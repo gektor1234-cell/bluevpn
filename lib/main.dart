@@ -2109,8 +2109,7 @@ abstract class VpnBackend {
   Future<VpnBackendResult> disconnect();
   Future<bool> isConnected();
 
-  static VpnBackend createDefault({required String tunnelName}) {
-    if (Platform.isWindows) {
+  static VpnBackend createDefault({required String tunnelName}) { if (kIsWeb) { return const UnsupportedVpnBackend(reason: 'Web-режим: реальное подключение недоступно. Запусти как Windows: flutter run -d windows'); } if (Platform.isWindows) {
       return WireGuardWindowsBackend(tunnelName: tunnelName);
     }
     return UnsupportedVpnBackend(reason: 'РџР»Р°С‚С„РѕСЂРјР° РЅРµ РїРѕРґРґРµСЂР¶РёРІР°РµС‚СЃСЏ РґР»СЏ СЂРµР°Р»СЊРЅРѕРіРѕ РїРѕРґРєР»СЋС‡РµРЅРёСЏ (РїРѕРєР° СЃРґРµР»Р°РЅРѕ РїРѕРґ Windows).');
@@ -2244,4 +2243,5 @@ class WireGuardWindowsBackend extends VpnBackend {
     }
   }
 }
+
 
