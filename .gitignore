@@ -37,3 +37,8 @@ type
 Microsoft
 del
 type
+
+# local secrets
+BlueVPN.conf
+*.conf
+
