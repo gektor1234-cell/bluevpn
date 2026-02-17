@@ -1,4 +1,4 @@
-# Flutter/Dart
+﻿# Flutter/Dart
 .dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
@@ -6,12 +6,31 @@
 build/
 .pub/
 .pub-cache/
-pubspec.lock
 coverage/
+*.log
+
+# IDE
 .idea/
 *.iml
 .vscode/
-*.log
+
+# Platform generated
 **/android/local.properties
 **/ios/Flutter/Flutter.podspec
 **/ios/Pods/
+
+# Garbage from console copy-paste
+0
+1
+16.02.2026
+cd
+dir
+flutter
+bluevpn_ui.bundle
+(
+del
+git
+main
+Серийный
+Содержимое
+Том
