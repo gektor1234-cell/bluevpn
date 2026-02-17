@@ -1,6 +1,6 @@
-import 'dart:io';
+﻿import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:flutter/services.dart'; import 'package:flutter/foundation.dart' show kIsWeb;
 
 void main() {
   runApp(const BlueVPNApp());
@@ -111,7 +111,7 @@ class RootShell extends StatefulWidget {
 }
 
 class _RootShellState extends State<RootShell> {
-  static const String _tunnelName = 'BlueVPN'; // имя туннеля (и файла конфига) — НЕ ТРОГАЕМ
+  static const String _tunnelName = 'BlueVPN'; // РёРјСЏ С‚СѓРЅРЅРµР»СЏ (Рё С„Р°Р№Р»Р° РєРѕРЅС„РёРіР°) вЂ” РќР• РўР РћР“РђР•Рњ
   late final VpnBackend _vpnBackend;
 
   int _index = 0;
@@ -120,69 +120,69 @@ class _RootShellState extends State<RootShell> {
   bool vpnEnabled = false;
   bool vpnBusy = false;
 
-  // “Только для соцсетей”
+  // вЂњРўРѕР»СЊРєРѕ РґР»СЏ СЃРѕС†СЃРµС‚РµР№вЂќ
   bool socialOnlyEnabled = false;
   final Set<SocialApp> socialOnlyApps = {SocialApp.telegram, SocialApp.instagram};
 
-  // Сервер
+  // РЎРµСЂРІРµСЂ
   final List<ServerLocation> servers = const [
     ServerLocation(
       id: 'auto',
-      title: 'Авто',
-      subtitle: 'Самая быстрая локация',
+      title: 'РђРІС‚Рѕ',
+      subtitle: 'РЎР°РјР°СЏ Р±С‹СЃС‚СЂР°СЏ Р»РѕРєР°С†РёСЏ',
       pingMs: null,
       isAuto: true,
     ),
     ServerLocation(
       id: 'nl',
-      title: 'Нидерланды',
-      subtitle: 'Амстердам',
+      title: 'РќРёРґРµСЂР»Р°РЅРґС‹',
+      subtitle: 'РђРјСЃС‚РµСЂРґР°Рј',
       pingMs: 32,
     ),
     ServerLocation(
       id: 'de',
-      title: 'Германия',
-      subtitle: 'Франкфурт',
+      title: 'Р“РµСЂРјР°РЅРёСЏ',
+      subtitle: 'Р¤СЂР°РЅРєС„СѓСЂС‚',
       pingMs: 44,
     ),
     ServerLocation(
       id: 'fi',
-      title: 'Финляндия',
-      subtitle: 'Хельсинки',
+      title: 'Р¤РёРЅР»СЏРЅРґРёСЏ',
+      subtitle: 'РҐРµР»СЊСЃРёРЅРєРё',
       pingMs: 48,
     ),
     ServerLocation(
       id: 'uk',
-      title: 'Великобритания',
-      subtitle: 'Лондон',
+      title: 'Р’РµР»РёРєРѕР±СЂРёС‚Р°РЅРёСЏ',
+      subtitle: 'Р›РѕРЅРґРѕРЅ',
       pingMs: 58,
     ),
     ServerLocation(
       id: 'us',
-      title: 'США',
-      subtitle: 'Нью-Йорк',
+      title: 'РЎРЁРђ',
+      subtitle: 'РќСЊСЋ-Р™РѕСЂРє',
       pingMs: 120,
     ),
   ];
 
   ServerLocation selectedServer = const ServerLocation(
     id: 'auto',
-    title: 'Авто',
-    subtitle: 'Самая быстрая локация',
+    title: 'РђРІС‚Рѕ',
+    subtitle: 'РЎР°РјР°СЏ Р±С‹СЃС‚СЂР°СЏ Р»РѕРєР°С†РёСЏ',
     pingMs: null,
     isAuto: true,
   );
 
-  // ===== TARIFF STATE (оставляем как было, но добавили trafficGb для “любой объём”) =====
+  // ===== TARIFF STATE (РѕСЃС‚Р°РІР»СЏРµРј РєР°Рє Р±С‹Р»Рѕ, РЅРѕ РґРѕР±Р°РІРёР»Рё trafficGb РґР»СЏ вЂњР»СЋР±РѕР№ РѕР±СЉС‘РјвЂќ) =====
 
-  // Тариф-конструктор (UI-логика)
+  // РўР°СЂРёС„-РєРѕРЅСЃС‚СЂСѓРєС‚РѕСЂ (UI-Р»РѕРіРёРєР°)
   final Set<TariffApp> selectedApps = {};
-  TrafficPack trafficPack = TrafficPack.gb20; // используем как “режим” (по ГБ / безлимит)
-  double trafficGb = 20; // любой объём ГБ
+  TrafficPack trafficPack = TrafficPack.gb20; // РёСЃРїРѕР»СЊР·СѓРµРј РєР°Рє вЂњСЂРµР¶РёРјвЂќ (РїРѕ Р“Р‘ / Р±РµР·Р»РёРјРёС‚)
+  double trafficGb = 20; // Р»СЋР±РѕР№ РѕР±СЉС‘Рј Р“Р‘
   int devices = 1;
 
   bool optNoAds = true;
-  bool optSmartRouting = true; // этим флагом управляем доступностью “соцсетей”
+  bool optSmartRouting = true; // СЌС‚РёРј С„Р»Р°РіРѕРј СѓРїСЂР°РІР»СЏРµРј РґРѕСЃС‚СѓРїРЅРѕСЃС‚СЊСЋ вЂњСЃРѕС†СЃРµС‚РµР№вЂќ
   bool optDedicatedIp = false;
 
   // ===== SETTINGS STATE =====
@@ -194,14 +194,14 @@ class _RootShellState extends State<RootShell> {
   bool sSplitTunneling = true;
   bool sSendDiagnostics = true;
 
-  String sLanguage = 'Русский';
+  String sLanguage = 'Р СѓСЃСЃРєРёР№';
   String sProtocol = 'WireGuard';
-  String sDns = 'Авто';
+  String sDns = 'РђРІС‚Рѕ';
 
   void goToTab(int i) => setState(() => _index = i);
 
   String get _configFileName => '$_tunnelName.conf';
-  String get _configPath => File(_configFileName).absolute.path;
+  String get _configPath => kIsWeb ? _configFileName : File(_configFileName).absolute.path;
 
   @override
   void initState() {
@@ -225,31 +225,31 @@ class _RootShellState extends State<RootShell> {
         if (!conf.existsSync()) {
           _toast(
             context,
-            'Нет конфига $_configFileName.\n'
-            'Положи WireGuard-конфиг рядом с приложением (или в папку запуска) и назови "$_configFileName".',
+            'РќРµС‚ РєРѕРЅС„РёРіР° $_configFileName.\n'
+            'РџРѕР»РѕР¶Рё WireGuard-РєРѕРЅС„РёРі СЂСЏРґРѕРј СЃ РїСЂРёР»РѕР¶РµРЅРёРµРј (РёР»Рё РІ РїР°РїРєСѓ Р·Р°РїСѓСЃРєР°) Рё РЅР°Р·РѕРІРё "$_configFileName".',
           );
           return;
         }
 
         final res = await _vpnBackend.connect(configPath: _configPath);
         if (!res.ok) {
-          _toast(context, res.message ?? 'Не удалось подключить VPN.');
+          _toast(context, res.message ?? 'РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕРґРєР»СЋС‡РёС‚СЊ VPN.');
           await _syncVpnStatus();
           return;
         }
 
         await _syncVpnStatus();
-        _toast(context, 'VPN включён.');
+        _toast(context, 'VPN РІРєР»СЋС‡С‘РЅ.');
       } else {
         final res = await _vpnBackend.disconnect();
         if (!res.ok) {
-          _toast(context, res.message ?? 'Не удалось отключить VPN.');
+          _toast(context, res.message ?? 'РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РєР»СЋС‡РёС‚СЊ VPN.');
           await _syncVpnStatus();
           return;
         }
 
         await _syncVpnStatus();
-        _toast(context, 'VPN выключен.');
+        _toast(context, 'VPN РІС‹РєР»СЋС‡РµРЅ.');
       }
     } finally {
       if (mounted) setState(() => vpnBusy = false);
@@ -259,12 +259,12 @@ class _RootShellState extends State<RootShell> {
   Future<void> _exportConfigToClipboard() async {
     final conf = File(_configPath);
     if (!conf.existsSync()) {
-      _toast(context, 'Конфиг $_configFileName не найден рядом с приложением.');
+      _toast(context, 'РљРѕРЅС„РёРі $_configFileName РЅРµ РЅР°Р№РґРµРЅ СЂСЏРґРѕРј СЃ РїСЂРёР»РѕР¶РµРЅРёРµРј.');
       return;
     }
     final text = await conf.readAsString();
     await Clipboard.setData(ClipboardData(text: text));
-    _toast(context, 'Конфиг скопирован в буфер обмена.');
+    _toast(context, 'РљРѕРЅС„РёРі СЃРєРѕРїРёСЂРѕРІР°РЅ РІ Р±СѓС„РµСЂ РѕР±РјРµРЅР°.');
   }
 
   Future<void> _copyDiagnosticsToClipboard() async {
@@ -288,7 +288,7 @@ class _RootShellState extends State<RootShell> {
     sb.writeln('Backend isConnected(): $backendStatus');
 
     await Clipboard.setData(ClipboardData(text: sb.toString()));
-    _toast(context, 'Диагностика скопирована в буфер.');
+    _toast(context, 'Р”РёР°РіРЅРѕСЃС‚РёРєР° СЃРєРѕРїРёСЂРѕРІР°РЅР° РІ Р±СѓС„РµСЂ.');
   }
 
   @override
@@ -298,24 +298,24 @@ class _RootShellState extends State<RootShell> {
         vpnEnabled: vpnEnabled,
         onToggleVpn: () => _toggleVpnReal(),
 
-        // Сервер
+        // РЎРµСЂРІРµСЂ
         selectedServer: selectedServer,
         onOpenServerPicker: () => _openServerPicker(context),
 
-        // Соцсети
+        // РЎРѕС†СЃРµС‚Рё
         socialOnlyEnabled: socialOnlyEnabled,
-        socialOnlyAllowed: optSmartRouting, // привязка к тарифу
+        socialOnlyAllowed: optSmartRouting, // РїСЂРёРІСЏР·РєР° Рє С‚Р°СЂРёС„Сѓ
         socialOnlyApps: socialOnlyApps,
         onToggleSocialOnly: (v) {
           if (!optSmartRouting) {
-            _toast(context, 'Недоступно в текущей подписке. Включи “Умную маршрутизацию” в тарифе.');
+            _toast(context, 'РќРµРґРѕСЃС‚СѓРїРЅРѕ РІ С‚РµРєСѓС‰РµР№ РїРѕРґРїРёСЃРєРµ. Р’РєР»СЋС‡Рё вЂњРЈРјРЅСѓСЋ РјР°СЂС€СЂСѓС‚РёР·Р°С†РёСЋвЂќ РІ С‚Р°СЂРёС„Рµ.');
             return;
           }
           setState(() => socialOnlyEnabled = v);
         },
         onConfigureSocialApps: () {
           if (!optSmartRouting) {
-            _toast(context, 'Недоступно в текущей подписке. Включи “Умную маршрутизацию” в тарифе.');
+            _toast(context, 'РќРµРґРѕСЃС‚СѓРїРЅРѕ РІ С‚РµРєСѓС‰РµР№ РїРѕРґРїРёСЃРєРµ. Р’РєР»СЋС‡Рё вЂњРЈРјРЅСѓСЋ РјР°СЂС€СЂСѓС‚РёР·Р°С†РёСЋвЂќ РІ С‚Р°СЂРёС„Рµ.');
             return;
           }
           _openSocialAppsPicker(context);
@@ -349,7 +349,7 @@ class _RootShellState extends State<RootShell> {
           setState(() {
             optSmartRouting = v;
 
-            // если отключили smart routing — “соцсети” становятся недоступны, гасим их
+            // РµСЃР»Рё РѕС‚РєР»СЋС‡РёР»Рё smart routing вЂ” вЂњСЃРѕС†СЃРµС‚РёвЂќ СЃС‚Р°РЅРѕРІСЏС‚СЃСЏ РЅРµРґРѕСЃС‚СѓРїРЅС‹, РіР°СЃРёРј РёС…
             if (!optSmartRouting) {
               socialOnlyEnabled = false;
             }
@@ -384,15 +384,15 @@ class _RootShellState extends State<RootShell> {
 
         onPickLanguage: () => _pickOne(
           context,
-          title: 'Язык',
+          title: 'РЇР·С‹Рє',
           current: sLanguage,
-          items: const ['Русский', 'English'],
+          items: const ['Р СѓСЃСЃРєРёР№', 'English'],
           onSelect: (v) => setState(() => sLanguage = v),
         ),
 
         onPickProtocol: () => _pickOne(
           context,
-          title: 'Протокол',
+          title: 'РџСЂРѕС‚РѕРєРѕР»',
           current: sProtocol,
           items: const ['WireGuard', 'OpenVPN (UI)', 'IKEv2 (UI)'],
           onSelect: (v) => setState(() => sProtocol = v),
@@ -402,7 +402,7 @@ class _RootShellState extends State<RootShell> {
           context,
           title: 'DNS',
           current: sDns,
-          items: const ['Авто', 'Cloudflare (1.1.1.1)', 'Google (8.8.8.8)'],
+          items: const ['РђРІС‚Рѕ', 'Cloudflare (1.1.1.1)', 'Google (8.8.8.8)'],
           onSelect: (v) => setState(() => sDns = v),
         ),
 
@@ -420,9 +420,9 @@ class _RootShellState extends State<RootShell> {
         unselectedItemColor: const Color(0xFF94A3B8),
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.vpn_key_rounded), label: 'VPN'),
-          BottomNavigationBarItem(icon: Icon(Icons.star_rounded), label: 'Тариф'),
-          BottomNavigationBarItem(icon: Icon(Icons.checklist_rounded), label: 'Задания'),
-          BottomNavigationBarItem(icon: Icon(Icons.settings_rounded), label: 'Настройки'),
+          BottomNavigationBarItem(icon: Icon(Icons.star_rounded), label: 'РўР°СЂРёС„'),
+          BottomNavigationBarItem(icon: Icon(Icons.checklist_rounded), label: 'Р—Р°РґР°РЅРёСЏ'),
+          BottomNavigationBarItem(icon: Icon(Icons.settings_rounded), label: 'РќР°СЃС‚СЂРѕР№РєРё'),
         ],
       ),
     );
@@ -442,8 +442,8 @@ class _RootShellState extends State<RootShell> {
         final bg = theme.colorScheme.surface;
 
         return _BottomSheetFrame(
-          title: 'Выбор сервера',
-          subtitle: 'Пока UI. Позже подключим реальные локации.',
+          title: 'Р’С‹Р±РѕСЂ СЃРµСЂРІРµСЂР°',
+          subtitle: 'РџРѕРєР° UI. РџРѕР·Р¶Рµ РїРѕРґРєР»СЋС‡РёРј СЂРµР°Р»СЊРЅС‹Рµ Р»РѕРєР°С†РёРё.',
           leading: Icons.bolt_rounded,
           child: DraggableScrollableSheet(
             expand: false,
@@ -503,7 +503,7 @@ class _RootShellState extends State<RootShell> {
                                   ),
                                   const SizedBox(height: 2),
                                   Text(
-                                    s.isAuto ? 'Авто-подбор' : '${s.subtitle}${s.pingMs != null ? ' • ${s.pingMs} ms' : ''}',
+                                    s.isAuto ? 'РђРІС‚Рѕ-РїРѕРґР±РѕСЂ' : '${s.subtitle}${s.pingMs != null ? ' вЂў ${s.pingMs} ms' : ''}',
                                     style: TextStyle(
                                       color: theme.colorScheme.onSurface.withOpacity(0.65),
                                       fontWeight: FontWeight.w600,
@@ -537,7 +537,7 @@ class _RootShellState extends State<RootShell> {
   }
 
   Future<void> _openSocialAppsPicker(BuildContext context) async {
-    // локальная копия выбора
+    // Р»РѕРєР°Р»СЊРЅР°СЏ РєРѕРїРёСЏ РІС‹Р±РѕСЂР°
     final initial = Set<SocialApp>.from(socialOnlyApps);
 
     final picked = await showModalBottomSheet<Set<SocialApp>>(
@@ -546,8 +546,8 @@ class _RootShellState extends State<RootShell> {
       backgroundColor: Colors.transparent,
       builder: (ctx) {
         return _BottomSheetFrame(
-          title: 'Соцсети через VPN',
-          subtitle: 'Выбери приложения, которые пойдут через VPN.',
+          title: 'РЎРѕС†СЃРµС‚Рё С‡РµСЂРµР· VPN',
+          subtitle: 'Р’С‹Р±РµСЂРё РїСЂРёР»РѕР¶РµРЅРёСЏ, РєРѕС‚РѕСЂС‹Рµ РїРѕР№РґСѓС‚ С‡РµСЂРµР· VPN.',
           leading: Icons.filter_alt_rounded,
           child: StatefulBuilder(
             builder: (context, setLocal) {
@@ -599,7 +599,7 @@ class _RootShellState extends State<RootShell> {
                                       child: Icon(app.icon, color: const Color(0xFF2563EB)),
                                     ),
                                     title: Text(app.title, style: const TextStyle(fontWeight: FontWeight.w900)),
-                                    subtitle: const Text('Трафик этого приложения пойдёт через VPN'),
+                                    subtitle: const Text('РўСЂР°С„РёРє СЌС‚РѕРіРѕ РїСЂРёР»РѕР¶РµРЅРёСЏ РїРѕР№РґС‘С‚ С‡РµСЂРµР· VPN'),
                                   ),
                                 );
                               }),
@@ -618,7 +618,7 @@ class _RootShellState extends State<RootShell> {
                                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                                   ),
                                   onPressed: () => Navigator.of(ctx).pop(null),
-                                  child: const Text('Отмена', style: TextStyle(fontWeight: FontWeight.w900)),
+                                  child: const Text('РћС‚РјРµРЅР°', style: TextStyle(fontWeight: FontWeight.w900)),
                                 ),
                               ),
                               const SizedBox(width: 10),
@@ -632,12 +632,12 @@ class _RootShellState extends State<RootShell> {
                                   ),
                                   onPressed: () {
                                     if (initial.isEmpty) {
-                                      _toast(ctx, 'Выбери хотя бы одно приложение.');
+                                      _toast(ctx, 'Р’С‹Р±РµСЂРё С…РѕС‚СЏ Р±С‹ РѕРґРЅРѕ РїСЂРёР»РѕР¶РµРЅРёРµ.');
                                       return;
                                     }
                                     Navigator.of(ctx).pop(initial);
                                   },
-                                  child: const Text('Готово', style: TextStyle(fontWeight: FontWeight.w900)),
+                                  child: const Text('Р“РѕС‚РѕРІРѕ', style: TextStyle(fontWeight: FontWeight.w900)),
                                 ),
                               ),
                             ],
@@ -676,7 +676,7 @@ class _RootShellState extends State<RootShell> {
       builder: (ctx) {
         return _BottomSheetFrame(
           title: title,
-          subtitle: 'Выбери значение',
+          subtitle: 'Р’С‹Р±РµСЂРё Р·РЅР°С‡РµРЅРёРµ',
           leading: Icons.tune_rounded,
           child: Container(
             decoration: BoxDecoration(
@@ -733,7 +733,7 @@ class _RootShellState extends State<RootShell> {
         _copyDiagnosticsToClipboard();
         break;
       case SettingsAction.resetApp:
-        _toast(context, 'UI: позже добавим сброс настроек/кэша.');
+        _toast(context, 'UI: РїРѕР·Р¶Рµ РґРѕР±Р°РІРёРј СЃР±СЂРѕСЃ РЅР°СЃС‚СЂРѕРµРє/РєСЌС€Р°.');
         break;
       case SettingsAction.about:
         _showAbout(context);
@@ -748,11 +748,11 @@ class _RootShellState extends State<RootShell> {
         return AlertDialog(
           title: const Text('BlueVPN'),
           content: const Text(
-            'UI-прототип.\n\n'
-            'Дальше подключим реальные конфиги, активацию подписки и маршрутизацию.',
+            'UI-РїСЂРѕС‚РѕС‚РёРї.\n\n'
+            'Р”Р°Р»СЊС€Рµ РїРѕРґРєР»СЋС‡РёРј СЂРµР°Р»СЊРЅС‹Рµ РєРѕРЅС„РёРіРё, Р°РєС‚РёРІР°С†РёСЋ РїРѕРґРїРёСЃРєРё Рё РјР°СЂС€СЂСѓС‚РёР·Р°С†РёСЋ.',
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Ок')),
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('РћРє')),
           ],
         );
       },
@@ -795,14 +795,14 @@ class VpnPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final statusText = vpnEnabled ? 'Включено' : 'Отключено';
+    final statusText = vpnEnabled ? 'Р’РєР»СЋС‡РµРЅРѕ' : 'РћС‚РєР»СЋС‡РµРЅРѕ';
 
-    final serverTitle = selectedServer.isAuto ? 'Самая быстрая локация' : selectedServer.title;
+    final serverTitle = selectedServer.isAuto ? 'РЎР°РјР°СЏ Р±С‹СЃС‚СЂР°СЏ Р»РѕРєР°С†РёСЏ' : selectedServer.title;
     final serverSub = selectedServer.isAuto
-        ? 'Авто-подбор'
-        : '${selectedServer.subtitle}${selectedServer.pingMs != null ? ' • ${selectedServer.pingMs} ms' : ''}';
+        ? 'РђРІС‚Рѕ-РїРѕРґР±РѕСЂ'
+        : '${selectedServer.subtitle}${selectedServer.pingMs != null ? ' вЂў ${selectedServer.pingMs} ms' : ''}';
 
-    final appsText = socialOnlyApps.isEmpty ? 'Не выбрано' : socialOnlyApps.map((e) => e.title).join(', ');
+    final appsText = socialOnlyApps.isEmpty ? 'РќРµ РІС‹Р±СЂР°РЅРѕ' : socialOnlyApps.map((e) => e.title).join(', ');
 
     final disabledOverlay = !socialOnlyAllowed
         ? Container(
@@ -818,7 +818,7 @@ class VpnPage extends StatelessWidget {
                 Icon(Icons.lock_rounded, size: 16, color: Color(0xFF64748B)),
                 SizedBox(width: 6),
                 Text(
-                  'Требуется “Умная маршрутизация”',
+                  'РўСЂРµР±СѓРµС‚СЃСЏ вЂњРЈРјРЅР°СЏ РјР°СЂС€СЂСѓС‚РёР·Р°С†РёСЏвЂќ',
                   style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.w800, fontSize: 12),
                 ),
               ],
@@ -852,7 +852,7 @@ class VpnPage extends StatelessWidget {
             ),
           ),
 
-          // Только для соцсетей
+          // РўРѕР»СЊРєРѕ РґР»СЏ СЃРѕС†СЃРµС‚РµР№
           _Card(
             child: Column(
               children: [
@@ -860,7 +860,7 @@ class VpnPage extends StatelessWidget {
                   children: [
                     const Expanded(
                       child: Text(
-                        'Только для соц. сетей',
+                        'РўРѕР»СЊРєРѕ РґР»СЏ СЃРѕС†. СЃРµС‚РµР№',
                         style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w900,
@@ -879,7 +879,7 @@ class VpnPage extends StatelessWidget {
                   children: [
                     Expanded(
                       child: Text(
-                        socialOnlyEnabled ? 'Через VPN: $appsText' : 'Выбери приложения (если доступно в подписке)',
+                        socialOnlyEnabled ? 'Р§РµСЂРµР· VPN: $appsText' : 'Р’С‹Р±РµСЂРё РїСЂРёР»РѕР¶РµРЅРёСЏ (РµСЃР»Рё РґРѕСЃС‚СѓРїРЅРѕ РІ РїРѕРґРїРёСЃРєРµ)',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
@@ -899,7 +899,7 @@ class VpnPage extends StatelessWidget {
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                           ),
                           onPressed: (socialOnlyAllowed && socialOnlyEnabled) ? onConfigureSocialApps : null,
-                          child: const Text('Настроить', style: TextStyle(fontWeight: FontWeight.w900)),
+                          child: const Text('РќР°СЃС‚СЂРѕРёС‚СЊ', style: TextStyle(fontWeight: FontWeight.w900)),
                         ),
                         if (!socialOnlyAllowed) Positioned(right: 0, child: disabledOverlay),
                       ],
@@ -911,7 +911,7 @@ class VpnPage extends StatelessWidget {
           ),
           const SizedBox(height: 10),
 
-          // Сервер
+          // РЎРµСЂРІРµСЂ
           _Card(
             tint: const Color(0xFFEFF6FF),
             child: InkWell(
@@ -925,7 +925,7 @@ class VpnPage extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Сервер', style: TextStyle(color: Color(0xFF64748B), fontSize: 12)),
+                        const Text('РЎРµСЂРІРµСЂ', style: TextStyle(color: Color(0xFF64748B), fontSize: 12)),
                         const SizedBox(height: 2),
                         Text(
                           serverTitle,
@@ -984,10 +984,10 @@ class _TariffBanner extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Тариф', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14)),
+                  Text('РўР°СЂРёС„', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14)),
                   SizedBox(height: 2),
                   Text(
-                    'Текущий: Base • настрой подписку',
+                    'РўРµРєСѓС‰РёР№: Base вЂў РЅР°СЃС‚СЂРѕР№ РїРѕРґРїРёСЃРєСѓ',
                     style: TextStyle(color: Color(0xFFBFDBFE), fontSize: 12, fontWeight: FontWeight.w600),
                   ),
                 ],
@@ -1071,11 +1071,11 @@ enum TariffApp {
 }
 
 enum TrafficPack {
-  gb5('5 ГБ', 99),
-  gb20('20 ГБ', 199),
-  gb50('50 ГБ', 299),
-  gb100('100 ГБ', 399),
-  unlimited('Безлимит', 799);
+  gb5('5 Р“Р‘', 99),
+  gb20('20 Р“Р‘', 199),
+  gb50('50 Р“Р‘', 299),
+  gb100('100 Р“Р‘', 399),
+  unlimited('Р‘РµР·Р»РёРјРёС‚', 799);
 
   const TrafficPack(this.title, this.basePriceRub);
   final String title;
@@ -1162,7 +1162,7 @@ class TariffPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final price = _calcPriceRub();
 
-    final appsText = selectedApps.isEmpty ? 'Без безлимитных приложений' : selectedApps.map((e) => e.title).join(', ');
+    final appsText = selectedApps.isEmpty ? 'Р‘РµР· Р±РµР·Р»РёРјРёС‚РЅС‹С… РїСЂРёР»РѕР¶РµРЅРёР№' : selectedApps.map((e) => e.title).join(', ');
 
     final appsDisabled = trafficPack == TrafficPack.unlimited;
 
@@ -1174,8 +1174,8 @@ class TariffPage extends StatelessWidget {
       child: Column(
         children: [
           const _PageTitle(
-            title: 'Тариф',
-            subtitle: 'Гигабайты или безлимит + докупай безлимит на приложения',
+            title: 'РўР°СЂРёС„',
+            subtitle: 'Р“РёРіР°Р±Р°Р№С‚С‹ РёР»Рё Р±РµР·Р»РёРјРёС‚ + РґРѕРєСѓРїР°Р№ Р±РµР·Р»РёРјРёС‚ РЅР° РїСЂРёР»РѕР¶РµРЅРёСЏ',
             icon: Icons.star_rounded,
           ),
           const SizedBox(height: 12),
@@ -1186,27 +1186,27 @@ class TariffPage extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const _SectionTitle('Трафик'),
+                      const _SectionTitle('РўСЂР°С„РёРє'),
                       const SizedBox(height: 10),
                       Row(
                         children: [
                           Expanded(
                             child: Text(
-                              appsDisabled ? 'Безлимитный трафик' : 'Трафик: $gbInt ГБ',
+                              appsDisabled ? 'Р‘РµР·Р»РёРјРёС‚РЅС‹Р№ С‚СЂР°С„РёРє' : 'РўСЂР°С„РёРє: $gbInt Р“Р‘',
                               style: const TextStyle(fontWeight: FontWeight.w900),
                             ),
                           ),
                           const SizedBox(width: 8),
                           _ChipButton(
                             icon: Icons.data_usage_rounded,
-                            text: 'По ГБ',
+                            text: 'РџРѕ Р“Р‘',
                             selected: !appsDisabled,
                             onTap: () => onTrafficChanged(TrafficPack.gb20),
                           ),
                           const SizedBox(width: 8),
                           _ChipButton(
                             icon: Icons.all_inclusive_rounded,
-                            text: 'Безлимит',
+                            text: 'Р‘РµР·Р»РёРјРёС‚',
                             selected: appsDisabled,
                             onTap: () => onTrafficChanged(TrafficPack.unlimited),
                           ),
@@ -1225,14 +1225,14 @@ class TariffPage extends StatelessWidget {
                                 min: 1,
                                 max: 500,
                                 divisions: 499,
-                                label: '$gbInt ГБ',
+                                label: '$gbInt Р“Р‘',
                                 onChanged: (v) => onTrafficGbChanged(v.roundToDouble()),
                               ),
                               Row(
                                 children: const [
-                                  Text('1 ГБ', style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.w700, fontSize: 12)),
+                                  Text('1 Р“Р‘', style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.w700, fontSize: 12)),
                                   Spacer(),
-                                  Text('500 ГБ', style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.w700, fontSize: 12)),
+                                  Text('500 Р“Р‘', style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.w700, fontSize: 12)),
                                 ],
                               ),
                             ],
@@ -1241,13 +1241,13 @@ class TariffPage extends StatelessWidget {
                       ),
                       const SizedBox(height: 10),
                       Text(
-                        appsDisabled ? 'База: $baseForGb ₽ (безлимит)' : 'База: $baseForGb ₽ за $gbInt ГБ',
+                        appsDisabled ? 'Р‘Р°Р·Р°: $baseForGb в‚Ѕ (Р±РµР·Р»РёРјРёС‚)' : 'Р‘Р°Р·Р°: $baseForGb в‚Ѕ Р·Р° $gbInt Р“Р‘',
                         style: const TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.w700, fontSize: 12),
                       ),
                       if (appsDisabled) ...const [
                         SizedBox(height: 10),
                         Text(
-                          'Выбран “Безлимит” — безлимитные приложения не нужны (и отключены).',
+                          'Р’С‹Р±СЂР°РЅ вЂњР‘РµР·Р»РёРјРёС‚вЂќ вЂ” Р±РµР·Р»РёРјРёС‚РЅС‹Рµ РїСЂРёР»РѕР¶РµРЅРёСЏ РЅРµ РЅСѓР¶РЅС‹ (Рё РѕС‚РєР»СЋС‡РµРЅС‹).',
                           style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.w700, fontSize: 12),
                         ),
                       ],
@@ -1259,7 +1259,7 @@ class TariffPage extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const _SectionTitle('Безлимитные приложения (дёшево)'),
+                      const _SectionTitle('Р‘РµР·Р»РёРјРёС‚РЅС‹Рµ РїСЂРёР»РѕР¶РµРЅРёСЏ (РґС‘С€РµРІРѕ)'),
                       const SizedBox(height: 10),
                       Wrap(
                         spacing: 10,
@@ -1288,7 +1288,7 @@ class TariffPage extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const _SectionTitle('Устройства'),
+                      const _SectionTitle('РЈСЃС‚СЂРѕР№СЃС‚РІР°'),
                       const SizedBox(height: 10),
                       Row(
                         children: [
@@ -1314,7 +1314,7 @@ class TariffPage extends StatelessWidget {
                           const SizedBox(width: 10),
                           const Expanded(
                             child: Text(
-                              'Сколько девайсов одновременно',
+                              'РЎРєРѕР»СЊРєРѕ РґРµРІР°Р№СЃРѕРІ РѕРґРЅРѕРІСЂРµРјРµРЅРЅРѕ',
                               style: TextStyle(color: Color(0xFF475569), fontWeight: FontWeight.w700),
                             ),
                           ),
@@ -1328,25 +1328,25 @@ class TariffPage extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const _SectionTitle('Опции'),
+                      const _SectionTitle('РћРїС†РёРё'),
                       const SizedBox(height: 6),
                       _SwitchRow(
-                        title: 'Без рекламы',
-                        subtitle: 'Чистый интерфейс в приложении',
+                        title: 'Р‘РµР· СЂРµРєР»Р°РјС‹',
+                        subtitle: 'Р§РёСЃС‚С‹Р№ РёРЅС‚РµСЂС„РµР№СЃ РІ РїСЂРёР»РѕР¶РµРЅРёРё',
                         value: optNoAds,
                         onChanged: onOptNoAds,
                       ),
                       const Divider(height: 18),
                       _SwitchRow(
-                        title: 'Умная маршрутизация',
-                        subtitle: 'Нужные сайты/приложения через VPN',
+                        title: 'РЈРјРЅР°СЏ РјР°СЂС€СЂСѓС‚РёР·Р°С†РёСЏ',
+                        subtitle: 'РќСѓР¶РЅС‹Рµ СЃР°Р№С‚С‹/РїСЂРёР»РѕР¶РµРЅРёСЏ С‡РµСЂРµР· VPN',
                         value: optSmartRouting,
                         onChanged: onOptSmartRouting,
                       ),
                       const Divider(height: 18),
                       _SwitchRow(
-                        title: 'Выделенный IP',
-                        subtitle: 'Для своих сервисов/доступов',
+                        title: 'Р’С‹РґРµР»РµРЅРЅС‹Р№ IP',
+                        subtitle: 'Р”Р»СЏ СЃРІРѕРёС… СЃРµСЂРІРёСЃРѕРІ/РґРѕСЃС‚СѓРїРѕРІ',
                         value: optDedicatedIp,
                         onChanged: onOptDedicatedIp,
                       ),
@@ -1372,10 +1372,10 @@ class TariffPage extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Итого', style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.w800)),
+                      const Text('РС‚РѕРіРѕ', style: TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.w800)),
                       const SizedBox(height: 2),
                       Text(
-                        '$price ₽ / мес',
+                        '$price в‚Ѕ / РјРµСЃ',
                         style: const TextStyle(
                           color: Color(0xFF0F172A),
                           fontWeight: FontWeight.w900,
@@ -1384,7 +1384,7 @@ class TariffPage extends StatelessWidget {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        trafficPack == TrafficPack.unlimited ? 'Безлимит' : '$gbInt ГБ • $appsText',
+                        trafficPack == TrafficPack.unlimited ? 'Р‘РµР·Р»РёРјРёС‚' : '$gbInt Р“Р‘ вЂў $appsText',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.w700, fontSize: 12),
@@ -1402,10 +1402,10 @@ class TariffPage extends StatelessWidget {
                   ),
                   onPressed: () {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Пока UI 🙂 Позже подключим оплату/активацию.')),
+                      const SnackBar(content: Text('РџРѕРєР° UI рџ™‚ РџРѕР·Р¶Рµ РїРѕРґРєР»СЋС‡РёРј РѕРїР»Р°С‚Сѓ/Р°РєС‚РёРІР°С†РёСЋ.')),
                     );
                   },
-                  child: const Text('Оформить', style: TextStyle(fontWeight: FontWeight.w900)),
+                  child: const Text('РћС„РѕСЂРјРёС‚СЊ', style: TextStyle(fontWeight: FontWeight.w900)),
                 ),
               ],
             ),
@@ -1432,8 +1432,8 @@ class TasksPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const _PlaceholderPage(
-      title: 'Задания',
-      subtitle: 'Позже добавим: бонусы, рефы, промо, ежедневные задания.',
+      title: 'Р—Р°РґР°РЅРёСЏ',
+      subtitle: 'РџРѕР·Р¶Рµ РґРѕР±Р°РІРёРј: Р±РѕРЅСѓСЃС‹, СЂРµС„С‹, РїСЂРѕРјРѕ, РµР¶РµРґРЅРµРІРЅС‹Рµ Р·Р°РґР°РЅРёСЏ.',
       icon: Icons.checklist_rounded,
     );
   }
@@ -1507,8 +1507,8 @@ class SettingsPage extends StatelessWidget {
       child: ListView(
         children: [
           const _PageTitle(
-            title: 'Настройки',
-            subtitle: 'Язык, протокол, автозапуск, диагностика',
+            title: 'РќР°СЃС‚СЂРѕР№РєРё',
+            subtitle: 'РЇР·С‹Рє, РїСЂРѕС‚РѕРєРѕР», Р°РІС‚РѕР·Р°РїСѓСЃРє, РґРёР°РіРЅРѕСЃС‚РёРєР°',
             icon: Icons.settings_rounded,
           ),
           const SizedBox(height: 12),
@@ -1516,11 +1516,11 @@ class SettingsPage extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const _SectionTitle('Внешний вид'),
+                const _SectionTitle('Р’РЅРµС€РЅРёР№ РІРёРґ'),
                 const SizedBox(height: 8),
                 _SwitchRow(
-                  title: 'Тёмная тема',
-                  subtitle: 'Меняет тему приложения',
+                  title: 'РўС‘РјРЅР°СЏ С‚РµРјР°',
+                  subtitle: 'РњРµРЅСЏРµС‚ С‚РµРјСѓ РїСЂРёР»РѕР¶РµРЅРёСЏ',
                   value: isDark,
                   onChanged: (v) => onThemeModeChanged(v ? ThemeMode.dark : ThemeMode.light),
                 ),
@@ -1532,32 +1532,32 @@ class SettingsPage extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const _SectionTitle('Приложение'),
+                const _SectionTitle('РџСЂРёР»РѕР¶РµРЅРёРµ'),
                 const SizedBox(height: 8),
                 _SettingsNavRow(
-                  title: 'Язык',
+                  title: 'РЇР·С‹Рє',
                   subtitle: language,
                   icon: Icons.language_rounded,
                   onTap: onPickLanguage,
                 ),
                 const Divider(height: 18),
                 _SwitchRow(
-                  title: 'Автозапуск',
-                  subtitle: 'Запускать вместе с Windows',
+                  title: 'РђРІС‚РѕР·Р°РїСѓСЃРє',
+                  subtitle: 'Р—Р°РїСѓСЃРєР°С‚СЊ РІРјРµСЃС‚Рµ СЃ Windows',
                   value: autoStart,
                   onChanged: onAutoStart,
                 ),
                 const Divider(height: 18),
                 _SwitchRow(
-                  title: 'Автоподключение',
-                  subtitle: 'Подключать VPN сразу после запуска',
+                  title: 'РђРІС‚РѕРїРѕРґРєР»СЋС‡РµРЅРёРµ',
+                  subtitle: 'РџРѕРґРєР»СЋС‡Р°С‚СЊ VPN СЃСЂР°Р·Сѓ РїРѕСЃР»Рµ Р·Р°РїСѓСЃРєР°',
                   value: autoConnect,
                   onChanged: onAutoConnect,
                 ),
                 const Divider(height: 18),
                 _SwitchRow(
-                  title: 'Уведомления',
-                  subtitle: 'Статус, ошибки, подсказки',
+                  title: 'РЈРІРµРґРѕРјР»РµРЅРёСЏ',
+                  subtitle: 'РЎС‚Р°С‚СѓСЃ, РѕС€РёР±РєРё, РїРѕРґСЃРєР°Р·РєРё',
                   value: notifications,
                   onChanged: onNotifications,
                 ),
@@ -1572,7 +1572,7 @@ class SettingsPage extends StatelessWidget {
                 const _SectionTitle('VPN'),
                 const SizedBox(height: 8),
                 _SettingsNavRow(
-                  title: 'Протокол',
+                  title: 'РџСЂРѕС‚РѕРєРѕР»',
                   subtitle: protocol,
                   icon: Icons.swap_horiz_rounded,
                   onTap: onPickProtocol,
@@ -1587,14 +1587,14 @@ class SettingsPage extends StatelessWidget {
                 const Divider(height: 18),
                 _SwitchRow(
                   title: 'Kill Switch',
-                  subtitle: 'Рубит интернет при обрыве VPN',
+                  subtitle: 'Р СѓР±РёС‚ РёРЅС‚РµСЂРЅРµС‚ РїСЂРё РѕР±СЂС‹РІРµ VPN',
                   value: killSwitch,
                   onChanged: onKillSwitch,
                 ),
                 const Divider(height: 18),
                 _SwitchRow(
                   title: 'Split Tunneling',
-                  subtitle: 'Исключения (часть трафика мимо VPN)',
+                  subtitle: 'РСЃРєР»СЋС‡РµРЅРёСЏ (С‡Р°СЃС‚СЊ С‚СЂР°С„РёРєР° РјРёРјРѕ VPN)',
                   value: splitTunneling,
                   onChanged: onSplitTunneling,
                 ),
@@ -1606,25 +1606,25 @@ class SettingsPage extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const _SectionTitle('Диагностика'),
+                const _SectionTitle('Р”РёР°РіРЅРѕСЃС‚РёРєР°'),
                 const SizedBox(height: 8),
                 _SwitchRow(
-                  title: 'Отправлять диагностику',
-                  subtitle: 'Анонимные логи/краши (пока UI)',
+                  title: 'РћС‚РїСЂР°РІР»СЏС‚СЊ РґРёР°РіРЅРѕСЃС‚РёРєСѓ',
+                  subtitle: 'РђРЅРѕРЅРёРјРЅС‹Рµ Р»РѕРіРё/РєСЂР°С€Рё (РїРѕРєР° UI)',
                   value: sendDiagnostics,
                   onChanged: onSendDiagnostics,
                 ),
                 const Divider(height: 18),
                 _SettingsActionRow(
-                  title: 'Скопировать отчёт диагностики',
-                  subtitle: 'Логи, сеть, статусы, конфиг (позже)',
+                  title: 'РЎРєРѕРїРёСЂРѕРІР°С‚СЊ РѕС‚С‡С‘С‚ РґРёР°РіРЅРѕСЃС‚РёРєРё',
+                  subtitle: 'Р›РѕРіРё, СЃРµС‚СЊ, СЃС‚Р°С‚СѓСЃС‹, РєРѕРЅС„РёРі (РїРѕР·Р¶Рµ)',
                   icon: Icons.copy_all_rounded,
                   onTap: () => onAction(SettingsAction.copyDiagnostics),
                 ),
                 const Divider(height: 18),
                 _SettingsActionRow(
-                  title: 'Экспорт конфигурации',
-                  subtitle: 'Файл / QR (позже)',
+                  title: 'Р­РєСЃРїРѕСЂС‚ РєРѕРЅС„РёРіСѓСЂР°С†РёРё',
+                  subtitle: 'Р¤Р°Р№Р» / QR (РїРѕР·Р¶Рµ)',
                   icon: Icons.qr_code_rounded,
                   onTap: () => onAction(SettingsAction.exportConfig),
                 ),
@@ -1636,18 +1636,18 @@ class SettingsPage extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const _SectionTitle('О приложении'),
+                const _SectionTitle('Рћ РїСЂРёР»РѕР¶РµРЅРёРё'),
                 const SizedBox(height: 8),
                 _SettingsActionRow(
-                  title: 'О BlueVPN',
-                  subtitle: 'Версия, лицензии, информация',
+                  title: 'Рћ BlueVPN',
+                  subtitle: 'Р’РµСЂСЃРёСЏ, Р»РёС†РµРЅР·РёРё, РёРЅС„РѕСЂРјР°С†РёСЏ',
                   icon: Icons.info_outline_rounded,
                   onTap: () => onAction(SettingsAction.about),
                 ),
                 const Divider(height: 18),
                 _SettingsActionRow(
-                  title: 'Сбросить настройки (UI)',
-                  subtitle: 'Вернуть дефолт (позже)',
+                  title: 'РЎР±СЂРѕСЃРёС‚СЊ РЅР°СЃС‚СЂРѕР№РєРё (UI)',
+                  subtitle: 'Р’РµСЂРЅСѓС‚СЊ РґРµС„РѕР»С‚ (РїРѕР·Р¶Рµ)',
                   icon: Icons.restart_alt_rounded,
                   onTap: () => onAction(SettingsAction.resetApp),
                 ),
@@ -2093,7 +2093,7 @@ class _Card extends StatelessWidget {
 }
 
 /* =========================
-   BACKEND (РЕАЛЬНОЕ ПОДКЛЮЧЕНИЕ)
+   BACKEND (Р Р•РђР›Р¬РќРћР• РџРћР”РљР›Р®Р§Р•РќРР•)
    ========================= */
 
 class VpnBackendResult {
@@ -2113,7 +2113,7 @@ abstract class VpnBackend {
     if (Platform.isWindows) {
       return WireGuardWindowsBackend(tunnelName: tunnelName);
     }
-    return UnsupportedVpnBackend(reason: 'Платформа не поддерживается для реального подключения (пока сделано под Windows).');
+    return UnsupportedVpnBackend(reason: 'РџР»Р°С‚С„РѕСЂРјР° РЅРµ РїРѕРґРґРµСЂР¶РёРІР°РµС‚СЃСЏ РґР»СЏ СЂРµР°Р»СЊРЅРѕРіРѕ РїРѕРґРєР»СЋС‡РµРЅРёСЏ (РїРѕРєР° СЃРґРµР»Р°РЅРѕ РїРѕРґ Windows).');
   }
 }
 
@@ -2157,7 +2157,7 @@ class WireGuardWindowsBackend extends VpnBackend {
       if (File(c).existsSync()) return c;
     }
 
-    // fallback: пусть ищется через PATH
+    // fallback: РїСѓСЃС‚СЊ РёС‰РµС‚СЃСЏ С‡РµСЂРµР· PATH
     return 'wireguard.exe';
   }
 
@@ -2169,16 +2169,16 @@ class WireGuardWindowsBackend extends VpnBackend {
       args,
       runInShell: true,
     );
-    // если надо будет — добавим workingDirectory/env
+    // РµСЃР»Рё РЅР°РґРѕ Р±СѓРґРµС‚ вЂ” РґРѕР±Р°РІРёРј workingDirectory/env
   }
 
   @override
   Future<VpnBackendResult> connect({required String configPath}) async {
-    // ВАЖНО: имя файла должно совпадать с tunnelName (для WireGuard for Windows)
-    // Например: BlueVPN.conf -> туннель BlueVPN
+    // Р’РђР–РќРћ: РёРјСЏ С„Р°Р№Р»Р° РґРѕР»Р¶РЅРѕ СЃРѕРІРїР°РґР°С‚СЊ СЃ tunnelName (РґР»СЏ WireGuard for Windows)
+    // РќР°РїСЂРёРјРµСЂ: BlueVPN.conf -> С‚СѓРЅРЅРµР»СЊ BlueVPN
     final fileName = File(configPath).uri.pathSegments.isNotEmpty ? File(configPath).uri.pathSegments.last : configPath;
     if (!fileName.toLowerCase().endsWith('.conf')) {
-      return const VpnBackendResult(ok: false, message: 'Конфиг должен иметь расширение .conf');
+      return const VpnBackendResult(ok: false, message: 'РљРѕРЅС„РёРі РґРѕР»Р¶РµРЅ РёРјРµС‚СЊ СЂР°СЃС€РёСЂРµРЅРёРµ .conf');
     }
 
     try {
@@ -2188,21 +2188,21 @@ class WireGuardWindowsBackend extends VpnBackend {
         final err = (res.stderr ?? '').toString().trim();
         return VpnBackendResult(
           ok: false,
-          message: 'WireGuard не поднялся.\n'
-              'Возможные причины: нет прав администратора / не установлен WireGuard.\n'
+          message: 'WireGuard РЅРµ РїРѕРґРЅСЏР»СЃСЏ.\n'
+              'Р’РѕР·РјРѕР¶РЅС‹Рµ РїСЂРёС‡РёРЅС‹: РЅРµС‚ РїСЂР°РІ Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂР° / РЅРµ СѓСЃС‚Р°РЅРѕРІР»РµРЅ WireGuard.\n'
               '${err.isNotEmpty ? err : out}',
         );
       }
 
-      // проверим статус
+      // РїСЂРѕРІРµСЂРёРј СЃС‚Р°С‚СѓСЃ
       final ok = await isConnected();
       if (!ok) {
-        return const VpnBackendResult(ok: false, message: 'Туннель установлен, но сервис не в состоянии RUNNING.');
+        return const VpnBackendResult(ok: false, message: 'РўСѓРЅРЅРµР»СЊ СѓСЃС‚Р°РЅРѕРІР»РµРЅ, РЅРѕ СЃРµСЂРІРёСЃ РЅРµ РІ СЃРѕСЃС‚РѕСЏРЅРёРё RUNNING.');
       }
 
       return const VpnBackendResult(ok: true);
     } catch (e) {
-      return VpnBackendResult(ok: false, message: 'Ошибка запуска WireGuard: $e');
+      return VpnBackendResult(ok: false, message: 'РћС€РёР±РєР° Р·Р°РїСѓСЃРєР° WireGuard: $e');
     }
   }
 
@@ -2215,20 +2215,20 @@ class WireGuardWindowsBackend extends VpnBackend {
         final err = (res.stderr ?? '').toString().trim();
         return VpnBackendResult(
           ok: false,
-          message: 'WireGuard не отключился.\n'
-              'Возможные причины: нет прав администратора.\n'
+          message: 'WireGuard РЅРµ РѕС‚РєР»СЋС‡РёР»СЃСЏ.\n'
+              'Р’РѕР·РјРѕР¶РЅС‹Рµ РїСЂРёС‡РёРЅС‹: РЅРµС‚ РїСЂР°РІ Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂР°.\n'
               '${err.isNotEmpty ? err : out}',
         );
       }
 
       final ok = await isConnected();
       if (ok) {
-        return const VpnBackendResult(ok: false, message: 'Сервис всё ещё RUNNING после отключения.');
+        return const VpnBackendResult(ok: false, message: 'РЎРµСЂРІРёСЃ РІСЃС‘ РµС‰С‘ RUNNING РїРѕСЃР»Рµ РѕС‚РєР»СЋС‡РµРЅРёСЏ.');
       }
 
       return const VpnBackendResult(ok: true);
     } catch (e) {
-      return VpnBackendResult(ok: false, message: 'Ошибка отключения WireGuard: $e');
+      return VpnBackendResult(ok: false, message: 'РћС€РёР±РєР° РѕС‚РєР»СЋС‡РµРЅРёСЏ WireGuard: $e');
     }
   }
 
@@ -2244,3 +2244,4 @@ class WireGuardWindowsBackend extends VpnBackend {
     }
   }
 }
+
