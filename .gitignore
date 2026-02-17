@@ -1,4 +1,4 @@
-﻿# Flutter/Dart
+# Flutter/Dart
 .dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
@@ -19,18 +19,21 @@ coverage/
 **/ios/Flutter/Flutter.podspec
 **/ios/Pods/
 
-# Garbage from console copy-paste
-0
-1
-16.02.2026
+# OS junk
+Thumbs.db
+Desktop.ini
+
+# Console junk
 cd
 dir
-flutter
-bluevpn_ui.bundle
-(
-del
 git
 main
-Серийный
-Содержимое
-Том
+(
+
+Microsoft
+del
+type
+
+Microsoft
+del
+type
