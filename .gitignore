@@ -42,3 +42,13 @@ type
 BlueVPN.conf
 *.conf
 
+# --- local secrets / configs ---
+*.conf
+BlueVPN.conf
+
+# --- accidental files created by wrong commands ---
+/cd
+/copy
+/dir
+/net
+/sc
