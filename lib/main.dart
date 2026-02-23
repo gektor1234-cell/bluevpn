@@ -1,4 +1,4 @@
-// lib/main.dart
+﻿// lib/main.dart
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -8,6 +8,8 @@ import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 
 /*
   BlueVPN — режим "как пользовательский продукт":
@@ -71,9 +73,35 @@ class BlueVPNApp extends StatefulWidget {
 }
 
 class _BlueVPNAppState extends State<BlueVPNApp> {
+  final PrefsStore _prefsStore = PrefsStore();
   ThemeMode _themeMode = ThemeMode.light;
 
-  void _setThemeMode(ThemeMode mode) => setState(() => _themeMode = mode);
+  @override
+  void initState() {
+    super.initState();
+    _loadPrefs();
+  }
+
+  void _loadPrefs() {
+    if (kIsWeb) return;
+    unawaited(() async {
+      final p = await _prefsStore.readPrefs();
+      if (!mounted) return;
+      setState(() {
+        _themeMode = p.themeMode == 'dark' ? ThemeMode.dark : ThemeMode.light;
+      });
+    }());
+  }
+
+  void _setThemeMode(ThemeMode mode) {
+    setState(() => _themeMode = mode);
+    if (kIsWeb) return;
+    unawaited(
+      _prefsStore.patch({
+        'themeMode': mode == ThemeMode.dark ? 'dark' : 'light',
+      }),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -298,6 +326,228 @@ class DeviceIdStore {
 }
 
 /* =========================
+   PREFS (LOCAL UI SETTINGS)
+   ========================= */
+
+class Prefs {
+  final String themeMode; // 'light' | 'dark'
+  final String language;
+
+  final String serverId;
+
+  final bool socialOnlyEnabled;
+  final List<String> socialOnlyApps; // SocialApp.name
+
+  final List<String> selectedApps; // TariffApp.name
+  final String trafficPack; // TrafficPack.name
+  final double trafficGb;
+  final int devices;
+
+  final bool optNoAds;
+  final bool optSmartRouting;
+  final bool optDedicatedIp;
+
+  const Prefs({
+    required this.themeMode,
+    required this.language,
+    required this.serverId,
+    required this.socialOnlyEnabled,
+    required this.socialOnlyApps,
+    required this.selectedApps,
+    required this.trafficPack,
+    required this.trafficGb,
+    required this.devices,
+    required this.optNoAds,
+    required this.optSmartRouting,
+    required this.optDedicatedIp,
+  });
+
+  static Prefs defaults() => const Prefs(
+    themeMode: 'light',
+    language: 'Русский',
+    serverId: 'auto',
+    socialOnlyEnabled: false,
+    socialOnlyApps: ['telegram', 'instagram'],
+    selectedApps: [],
+    trafficPack: 'gb20',
+    trafficGb: 20,
+    devices: 1,
+    optNoAds: true,
+    optSmartRouting: true,
+    optDedicatedIp: false,
+  );
+
+  Prefs copyWith({
+    String? themeMode,
+    String? language,
+    String? serverId,
+    bool? socialOnlyEnabled,
+    List<String>? socialOnlyApps,
+    List<String>? selectedApps,
+    String? trafficPack,
+    double? trafficGb,
+    int? devices,
+    bool? optNoAds,
+    bool? optSmartRouting,
+    bool? optDedicatedIp,
+  }) {
+    return Prefs(
+      themeMode: themeMode ?? this.themeMode,
+      language: language ?? this.language,
+      serverId: serverId ?? this.serverId,
+      socialOnlyEnabled: socialOnlyEnabled ?? this.socialOnlyEnabled,
+      socialOnlyApps: socialOnlyApps ?? this.socialOnlyApps,
+      selectedApps: selectedApps ?? this.selectedApps,
+      trafficPack: trafficPack ?? this.trafficPack,
+      trafficGb: trafficGb ?? this.trafficGb,
+      devices: devices ?? this.devices,
+      optNoAds: optNoAds ?? this.optNoAds,
+      optSmartRouting: optSmartRouting ?? this.optSmartRouting,
+      optDedicatedIp: optDedicatedIp ?? this.optDedicatedIp,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'themeMode': themeMode,
+    'language': language,
+    'serverId': serverId,
+    'socialOnlyEnabled': socialOnlyEnabled,
+    'socialOnlyApps': socialOnlyApps,
+    'selectedApps': selectedApps,
+    'trafficPack': trafficPack,
+    'trafficGb': trafficGb,
+    'devices': devices,
+    'optNoAds': optNoAds,
+    'optSmartRouting': optSmartRouting,
+    'optDedicatedIp': optDedicatedIp,
+  };
+
+  static Prefs fromJson(Map<String, dynamic> map) {
+    final d = Prefs.defaults();
+
+    String _s(String k, String def) {
+      final v = map[k];
+      if (v == null) return def;
+      final s = v.toString().trim();
+      return s.isEmpty ? def : s;
+    }
+
+    bool _b(String k, bool def) {
+      final v = map[k];
+      if (v is bool) return v;
+      if (v is num) return v != 0;
+      if (v is String) {
+        final s = v.toLowerCase();
+        if (s == 'true' || s == '1' || s == 'yes') return true;
+        if (s == 'false' || s == '0' || s == 'no') return false;
+      }
+      return def;
+    }
+
+    int _i(String k, int def) {
+      final v = map[k];
+      if (v is int) return v;
+      if (v is num) return v.round();
+      if (v is String) return int.tryParse(v) ?? def;
+      return def;
+    }
+
+    double _d(String k, double def) {
+      final v = map[k];
+      if (v is double) return v;
+      if (v is int) return v.toDouble();
+      if (v is num) return v.toDouble();
+      if (v is String) return double.tryParse(v.replaceAll(',', '.')) ?? def;
+      return def;
+    }
+
+    List<String> _ls(String k, List<String> def) {
+      final v = map[k];
+      if (v is List) {
+        final out = <String>[];
+        for (final it in v) {
+          if (it == null) continue;
+          final s = it.toString().trim();
+          if (s.isNotEmpty) out.add(s);
+        }
+        return out;
+      }
+      return def;
+    }
+
+    final theme = _s('themeMode', d.themeMode);
+    final safeTheme = (theme == 'dark' || theme == 'light')
+        ? theme
+        : d.themeMode;
+
+    return d.copyWith(
+      themeMode: safeTheme,
+      language: _s('language', d.language),
+      serverId: _s('serverId', d.serverId),
+      socialOnlyEnabled: _b('socialOnlyEnabled', d.socialOnlyEnabled),
+      socialOnlyApps: _ls('socialOnlyApps', d.socialOnlyApps),
+      selectedApps: _ls('selectedApps', d.selectedApps),
+      trafficPack: _s('trafficPack', d.trafficPack),
+      trafficGb: _d('trafficGb', d.trafficGb).clamp(1.0, 500.0),
+      devices: _i('devices', d.devices).clamp(1, 5),
+      optNoAds: _b('optNoAds', d.optNoAds),
+      optSmartRouting: _b('optSmartRouting', d.optSmartRouting),
+      optDedicatedIp: _b('optDedicatedIp', d.optDedicatedIp),
+    );
+  }
+}
+
+class PrefsStore {
+  Future<String> _appDirPath() async {
+    final base = Platform.environment['APPDATA'];
+    final dir = Directory(
+      base != null && base.isNotEmpty ? '$base\\BlueVPN' : 'BlueVPN',
+    );
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+    return dir.path;
+  }
+
+  Future<File> _file() async {
+    final dir = await _appDirPath();
+    return File('$dir\\prefs.json');
+  }
+
+  Future<Map<String, dynamic>> _readMap() async {
+    if (kIsWeb) return <String, dynamic>{};
+    try {
+      final f = await _file();
+      if (!f.existsSync()) return <String, dynamic>{};
+      final raw = await f.readAsString();
+      final decoded = jsonDecode(raw);
+      if (decoded is Map<String, dynamic>) return decoded;
+      return <String, dynamic>{};
+    } catch (_) {
+      return <String, dynamic>{};
+    }
+  }
+
+  Future<void> _writeMap(Map<String, dynamic> map) async {
+    if (kIsWeb) return;
+    final f = await _file();
+    await f.writeAsString(jsonEncode(map));
+  }
+
+  Future<Prefs> readPrefs() async {
+    final m = await _readMap();
+    return Prefs.fromJson(m);
+  }
+
+  Future<void> patch(Map<String, dynamic> patch) async {
+    if (kIsWeb) return;
+    final m = await _readMap();
+    for (final e in patch.entries) {
+      m[e.key] = e.value;
+    }
+    await _writeMap(m);
+  }
+}
+
+/* =========================
    API CLIENT (SERVER AUTH + PROVISION)
    ========================= */
 
@@ -442,45 +692,41 @@ class BlueVpnApi {
    ========================= */
 
 class ConfigStore {
-  Future<String> _baseDir() async {
-    final base = Platform.environment['APPDATA'];
-    final dir = Directory(
-      base != null && base.isNotEmpty
-          ? '$base\\BlueVPN\\configs'
-          : 'BlueVPN\\configs',
-    );
-    if (!dir.existsSync()) dir.createSync(recursive: true);
-    return dir.path;
-  }
-
-  Future<String> managedConfigPath() async {
-    final dir = await _baseDir();
-    return '$dir\\$kTunnelName.conf';
+  // Managed config path. Stored in ProgramData so the WireGuard service (LocalSystem) can read it.
+  String get managedConfigPath {
+    if (kIsWeb) return '';
+    if (!Platform.isWindows) return '';
+    return r'C:\ProgramData\BlueVPN\BlueVPN.conf';
   }
 
   Future<bool> hasManagedConfig() async {
     if (kIsWeb) return false;
-    final p = await managedConfigPath();
+    final p = managedConfigPath;
+    if (p.isEmpty) return false;
     return File(p).existsSync();
   }
 
-  Future<void> writeManagedConfig(String configText) async {
+  Future<void> writeManagedConfig(String content) async {
     if (kIsWeb) return;
-    final p = await managedConfigPath();
-    await File(p).writeAsString(configText);
+    final p = managedConfigPath;
+    if (p.isEmpty) return;
+    final f = File(p);
+    if (!f.parent.existsSync()) {
+      f.parent.createSync(recursive: true);
+    }
+    await f.writeAsString(content);
   }
 
   Future<void> deleteManagedConfig() async {
     if (kIsWeb) return;
-    try {
-      final p = await managedConfigPath();
-      final f = File(p);
-      if (f.existsSync()) f.deleteSync();
-    } catch (_) {}
+    final p = managedConfigPath;
+    if (p.isEmpty) return;
+    final f = File(p);
+    if (f.existsSync()) {
+      await f.delete();
+    }
   }
-}
-
-/* =========================
+}/* =========================
    AUTH UI
    ========================= */
 
@@ -829,12 +1075,19 @@ class _RootShellState extends State<RootShell> {
   // ===== SETTINGS (косметика) =====
   String sLanguage = 'Русский';
 
+  // Local prefs (persist UI settings)
+  final PrefsStore _prefsStore = PrefsStore();
+  Timer? _prefsDebounce;
+
   void goToTab(int i) => setState(() => _index = i);
 
   @override
   void initState() {
     super.initState();
     _vpnBackend = VpnBackend.createDefault(tunnelName: kTunnelName);
+
+    _loadPrefsAndApply();
+
     _syncVpnStatus();
     _ensureProvisionedConfigSilently();
     _syncPlanSilently();
@@ -842,6 +1095,103 @@ class _RootShellState extends State<RootShell> {
 
   void _toast(BuildContext context, String text) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  Future<void> _loadPrefsAndApply() async {
+    if (kIsWeb) return;
+
+    try {
+      final p = await _prefsStore.readPrefs();
+      if (!mounted) return;
+
+      // Apply language
+      sLanguage = p.language;
+
+      // Apply server
+      final srv = servers.firstWhere(
+        (s) => s.id == p.serverId,
+        orElse: () => servers.first,
+      );
+      selectedServer = srv;
+
+      // Apply social-only
+      socialOnlyEnabled = p.socialOnlyEnabled;
+      socialOnlyApps
+        ..clear()
+        ..addAll(
+          p.socialOnlyApps
+              .map(
+                (n) => SocialApp.values.firstWhere(
+                  (e) => e.name == n,
+                  orElse: () => SocialApp.telegram,
+                ),
+              )
+              .toSet(),
+        );
+      if (socialOnlyApps.isEmpty) {
+        socialOnlyApps.addAll({SocialApp.telegram, SocialApp.instagram});
+      }
+
+      // Apply tariff settings
+      selectedApps
+        ..clear()
+        ..addAll(
+          p.selectedApps
+              .map(
+                (n) => TariffApp.values.firstWhere(
+                  (e) => e.name == n,
+                  orElse: () => TariffApp.telegram,
+                ),
+              )
+              .toSet(),
+        );
+
+      trafficPack = TrafficPack.values.firstWhere(
+        (e) => e.name == p.trafficPack,
+        orElse: () => TrafficPack.gb20,
+      );
+      trafficGb = p.trafficGb.clamp(1.0, 500.0);
+      devices = p.devices.clamp(1, 5);
+
+      optNoAds = p.optNoAds;
+      optSmartRouting = p.optSmartRouting;
+      optDedicatedIp = p.optDedicatedIp;
+
+      if (!optSmartRouting) {
+        socialOnlyEnabled = false;
+      }
+
+      if (mounted) setState(() {});
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  void _schedulePrefsSave() {
+    if (kIsWeb) return;
+    _prefsDebounce?.cancel();
+    _prefsDebounce = Timer(const Duration(milliseconds: 350), () {
+      unawaited(
+        _prefsStore.patch({
+          'language': sLanguage,
+          'serverId': selectedServer.id,
+          'socialOnlyEnabled': socialOnlyEnabled,
+          'socialOnlyApps': socialOnlyApps.map((e) => e.name).toList(),
+          'selectedApps': selectedApps.map((e) => e.name).toList(),
+          'trafficPack': trafficPack.name,
+          'trafficGb': trafficGb,
+          'devices': devices,
+          'optNoAds': optNoAds,
+          'optSmartRouting': optSmartRouting,
+          'optDedicatedIp': optDedicatedIp,
+        }),
+      );
+    });
+  }
+
+  void _setLanguage(String v) {
+    setState(() => sLanguage = v);
+    _schedulePrefsSave();
   }
 
   Future<void> _syncVpnStatus() async {
@@ -974,11 +1324,24 @@ class _RootShellState extends State<RootShell> {
         final ok = await _ensureProvisionedConfigInteractive();
         if (!ok) return;
 
-        final configPath = await _cfg.managedConfigPath();
+        final configPath = await _cfg.managedConfigPath;
         final res = await _vpnBackend.connect(configPath: configPath);
         if (!res.ok) {
           _toast(context, res.message ?? 'Не удалось подключить VPN.');
           await _syncVpnStatus();
+          var onNow = false;
+for (var i = 0; i < 40; i++) {
+  onNow = await _vpnBackend.isConnected();
+  if (onNow) break;
+  await Future.delayed(const Duration(milliseconds: 250));
+}
+if (mounted) setState(() => vpnEnabled = onNow);
+if (!onNow) {
+  _toast(context, 'VPN did not start (service not RUNNING).');
+  await _syncVpnStatus();
+  return;
+}
+
           return;
         }
 
@@ -989,6 +1352,9 @@ class _RootShellState extends State<RootShell> {
         if (!res.ok) {
           _toast(context, res.message ?? 'Не удалось отключить VPN.');
           await _syncVpnStatus();
+          final onNow = await _vpnBackend.isConnected();
+          if (mounted) setState(() => vpnEnabled = onNow);
+
           return;
         }
 
@@ -1118,6 +1484,14 @@ class _RootShellState extends State<RootShell> {
 
     if (picked != null) {
       setState(() => selectedServer = picked);
+      _schedulePrefsSave();
+
+      // Если VPN сейчас выключен — сносим старый конфиг, чтобы при следующем включении подтянуть новый.
+      if (!vpnEnabled) {
+        unawaited(_cfg.deleteManagedConfig());
+      } else {
+        _toast(context, 'Сервер изменён. Переподключись, чтобы применить.');
+      }
     }
   }
 
@@ -1288,7 +1662,14 @@ class _RootShellState extends State<RootShell> {
           ..clear()
           ..addAll(picked);
       });
+      _schedulePrefsSave();
     }
+  }
+
+  @override
+  void dispose() {
+    _prefsDebounce?.cancel();
+    super.dispose();
   }
 
   @override
@@ -1316,6 +1697,7 @@ class _RootShellState extends State<RootShell> {
             return;
           }
           setState(() => socialOnlyEnabled = v);
+          _schedulePrefsSave();
         },
         onConfigureSocialApps: () {
           if (!optSmartRouting) {
@@ -1347,11 +1729,24 @@ class _RootShellState extends State<RootShell> {
               selectedApps.add(app);
             }
           });
+          _schedulePrefsSave();
         },
-        onTrafficChanged: (p) => setState(() => trafficPack = p),
-        onTrafficGbChanged: (gb) => setState(() => trafficGb = gb),
-        onDevicesChanged: (v) => setState(() => devices = v.clamp(1, 5)),
-        onOptNoAds: (v) => setState(() => optNoAds = v),
+        onTrafficChanged: (p) {
+          setState(() => trafficPack = p);
+          _schedulePrefsSave();
+        },
+        onTrafficGbChanged: (gb) {
+          setState(() => trafficGb = gb);
+          _schedulePrefsSave();
+        },
+        onDevicesChanged: (v) {
+          setState(() => devices = v.clamp(1, 5));
+          _schedulePrefsSave();
+        },
+        onOptNoAds: (v) {
+          setState(() => optNoAds = v);
+          _schedulePrefsSave();
+        },
         onOptSmartRouting: (v) {
           setState(() {
             optSmartRouting = v;
@@ -1361,8 +1756,12 @@ class _RootShellState extends State<RootShell> {
               socialOnlyEnabled = false;
             }
           });
+          _schedulePrefsSave();
         },
-        onOptDedicatedIp: (v) => setState(() => optDedicatedIp = v),
+        onOptDedicatedIp: (v) {
+          setState(() => optDedicatedIp = v);
+          _schedulePrefsSave();
+        },
       ),
 
       const TasksPage(),
@@ -1376,10 +1775,15 @@ class _RootShellState extends State<RootShell> {
           title: 'Язык',
           current: sLanguage,
           items: const ['Русский', 'English'],
-          onSelect: (v) => setState(() => sLanguage = v),
+          onSelect: (v) => _setLanguage(v),
         ),
         email: widget.session.email,
         onLogout: widget.onLogout,
+        onOpenDiagnostics: () {
+          Navigator.of(
+            context,
+          ).push(MaterialPageRoute(builder: (_) => const DiagnosticsPage()));
+        },
       ),
     ];
 
@@ -1793,6 +2197,7 @@ class _BigToggle extends StatelessWidget {
 
     return GestureDetector(
       onTap: onTap,
+        onHorizontalDragEnd: (_) => onTap(),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 220),
         width: 210,
@@ -2212,6 +2617,7 @@ class SettingsPage extends StatelessWidget {
 
   final String email;
   final Future<void> Function() onLogout;
+  final VoidCallback onOpenDiagnostics;
 
   const SettingsPage({
     super.key,
@@ -2221,6 +2627,7 @@ class SettingsPage extends StatelessWidget {
     required this.onPickLanguage,
     required this.email,
     required this.onLogout,
+    required this.onOpenDiagnostics,
   });
 
   @override
@@ -2290,6 +2697,13 @@ class SettingsPage extends StatelessWidget {
               children: [
                 const _SectionTitle('О приложении'),
                 const SizedBox(height: 8),
+                _SettingsActionRow(
+                  title: 'Диагностика',
+                  subtitle: 'Проверка WireGuard, прав и конфигурации',
+                  icon: Icons.health_and_safety_rounded,
+                  onTap: onOpenDiagnostics,
+                ),
+                const Divider(height: 18),
                 _SettingsActionRow(
                   title: 'О BlueVPN',
                   subtitle: 'UI-прототип. Дальше подключим сервер и подписку.',
@@ -2789,6 +3203,275 @@ class _Card extends StatelessWidget {
 }
 
 /* =========================
+   DIAGNOSTICS (READ-ONLY)
+   ========================= */
+
+class DiagnosticsPage extends StatefulWidget {
+  const DiagnosticsPage({super.key});
+
+  @override
+  State<DiagnosticsPage> createState() => _DiagnosticsPageState();
+}
+
+class _DiagnosticsPageState extends State<DiagnosticsPage> {
+  bool _loading = true;
+
+  String _appDataPath = '';
+  String _configPath = '';
+  bool _configExists = false;
+
+  bool _isAdmin = false;
+
+  String _wgExe = '';
+  bool _wgFound = false;
+
+  String _serviceName = '';
+  String _serviceState = 'unknown';
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  Future<void> _refresh() async {
+    setState(() => _loading = true);
+
+    final app = Platform.environment['APPDATA'] ?? '';
+    _appDataPath = app.isEmpty ? '(APPDATA не найден)' : '$app\\BlueVPN';
+
+    final cfg = ConfigStore();
+    _configPath = await cfg.managedConfigPath;
+    _configExists = File(_configPath).existsSync();
+
+    _wgExe = _resolveWireGuardExe();
+    _wgFound =
+        File(_wgExe).existsSync() || _wgExe.toLowerCase() == 'wireguard.exe';
+
+    _isAdmin = await _isAdminWindows();
+
+    _serviceName = 'WireGuardTunnel\$${kTunnelName}';
+    _serviceState = await _queryServiceState(_serviceName);
+
+    if (!mounted) return;
+    setState(() => _loading = false);
+  }
+
+  static String _resolveWireGuardExe() {
+    final candidates = <String>[];
+
+    final pf = Platform.environment['ProgramFiles'];
+    final pf86 = Platform.environment['ProgramFiles(x86)'];
+
+    if (pf != null) candidates.add('$pf\\WireGuard\\wireguard.exe');
+    if (pf86 != null) candidates.add('$pf86\\WireGuard\\wireguard.exe');
+
+    candidates.add(r'C:\Program Files\WireGuard\wireguard.exe');
+    candidates.add(r'C:\Program Files (x86)\WireGuard\wireguard.exe');
+
+    for (final c in candidates) {
+      if (File(c).existsSync()) return c;
+    }
+    return 'wireguard.exe';
+  }
+
+  static Future<bool> _isAdminWindows() async {
+    if (!Platform.isWindows) return false;
+    try {
+      final res = await Process.run('whoami', ['/groups'], runInShell: true);
+      if (res.exitCode != 0) return false;
+      final out = (res.stdout ?? '').toString();
+      return out.contains('S-1-5-32-544');
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<String> _queryServiceState(String serviceName) async {
+    if (!Platform.isWindows) return 'unsupported';
+    try {
+      final res = await Process.run('sc', [
+        'query',
+        serviceName,
+      ], runInShell: true);
+      if (res.exitCode != 0) return 'not_installed';
+      final out = (res.stdout ?? '').toString();
+      if (out.contains('RUNNING')) return 'running';
+      if (out.contains('STOPPED')) return 'stopped';
+      return 'unknown';
+    } catch (_) {
+      return 'unknown';
+    }
+  }
+
+  void _copyReport() {
+    final lines = <String>[
+      'BlueVPN Diagnostics',
+      'AppData: $_appDataPath',
+      'Config: $_configPath',
+      'Config exists: $_configExists',
+      'WireGuard exe: $_wgExe',
+      'WireGuard found: $_wgFound',
+      'Admin: $_isAdmin',
+      'Service: $_serviceName ($_serviceState)',
+    ];
+
+    Clipboard.setData(ClipboardData(text: lines.join('\n')));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Отчёт скопирован в буфер.')));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Диагностика'),
+        actions: [
+          IconButton(
+            tooltip: 'Обновить',
+            onPressed: _loading ? null : _refresh,
+            icon: const Icon(Icons.refresh_rounded),
+          ),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                _DiagTile(
+                  title: 'WireGuard установлен',
+                  value: _wgFound ? 'Да' : 'Нет',
+                  subtitle: _wgExe,
+                  ok: _wgFound,
+                ),
+                const SizedBox(height: 10),
+                _DiagTile(
+                  title: 'Права администратора',
+                  value: _isAdmin ? 'Да' : 'Нет',
+                  subtitle: _isAdmin
+                      ? 'Ок'
+                      : 'Для подключения/отключения через wireguard.exe нужны права администратора.\nЗапусти приложение от имени администратора.',
+                  ok: _isAdmin,
+                ),
+                const SizedBox(height: 10),
+                _DiagTile(
+                  title: 'Конфигурация (скрытая)',
+                  value: _configExists ? 'Есть' : 'Нет',
+                  subtitle: _configPath,
+                  ok: _configExists,
+                ),
+                const SizedBox(height: 10),
+                _DiagTile(
+                  title: 'Сервис WireGuard',
+                  value: _serviceState,
+                  subtitle: _serviceName,
+                  ok: _serviceState == 'running' || _serviceState == 'stopped',
+                ),
+                const SizedBox(height: 14),
+                _Card(
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.content_copy_rounded,
+                        color: Color(0xFF2563EB),
+                      ),
+                      const SizedBox(width: 10),
+                      const Expanded(
+                        child: Text(
+                          'Скопировать отчёт',
+                          style: TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF2563EB),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        onPressed: _copyReport,
+                        child: const Text('Копировать'),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+    );
+  }
+}
+
+class _DiagTile extends StatelessWidget {
+  final String title;
+  final String value;
+  final String subtitle;
+  final bool ok;
+
+  const _DiagTile({
+    required this.title,
+    required this.value,
+    required this.subtitle,
+    required this.ok,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return _Card(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: ok ? const Color(0xFFEFF6FF) : const Color(0xFFFFF1F2),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(
+              ok ? Icons.check_circle_rounded : Icons.error_rounded,
+              color: ok ? const Color(0xFF2563EB) : const Color(0xFFDC2626),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  value,
+                  style: TextStyle(
+                    color: theme.colorScheme.onSurface.withOpacity(0.7),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    color: theme.colorScheme.onSurface.withOpacity(0.55),
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/* =========================
    BACKEND (WIREGUARD FOR WINDOWS)
    ========================= */
 
@@ -2808,14 +3491,14 @@ abstract class VpnBackend {
   static VpnBackend createDefault({required String tunnelName}) {
     if (kIsWeb) {
       return const UnsupportedVpnBackend(
-        reason:
-            'Web-режим: реальное подключение недоступно. Запусти как Windows.',
+        reason: 'Web mode: VPN backend is not available.',
       );
     }
-    if (Platform.isWindows)
+    if (Platform.isWindows) {
       return WireGuardWindowsBackend(tunnelName: tunnelName);
+    }
     return const UnsupportedVpnBackend(
-      reason: 'Платформа не поддерживается (пока сделано под Windows).',
+      reason: 'Unsupported platform (Windows-only backend).',
     );
   }
 }
@@ -2840,8 +3523,11 @@ class WireGuardWindowsBackend extends VpnBackend {
   final String tunnelName;
   final String _exe;
 
+  // remember last configPath for cleanup (route removal)
+  String? _lastConfigPath;
+
   WireGuardWindowsBackend({required this.tunnelName})
-    : _exe = _resolveWireGuardExe();
+      : _exe = _resolveWireGuardExe();
 
   static String _resolveWireGuardExe() {
     final candidates = <String>[];
@@ -2849,8 +3535,12 @@ class WireGuardWindowsBackend extends VpnBackend {
     final pf = Platform.environment['ProgramFiles'];
     final pf86 = Platform.environment['ProgramFiles(x86)'];
 
-    if (pf != null) candidates.add('$pf\WireGuard\wireguard.exe');
-    if (pf86 != null) candidates.add('$pf86\WireGuard\wireguard.exe');
+    if (pf != null && pf.trim().isNotEmpty) {
+      candidates.add('${pf.trim()}\\WireGuard\\wireguard.exe');
+    }
+    if (pf86 != null && pf86.trim().isNotEmpty) {
+      candidates.add('${pf86.trim()}\\WireGuard\\wireguard.exe');
+    }
 
     candidates.add(r'C:\Program Files\WireGuard\wireguard.exe');
     candidates.add(r'C:\Program Files (x86)\WireGuard\wireguard.exe');
@@ -2861,22 +3551,12 @@ class WireGuardWindowsBackend extends VpnBackend {
     return 'wireguard.exe';
   }
 
-  String get _serviceName => 'WireGuardTunnel\$${tunnelName}';
+  // IMPORTANT: literal '$' must NOT be used with interpolation like $${tunnelName}
+  // Use raw string + concat.
+  String get _serviceName => r'WireGuardTunnel$' + tunnelName;
 
   Future<ProcessResult> _run(String exe, List<String> args) async {
     return Process.run(exe, args, runInShell: true);
-  }
-
-  Future<bool> _isAdmin() async {
-    // Админ-группа BUILTIN\Administrators имеет SID S-1-5-32-544
-    try {
-      final res = await _run('whoami', ['/groups']);
-      if (res.exitCode != 0) return false;
-      final out = (res.stdout ?? '').toString();
-      return out.contains('S-1-5-32-544');
-    } catch (_) {
-      return false;
-    }
   }
 
   List<int> _utf16le(String s) {
@@ -2890,206 +3570,247 @@ class WireGuardWindowsBackend extends VpnBackend {
   }
 
   Future<ProcessResult> _runElevatedPowerShell(String innerScript) async {
-    // Запускаем PowerShell с UAC один раз и выполняем innerScript внутри.
-    // Чтобы не мучиться с кавычками — используем -EncodedCommand (UTF-16LE + Base64).
+    // Run innerScript with UAC using -EncodedCommand (UTF-16LE Base64)
     final encoded = base64.encode(_utf16le(innerScript));
 
-    final outer =
-        r"""
-$ErrorActionPreference = "Stop"
-$encoded = "ENCODED_PAYLOAD"
+    final outer = r'''
+$ErrorActionPreference="Stop"
+$enc="__ENC__"
 $p = Start-Process -FilePath "powershell.exe" -Verb RunAs -Wait -PassThru -ArgumentList @(
   "-NoProfile",
   "-ExecutionPolicy","Bypass",
-  "-EncodedCommand",$encoded
+  "-EncodedCommand",$enc
 )
 exit $p.ExitCode
-"""
-            .replaceAll('ENCODED_PAYLOAD', encoded);
+'''.replaceAll('__ENC__', encoded);
 
-    return Process.run('powershell', [
+    return _run('powershell', [
       '-NoProfile',
       '-ExecutionPolicy',
       'Bypass',
       '-Command',
       outer,
-    ], runInShell: true);
+    ]);
   }
 
-  Future<VpnBackendResult> _ensureWireGuardPresent() async {
-    // Проверка: если путь абсолютный — проверим файл.
-    final isAbs = _exe.contains(':\\') || _exe.startsWith(r'\\');
-    if (isAbs && !File(_exe).existsSync()) {
-      return VpnBackendResult(
-        ok: false,
-        message:
-            'WireGuard не найден по пути:\n$_exe\n\nУстанови WireGuard for Windows и попробуй снова.',
-      );
+  static String? _extractEndpointIPv4(String cfg) {
+    final re = RegExp(
+      r'^\s*Endpoint\s*=\s*([0-9]{1,3}(?:\.[0-9]{1,3}){3})\s*:\s*\d+\s*$',
+      multiLine: true,
+    );
+    final m = re.firstMatch(cfg);
+    return m?.group(1);
+  }
+
+  Future<String?> _configPathForCleanup() async {
+    if (_lastConfigPath != null && _lastConfigPath!.trim().isNotEmpty) {
+      return _lastConfigPath;
     }
-    return const VpnBackendResult(ok: true);
+    // best effort: try to parse from sc qc if service exists
+    try {
+      final res = await _run('sc', ['qc', _serviceName]);
+      if (res.exitCode != 0) return null;
+      final out = ('${res.stdout}\n${res.stderr}').toString();
+      final re = RegExp(r'([A-Za-z]:\\[^"\r\n]+\.conf)', caseSensitive: false);
+      return re.firstMatch(out)?.group(1);
+    } catch (_) {
+      return null;
+    }
   }
 
-  String _psQuote(String s) => s.replaceAll('"', '`"');
-
-  @override
+    @override
   Future<VpnBackendResult> connect({required String configPath}) async {
-    final wgCheck = await _ensureWireGuardPresent();
-    if (!wgCheck.ok) return wgCheck;
+    final logFile = File(r'C:\ProgramData\BlueVPN\backend.log');
 
-    if (!File(configPath).existsSync()) {
-      return VpnBackendResult(
-        ok: false,
-        message: 'Конфиг не найден:\n$configPath',
-      );
+    Future<void> log(String s) async {
+      try {
+        final ts = DateTime.now().toIso8601String();
+        await logFile.writeAsString('[' + ts + '] ' + s + '\n', mode: FileMode.append);
+      } catch (_) {}
+    }
+
+    String outOf(ProcessResult r) =>
+        ((r.stdout ?? '').toString() + '\n' + (r.stderr ?? '').toString()).trim();
+
+    bool isRunningText(String out) => out.contains('RUNNING');
+    bool isStoppedText(String out) => out.contains('STOPPED');
+
+    Future<ProcessResult> scQueryEx() => _run('sc', ['queryex', _serviceName]);
+
+    Future<bool> waitRunning({int loops = 60}) async {
+      for (var i = 0; i < loops; i++) {
+        final q = await scQueryEx();
+        final o = outOf(q);
+        await log('queryex(connect)[$i] ec=${q.exitCode} :: ' +
+            o.replaceAll('\r', ' ').replaceAll('\n', ' | '));
+        if (q.exitCode == 0 && isRunningText(o)) return true;
+        await Future.delayed(const Duration(milliseconds: 250));
+      }
+      return false;
     }
 
     try {
-      // Всегда делаем "обновление" туннеля (чтобы конфиг точно применился)
-      if (await _isAdmin()) {
-        // Админ уже есть — делаем без UAC и с нормальными stdout/stderr
-        await _run('sc', ['stop', _serviceName]);
-        await _run(_exe, ['/uninstalltunnelservice', tunnelName]);
+      await log('=== CONNECT requested ===');
+      await log('service=' + _serviceName);
+      await log('exe=' + _exe);
+      await log('cfg=' + configPath);
 
-        final res = await _run(_exe, ['/installtunnelservice', configPath]);
-        if (res.exitCode != 0) {
-          final out = (res.stdout ?? '').toString().trim();
-          final err = (res.stderr ?? '').toString().trim();
-          return VpnBackendResult(
-            ok: false,
-            message: 'WireGuard не поднялся.\n${err.isNotEmpty ? err : out}',
-          );
-        }
-
-        await _run('sc', ['start', _serviceName]);
-      } else {
-        // Нет админа — попросим UAC ОДИН раз и сделаем всё внутри elevated PowerShell.
-        final inner =
-            r"""
-$ErrorActionPreference = "Stop"
-$exe  = "EXE"
-$cfg  = "CFG"
-$tn   = "TN"
-$svc  = "SVC"
-
-# stop (ignore errors)
-sc.exe stop $svc | Out-Null
-
-# uninstall old (ignore errors)
-& $exe /uninstalltunnelservice $tn | Out-Null
-
-# install new
-& $exe /installtunnelservice $cfg | Out-Null
-
-# start
-sc.exe start $svc | Out-Null
-"""
-                .replaceAll('EXE', _psQuote(_exe))
-                .replaceAll('CFG', _psQuote(configPath))
-                .replaceAll('TN', _psQuote(tunnelName))
-                .replaceAll('SVC', _psQuote(_serviceName));
-
-        final pr = await _runElevatedPowerShell(inner);
-        if (pr.exitCode != 0) {
-          final err = (pr.stderr ?? '').toString().trim();
-          final out = (pr.stdout ?? '').toString().trim();
-          final msg = (err + '\n' + out).trim();
-          if (msg.toLowerCase().contains('canceled') ||
-              msg.toLowerCase().contains('отмен')) {
-            return const VpnBackendResult(
-              ok: false,
-              message: 'Операция отменена (UAC).',
-            );
-          }
-          return VpnBackendResult(
-            ok: false,
-            message: msg.isEmpty
-                ? 'Не удалось выполнить команду WireGuard (UAC).'
-                : msg,
-          );
-        }
+      if (!File(configPath).existsSync()) {
+        await log('ERROR: configPath does not exist');
+        return VpnBackendResult(ok: false, message: 'Config not found: $configPath');
       }
 
-      final ok = await isConnected();
+      // 1) ensure service exists: if query fails -> install
+      final q0 = await scQueryEx();
+      final o0 = outOf(q0);
+      await log('queryex(initial) ec=${q0.exitCode} :: ' +
+          o0.replaceAll('\r', ' ').replaceAll('\n', ' | '));
+
+      if (q0.exitCode != 0) {
+        final ins = await _run(_exe, ['/installtunnelservice', configPath]);
+        await log('wireguard install ec=${ins.exitCode} :: ' +
+            outOf(ins).replaceAll('\r', ' ').replaceAll('\n', ' | '));
+      }
+
+      // 2) start
+      final st = await _run('sc', ['start', _serviceName]);
+      await log('sc start ec=${st.exitCode} :: ' +
+          outOf(st).replaceAll('\r', ' ').replaceAll('\n', ' | '));
+
+      // 3) wait RUNNING (up to ~15s)
+      final ok = await waitRunning(loops: 60);
       if (!ok) {
+        await log('=== CONNECT FAIL: not RUNNING after wait ===');
         return const VpnBackendResult(
           ok: false,
-          message: 'Туннель установлен, но сервис не RUNNING.',
+          message: 'VPN did not start (service not RUNNING). See backend.log',
         );
       }
-      return const VpnBackendResult(ok: true);
+
+      // 4) final verify via isConnected()
+      for (var i = 0; i < 40; i++) {
+        final on = await isConnected();
+        await log('verify(connect)[$i] isConnected=' + on.toString());
+        if (on) {
+          await log('=== CONNECT OK ===');
+          return const VpnBackendResult(ok: true);
+        }
+        await Future.delayed(const Duration(milliseconds: 250));
+      }
+
+      await log('=== CONNECT FAIL: verify isConnected still false ===');
+      return const VpnBackendResult(
+        ok: false,
+        message: 'Service RUNNING but isConnected() false. See backend.log',
+      );
     } catch (e) {
-      return VpnBackendResult(ok: false, message: 'Ошибка WireGuard: $e');
+      await log('EXCEPTION(connect): ' + e.toString());
+      return VpnBackendResult(ok: false, message: 'Connect error: $e (see backend.log)');
     }
   }
 
-  @override
+
+    @override
   Future<VpnBackendResult> disconnect() async {
-    final wgCheck = await _ensureWireGuardPresent();
-    if (!wgCheck.ok) return wgCheck;
+    final logFile = File(r'C:\ProgramData\BlueVPN\backend.log');
+
+    Future<void> log(String s) async {
+      try {
+        final ts = DateTime.now().toIso8601String();
+        await logFile.writeAsString('[' + ts + '] ' + s + '\n', mode: FileMode.append);
+      } catch (_) {}
+    }
+
+    String outOf(ProcessResult r) =>
+        ((r.stdout ?? '').toString() + '\n' + (r.stderr ?? '').toString()).trim();
+
+    int? pidFrom(String out) {
+      final m1 = RegExp(r'(?m)^\s*PID\s*:\s*(\d+)\s*$').firstMatch(out);
+      if (m1 != null) return int.tryParse(m1.group(1)!);
+      final m2 = RegExp(r'(?m)^\s*ID_РїСЂРѕС†РµСЃСЃР°\s*:\s*(\d+)\s*$').firstMatch(out);
+      if (m2 != null) return int.tryParse(m2.group(1)!);
+      return null;
+    }
+
+    bool isStoppedText(String out) => out.contains('STOPPED');
+    bool isRunningText(String out) => out.contains('RUNNING');
+
+    Future<ProcessResult> scQueryEx() => _run('sc', ['queryex', _serviceName]);
+
+    Future<bool> waitStopped({int loops = 40}) async {
+      for (var i = 0; i < loops; i++) {
+        final q = await scQueryEx();
+        final o = outOf(q);
+        await log('queryex[$i] ec=${q.exitCode} :: ' + o.replaceAll('\r', ' ').replaceAll('\n', ' | '));
+        if (q.exitCode != 0) return true; // service missing => treated as off
+        if (isStoppedText(o)) return true;
+        await Future.delayed(const Duration(milliseconds: 250));
+      }
+      return false;
+    }
 
     try {
-      if (await _isAdmin()) {
-        await _run('sc', ['stop', _serviceName]);
-        final res = await _run(_exe, ['/uninstalltunnelservice', tunnelName]);
-        if (res.exitCode != 0) {
-          final out = (res.stdout ?? '').toString().trim();
-          final err = (res.stderr ?? '').toString().trim();
-          return VpnBackendResult(
-            ok: false,
-            message: 'WireGuard не отключился.\n${err.isNotEmpty ? err : out}',
-          );
-        }
-      } else {
-        final inner =
-            r"""
-$ErrorActionPreference = "Stop"
-$exe  = "EXE"
-$tn   = "TN"
-$svc  = "SVC"
+      await log('=== DISCONNECT requested ===');
+      await log('service=' + _serviceName);
 
-sc.exe stop $svc | Out-Null
-& $exe /uninstalltunnelservice $tn | Out-Null
-"""
-                .replaceAll('EXE', _psQuote(_exe))
-                .replaceAll('TN', _psQuote(tunnelName))
-                .replaceAll('SVC', _psQuote(_serviceName));
+      // 1) sc stop
+      final stop = await _run('sc', ['stop', _serviceName]);
+      await log('sc stop ec=${stop.exitCode} :: ' + outOf(stop).replaceAll('\r', ' ').replaceAll('\n', ' | '));
 
-        final pr = await _runElevatedPowerShell(inner);
-        if (pr.exitCode != 0) {
-          final err = (pr.stderr ?? '').toString().trim();
-          final out = (pr.stdout ?? '').toString().trim();
-          final msg = (err + '\n' + out).trim();
-          if (msg.toLowerCase().contains('canceled') ||
-              msg.toLowerCase().contains('отмен')) {
-            return const VpnBackendResult(
-              ok: false,
-              message: 'Операция отменена (UAC).',
-            );
-          }
-          return VpnBackendResult(
-            ok: false,
-            message: msg.isEmpty
-                ? 'Не удалось отключить WireGuard (UAC).'
-                : msg,
-          );
+      // 2) wait STOPPED
+      var stopped = await waitStopped(loops: 24); // ~6s
+
+      // 3) if still running -> get PID and taskkill
+      if (!stopped) {
+        final q = await scQueryEx();
+        final o = outOf(q);
+        final pid = pidFrom(o);
+
+        await log('still not stopped. pid=' + (pid?.toString() ?? 'null') + ' running=' + isRunningText(o).toString());
+
+        if (pid != null && pid > 0) {
+          final tk = await _run('taskkill', ['/PID', '$pid', '/F', '/T']);
+          await log('taskkill pid=$pid ec=${tk.exitCode} :: ' + outOf(tk).replaceAll('\r', ' ').replaceAll('\n', ' | '));
+        } else {
+          await log('WARN: PID not parsed from queryex. No taskkill performed.');
         }
+
+        await Future.delayed(const Duration(milliseconds: 400));
+        stopped = await waitStopped(loops: 20); // ~5s
       }
 
-      final ok = await isConnected();
-      if (ok) {
-        return const VpnBackendResult(
-          ok: false,
-          message: 'Сервис всё ещё RUNNING после отключения.',
-        );
+      // 4) last resort: uninstall service
+      if (!stopped) {
+        await log('LAST RESORT: uninstall tunnel service via wireguard.exe');
+        final un = await _run(_exe, ['/uninstalltunnelservice', tunnelName]);
+        await log('wireguard uninstall ec=${un.exitCode} :: ' + outOf(un).replaceAll('\r', ' ').replaceAll('\n', ' | '));
+
+        await Future.delayed(const Duration(milliseconds: 600));
+        stopped = await waitStopped(loops: 24);
       }
-      return const VpnBackendResult(ok: true);
-    } catch (e) {
-      return VpnBackendResult(
+
+      // 5) final verify (wait a bit)
+      for (var i = 0; i < 40; i++) {
+        final on = await isConnected();
+        await log('verify[$i] isConnected=' + on.toString());
+        if (!on) {
+          await log('=== DISCONNECT OK ===');
+          return const VpnBackendResult(ok: true);
+        }
+        await Future.delayed(const Duration(milliseconds: 250));
+      }
+
+      await log('=== DISCONNECT FAIL: still RUNNING ===');
+      return const VpnBackendResult(
         ok: false,
-        message: 'Ошибка отключения WireGuard: $e',
+        message: 'Service still RUNNING after stop/kill/uninstall. See log: C:\\ProgramData\\BlueVPN\\backend.log',
       );
+    } catch (e) {
+      await log('EXCEPTION: ' + e.toString());
+      return VpnBackendResult(ok: false, message: 'Disconnect error: $e (see backend.log)');
     }
   }
+
 
   @override
   Future<bool> isConnected() async {
@@ -3103,3 +3824,11 @@ sc.exe stop $svc | Out-Null
     }
   }
 }
+
+
+
+
+
+
+
+
