@@ -26,7 +26,7 @@ const String kTunnelName = 'BlueVPN';
 // TODO: поставь реальный URL API твоего сервера (без / в конце).
 const String kApiBaseUrl = String.fromEnvironment(
   'BLUEVPN_API_BASE_URL',
-  defaultValue: 'http://127.0.0.1:8000',
+  defaultValue: 'https://api.example.com',
 );
 
 // DEV-кнопка для входа без сервера появляется ТОЛЬКО в debug.
@@ -571,7 +571,7 @@ class BlueVpnApi {
     required String email,
     required String password,
   }) async {
-    return _postSession('/api/v1/auth/register', {
+    return _postSession('/v1/auth/register', {
       'email': email,
       'password': password,
     });
@@ -581,66 +581,35 @@ class BlueVpnApi {
     required String email,
     required String password,
   }) async {
-    return _postSession('/api/v1/auth/login', {
+    return _postSession('/v1/auth/login', {
       'email': email,
       'password': password,
     });
   }
 
-    Future<ApiResult<String>> fetchPlanName({
+  Future<ApiResult<String>> fetchPlanName({
     required String accessToken,
     String? deviceId,
   }) async {
+    // Ожидаем JSON вида: { "plan": "Base" } или { "planName": "Base" }
     try {
       final client = HttpClient();
-      final req = await client.getUrl(_u('/api/v1/subscription/me'));
+      final req = await client.getUrl(_u('/v1/me'));
       req.headers.set('Authorization', 'Bearer $accessToken');
+      if (deviceId != null && deviceId.isNotEmpty) {
+        req.headers.set('X-Device-Id', deviceId);
+      }
       final res = await req.close();
       final body = await utf8.decodeStream(res);
 
       if (res.statusCode >= 200 && res.statusCode < 300) {
-        final jsonMap = Map<String, dynamic>.from(jsonDecode(body) as Map);
-        final p = (jsonMap['planName'] ?? jsonMap['planCode'] ?? 'Base')
-            .toString();
+        final jsonMap = jsonDecode(body) as Map<String, dynamic>;
+        final p = (jsonMap['plan'] ?? jsonMap['planName'] ?? 'Base').toString();
         return ApiResult.ok(p.isEmpty ? 'Base' : p);
       }
-      return ApiResult.err('РћС€РёР±РєР° СЃРµСЂРІРµСЂР° (${res.statusCode}): $body');
+      return ApiResult.err('Ошибка сервера (${res.statusCode}): $body');
     } catch (e) {
-      return ApiResult.err('РћС€РёР±РєР° СЃРµС‚Рё: $e');
-    }
-  }
-
-  Future<ApiResult<Map<String, dynamic>>> bootstrapClient({
-    required String accessToken,
-    required String deviceId,
-    required String deviceName,
-    String platform = 'windows',
-    String appVersion = '0.1.0',
-  }) async {
-    try {
-      final client = HttpClient();
-      final req = await client.postUrl(_u('/api/v1/client/bootstrap'));
-      req.headers.contentType = ContentType.json;
-      req.headers.set('Authorization', 'Bearer $accessToken');
-      req.write(
-        jsonEncode({
-          'deviceUid': deviceId,
-          'deviceName': deviceName,
-          'platform': platform,
-          'appVersion': appVersion,
-        }),
-      );
-
-      final res = await req.close();
-      final body = await utf8.decodeStream(res);
-
-      if (res.statusCode >= 200 && res.statusCode < 300) {
-        final jsonMap = Map<String, dynamic>.from(jsonDecode(body) as Map);
-        return ApiResult.ok(jsonMap);
-      }
-      return ApiResult.err('РћС€РёР±РєР° bootstrap (${res.statusCode}): $body');
-    } catch (e) {
-      return ApiResult.err('РћС€РёР±РєР° bootstrap: $e');
+      return ApiResult.err('Ошибка сети: $e');
     }
   }
 
@@ -649,42 +618,42 @@ class BlueVpnApi {
     String? deviceId,
     String? serverId,
   }) async {
+    // Ожидаемые форматы ответа:
+    // A) JSON: { "config": "[Interface]..." }
+    // B) text/plain: сам конфиг
     try {
-      if (deviceId == null || deviceId.trim().isEmpty) {
-        return const ApiResult.err('РћС‚СЃСѓС‚СЃС‚РІСѓРµС‚ device id.');
-      }
-
       final client = HttpClient();
-      final req = await client.postUrl(_u('/api/v1/client/config'));
-      req.headers.contentType = ContentType.json;
+
+      final uri = serverId == null || serverId.isEmpty
+          ? _u('/v1/wg/config')
+          : _u('/v1/wg/config').replace(queryParameters: {'server': serverId});
+
+      final req = await client.getUrl(uri);
       req.headers.set('Authorization', 'Bearer $accessToken');
-      req.write(
-        jsonEncode({
-          'deviceUid': deviceId,
-          'mode': 'full',
-        }),
-      );
+      if (deviceId != null && deviceId.isNotEmpty) {
+        req.headers.set('X-Device-Id', deviceId);
+      }
 
       final res = await req.close();
       final body = await utf8.decodeStream(res);
 
       if (res.statusCode >= 200 && res.statusCode < 300) {
         final trimmed = body.trim();
-        if (trimmed.isEmpty) {
-          return const ApiResult.err('РЎРµСЂРІРµСЂ РІРµСЂРЅСѓР» РїСѓСЃС‚РѕР№ РєРѕРЅС„РёРі.');
+        if (trimmed.startsWith('{')) {
+          final jsonMap = jsonDecode(trimmed) as Map<String, dynamic>;
+          final cfg = (jsonMap['config'] ?? '').toString();
+          if (cfg.trim().isEmpty)
+            return const ApiResult.err('Сервер вернул пустой конфиг.');
+          return ApiResult.ok(cfg);
         }
-
-        final jsonMap = Map<String, dynamic>.from(jsonDecode(trimmed) as Map);
-        final cfg = (jsonMap['configText'] ?? jsonMap['config'] ?? '').toString();
-        if (cfg.trim().isEmpty) {
-          return const ApiResult.err('РЎРµСЂРІРµСЂ РІРµСЂРЅСѓР» РїСѓСЃС‚РѕР№ configText.');
-        }
-        return ApiResult.ok(cfg);
+        if (trimmed.isEmpty)
+          return const ApiResult.err('Сервер вернул пустой конфиг.');
+        return ApiResult.ok(body);
       }
 
-      return ApiResult.err('РћС€РёР±РєР° СЃРµСЂРІРµСЂР° (${res.statusCode}): $body');
+      return ApiResult.err('Ошибка сервера (${res.statusCode}): $body');
     } catch (e) {
-      return ApiResult.err('РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РєРѕРЅС„РёРі: $e');
+      return ApiResult.err('Не удалось получить конфиг: $e');
     }
   }
 
@@ -1553,7 +1522,8 @@ class _RootShellState extends State<RootShell> {
     return false;
   }
 
-    Future<void> _ensureProvisionedConfigSilently() async {
+  Future<void> _ensureProvisionedConfigSilently() async {
+    // тихо подтянем конфиг при старте, если его нет
     if (kIsWeb) return;
     try {
       if (widget.session.accessToken == 'dev-token') {
@@ -1575,32 +1545,9 @@ class _RootShellState extends State<RootShell> {
         return;
       }
 
-      final did = await _ensureDeviceId();
-      if (did == null || did.isEmpty) return;
-
-      final boot = await _api.bootstrapClient(
-        accessToken: widget.session.accessToken,
-        deviceId: did,
-        deviceName: Platform.localHostname,
-        platform: 'windows',
-        appVersion: '0.2.0-auth-gate',
-      );
-      if (!boot.ok || boot.data == null) return;
-
-      final canConnect = boot.data!['canConnect'] == true;
-      if (!canConnect) return;
-
-      final sub = boot.data!['subscription'];
-      if (sub is Map) {
-        final p = (sub['planName'] ?? sub['planCode'] ?? '').toString().trim();
-        if (p.isNotEmpty && mounted) {
-          setState(() => planName = p);
-        }
-      }
-
       final res = await _api.fetchWireGuardConfig(
         accessToken: widget.session.accessToken,
-        deviceId: did,
+        deviceId: await _ensureDeviceId(),
         serverId: selectedServer.id == 'auto' ? null : selectedServer.id,
       );
       if (res.ok && res.data != null) {
@@ -1609,64 +1556,41 @@ class _RootShellState extends State<RootShell> {
     } catch (_) {}
   }
 
-    Future<bool> _ensureProvisionedConfigInteractive() async {
+  Future<bool> _ensureProvisionedConfigInteractive() async {
     if (kIsWeb) return false;
+
+    if (widget.session.accessToken == 'dev-token') {
+      await _repairProvisionedConfigFromPreferredDevSource(showToast: true);
+    }
+
+    if (await _cfg.hasManagedConfig()) {
+      await _cfg.ensureBaseSeededFromManagedIfMissing();
+      final base = await _cfg.readBaseConfig();
+      if (base != null && base.trim().isNotEmpty) {
+        await _cfg.writeManagedConfig(_buildManagedConfigFromBase(base));
+      }
+      return true;
+    }
 
     if (widget.session.accessToken == 'dev-token') {
       final ok = await _trySeedDevConfig(showToast: true);
       if (ok) return true;
       _toast(
         context,
-        'DEV: РЅРµ РЅР°Р№РґРµРЅ Р»РѕРєР°Р»СЊРЅС‹Р№ РєРѕРЅС„РёРі. РџРѕР»РѕР¶Рё $kTunnelName.conf РЅР° Desktop/Downloads РёР»Рё РїРѕРґРЅРёРјРё СЃРµСЂРІРµСЂ.',
+        'DEV: не найден локальный конфиг. Положи WARP.conf или BlueVPN.conf на Desktop/Downloads либо подними сервер.',
       );
       return false;
     }
 
-    final did = await _ensureDeviceId();
-    if (did == null || did.isEmpty) {
-      _toast(context, 'РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ device id.');
-      return false;
-    }
-
-    final boot = await _api.bootstrapClient(
-      accessToken: widget.session.accessToken,
-      deviceId: did,
-      deviceName: Platform.localHostname,
-      platform: 'windows',
-      appVersion: '0.2.0-auth-gate',
-    );
-
-    if (!boot.ok || boot.data == null) {
-      _toast(context, boot.message ?? 'РќРµ СѓРґР°Р»РѕСЃСЊ РїСЂРѕР№С‚Рё bootstrap.');
-      return false;
-    }
-
-    final bootMap = boot.data!;
-    final canConnect = bootMap['canConnect'] == true;
-    if (!canConnect) {
-      final reason = (bootMap['reason'] ?? 'connect_not_allowed').toString();
-      _toast(context, 'РџРѕРґРєР»СЋС‡РµРЅРёРµ Р·Р°РїСЂРµС‰РµРЅРѕ: $reason');
-      return false;
-    }
-
-    final sub = bootMap['subscription'];
-    if (sub is Map) {
-      final p = (sub['planName'] ?? sub['planCode'] ?? '').toString().trim();
-      if (p.isNotEmpty && mounted) {
-        setState(() => planName = p);
-      }
-    }
-
     final res = await _api.fetchWireGuardConfig(
       accessToken: widget.session.accessToken,
-      deviceId: did,
+      deviceId: await _ensureDeviceId(),
       serverId: selectedServer.id == 'auto' ? null : selectedServer.id,
     );
     if (!res.ok || res.data == null) {
-      _toast(context, res.message ?? 'РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РєРѕРЅС„РёРі СЃ СЃРµСЂРІРµСЂР°.');
+      _toast(context, res.message ?? 'Не удалось получить конфиг с сервера.');
       return false;
     }
-
     await _writeProvisionedConfig(res.data!);
     return true;
   }
