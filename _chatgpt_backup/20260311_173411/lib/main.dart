@@ -1,4 +1,4 @@
-// lib/main.dart
+﻿// lib/main.dart
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -692,30 +692,16 @@ class BlueVpnApi {
    ========================= */
 
 class ConfigStore {
-  // Active managed config path. Stored in ProgramData so the WireGuard service (LocalSystem) can read it.
+  // Managed config path. Stored in ProgramData so the WireGuard service (LocalSystem) can read it.
   String get managedConfigPath {
     if (kIsWeb) return '';
     if (!Platform.isWindows) return '';
     return r'C:\ProgramData\BlueVPN\BlueVPN.conf';
   }
 
-  // Hidden base config received from server/dev seed. We never apply it directly.
-  String get baseConfigPath {
-    if (kIsWeb) return '';
-    if (!Platform.isWindows) return '';
-    return r'C:\ProgramData\BlueVPN\BlueVPN.base.conf';
-  }
-
   Future<bool> hasManagedConfig() async {
     if (kIsWeb) return false;
     final p = managedConfigPath;
-    if (p.isEmpty) return false;
-    return File(p).existsSync();
-  }
-
-  Future<bool> hasBaseConfig() async {
-    if (kIsWeb) return false;
-    final p = baseConfigPath;
     if (p.isEmpty) return false;
     return File(p).existsSync();
   }
@@ -731,62 +717,16 @@ class ConfigStore {
     await f.writeAsString(content);
   }
 
-  Future<void> writeBaseConfig(String content) async {
-    if (kIsWeb) return;
-    final p = baseConfigPath;
-    if (p.isEmpty) return;
-    final f = File(p);
-    if (!f.parent.existsSync()) {
-      f.parent.createSync(recursive: true);
-    }
-    await f.writeAsString(content);
-  }
-
-  Future<String?> readBaseConfig() async {
-    if (kIsWeb) return null;
-    final p = baseConfigPath;
-    if (p.isEmpty) return null;
-    final f = File(p);
-    if (!f.existsSync()) return null;
-    return f.readAsString();
-  }
-
-  Future<void> ensureBaseSeededFromManagedIfMissing() async {
-    if (kIsWeb) return;
-    final hasBase = await hasBaseConfig();
-    if (hasBase) return;
-
-    final managed = managedConfigPath;
-    if (managed.isEmpty) return;
-
-    final mf = File(managed);
-    if (!mf.existsSync()) return;
-
-    final raw = await mf.readAsString();
-    if (raw.trim().isEmpty) return;
-    await writeBaseConfig(raw);
-  }
-
   Future<void> deleteManagedConfig() async {
     if (kIsWeb) return;
-
-    final managed = managedConfigPath;
-    if (managed.isNotEmpty) {
-      final f = File(managed);
-      if (f.existsSync()) {
-        await f.delete();
-      }
-    }
-
-    final base = baseConfigPath;
-    if (base.isNotEmpty) {
-      final f = File(base);
-      if (f.existsSync()) {
-        await f.delete();
-      }
+    final p = managedConfigPath;
+    if (p.isEmpty) return;
+    final f = File(p);
+    if (f.existsSync()) {
+      await f.delete();
     }
   }
-} /* =========================
+}/* =========================
    AUTH UI
    ========================= */
 
@@ -1065,33 +1005,6 @@ class _RootShellState extends State<RootShell> {
 
   late final VpnBackend _vpnBackend;
 
-  static const Map<SocialApp, List<String>> _socialAllowedIps = {
-    SocialApp.telegram: [
-      '149.154.160.0/20',
-      '91.108.4.0/22',
-      '91.108.8.0/22',
-      '91.108.12.0/22',
-      '91.108.16.0/22',
-      '91.108.56.0/22',
-    ],
-    SocialApp.instagram: [
-      '31.13.24.0/21',
-      '31.13.64.0/18',
-      '66.220.144.0/20',
-      '69.63.176.0/20',
-      '157.240.0.0/16',
-    ],
-    SocialApp.youtube: [
-      '74.125.0.0/16',
-      '142.250.0.0/15',
-      '142.251.0.0/16',
-      '172.217.0.0/16',
-    ],
-    // Starter ranges for MVP; later these should be moved to server-side/domain-based rules.
-    SocialApp.discord: ['162.159.128.0/17', '66.22.192.0/18'],
-    SocialApp.tiktok: ['23.192.0.0/11', '23.32.0.0/11'],
-  };
-
   int _index = 0;
 
   // VPN state
@@ -1241,15 +1154,11 @@ class _RootShellState extends State<RootShell> {
       devices = p.devices.clamp(1, 5);
 
       optNoAds = p.optNoAds;
-      optSmartRouting =
-          true; // временно всегда разрешаем Social Only в Windows-клиенте
+      optSmartRouting = p.optSmartRouting;
       optDedicatedIp = p.optDedicatedIp;
 
-      await _repairProvisionedConfigFromPreferredDevSource(showToast: false);
-      await _cfg.ensureBaseSeededFromManagedIfMissing();
-      final base = await _cfg.readBaseConfig();
-      if (base != null && base.trim().isNotEmpty) {
-        await _cfg.writeManagedConfig(_buildManagedConfigFromBase(base));
+      if (!optSmartRouting) {
+        socialOnlyEnabled = false;
       }
 
       if (mounted) setState(() {});
@@ -1273,197 +1182,11 @@ class _RootShellState extends State<RootShell> {
           'trafficGb': trafficGb,
           'devices': devices,
           'optNoAds': optNoAds,
-          'optSmartRouting': true,
+          'optSmartRouting': optSmartRouting,
           'optDedicatedIp': optDedicatedIp,
         }),
       );
     });
-  }
-
-  bool _configLooksLikeFullTunnel(String raw) {
-    final line = RegExp(
-      r'^\s*AllowedIPs\s*=\s*(.*)$',
-      multiLine: true,
-      caseSensitive: false,
-    ).firstMatch(raw);
-
-    if (line == null) return false;
-    final value = (line.group(1) ?? '').toLowerCase();
-    return value.contains('0.0.0.0/0') || value.contains('::/0');
-  }
-
-  List<String> _preferredLocalConfigCandidates() {
-    if (kIsWeb) return const [];
-    final home = Platform.environment['USERPROFILE'];
-    if (home == null || home.isEmpty) return const [];
-
-    return <String>[
-      '$home\\OneDrive\\Desktop\\WARP.conf',
-      '$home\\Desktop\\WARP.conf',
-      '$home\\Downloads\\WARP.conf',
-      '$home\\Downloads\\WARP (1).conf',
-      '$home\\Downloads\\Telegram Desktop\\WARP.conf',
-      '$home\\Downloads\\Telegram Desktop\\WARP (2).conf',
-      '$home\\Downloads\\Telegram Desktop\\WARP (3).conf',
-      '$home\\Desktop\\$kTunnelName.conf',
-      '$home\\Downloads\\$kTunnelName.conf',
-      '$home\\Desktop\\BlueVPN.conf',
-      '$home\\Downloads\\BlueVPN.conf',
-    ];
-  }
-
-  Future<String?> _findPreferredLocalConfig() async {
-    for (final p in _preferredLocalConfigCandidates()) {
-      final f = File(p);
-      if (!f.existsSync()) continue;
-      try {
-        final raw = await f.readAsString();
-        if (raw.trim().isEmpty) continue;
-        return raw;
-      } catch (_) {
-        // ignore and try next
-      }
-    }
-    return null;
-  }
-
-  Future<void> _repairProvisionedConfigFromPreferredDevSource({
-    required bool showToast,
-  }) async {
-    if (kIsWeb) return;
-    if (widget.session.accessToken != 'dev-token') return;
-
-    String? base;
-    try {
-      base = await _cfg.readBaseConfig();
-    } catch (_) {
-      base = null;
-    }
-
-    if (base != null &&
-        base.trim().isNotEmpty &&
-        _configLooksLikeFullTunnel(base)) {
-      return;
-    }
-
-    final preferred = await _findPreferredLocalConfig();
-    if (preferred == null || preferred.trim().isEmpty) return;
-
-    await _writeProvisionedConfig(preferred);
-
-    if (showToast && mounted) {
-      _toast(context, 'Локальный WARP/BlueVPN конфиг восстановлен.');
-    }
-  }
-
-  List<String> _resolveSocialAllowedIps(Set<SocialApp> apps) {
-    final out = <String>{};
-
-    for (final app in apps) {
-      final ranges = _socialAllowedIps[app];
-      if (ranges != null) {
-        out.addAll(ranges);
-      }
-    }
-
-    if (out.isEmpty) {
-      final fallback = _socialAllowedIps[SocialApp.telegram];
-      if (fallback != null) out.addAll(fallback);
-    }
-
-    final list = out.toList()..sort();
-    return list;
-  }
-
-  String _replaceAllowedIps(String configText, List<String> allowedIps) {
-    final value = allowedIps.join(', ');
-
-    final regExp = RegExp(
-      r'(^\s*AllowedIPs\s*=\s*.*$)',
-      multiLine: true,
-      caseSensitive: false,
-    );
-
-    if (regExp.hasMatch(configText)) {
-      return configText.replaceFirst(regExp, 'AllowedIPs = $value');
-    }
-
-    final lines = configText.split('\n');
-    final peerIndex = lines.indexWhere(
-      (line) => line.trim().toLowerCase() == '[peer]',
-    );
-
-    if (peerIndex == -1) {
-      return configText;
-    }
-
-    lines.insert(peerIndex + 1, 'AllowedIPs = $value');
-    return lines.join('\n');
-  }
-
-  String _buildManagedConfigFromBase(String baseConfig) {
-    if (!socialOnlyEnabled) {
-      return _replaceAllowedIps(baseConfig, const ['0.0.0.0/0', '::/0']);
-    }
-
-    final allowedIps = _resolveSocialAllowedIps(socialOnlyApps);
-    return _replaceAllowedIps(baseConfig, allowedIps);
-  }
-
-  Future<void> _writeProvisionedConfig(String rawConfig) async {
-    await _cfg.writeBaseConfig(rawConfig);
-    await _cfg.writeManagedConfig(_buildManagedConfigFromBase(rawConfig));
-  }
-
-  Future<bool> _applyCurrentConfigMode({
-    required bool reconnectIfNeeded,
-    required bool showToastOnSuccess,
-  }) async {
-    await _cfg.ensureBaseSeededFromManagedIfMissing();
-
-    final base = await _cfg.readBaseConfig();
-    if (base == null || base.trim().isEmpty) {
-      if (showToastOnSuccess) {
-        _toast(
-          context,
-          socialOnlyEnabled
-              ? 'Режим сохранён. Применится после получения конфига.'
-              : 'Обычный режим сохранён.',
-        );
-      }
-      return true;
-    }
-
-    await _cfg.writeManagedConfig(_buildManagedConfigFromBase(base));
-
-    if (reconnectIfNeeded && vpnEnabled) {
-      final off = await _vpnBackend.disconnect();
-      if (!off.ok) {
-        _toast(context, off.message ?? 'Не удалось переподключить VPN.');
-        await _syncVpnStatus();
-        return false;
-      }
-
-      final on = await _vpnBackend.connect(configPath: _cfg.managedConfigPath);
-      if (!on.ok) {
-        _toast(context, on.message ?? 'Не удалось заново подключить VPN.');
-        await _syncVpnStatus();
-        return false;
-      }
-
-      await _syncVpnStatus();
-    }
-
-    if (showToastOnSuccess) {
-      _toast(
-        context,
-        socialOnlyEnabled
-            ? 'Social Only применён.'
-            : 'Обычный режим восстановлен.',
-      );
-    }
-
-    return true;
   }
 
   void _setLanguage(String v) {
@@ -1500,16 +1223,27 @@ class _RootShellState extends State<RootShell> {
   }
 
   Future<bool> _trySeedDevConfig({required bool showToast}) async {
-    // Для разработки без сервера: ищем сначала WARP.conf, потом BlueVPN.conf.
+    // Для разработки без сервера: если есть локальный конфиг (например на Desktop),
+    // мы тихо копируем его в managed-config (AppData\BlueVPN\configs\BlueVPN.conf).
     if (kIsWeb) return false;
 
-    for (final p in _preferredLocalConfigCandidates()) {
+    final home = Platform.environment['USERPROFILE'];
+    if (home == null || home.isEmpty) return false;
+
+    final candidates = <String>[
+      '$home\\Desktop\\$kTunnelName.conf',
+      '$home\\Downloads\\$kTunnelName.conf',
+      '$home\\Desktop\\BlueVPN.conf',
+      '$home\\Downloads\\BlueVPN.conf',
+    ];
+
+    for (final p in candidates) {
       final f = File(p);
       if (!f.existsSync()) continue;
       try {
         final cfg = await f.readAsString();
         if (cfg.trim().isEmpty) continue;
-        await _writeProvisionedConfig(cfg);
+        await _cfg.writeManagedConfig(cfg);
         if (showToast) {
           _toast(context, 'DEV: конфиг подхвачен из $p');
         }
@@ -1526,20 +1260,10 @@ class _RootShellState extends State<RootShell> {
     // тихо подтянем конфиг при старте, если его нет
     if (kIsWeb) return;
     try {
-      if (widget.session.accessToken == 'dev-token') {
-        await _repairProvisionedConfigFromPreferredDevSource(showToast: false);
-      }
-
       final has = await _cfg.hasManagedConfig();
-      if (has) {
-        await _cfg.ensureBaseSeededFromManagedIfMissing();
-        final base = await _cfg.readBaseConfig();
-        if (base != null && base.trim().isNotEmpty) {
-          await _cfg.writeManagedConfig(_buildManagedConfigFromBase(base));
-        }
-        return;
-      }
+      if (has) return;
 
+      // DEV режим: без сервера попробуем подхватить локальный конфиг (Desktop/Downloads)
       if (widget.session.accessToken == 'dev-token') {
         await _trySeedDevConfig(showToast: false);
         return;
@@ -1551,33 +1275,21 @@ class _RootShellState extends State<RootShell> {
         serverId: selectedServer.id == 'auto' ? null : selectedServer.id,
       );
       if (res.ok && res.data != null) {
-        await _writeProvisionedConfig(res.data!);
+        await _cfg.writeManagedConfig(res.data!);
       }
     } catch (_) {}
   }
 
   Future<bool> _ensureProvisionedConfigInteractive() async {
     if (kIsWeb) return false;
-
-    if (widget.session.accessToken == 'dev-token') {
-      await _repairProvisionedConfigFromPreferredDevSource(showToast: true);
-    }
-
-    if (await _cfg.hasManagedConfig()) {
-      await _cfg.ensureBaseSeededFromManagedIfMissing();
-      final base = await _cfg.readBaseConfig();
-      if (base != null && base.trim().isNotEmpty) {
-        await _cfg.writeManagedConfig(_buildManagedConfigFromBase(base));
-      }
-      return true;
-    }
+    if (await _cfg.hasManagedConfig()) return true;
 
     if (widget.session.accessToken == 'dev-token') {
       final ok = await _trySeedDevConfig(showToast: true);
       if (ok) return true;
       _toast(
         context,
-        'DEV: не найден локальный конфиг. Положи WARP.conf или BlueVPN.conf на Desktop/Downloads либо подними сервер.',
+        'DEV: не найден локальный конфиг. Положи $kTunnelName.conf на Desktop/Downloads или подними сервер.',
       );
       return false;
     }
@@ -1591,7 +1303,7 @@ class _RootShellState extends State<RootShell> {
       _toast(context, res.message ?? 'Не удалось получить конфиг с сервера.');
       return false;
     }
-    await _writeProvisionedConfig(res.data!);
+    await _cfg.writeManagedConfig(res.data!);
     return true;
   }
 
@@ -1612,23 +1324,23 @@ class _RootShellState extends State<RootShell> {
         final ok = await _ensureProvisionedConfigInteractive();
         if (!ok) return;
 
-        final configPath = _cfg.managedConfigPath;
+        final configPath = await _cfg.managedConfigPath;
         final res = await _vpnBackend.connect(configPath: configPath);
         if (!res.ok) {
           _toast(context, res.message ?? 'Не удалось подключить VPN.');
           await _syncVpnStatus();
           var onNow = false;
-          for (var i = 0; i < 40; i++) {
-            onNow = await _vpnBackend.isConnected();
-            if (onNow) break;
-            await Future.delayed(const Duration(milliseconds: 250));
-          }
-          if (mounted) setState(() => vpnEnabled = onNow);
-          if (!onNow) {
-            _toast(context, 'VPN did not start (service not RUNNING).');
-            await _syncVpnStatus();
-            return;
-          }
+for (var i = 0; i < 40; i++) {
+  onNow = await _vpnBackend.isConnected();
+  if (onNow) break;
+  await Future.delayed(const Duration(milliseconds: 250));
+}
+if (mounted) setState(() => vpnEnabled = onNow);
+if (!onNow) {
+  _toast(context, 'VPN did not start (service not RUNNING).');
+  await _syncVpnStatus();
+  return;
+}
 
           return;
         }
@@ -1654,49 +1366,118 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-
   Future<void> _openServerPicker(BuildContext context) async {
-    final picked = await showDialog<ServerLocation>(
+    final picked = await showModalBottomSheet<ServerLocation>(
       context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
       builder: (ctx) {
-        return AlertDialog(
-          title: const Text('Выбор сервера'),
-          content: SizedBox(
-            width: 420,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: servers.map((s) {
-                  final selected = s.id == selectedServer.id;
-                  final subtitle = s.isAuto
-                      ? 'Авто-подбор'
-                      : '${s.subtitle}${s.pingMs != null ? ' • ${s.pingMs} ms' : ''}';
-                  return ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(
-                      s.isAuto ? Icons.auto_awesome_rounded : Icons.public_rounded,
-                      color: const Color(0xFF2563EB),
-                    ),
-                    title: Text(
-                      s.title,
-                      style: const TextStyle(fontWeight: FontWeight.w900),
-                    ),
-                    subtitle: Text(subtitle),
-                    trailing: selected
-                        ? const Icon(Icons.check_circle_rounded, color: Color(0xFF2563EB))
-                        : const Icon(Icons.chevron_right_rounded),
-                    onTap: () => Navigator.of(ctx).pop(s),
-                  );
-                }).toList(),
-              ),
-            ),
+        final theme = Theme.of(ctx);
+        final bg = theme.colorScheme.surface;
+
+        return _BottomSheetFrame(
+          title: 'Выбор сервера',
+          subtitle: 'Пока UI. Позже подключим реальные локации.',
+          leading: Icons.bolt_rounded,
+          child: DraggableScrollableSheet(
+            expand: false,
+            initialChildSize: 0.62,
+            minChildSize: 0.45,
+            maxChildSize: 0.92,
+            builder: (context, scrollController) {
+              return Container(
+                decoration: BoxDecoration(
+                  color: bg,
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(22),
+                  ),
+                ),
+                child: ListView.separated(
+                  controller: scrollController,
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 18),
+                  itemCount: servers.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                  itemBuilder: (_, i) {
+                    final s = servers[i];
+                    final selected = s.id == selectedServer.id;
+
+                    return InkWell(
+                      borderRadius: BorderRadius.circular(16),
+                      onTap: () => Navigator.of(ctx).pop(s),
+                      child: Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: theme.brightness == Brightness.dark
+                              ? const Color(0xFF0F172A)
+                              : const Color(0xFFF8FAFC),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: const Color(0x140F172A)),
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 40,
+                              height: 40,
+                              decoration: BoxDecoration(
+                                color: theme.brightness == Brightness.dark
+                                    ? const Color(0xFF111827)
+                                    : const Color(0xFFEFF6FF),
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: Icon(
+                                s.isAuto
+                                    ? Icons.auto_awesome_rounded
+                                    : Icons.public_rounded,
+                                color: const Color(0xFF2563EB),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    s.title,
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    s.isAuto
+                                        ? 'Авто-подбор'
+                                        : '${s.subtitle}${s.pingMs != null ? ' • ${s.pingMs} ms' : ''}',
+                                    style: TextStyle(
+                                      color: theme.colorScheme.onSurface
+                                          .withOpacity(0.65),
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Icon(
+                              selected
+                                  ? Icons.check_circle_rounded
+                                  : Icons.chevron_right_rounded,
+                              color: selected
+                                  ? const Color(0xFF2563EB)
+                                  : theme.colorScheme.onSurface.withOpacity(
+                                      0.35,
+                                    ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              );
+            },
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Закрыть'),
-            ),
-          ],
         );
       },
     );
@@ -1705,6 +1486,7 @@ class _RootShellState extends State<RootShell> {
       setState(() => selectedServer = picked);
       _schedulePrefsSave();
 
+      // Если VPN сейчас выключен — сносим старый конфиг, чтобы при следующем включении подтянуть новый.
       if (!vpnEnabled) {
         unawaited(_cfg.deleteManagedConfig());
       } else {
@@ -1713,82 +1495,176 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-
   Future<void> _openSocialAppsPicker(BuildContext context) async {
-    final temp = Set<SocialApp>.from(socialOnlyApps);
+    // локальная копия выбора
+    final initial = Set<SocialApp>.from(socialOnlyApps);
 
-    final picked = await showDialog<Set<SocialApp>>(
+    final picked = await showModalBottomSheet<Set<SocialApp>>(
       context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
       builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setLocal) {
-            return AlertDialog(
-              title: const Text('Соцсети через VPN'),
-              content: SizedBox(
-                width: 460,
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: SocialApp.values.map((app) {
-                      return CheckboxListTile(
-                        value: temp.contains(app),
-                        onChanged: (v) {
-                          setLocal(() {
-                            if (v == true) {
-                              temp.add(app);
-                            } else {
-                              temp.remove(app);
-                            }
-                          });
-                        },
-                        title: Text(app.title),
-                        secondary: Icon(app.icon, color: const Color(0xFF2563EB)),
-                        controlAffinity: ListTileControlAffinity.trailing,
-                        contentPadding: EdgeInsets.zero,
-                      );
-                    }).toList(),
-                  ),
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(ctx).pop(),
-                  child: const Text('Отмена'),
-                ),
-                ElevatedButton(
-                  onPressed: () {
-                    if (temp.isEmpty) {
-                      _toast(ctx, 'Выбери хотя бы одно приложение.');
-                      return;
-                    }
-                    Navigator.of(ctx).pop(Set<SocialApp>.from(temp));
-                  },
-                  child: const Text('Готово'),
-                ),
-              ],
-            );
-          },
+        return _BottomSheetFrame(
+          title: 'Соцсети через VPN',
+          subtitle: 'Выбери приложения, которые пойдут через VPN.',
+          leading: Icons.filter_alt_rounded,
+          child: StatefulBuilder(
+            builder: (context, setLocal) {
+              return DraggableScrollableSheet(
+                expand: false,
+                initialChildSize: 0.66,
+                minChildSize: 0.45,
+                maxChildSize: 0.92,
+                builder: (_, controller) {
+                  return Container(
+                    decoration: BoxDecoration(
+                      color: Theme.of(ctx).colorScheme.surface,
+                      borderRadius: const BorderRadius.vertical(
+                        top: Radius.circular(22),
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        Expanded(
+                          child: ListView(
+                            controller: controller,
+                            padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+                            children: [
+                              ...SocialApp.values.map((app) {
+                                final on = initial.contains(app);
+                                return Container(
+                                  margin: const EdgeInsets.only(bottom: 10),
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(
+                                      color: const Color(0x140F172A),
+                                    ),
+                                    color:
+                                        Theme.of(ctx).brightness ==
+                                            Brightness.dark
+                                        ? const Color(0xFF0F172A)
+                                        : const Color(0xFFF8FAFC),
+                                  ),
+                                  child: SwitchListTile(
+                                    value: on,
+                                    onChanged: (v) {
+                                      setLocal(() {
+                                        if (v) {
+                                          initial.add(app);
+                                        } else {
+                                          initial.remove(app);
+                                        }
+                                      });
+                                    },
+                                    secondary: Container(
+                                      width: 40,
+                                      height: 40,
+                                      decoration: BoxDecoration(
+                                        color:
+                                            Theme.of(ctx).brightness ==
+                                                Brightness.dark
+                                            ? const Color(0xFF111827)
+                                            : const Color(0xFFEFF6FF),
+                                        borderRadius: BorderRadius.circular(14),
+                                      ),
+                                      child: Icon(
+                                        app.icon,
+                                        color: const Color(0xFF2563EB),
+                                      ),
+                                    ),
+                                    title: Text(
+                                      app.title,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                    subtitle: const Text(
+                                      'Трафик этого приложения пойдёт через VPN',
+                                    ),
+                                  ),
+                                );
+                              }),
+                              const SizedBox(height: 10),
+                            ],
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton(
+                                  style: OutlinedButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 14,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                  ),
+                                  onPressed: () => Navigator.of(ctx).pop(null),
+                                  child: const Text(
+                                    'Отмена',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: ElevatedButton(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF2563EB),
+                                    foregroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(
+                                      vertical: 14,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                  ),
+                                  onPressed: () {
+                                    if (initial.isEmpty) {
+                                      _toast(
+                                        ctx,
+                                        'Выбери хотя бы одно приложение.',
+                                      );
+                                      return;
+                                    }
+                                    Navigator.of(ctx).pop(initial);
+                                  },
+                                  child: const Text(
+                                    'Готово',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              );
+            },
+          ),
         );
       },
     );
 
-    if (picked == null) return;
-
-    setState(() {
-      socialOnlyApps
-        ..clear()
-        ..addAll(picked);
-    });
-    _schedulePrefsSave();
-
-    if (socialOnlyEnabled) {
-      await _applyCurrentConfigMode(
-        reconnectIfNeeded: true,
-        showToastOnSuccess: true,
-      );
+    if (picked != null) {
+      setState(() {
+        socialOnlyApps
+          ..clear()
+          ..addAll(picked);
+      });
+      _schedulePrefsSave();
     }
   }
-
 
   @override
   void dispose() {
@@ -1810,31 +1686,28 @@ class _RootShellState extends State<RootShell> {
 
         // Соцсети
         socialOnlyEnabled: socialOnlyEnabled,
-        socialOnlyAllowed: true,
+        socialOnlyAllowed: optSmartRouting, // привязка к тарифу
         socialOnlyApps: socialOnlyApps,
-        onToggleSocialOnly: (v) async {
-          if (vpnBusy) return;
-
-          setState(() {
-            vpnBusy = true;
-            socialOnlyEnabled = v;
-          });
-          _schedulePrefsSave();
-
-          try {
-            await _applyCurrentConfigMode(
-              reconnectIfNeeded: true,
-              showToastOnSuccess: true,
+        onToggleSocialOnly: (v) {
+          if (!optSmartRouting) {
+            _toast(
+              context,
+              'Недоступно в текущей подписке. Включи “Умную маршрутизацию” в тарифе.',
             );
-          } finally {
-            if (mounted) {
-              setState(() => vpnBusy = false);
-            }
+            return;
           }
+          setState(() => socialOnlyEnabled = v);
+          _schedulePrefsSave();
         },
-        onConfigureSocialApps: () async {
-          if (vpnBusy) return;
-          await _openSocialAppsPicker(context);
+        onConfigureSocialApps: () {
+          if (!optSmartRouting) {
+            _toast(
+              context,
+              'Недоступно в текущей подписке. Включи “Умную маршрутизацию” в тарифе.',
+            );
+            return;
+          }
+          _openSocialAppsPicker(context);
         },
 
         onOpenTariff: () => goToTab(1),
@@ -1877,6 +1750,11 @@ class _RootShellState extends State<RootShell> {
         onOptSmartRouting: (v) {
           setState(() {
             optSmartRouting = v;
+
+            // если отключили smart routing — “соцсети” становятся недоступны, гасим их
+            if (!optSmartRouting) {
+              socialOnlyEnabled = false;
+            }
           });
           _schedulePrefsSave();
         },
@@ -2022,9 +1900,12 @@ class VpnPage extends StatelessWidget {
   final String planName;
   final bool vpnEnabled;
   final VoidCallback onToggleVpn;
+
   final VoidCallback onOpenTariff;
+
   final ServerLocation selectedServer;
   final VoidCallback onOpenServerPicker;
+
   final bool socialOnlyEnabled;
   final bool socialOnlyAllowed;
   final Set<SocialApp> socialOnlyApps;
@@ -2049,176 +1930,194 @@ class VpnPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final statusText = vpnEnabled ? 'Включено' : 'Отключено';
+
     final serverTitle = selectedServer.isAuto
         ? 'Самая быстрая локация'
         : selectedServer.title;
     final serverSub = selectedServer.isAuto
         ? 'Авто-подбор'
         : '${selectedServer.subtitle}${selectedServer.pingMs != null ? ' • ${selectedServer.pingMs} ms' : ''}';
+
     final appsText = socialOnlyApps.isEmpty
         ? 'Не выбрано'
         : socialOnlyApps.map((e) => e.title).join(', ');
 
+    final disabledOverlay = !socialOnlyAllowed
+        ? Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F172A).withOpacity(0.08),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: const Color(0x220F172A)),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.lock_rounded, size: 16, color: Color(0xFF64748B)),
+                SizedBox(width: 6),
+                Text(
+                  'Требуется “Умная маршрутизация”',
+                  style: TextStyle(
+                    color: Color(0xFF64748B),
+                    fontWeight: FontWeight.w800,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          )
+        : const SizedBox.shrink();
+
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        FilledButton.tonal(
-          onPressed: onOpenTariff,
-          style: FilledButton.styleFrom(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
-            ),
-          ),
-          child: Row(
-            children: [
-              const Icon(Icons.star_rounded),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Тариф',
-                      style: TextStyle(fontWeight: FontWeight.w900),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      'Текущий: $planName • открыть тариф',
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                  ],
-                ),
-              ),
-              const Icon(Icons.chevron_right_rounded),
-            ],
-          ),
-        ),
+        _TariffBanner(onTap: onOpenTariff, planName: planName),
         const SizedBox(height: 18),
-        _Card(
-          child: Column(
-            children: [
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: onToggleVpn,
-                  icon: Icon(
-                    vpnEnabled ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                  ),
-                  label: Text(vpnEnabled ? 'Отключить VPN' : 'Подключить VPN'),
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 18),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                statusText,
-                style: const TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w900,
-                  color: Color(0xFF334155),
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-        _Card(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text(
-                  'Только для соц. сетей',
-                  style: TextStyle(fontWeight: FontWeight.w900),
-                ),
-                subtitle: Text(
-                  socialOnlyEnabled
-                      ? 'Через VPN: $appsText'
-                      : 'Выбери приложения, которые должны идти через VPN',
-                  style: const TextStyle(fontSize: 12),
-                ),
-                value: socialOnlyEnabled,
-                onChanged: onToggleSocialOnly,
-              ),
-              const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: onConfigureSocialApps,
-                  icon: const Icon(Icons.tune_rounded),
-                  label: const Text(
-                    'Настроить приложения',
-                    style: TextStyle(fontWeight: FontWeight.w900),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
+
+        // Центральный блок (переключатель + статус)
+        SizedBox(
+          height: 220,
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _BigToggle(enabled: vpnEnabled, onTap: onToggleVpn),
+                const SizedBox(height: 14),
+                Text(
+                  statusText,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF334155),
                   ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                socialOnlyAllowed
-                    ? 'Функция активна. Кнопка выше должна открывать выбор приложений.'
-                    : 'Функция временно недоступна для текущего режима.',
-                style: const TextStyle(
-                  color: Color(0xFF64748B),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-        _Card(
-          tint: const Color(0xFFEFF6FF),
-          child: ListTile(
-            contentPadding: EdgeInsets.zero,
-            onTap: onOpenServerPicker,
-            leading: const Icon(Icons.bolt_rounded, color: Color(0xFF2563EB)),
-            title: const Text(
-              'Сервер',
-              style: TextStyle(
-                color: Color(0xFF64748B),
-                fontSize: 12,
-              ),
+              ],
             ),
-            subtitle: Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
+          ),
+        ),
+
+        // Только для соцсетей
+        _Card(
+          child: Column(
+            children: [
+              Row(
                 children: [
-                  Text(
-                    serverTitle,
-                    style: const TextStyle(
-                      color: Color(0xFF0F172A),
-                      fontWeight: FontWeight.w900,
-                      fontSize: 15,
+                  const Expanded(
+                    child: Text(
+                      'Только для соц. сетей',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                        color: Color(0xFF334155),
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    serverSub,
-                    style: const TextStyle(
-                      color: Color(0xFF64748B),
-                      fontWeight: FontWeight.w700,
-                      fontSize: 12,
-                    ),
+                  Switch(
+                    value: socialOnlyEnabled,
+                    onChanged: socialOnlyAllowed
+                        ? onToggleSocialOnly
+                        : (_) => onToggleSocialOnly(false),
                   ),
                 ],
               ),
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      socialOnlyEnabled
+                          ? 'Через VPN: $appsText'
+                          : 'Выбери приложения (если доступно в подписке)',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFF64748B),
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Stack(
+                    alignment: Alignment.centerRight,
+                    children: [
+                      OutlinedButton(
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        onPressed: (socialOnlyAllowed && socialOnlyEnabled)
+                            ? onConfigureSocialApps
+                            : null,
+                        child: const Text(
+                          'Настроить',
+                          style: TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                      if (!socialOnlyAllowed)
+                        Positioned(right: 0, child: disabledOverlay),
+                    ],
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+
+        // Сервер
+        _Card(
+          tint: const Color(0xFFEFF6FF),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: onOpenServerPicker,
+            child: Row(
+              children: [
+                const Icon(Icons.bolt_rounded, color: Color(0xFF2563EB)),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Сервер',
+                        style: TextStyle(
+                          color: Color(0xFF64748B),
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        serverTitle,
+                        style: const TextStyle(
+                          color: Color(0xFF0F172A),
+                          fontWeight: FontWeight.w900,
+                          fontSize: 14,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        serverSub,
+                        style: const TextStyle(
+                          color: Color(0xFF64748B),
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  color: Color(0xFF2563EB),
+                ),
+              ],
             ),
-            trailing: const Icon(Icons.chevron_right_rounded),
           ),
         ),
       ],
@@ -2293,15 +2192,47 @@ class _BigToggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: double.infinity,
-      child: ElevatedButton.icon(
-        onPressed: onTap,
-        icon: Icon(enabled ? Icons.pause_rounded : Icons.play_arrow_rounded),
-        label: Text(enabled ? 'Отключить VPN' : 'Подключить VPN'),
-        style: ElevatedButton.styleFrom(
-          padding: const EdgeInsets.symmetric(vertical: 18),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+    final bg = enabled ? const Color(0xFF2563EB) : const Color(0xFF334155);
+    final knob = enabled ? const Color(0xFFEFF6FF) : Colors.white;
+
+    return GestureDetector(
+      onTap: onTap,
+        onHorizontalDragEnd: (_) => onTap(),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 220),
+        width: 210,
+        height: 72,
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(40),
+          boxShadow: const [
+            BoxShadow(
+              blurRadius: 18,
+              offset: Offset(0, 10),
+              color: Color(0x22000000),
+            ),
+          ],
+        ),
+        child: Stack(
+          children: [
+            AnimatedAlign(
+              duration: const Duration(milliseconds: 220),
+              alignment: enabled ? Alignment.centerRight : Alignment.centerLeft,
+              child: Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(color: knob, shape: BoxShape.circle),
+                child: Icon(
+                  enabled ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                  color: enabled
+                      ? const Color(0xFF2563EB)
+                      : const Color(0xFF334155),
+                  size: 30,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -3310,7 +3241,7 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
     _appDataPath = app.isEmpty ? '(APPDATA не найден)' : '$app\\BlueVPN';
 
     final cfg = ConfigStore();
-    _configPath = cfg.managedConfigPath;
+    _configPath = await cfg.managedConfigPath;
     _configExists = File(_configPath).existsSync();
 
     _wgExe = _resolveWireGuardExe();
@@ -3596,7 +3527,7 @@ class WireGuardWindowsBackend extends VpnBackend {
   String? _lastConfigPath;
 
   WireGuardWindowsBackend({required this.tunnelName})
-    : _exe = _resolveWireGuardExe();
+      : _exe = _resolveWireGuardExe();
 
   static String _resolveWireGuardExe() {
     final candidates = <String>[];
@@ -3642,8 +3573,7 @@ class WireGuardWindowsBackend extends VpnBackend {
     // Run innerScript with UAC using -EncodedCommand (UTF-16LE Base64)
     final encoded = base64.encode(_utf16le(innerScript));
 
-    final outer =
-        r'''
+    final outer = r'''
 $ErrorActionPreference="Stop"
 $enc="__ENC__"
 $p = Start-Process -FilePath "powershell.exe" -Verb RunAs -Wait -PassThru -ArgumentList @(
@@ -3652,8 +3582,7 @@ $p = Start-Process -FilePath "powershell.exe" -Verb RunAs -Wait -PassThru -Argum
   "-EncodedCommand",$enc
 )
 exit $p.ExitCode
-'''
-            .replaceAll('__ENC__', encoded);
+'''.replaceAll('__ENC__', encoded);
 
     return _run('powershell', [
       '-NoProfile',
@@ -3689,19 +3618,14 @@ exit $p.ExitCode
     }
   }
 
-
-  @override
+    @override
   Future<VpnBackendResult> connect({required String configPath}) async {
-    _lastConfigPath = configPath;
     final logFile = File(r'C:\ProgramData\BlueVPN\backend.log');
 
     Future<void> log(String s) async {
       try {
         final ts = DateTime.now().toIso8601String();
-        await logFile.writeAsString(
-          '[' + ts + '] ' + s + '\n',
-          mode: FileMode.append,
-        );
+        await logFile.writeAsString('[' + ts + '] ' + s + '\n', mode: FileMode.append);
       } catch (_) {}
     }
 
@@ -3709,27 +3633,20 @@ exit $p.ExitCode
         ((r.stdout ?? '').toString() + '\n' + (r.stderr ?? '').toString()).trim();
 
     bool isRunningText(String out) => out.contains('RUNNING');
+    bool isStoppedText(String out) => out.contains('STOPPED');
+
     Future<ProcessResult> scQueryEx() => _run('sc', ['queryex', _serviceName]);
 
     Future<bool> waitRunning({int loops = 60}) async {
       for (var i = 0; i < loops; i++) {
         final q = await scQueryEx();
         final o = outOf(q);
-        await log('queryex(connect)[$i] ec=${q.exitCode} :: ' + o.replaceAll('\r', ' ').replaceAll('\n', ' | '));
+        await log('queryex(connect)[$i] ec=${q.exitCode} :: ' +
+            o.replaceAll('\r', ' ').replaceAll('\n', ' | '));
         if (q.exitCode == 0 && isRunningText(o)) return true;
         await Future.delayed(const Duration(milliseconds: 250));
       }
       return false;
-    }
-
-    Future<bool> isAdmin() async {
-      try {
-        final res = await _run('whoami', ['/groups']);
-        final out = ((res.stdout ?? '').toString() + '\n' + (res.stderr ?? '').toString());
-        return out.contains('S-1-5-32-544');
-      } catch (_) {
-        return false;
-      }
     }
 
     try {
@@ -3743,46 +3660,34 @@ exit $p.ExitCode
         return VpnBackendResult(ok: false, message: 'Config not found: $configPath');
       }
 
+      // 1) ensure service exists: if query fails -> install
       final q0 = await scQueryEx();
       final o0 = outOf(q0);
-      await log('queryex(initial) ec=${q0.exitCode} :: ' + o0.replaceAll('\r', ' ').replaceAll('\n', ' | '));
+      await log('queryex(initial) ec=${q0.exitCode} :: ' +
+          o0.replaceAll('\r', ' ').replaceAll('\n', ' | '));
 
-      final admin = await isAdmin();
-      await log('isAdmin=' + admin.toString());
-
-      if (admin) {
-        if (q0.exitCode != 0) {
-          final ins = await _run(_exe, ['/installtunnelservice', configPath]);
-          await log('wireguard install ec=${ins.exitCode} :: ' + outOf(ins).replaceAll('\r', ' ').replaceAll('\n', ' | '));
-        }
-        final st = await _run('sc', ['start', _serviceName]);
-        await log('sc start ec=${st.exitCode} :: ' + outOf(st).replaceAll('\r', ' ').replaceAll('\n', ' | '));
-      } else {
-        final ps = r'''$ErrorActionPreference = "Stop"
-$svc = "__SVC__"
-$cfg = "__CFG__"
-$wg  = "__WG__"
-if (!(Test-Path $cfg)) { throw "Config not found: $cfg" }
-sc.exe queryex $svc *> $null
-if ($LASTEXITCODE -ne 0) {
-  & $wg /installtunnelservice $cfg | Out-Null
-}
-sc.exe start $svc | Out-Null
-'''
-            .replaceAll('__SVC__', _serviceName)
-            .replaceAll('__CFG__', configPath)
-            .replaceAll('__WG__', _exe);
-
-        final elevated = await _runElevatedPowerShell(ps);
-        await log('elevated connect ec=${elevated.exitCode} :: ' + outOf(elevated).replaceAll('\r', ' ').replaceAll('\n', ' | '));
+      if (q0.exitCode != 0) {
+        final ins = await _run(_exe, ['/installtunnelservice', configPath]);
+        await log('wireguard install ec=${ins.exitCode} :: ' +
+            outOf(ins).replaceAll('\r', ' ').replaceAll('\n', ' | '));
       }
 
+      // 2) start
+      final st = await _run('sc', ['start', _serviceName]);
+      await log('sc start ec=${st.exitCode} :: ' +
+          outOf(st).replaceAll('\r', ' ').replaceAll('\n', ' | '));
+
+      // 3) wait RUNNING (up to ~15s)
       final ok = await waitRunning(loops: 60);
       if (!ok) {
         await log('=== CONNECT FAIL: not RUNNING after wait ===');
-        return const VpnBackendResult(ok: false, message: 'VPN did not start (service not RUNNING). See backend.log');
+        return const VpnBackendResult(
+          ok: false,
+          message: 'VPN did not start (service not RUNNING). See backend.log',
+        );
       }
 
+      // 4) final verify via isConnected()
       for (var i = 0; i < 40; i++) {
         final on = await isConnected();
         await log('verify(connect)[$i] isConnected=' + on.toString());
@@ -3794,7 +3699,10 @@ sc.exe start $svc | Out-Null
       }
 
       await log('=== CONNECT FAIL: verify isConnected still false ===');
-      return const VpnBackendResult(ok: false, message: 'Service RUNNING but isConnected() false. See backend.log');
+      return const VpnBackendResult(
+        ok: false,
+        message: 'Service RUNNING but isConnected() false. See backend.log',
+      );
     } catch (e) {
       await log('EXCEPTION(connect): ' + e.toString());
       return VpnBackendResult(ok: false, message: 'Connect error: $e (see backend.log)');
@@ -3802,7 +3710,7 @@ sc.exe start $svc | Out-Null
   }
 
 
-  @override
+    @override
   Future<VpnBackendResult> disconnect() async {
     final logFile = File(r'C:\ProgramData\BlueVPN\backend.log');
 
@@ -3816,7 +3724,17 @@ sc.exe start $svc | Out-Null
     String outOf(ProcessResult r) =>
         ((r.stdout ?? '').toString() + '\n' + (r.stderr ?? '').toString()).trim();
 
+    int? pidFrom(String out) {
+      final m1 = RegExp(r'(?m)^\s*PID\s*:\s*(\d+)\s*$').firstMatch(out);
+      if (m1 != null) return int.tryParse(m1.group(1)!);
+      final m2 = RegExp(r'(?m)^\s*ID_РїСЂРѕС†РµСЃСЃР°\s*:\s*(\d+)\s*$').firstMatch(out);
+      if (m2 != null) return int.tryParse(m2.group(1)!);
+      return null;
+    }
+
     bool isStoppedText(String out) => out.contains('STOPPED');
+    bool isRunningText(String out) => out.contains('RUNNING');
+
     Future<ProcessResult> scQueryEx() => _run('sc', ['queryex', _serviceName]);
 
     Future<bool> waitStopped({int loops = 40}) async {
@@ -3824,62 +3742,75 @@ sc.exe start $svc | Out-Null
         final q = await scQueryEx();
         final o = outOf(q);
         await log('queryex[$i] ec=${q.exitCode} :: ' + o.replaceAll('\r', ' ').replaceAll('\n', ' | '));
-        if (q.exitCode != 0) return true;
+        if (q.exitCode != 0) return true; // service missing => treated as off
         if (isStoppedText(o)) return true;
         await Future.delayed(const Duration(milliseconds: 250));
       }
       return false;
     }
 
-    Future<bool> isAdmin() async {
-      try {
-        final res = await _run('whoami', ['/groups']);
-        final out = ((res.stdout ?? '').toString() + '\n' + (res.stderr ?? '').toString());
-        return out.contains('S-1-5-32-544');
-      } catch (_) {
-        return false;
-      }
-    }
-
     try {
       await log('=== DISCONNECT requested ===');
       await log('service=' + _serviceName);
-      final admin = await isAdmin();
-      await log('isAdmin=' + admin.toString());
 
-      if (admin) {
-        final stop = await _run('sc', ['stop', _serviceName]);
-        await log('sc stop ec=${stop.exitCode} :: ' + outOf(stop).replaceAll('\r', ' ').replaceAll('\n', ' | '));
+      // 1) sc stop
+      final stop = await _run('sc', ['stop', _serviceName]);
+      await log('sc stop ec=${stop.exitCode} :: ' + outOf(stop).replaceAll('\r', ' ').replaceAll('\n', ' | '));
+
+      // 2) wait STOPPED
+      var stopped = await waitStopped(loops: 24); // ~6s
+
+      // 3) if still running -> get PID and taskkill
+      if (!stopped) {
+        final q = await scQueryEx();
+        final o = outOf(q);
+        final pid = pidFrom(o);
+
+        await log('still not stopped. pid=' + (pid?.toString() ?? 'null') + ' running=' + isRunningText(o).toString());
+
+        if (pid != null && pid > 0) {
+          final tk = await _run('taskkill', ['/PID', '$pid', '/F', '/T']);
+          await log('taskkill pid=$pid ec=${tk.exitCode} :: ' + outOf(tk).replaceAll('\r', ' ').replaceAll('\n', ' | '));
+        } else {
+          await log('WARN: PID not parsed from queryex. No taskkill performed.');
+        }
+
+        await Future.delayed(const Duration(milliseconds: 400));
+        stopped = await waitStopped(loops: 20); // ~5s
+      }
+
+      // 4) last resort: uninstall service
+      if (!stopped) {
+        await log('LAST RESORT: uninstall tunnel service via wireguard.exe');
         final un = await _run(_exe, ['/uninstalltunnelservice', tunnelName]);
         await log('wireguard uninstall ec=${un.exitCode} :: ' + outOf(un).replaceAll('\r', ' ').replaceAll('\n', ' | '));
-      } else {
-        final ps = r'''$ErrorActionPreference = "SilentlyContinue"
-$svc = "__SVC__"
-$wg  = "__WG__"
-sc.exe stop $svc | Out-Null
-Start-Sleep -Milliseconds 700
-& $wg /uninstalltunnelservice __TUN__ | Out-Null
-'''
-            .replaceAll('__SVC__', _serviceName)
-            .replaceAll('__WG__', _exe)
-            .replaceAll('__TUN__', tunnelName);
-        final elevated = await _runElevatedPowerShell(ps);
-        await log('elevated disconnect ec=${elevated.exitCode} :: ' + outOf(elevated).replaceAll('\r', ' ').replaceAll('\n', ' | '));
+
+        await Future.delayed(const Duration(milliseconds: 600));
+        stopped = await waitStopped(loops: 24);
       }
 
-      final stopped = await waitStopped(loops: 40);
-      if (!stopped) {
-        await log('=== DISCONNECT FAIL: still RUNNING ===');
-        return const VpnBackendResult(ok: false, message: 'Service still RUNNING after stop/uninstall. See backend.log');
+      // 5) final verify (wait a bit)
+      for (var i = 0; i < 40; i++) {
+        final on = await isConnected();
+        await log('verify[$i] isConnected=' + on.toString());
+        if (!on) {
+          await log('=== DISCONNECT OK ===');
+          return const VpnBackendResult(ok: true);
+        }
+        await Future.delayed(const Duration(milliseconds: 250));
       }
 
-      await log('=== DISCONNECT OK ===');
-      return const VpnBackendResult(ok: true);
+      await log('=== DISCONNECT FAIL: still RUNNING ===');
+      return const VpnBackendResult(
+        ok: false,
+        message: 'Service still RUNNING after stop/kill/uninstall. See log: C:\\ProgramData\\BlueVPN\\backend.log',
+      );
     } catch (e) {
       await log('EXCEPTION: ' + e.toString());
       return VpnBackendResult(ok: false, message: 'Disconnect error: $e (see backend.log)');
     }
   }
+
 
   @override
   Future<bool> isConnected() async {
@@ -3893,3 +3824,11 @@ Start-Sleep -Milliseconds 700
     }
   }
 }
+
+
+
+
+
+
+
+

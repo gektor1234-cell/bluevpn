@@ -1,54 +1,16 @@
-# Flutter/Dart
+# build / flutter
 .dart_tool/
-.flutter-plugins
-.flutter-plugins-dependencies
-.packages
 build/
-.pub/
-.pub-cache/
-coverage/
 *.log
 
-# IDE
-.idea/
-*.iml
-.vscode/
+# local backups
+_patch_backup/
+*.bak_*
+windows/runner/*.bak_*
 
-# Platform generated
-**/android/local.properties
-**/ios/Flutter/Flutter.podspec
-**/ios/Pods/
+# local reports (если где-то сохраняешь)
+BlueVPN_Reports/
+Desktop/BlueVPN_Reports/
 
-# OS junk
-Thumbs.db
-Desktop.ini
-
-# Console junk
-cd
-dir
-git
-main
-(
-
-Microsoft
-del
-type
-
-Microsoft
-del
-type
-
-# local secrets
-BlueVPN.conf
-*.conf
-
-# --- local secrets / configs ---
-*.conf
-BlueVPN.conf
-
-# --- accidental files created by wrong commands ---
-/cd
-/copy
-/dir
-/net
-/sc
+# temp / misc
+query

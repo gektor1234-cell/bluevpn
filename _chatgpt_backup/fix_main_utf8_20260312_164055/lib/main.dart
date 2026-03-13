@@ -12,25 +12,25 @@ import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 
 /*
-  BlueVPN — режим "как пользовательский продукт":
-  - Первый запуск: регистрация/вход (через сервер)
-  - Дальше: авто-вход по сохранённой сессии
-  - Пользователь НЕ видит: конфиги/папки/импорт/экспорт/профили
-  - Конфиг выдаёт сервер (provision), хранится внутри AppData (скрыто)
+  BlueVPN вЂ” СЂРµР¶РёРј "РєР°Рє РїРѕР»СЊР·РѕРІР°С‚РµР»СЊСЃРєРёР№ РїСЂРѕРґСѓРєС‚":
+  - РџРµСЂРІС‹Р№ Р·Р°РїСѓСЃРє: СЂРµРіРёСЃС‚СЂР°С†РёСЏ/РІС…РѕРґ (С‡РµСЂРµР· СЃРµСЂРІРµСЂ)
+  - Р”Р°Р»СЊС€Рµ: Р°РІС‚Рѕ-РІС…РѕРґ РїРѕ СЃРѕС…СЂР°РЅС‘РЅРЅРѕР№ СЃРµСЃСЃРёРё
+  - РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РќР• РІРёРґРёС‚: РєРѕРЅС„РёРіРё/РїР°РїРєРё/РёРјРїРѕСЂС‚/СЌРєСЃРїРѕСЂС‚/РїСЂРѕС„РёР»Рё
+  - РљРѕРЅС„РёРі РІС‹РґР°С‘С‚ СЃРµСЂРІРµСЂ (provision), С…СЂР°РЅРёС‚СЃСЏ РІРЅСѓС‚СЂРё AppData (СЃРєСЂС‹С‚Рѕ)
 
-  ВАЖНО: в VPN-экране НЕТ карточки "Профиль" (дырка закрыта).
+  Р’РђР–РќРћ: РІ VPN-СЌРєСЂР°РЅРµ РќР•Рў РєР°СЂС‚РѕС‡РєРё "РџСЂРѕС„РёР»СЊ" (РґС‹СЂРєР° Р·Р°РєСЂС‹С‚Р°).
 */
 
 const String kTunnelName = 'BlueVPN';
 
-// TODO: поставь реальный URL API твоего сервера (без / в конце).
+// TODO: РїРѕСЃС‚Р°РІСЊ СЂРµР°Р»СЊРЅС‹Р№ URL API С‚РІРѕРµРіРѕ СЃРµСЂРІРµСЂР° (Р±РµР· / РІ РєРѕРЅС†Рµ).
 const String kApiBaseUrl = String.fromEnvironment(
   'BLUEVPN_API_BASE_URL',
   defaultValue: 'https://api.example.com',
 );
 
-// DEV-кнопка для входа без сервера появляется ТОЛЬКО в debug.
-// Для релиза не влияет (kDebugMode == false).
+// DEV-РєРЅРѕРїРєР° РґР»СЏ РІС…РѕРґР° Р±РµР· СЃРµСЂРІРµСЂР° РїРѕСЏРІР»СЏРµС‚СЃСЏ РўРћР›Р¬РљРћ РІ debug.
+// Р”Р»СЏ СЂРµР»РёР·Р° РЅРµ РІР»РёСЏРµС‚ (kDebugMode == false).
 const bool _kEnableDevBypassInDebug = true;
 
 void main() {
@@ -181,7 +181,7 @@ class _AppBootstrapState extends State<AppBootstrap> {
 
   Future<void> _logout() async {
     await _sessionStore.clear();
-    await ConfigStore().deleteManagedConfig(); // скрыто от пользователя
+    await ConfigStore().deleteManagedConfig(); // СЃРєСЂС‹С‚Рѕ РѕС‚ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ
     if (!mounted) return;
     setState(() => _session = null);
   }
@@ -293,7 +293,7 @@ class DeviceIdStore {
   }
 
   String _gen() {
-    // Короткий, но уникальный для устройства идентификатор
+    // РљРѕСЂРѕС‚РєРёР№, РЅРѕ СѓРЅРёРєР°Р»СЊРЅС‹Р№ РґР»СЏ СѓСЃС‚СЂРѕР№СЃС‚РІР° РёРґРµРЅС‚РёС„РёРєР°С‚РѕСЂ
     final rnd = Random.secure();
     final bytes = List<int>.generate(16, (_) => rnd.nextInt(256));
     final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
@@ -364,7 +364,7 @@ class Prefs {
 
   static Prefs defaults() => const Prefs(
     themeMode: 'light',
-    language: 'Русский',
+    language: 'Р СѓСЃСЃРєРёР№',
     serverId: 'auto',
     socialOnlyEnabled: false,
     socialOnlyApps: ['telegram', 'instagram'],
@@ -591,7 +591,7 @@ class BlueVpnApi {
     required String accessToken,
     String? deviceId,
   }) async {
-    // Ожидаем JSON вида: { "plan": "Base" } или { "planName": "Base" }
+    // РћР¶РёРґР°РµРј JSON РІРёРґР°: { "plan": "Base" } РёР»Рё { "planName": "Base" }
     try {
       final client = HttpClient();
       final req = await client.getUrl(_u('/v1/me'));
@@ -607,9 +607,9 @@ class BlueVpnApi {
         final p = (jsonMap['plan'] ?? jsonMap['planName'] ?? 'Base').toString();
         return ApiResult.ok(p.isEmpty ? 'Base' : p);
       }
-      return ApiResult.err('Ошибка сервера (${res.statusCode}): $body');
+      return ApiResult.err('РћС€РёР±РєР° СЃРµСЂРІРµСЂР° (${res.statusCode}): $body');
     } catch (e) {
-      return ApiResult.err('Ошибка сети: $e');
+      return ApiResult.err('РћС€РёР±РєР° СЃРµС‚Рё: $e');
     }
   }
 
@@ -618,9 +618,9 @@ class BlueVpnApi {
     String? deviceId,
     String? serverId,
   }) async {
-    // Ожидаемые форматы ответа:
+    // РћР¶РёРґР°РµРјС‹Рµ С„РѕСЂРјР°С‚С‹ РѕС‚РІРµС‚Р°:
     // A) JSON: { "config": "[Interface]..." }
-    // B) text/plain: сам конфиг
+    // B) text/plain: СЃР°Рј РєРѕРЅС„РёРі
     try {
       final client = HttpClient();
 
@@ -643,17 +643,17 @@ class BlueVpnApi {
           final jsonMap = jsonDecode(trimmed) as Map<String, dynamic>;
           final cfg = (jsonMap['config'] ?? '').toString();
           if (cfg.trim().isEmpty)
-            return const ApiResult.err('Сервер вернул пустой конфиг.');
+            return const ApiResult.err('РЎРµСЂРІРµСЂ РІРµСЂРЅСѓР» РїСѓСЃС‚РѕР№ РєРѕРЅС„РёРі.');
           return ApiResult.ok(cfg);
         }
         if (trimmed.isEmpty)
-          return const ApiResult.err('Сервер вернул пустой конфиг.');
+          return const ApiResult.err('РЎРµСЂРІРµСЂ РІРµСЂРЅСѓР» РїСѓСЃС‚РѕР№ РєРѕРЅС„РёРі.');
         return ApiResult.ok(body);
       }
 
-      return ApiResult.err('Ошибка сервера (${res.statusCode}): $body');
+      return ApiResult.err('РћС€РёР±РєР° СЃРµСЂРІРµСЂР° (${res.statusCode}): $body');
     } catch (e) {
-      return ApiResult.err('Не удалось получить конфиг: $e');
+      return ApiResult.err('РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РєРѕРЅС„РёРі: $e');
     }
   }
 
@@ -676,13 +676,13 @@ class BlueVpnApi {
         final email = (jsonMap['email'] ?? payload['email'] ?? '').toString();
 
         if (token.isEmpty)
-          return const ApiResult.err('Сервер не вернул accessToken.');
+          return const ApiResult.err('РЎРµСЂРІРµСЂ РЅРµ РІРµСЂРЅСѓР» accessToken.');
         return ApiResult.ok(Session(accessToken: token, email: email));
       }
 
-      return ApiResult.err('Ошибка сервера (${res.statusCode}): $body');
+      return ApiResult.err('РћС€РёР±РєР° СЃРµСЂРІРµСЂР° (${res.statusCode}): $body');
     } catch (e) {
-      return ApiResult.err('Ошибка сети: $e');
+      return ApiResult.err('РћС€РёР±РєР° СЃРµС‚Рё: $e');
     }
   }
 }
@@ -832,11 +832,11 @@ class _AuthPageState extends State<AuthPage>
     final pass = _password.text;
 
     if (email.isEmpty || !email.contains('@')) {
-      _toast('Введи корректный email.');
+      _toast('Р’РІРµРґРё РєРѕСЂСЂРµРєС‚РЅС‹Р№ email.');
       return;
     }
     if (pass.length < 6) {
-      _toast('Пароль минимум 6 символов.');
+      _toast('РџР°СЂРѕР»СЊ РјРёРЅРёРјСѓРј 6 СЃРёРјРІРѕР»РѕРІ.');
       return;
     }
 
@@ -847,7 +847,7 @@ class _AuthPageState extends State<AuthPage>
           : await _api.login(email: email, password: pass);
 
       if (!res.ok || res.data == null) {
-        _toast(res.message ?? 'Ошибка авторизации.');
+        _toast(res.message ?? 'РћС€РёР±РєР° Р°РІС‚РѕСЂРёР·Р°С†РёРё.');
         return;
       }
 
@@ -908,7 +908,7 @@ class _AuthPageState extends State<AuthPage>
                               ),
                               SizedBox(height: 2),
                               Text(
-                                'Войти или зарегистрироваться',
+                                'Р’РѕР№С‚Рё РёР»Рё Р·Р°СЂРµРіРёСЃС‚СЂРёСЂРѕРІР°С‚СЊСЃСЏ',
                                 style: TextStyle(
                                   fontSize: 12,
                                   fontWeight: FontWeight.w700,
@@ -925,8 +925,8 @@ class _AuthPageState extends State<AuthPage>
                       controller: _tabs,
                       labelStyle: const TextStyle(fontWeight: FontWeight.w900),
                       tabs: const [
-                        Tab(text: 'Вход'),
-                        Tab(text: 'Регистрация'),
+                        Tab(text: 'Р’С…РѕРґ'),
+                        Tab(text: 'Р РµРіРёСЃС‚СЂР°С†РёСЏ'),
                       ],
                     ),
                     const SizedBox(height: 12),
@@ -943,7 +943,7 @@ class _AuthPageState extends State<AuthPage>
                       controller: _password,
                       obscureText: true,
                       decoration: const InputDecoration(
-                        labelText: 'Пароль',
+                        labelText: 'РџР°СЂРѕР»СЊ',
                         border: OutlineInputBorder(),
                       ),
                     ),
@@ -964,10 +964,10 @@ class _AuthPageState extends State<AuthPage>
                             : () => _submit(isRegister: _tabs.index == 1),
                         child: Text(
                           _busy
-                              ? 'Подождите…'
+                              ? 'РџРѕРґРѕР¶РґРёС‚РµвЂ¦'
                               : (_tabs.index == 1
-                                    ? 'Создать аккаунт'
-                                    : 'Войти'),
+                                    ? 'РЎРѕР·РґР°С‚СЊ Р°РєРєР°СѓРЅС‚'
+                                    : 'Р’РѕР№С‚Рё'),
                           style: const TextStyle(fontWeight: FontWeight.w900),
                         ),
                       ),
@@ -977,7 +977,7 @@ class _AuthPageState extends State<AuthPage>
                       TextButton(
                         onPressed: _busy ? null : _devBypass,
                         child: Text(
-                          'DEV: войти без сервера',
+                          'DEV: РІРѕР№С‚Рё Р±РµР· СЃРµСЂРІРµСЂР°',
                           style: TextStyle(
                             color: theme.colorScheme.onSurface.withOpacity(
                               0.65,
@@ -1056,7 +1056,7 @@ class _RootShellState extends State<RootShell> {
   final _api = const BlueVpnApi(baseUrl: kApiBaseUrl);
   final _cfg = ConfigStore();
 
-  // device identifier (for server-side provisioning) — hidden from user
+  // device identifier (for server-side provisioning) вЂ” hidden from user
   final DeviceIdStore _deviceStore = DeviceIdStore();
   String? _deviceId;
 
@@ -1098,69 +1098,69 @@ class _RootShellState extends State<RootShell> {
   bool vpnEnabled = false;
   bool vpnBusy = false;
 
-  // “Только для соцсетей”
+  // вЂњРўРѕР»СЊРєРѕ РґР»СЏ СЃРѕС†СЃРµС‚РµР№вЂќ
   bool socialOnlyEnabled = false;
   final Set<SocialApp> socialOnlyApps = {
     SocialApp.telegram,
     SocialApp.instagram,
   };
 
-  // Сервер
+  // РЎРµСЂРІРµСЂ
   final List<ServerLocation> servers = const [
     ServerLocation(
       id: 'auto',
-      title: 'Авто',
-      subtitle: 'Самая быстрая локация',
+      title: 'РђРІС‚Рѕ',
+      subtitle: 'РЎР°РјР°СЏ Р±С‹СЃС‚СЂР°СЏ Р»РѕРєР°С†РёСЏ',
       pingMs: null,
       isAuto: true,
     ),
     ServerLocation(
       id: 'nl',
-      title: 'Нидерланды',
-      subtitle: 'Амстердам',
+      title: 'РќРёРґРµСЂР»Р°РЅРґС‹',
+      subtitle: 'РђРјСЃС‚РµСЂРґР°Рј',
       pingMs: 32,
     ),
     ServerLocation(
       id: 'de',
-      title: 'Германия',
-      subtitle: 'Франкфурт',
+      title: 'Р“РµСЂРјР°РЅРёСЏ',
+      subtitle: 'Р¤СЂР°РЅРєС„СѓСЂС‚',
       pingMs: 44,
     ),
     ServerLocation(
       id: 'fi',
-      title: 'Финляндия',
-      subtitle: 'Хельсинки',
+      title: 'Р¤РёРЅР»СЏРЅРґРёСЏ',
+      subtitle: 'РҐРµР»СЊСЃРёРЅРєРё',
       pingMs: 48,
     ),
     ServerLocation(
       id: 'uk',
-      title: 'Великобритания',
-      subtitle: 'Лондон',
+      title: 'Р’РµР»РёРєРѕР±СЂРёС‚Р°РЅРёСЏ',
+      subtitle: 'Р›РѕРЅРґРѕРЅ',
       pingMs: 58,
     ),
-    ServerLocation(id: 'us', title: 'США', subtitle: 'Нью-Йорк', pingMs: 120),
+    ServerLocation(id: 'us', title: 'РЎРЁРђ', subtitle: 'РќСЊСЋ-Р™РѕСЂРє', pingMs: 120),
   ];
 
   ServerLocation selectedServer = const ServerLocation(
     id: 'auto',
-    title: 'Авто',
-    subtitle: 'Самая быстрая локация',
+    title: 'РђРІС‚Рѕ',
+    subtitle: 'РЎР°РјР°СЏ Р±С‹СЃС‚СЂР°СЏ Р»РѕРєР°С†РёСЏ',
     pingMs: null,
     isAuto: true,
   );
 
   // ===== TARIFF STATE =====
   final Set<TariffApp> selectedApps = {};
-  TrafficPack trafficPack = TrafficPack.gb20; // “режим” (по ГБ / безлимит)
-  double trafficGb = 20; // любой объём ГБ
+  TrafficPack trafficPack = TrafficPack.gb20; // вЂњСЂРµР¶РёРјвЂќ (РїРѕ Р“Р‘ / Р±РµР·Р»РёРјРёС‚)
+  double trafficGb = 20; // Р»СЋР±РѕР№ РѕР±СЉС‘Рј Р“Р‘
   int devices = 1;
 
   bool optNoAds = true;
-  bool optSmartRouting = true; // этим флагом управляем доступностью “соцсетей”
+  bool optSmartRouting = true; // СЌС‚РёРј С„Р»Р°РіРѕРј СѓРїСЂР°РІР»СЏРµРј РґРѕСЃС‚СѓРїРЅРѕСЃС‚СЊСЋ вЂњСЃРѕС†СЃРµС‚РµР№вЂќ
   bool optDedicatedIp = false;
 
-  // ===== SETTINGS (косметика) =====
-  String sLanguage = 'Русский';
+  // ===== SETTINGS (РєРѕСЃРјРµС‚РёРєР°) =====
+  String sLanguage = 'Р СѓСЃСЃРєРёР№';
 
   // Local prefs (persist UI settings)
   final PrefsStore _prefsStore = PrefsStore();
@@ -1242,7 +1242,7 @@ class _RootShellState extends State<RootShell> {
 
       optNoAds = p.optNoAds;
       optSmartRouting =
-          true; // временно всегда разрешаем Social Only в Windows-клиенте
+          true; // РІСЂРµРјРµРЅРЅРѕ РІСЃРµРіРґР° СЂР°Р·СЂРµС€Р°РµРј Social Only РІ Windows-РєР»РёРµРЅС‚Рµ
       optDedicatedIp = p.optDedicatedIp;
 
       await _repairProvisionedConfigFromPreferredDevSource(showToast: false);
@@ -1352,7 +1352,7 @@ class _RootShellState extends State<RootShell> {
     await _writeProvisionedConfig(preferred);
 
     if (showToast && mounted) {
-      _toast(context, 'Локальный WARP/BlueVPN конфиг восстановлен.');
+      _toast(context, 'Р›РѕРєР°Р»СЊРЅС‹Р№ WARP/BlueVPN РєРѕРЅС„РёРі РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅ.');
     }
   }
 
@@ -1427,8 +1427,8 @@ class _RootShellState extends State<RootShell> {
         _toast(
           context,
           socialOnlyEnabled
-              ? 'Режим сохранён. Применится после получения конфига.'
-              : 'Обычный режим сохранён.',
+              ? 'Р РµР¶РёРј СЃРѕС…СЂР°РЅС‘РЅ. РџСЂРёРјРµРЅРёС‚СЃСЏ РїРѕСЃР»Рµ РїРѕР»СѓС‡РµРЅРёСЏ РєРѕРЅС„РёРіР°.'
+              : 'РћР±С‹С‡РЅС‹Р№ СЂРµР¶РёРј СЃРѕС…СЂР°РЅС‘РЅ.',
         );
       }
       return true;
@@ -1439,14 +1439,14 @@ class _RootShellState extends State<RootShell> {
     if (reconnectIfNeeded && vpnEnabled) {
       final off = await _vpnBackend.disconnect();
       if (!off.ok) {
-        _toast(context, off.message ?? 'Не удалось переподключить VPN.');
+        _toast(context, off.message ?? 'РќРµ СѓРґР°Р»РѕСЃСЊ РїРµСЂРµРїРѕРґРєР»СЋС‡РёС‚СЊ VPN.');
         await _syncVpnStatus();
         return false;
       }
 
       final on = await _vpnBackend.connect(configPath: _cfg.managedConfigPath);
       if (!on.ok) {
-        _toast(context, on.message ?? 'Не удалось заново подключить VPN.');
+        _toast(context, on.message ?? 'РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РЅРѕРІРѕ РїРѕРґРєР»СЋС‡РёС‚СЊ VPN.');
         await _syncVpnStatus();
         return false;
       }
@@ -1458,8 +1458,8 @@ class _RootShellState extends State<RootShell> {
       _toast(
         context,
         socialOnlyEnabled
-            ? 'Social Only применён.'
-            : 'Обычный режим восстановлен.',
+            ? 'Social Only РїСЂРёРјРµРЅС‘РЅ.'
+            : 'РћР±С‹С‡РЅС‹Р№ СЂРµР¶РёРј РІРѕСЃСЃС‚Р°РЅРѕРІР»РµРЅ.',
       );
     }
 
@@ -1485,7 +1485,7 @@ class _RootShellState extends State<RootShell> {
   Future<void> _syncPlanSilently() async {
     if (kIsWeb) return;
     try {
-      // DEV режим — план не тянем
+      // DEV СЂРµР¶РёРј вЂ” РїР»Р°РЅ РЅРµ С‚СЏРЅРµРј
       if (widget.session.accessToken == 'dev-token') return;
 
       final did = await _ensureDeviceId();
@@ -1500,7 +1500,7 @@ class _RootShellState extends State<RootShell> {
   }
 
   Future<bool> _trySeedDevConfig({required bool showToast}) async {
-    // Для разработки без сервера: ищем сначала WARP.conf, потом BlueVPN.conf.
+    // Р”Р»СЏ СЂР°Р·СЂР°Р±РѕС‚РєРё Р±РµР· СЃРµСЂРІРµСЂР°: РёС‰РµРј СЃРЅР°С‡Р°Р»Р° WARP.conf, РїРѕС‚РѕРј BlueVPN.conf.
     if (kIsWeb) return false;
 
     for (final p in _preferredLocalConfigCandidates()) {
@@ -1511,7 +1511,7 @@ class _RootShellState extends State<RootShell> {
         if (cfg.trim().isEmpty) continue;
         await _writeProvisionedConfig(cfg);
         if (showToast) {
-          _toast(context, 'DEV: конфиг подхвачен из $p');
+          _toast(context, 'DEV: РєРѕРЅС„РёРі РїРѕРґС…РІР°С‡РµРЅ РёР· $p');
         }
         return true;
       } catch (_) {
@@ -1523,7 +1523,7 @@ class _RootShellState extends State<RootShell> {
   }
 
   Future<void> _ensureProvisionedConfigSilently() async {
-    // тихо подтянем конфиг при старте, если его нет
+    // С‚РёС…Рѕ РїРѕРґС‚СЏРЅРµРј РєРѕРЅС„РёРі РїСЂРё СЃС‚Р°СЂС‚Рµ, РµСЃР»Рё РµРіРѕ РЅРµС‚
     if (kIsWeb) return;
     try {
       if (widget.session.accessToken == 'dev-token') {
@@ -1577,7 +1577,7 @@ class _RootShellState extends State<RootShell> {
       if (ok) return true;
       _toast(
         context,
-        'DEV: не найден локальный конфиг. Положи WARP.conf или BlueVPN.conf на Desktop/Downloads либо подними сервер.',
+        'DEV: РЅРµ РЅР°Р№РґРµРЅ Р»РѕРєР°Р»СЊРЅС‹Р№ РєРѕРЅС„РёРі. РџРѕР»РѕР¶Рё WARP.conf РёР»Рё BlueVPN.conf РЅР° Desktop/Downloads Р»РёР±Рѕ РїРѕРґРЅРёРјРё СЃРµСЂРІРµСЂ.',
       );
       return false;
     }
@@ -1588,7 +1588,7 @@ class _RootShellState extends State<RootShell> {
       serverId: selectedServer.id == 'auto' ? null : selectedServer.id,
     );
     if (!res.ok || res.data == null) {
-      _toast(context, res.message ?? 'Не удалось получить конфиг с сервера.');
+      _toast(context, res.message ?? 'РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РєРѕРЅС„РёРі СЃ СЃРµСЂРІРµСЂР°.');
       return false;
     }
     await _writeProvisionedConfig(res.data!);
@@ -1601,7 +1601,7 @@ class _RootShellState extends State<RootShell> {
     if (kIsWeb) {
       _toast(
         context,
-        'Web-режим: реальный VPN недоступен. Запусти приложение как Windows.',
+        'Web-СЂРµР¶РёРј: СЂРµР°Р»СЊРЅС‹Р№ VPN РЅРµРґРѕСЃС‚СѓРїРµРЅ. Р—Р°РїСѓСЃС‚Рё РїСЂРёР»РѕР¶РµРЅРёРµ РєР°Рє Windows.',
       );
       return;
     }
@@ -1615,7 +1615,7 @@ class _RootShellState extends State<RootShell> {
         final configPath = _cfg.managedConfigPath;
         final res = await _vpnBackend.connect(configPath: configPath);
         if (!res.ok) {
-          _toast(context, res.message ?? 'Не удалось подключить VPN.');
+          _toast(context, res.message ?? 'РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕРґРєР»СЋС‡РёС‚СЊ VPN.');
           await _syncVpnStatus();
           var onNow = false;
           for (var i = 0; i < 40; i++) {
@@ -1634,11 +1634,11 @@ class _RootShellState extends State<RootShell> {
         }
 
         await _syncVpnStatus();
-        _toast(context, 'VPN включён.');
+        _toast(context, 'VPN РІРєР»СЋС‡С‘РЅ.');
       } else {
         final res = await _vpnBackend.disconnect();
         if (!res.ok) {
-          _toast(context, res.message ?? 'Не удалось отключить VPN.');
+          _toast(context, res.message ?? 'РќРµ СѓРґР°Р»РѕСЃСЊ РѕС‚РєР»СЋС‡РёС‚СЊ VPN.');
           await _syncVpnStatus();
           final onNow = await _vpnBackend.isConnected();
           if (mounted) setState(() => vpnEnabled = onNow);
@@ -1647,7 +1647,7 @@ class _RootShellState extends State<RootShell> {
         }
 
         await _syncVpnStatus();
-        _toast(context, 'VPN выключен.');
+        _toast(context, 'VPN РІС‹РєР»СЋС‡РµРЅ.');
       }
     } finally {
       if (mounted) setState(() => vpnBusy = false);
@@ -1660,7 +1660,7 @@ class _RootShellState extends State<RootShell> {
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          title: const Text('Выбор сервера'),
+          title: const Text('Р’С‹Р±РѕСЂ СЃРµСЂРІРµСЂР°'),
           content: SizedBox(
             width: 420,
             child: SingleChildScrollView(
@@ -1669,8 +1669,8 @@ class _RootShellState extends State<RootShell> {
                 children: servers.map((s) {
                   final selected = s.id == selectedServer.id;
                   final subtitle = s.isAuto
-                      ? 'Авто-подбор'
-                      : '${s.subtitle}${s.pingMs != null ? ' • ${s.pingMs} ms' : ''}';
+                      ? 'РђРІС‚Рѕ-РїРѕРґР±РѕСЂ'
+                      : '${s.subtitle}${s.pingMs != null ? ' вЂў ${s.pingMs} ms' : ''}';
                   return ListTile(
                     contentPadding: EdgeInsets.zero,
                     leading: Icon(
@@ -1694,7 +1694,7 @@ class _RootShellState extends State<RootShell> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Закрыть'),
+              child: const Text('Р—Р°РєСЂС‹С‚СЊ'),
             ),
           ],
         );
@@ -1708,7 +1708,7 @@ class _RootShellState extends State<RootShell> {
       if (!vpnEnabled) {
         unawaited(_cfg.deleteManagedConfig());
       } else {
-        _toast(context, 'Сервер изменён. Переподключись, чтобы применить.');
+        _toast(context, 'РЎРµСЂРІРµСЂ РёР·РјРµРЅС‘РЅ. РџРµСЂРµРїРѕРґРєР»СЋС‡РёСЃСЊ, С‡С‚РѕР±С‹ РїСЂРёРјРµРЅРёС‚СЊ.');
       }
     }
   }
@@ -1723,7 +1723,7 @@ class _RootShellState extends State<RootShell> {
         return StatefulBuilder(
           builder: (ctx, setLocal) {
             return AlertDialog(
-              title: const Text('Соцсети через VPN'),
+              title: const Text('РЎРѕС†СЃРµС‚Рё С‡РµСЂРµР· VPN'),
               content: SizedBox(
                 width: 460,
                 child: SingleChildScrollView(
@@ -1753,17 +1753,17 @@ class _RootShellState extends State<RootShell> {
               actions: [
                 TextButton(
                   onPressed: () => Navigator.of(ctx).pop(),
-                  child: const Text('Отмена'),
+                  child: const Text('РћС‚РјРµРЅР°'),
                 ),
                 ElevatedButton(
                   onPressed: () {
                     if (temp.isEmpty) {
-                      _toast(ctx, 'Выбери хотя бы одно приложение.');
+                      _toast(ctx, 'Р’С‹Р±РµСЂРё С…РѕС‚СЏ Р±С‹ РѕРґРЅРѕ РїСЂРёР»РѕР¶РµРЅРёРµ.');
                       return;
                     }
                     Navigator.of(ctx).pop(Set<SocialApp>.from(temp));
                   },
-                  child: const Text('Готово'),
+                  child: const Text('Р“РѕС‚РѕРІРѕ'),
                 ),
               ],
             );
@@ -1804,11 +1804,11 @@ class _RootShellState extends State<RootShell> {
         vpnEnabled: vpnEnabled,
         onToggleVpn: () => _toggleVpnReal(),
 
-        // Сервер
+        // РЎРµСЂРІРµСЂ
         selectedServer: selectedServer,
         onOpenServerPicker: () => _openServerPicker(context),
 
-        // Соцсети
+        // РЎРѕС†СЃРµС‚Рё
         socialOnlyEnabled: socialOnlyEnabled,
         socialOnlyAllowed: true,
         socialOnlyApps: socialOnlyApps,
@@ -1894,9 +1894,9 @@ class _RootShellState extends State<RootShell> {
         language: sLanguage,
         onPickLanguage: () => _pickOne(
           context,
-          title: 'Язык',
+          title: 'РЇР·С‹Рє',
           current: sLanguage,
-          items: const ['Русский', 'English'],
+          items: const ['Р СѓСЃСЃРєРёР№', 'English'],
           onSelect: (v) => _setLanguage(v),
         ),
         email: widget.session.email,
@@ -1924,15 +1924,15 @@ class _RootShellState extends State<RootShell> {
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.star_rounded),
-            label: 'Тариф',
+            label: 'РўР°СЂРёС„',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.checklist_rounded),
-            label: 'Задания',
+            label: 'Р—Р°РґР°РЅРёСЏ',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.settings_rounded),
-            label: 'Настройки',
+            label: 'РќР°СЃС‚СЂРѕР№РєРё',
           ),
         ],
       ),
@@ -1952,7 +1952,7 @@ class _RootShellState extends State<RootShell> {
       builder: (ctx) {
         return _BottomSheetFrame(
           title: title,
-          subtitle: 'Выбери значение',
+          subtitle: 'Р’С‹Р±РµСЂРё Р·РЅР°С‡РµРЅРёРµ',
           leading: Icons.tune_rounded,
           child: Container(
             decoration: BoxDecoration(
@@ -2048,15 +2048,15 @@ class VpnPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final statusText = vpnEnabled ? 'Включено' : 'Отключено';
+    final statusText = vpnEnabled ? 'Р’РєР»СЋС‡РµРЅРѕ' : 'РћС‚РєР»СЋС‡РµРЅРѕ';
     final serverTitle = selectedServer.isAuto
-        ? 'Самая быстрая локация'
+        ? 'РЎР°РјР°СЏ Р±С‹СЃС‚СЂР°СЏ Р»РѕРєР°С†РёСЏ'
         : selectedServer.title;
     final serverSub = selectedServer.isAuto
-        ? 'Авто-подбор'
-        : '${selectedServer.subtitle}${selectedServer.pingMs != null ? ' • ${selectedServer.pingMs} ms' : ''}';
+        ? 'РђРІС‚Рѕ-РїРѕРґР±РѕСЂ'
+        : '${selectedServer.subtitle}${selectedServer.pingMs != null ? ' вЂў ${selectedServer.pingMs} ms' : ''}';
     final appsText = socialOnlyApps.isEmpty
-        ? 'Не выбрано'
+        ? 'РќРµ РІС‹Р±СЂР°РЅРѕ'
         : socialOnlyApps.map((e) => e.title).join(', ');
 
     return ListView(
@@ -2079,12 +2079,12 @@ class VpnPage extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Тариф',
+                      'РўР°СЂРёС„',
                       style: TextStyle(fontWeight: FontWeight.w900),
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'Текущий: $planName • открыть тариф',
+                      'РўРµРєСѓС‰РёР№: $planName вЂў РѕС‚РєСЂС‹С‚СЊ С‚Р°СЂРёС„',
                       style: const TextStyle(fontSize: 12),
                     ),
                   ],
@@ -2105,7 +2105,7 @@ class VpnPage extends StatelessWidget {
                   icon: Icon(
                     vpnEnabled ? Icons.pause_rounded : Icons.play_arrow_rounded,
                   ),
-                  label: Text(vpnEnabled ? 'Отключить VPN' : 'Подключить VPN'),
+                  label: Text(vpnEnabled ? 'РћС‚РєР»СЋС‡РёС‚СЊ VPN' : 'РџРѕРґРєР»СЋС‡РёС‚СЊ VPN'),
                   style: ElevatedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 18),
                     shape: RoundedRectangleBorder(
@@ -2134,13 +2134,13 @@ class VpnPage extends StatelessWidget {
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 title: const Text(
-                  'Только для соц. сетей',
+                  'РўРѕР»СЊРєРѕ РґР»СЏ СЃРѕС†. СЃРµС‚РµР№',
                   style: TextStyle(fontWeight: FontWeight.w900),
                 ),
                 subtitle: Text(
                   socialOnlyEnabled
-                      ? 'Через VPN: $appsText'
-                      : 'Выбери приложения, которые должны идти через VPN',
+                      ? 'Р§РµСЂРµР· VPN: $appsText'
+                      : 'Р’С‹Р±РµСЂРё РїСЂРёР»РѕР¶РµРЅРёСЏ, РєРѕС‚РѕСЂС‹Рµ РґРѕР»Р¶РЅС‹ РёРґС‚Рё С‡РµСЂРµР· VPN',
                   style: const TextStyle(fontSize: 12),
                 ),
                 value: socialOnlyEnabled,
@@ -2153,7 +2153,7 @@ class VpnPage extends StatelessWidget {
                   onPressed: onConfigureSocialApps,
                   icon: const Icon(Icons.tune_rounded),
                   label: const Text(
-                    'Настроить приложения',
+                    'РќР°СЃС‚СЂРѕРёС‚СЊ РїСЂРёР»РѕР¶РµРЅРёСЏ',
                     style: TextStyle(fontWeight: FontWeight.w900),
                   ),
                   style: OutlinedButton.styleFrom(
@@ -2167,8 +2167,8 @@ class VpnPage extends StatelessWidget {
               const SizedBox(height: 8),
               Text(
                 socialOnlyAllowed
-                    ? 'Функция активна. Кнопка выше должна открывать выбор приложений.'
-                    : 'Функция временно недоступна для текущего режима.',
+                    ? 'Р¤СѓРЅРєС†РёСЏ Р°РєС‚РёРІРЅР°. РљРЅРѕРїРєР° РІС‹С€Рµ РґРѕР»Р¶РЅР° РѕС‚РєСЂС‹РІР°С‚СЊ РІС‹Р±РѕСЂ РїСЂРёР»РѕР¶РµРЅРёР№.'
+                    : 'Р¤СѓРЅРєС†РёСЏ РІСЂРµРјРµРЅРЅРѕ РЅРµРґРѕСЃС‚СѓРїРЅР° РґР»СЏ С‚РµРєСѓС‰РµРіРѕ СЂРµР¶РёРјР°.',
                 style: const TextStyle(
                   color: Color(0xFF64748B),
                   fontSize: 12,
@@ -2186,7 +2186,7 @@ class VpnPage extends StatelessWidget {
             onTap: onOpenServerPicker,
             leading: const Icon(Icons.bolt_rounded, color: Color(0xFF2563EB)),
             title: const Text(
-              'Сервер',
+              'РЎРµСЂРІРµСЂ',
               style: TextStyle(
                 color: Color(0xFF64748B),
                 fontSize: 12,
@@ -2258,7 +2258,7 @@ class _TariffBanner extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Тариф',
+                    'РўР°СЂРёС„',
                     style: TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.w800,
@@ -2267,7 +2267,7 @@ class _TariffBanner extends StatelessWidget {
                   ),
                   SizedBox(height: 2),
                   Text(
-                    'Текущий: $planName • настрой подписку',
+                    'РўРµРєСѓС‰РёР№: $planName вЂў РЅР°СЃС‚СЂРѕР№ РїРѕРґРїРёСЃРєСѓ',
                     style: TextStyle(
                       color: Color(0xFFBFDBFE),
                       fontSize: 12,
@@ -2298,7 +2298,7 @@ class _BigToggle extends StatelessWidget {
       child: ElevatedButton.icon(
         onPressed: onTap,
         icon: Icon(enabled ? Icons.pause_rounded : Icons.play_arrow_rounded),
-        label: Text(enabled ? 'Отключить VPN' : 'Подключить VPN'),
+        label: Text(enabled ? 'РћС‚РєР»СЋС‡РёС‚СЊ VPN' : 'РџРѕРґРєР»СЋС‡РёС‚СЊ VPN'),
         style: ElevatedButton.styleFrom(
           padding: const EdgeInsets.symmetric(vertical: 18),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
@@ -2327,11 +2327,11 @@ enum TariffApp {
 }
 
 enum TrafficPack {
-  gb5('5 ГБ', 99),
-  gb20('20 ГБ', 199),
-  gb50('50 ГБ', 299),
-  gb100('100 ГБ', 399),
-  unlimited('Безлимит', 799);
+  gb5('5 Р“Р‘', 99),
+  gb20('20 Р“Р‘', 199),
+  gb50('50 Р“Р‘', 299),
+  gb100('100 Р“Р‘', 399),
+  unlimited('Р‘РµР·Р»РёРјРёС‚', 799);
 
   const TrafficPack(this.title, this.basePriceRub);
   final String title;
@@ -2424,7 +2424,7 @@ class TariffPage extends StatelessWidget {
     final price = _calcPriceRub();
 
     final appsText = selectedApps.isEmpty
-        ? 'Без безлимитных приложений'
+        ? 'Р‘РµР· Р±РµР·Р»РёРјРёС‚РЅС‹С… РїСЂРёР»РѕР¶РµРЅРёР№'
         : selectedApps.map((e) => e.title).join(', ');
 
     final appsDisabled = trafficPack == TrafficPack.unlimited;
@@ -2438,8 +2438,8 @@ class TariffPage extends StatelessWidget {
       padding: const EdgeInsets.all(16),
       children: [
         const _PageTitle(
-          title: 'Тариф',
-          subtitle: 'Гигабайты или безлимит + докупай безлимит на приложения',
+          title: 'РўР°СЂРёС„',
+          subtitle: 'Р“РёРіР°Р±Р°Р№С‚С‹ РёР»Рё Р±РµР·Р»РёРјРёС‚ + РґРѕРєСѓРїР°Р№ Р±РµР·Р»РёРјРёС‚ РЅР° РїСЂРёР»РѕР¶РµРЅРёСЏ',
           icon: Icons.star_rounded,
         ),
         const SizedBox(height: 12),
@@ -2448,27 +2448,27 @@ class TariffPage extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const _SectionTitle('Трафик'),
+              const _SectionTitle('РўСЂР°С„РёРє'),
               const SizedBox(height: 10),
               Row(
                 children: [
                   Expanded(
                     child: Text(
-                      appsDisabled ? 'Безлимитный трафик' : 'Трафик: $gbInt ГБ',
+                      appsDisabled ? 'Р‘РµР·Р»РёРјРёС‚РЅС‹Р№ С‚СЂР°С„РёРє' : 'РўСЂР°С„РёРє: $gbInt Р“Р‘',
                       style: const TextStyle(fontWeight: FontWeight.w900),
                     ),
                   ),
                   const SizedBox(width: 8),
                   _ChipButton(
                     icon: Icons.data_usage_rounded,
-                    text: 'По ГБ',
+                    text: 'РџРѕ Р“Р‘',
                     selected: !appsDisabled,
                     onTap: () => onTrafficChanged(TrafficPack.gb20),
                   ),
                   const SizedBox(width: 8),
                   _ChipButton(
                     icon: Icons.all_inclusive_rounded,
-                    text: 'Безлимит',
+                    text: 'Р‘РµР·Р»РёРјРёС‚',
                     selected: appsDisabled,
                     onTap: () => onTrafficChanged(TrafficPack.unlimited),
                   ),
@@ -2487,13 +2487,13 @@ class TariffPage extends StatelessWidget {
                         min: 1,
                         max: 500,
                         divisions: 499,
-                        label: '$gbInt ГБ',
+                        label: '$gbInt Р“Р‘',
                         onChanged: (v) => onTrafficGbChanged(v.roundToDouble()),
                       ),
                       Row(
                         children: const [
                           Text(
-                            '1 ГБ',
+                            '1 Р“Р‘',
                             style: TextStyle(
                               color: Color(0xFF64748B),
                               fontWeight: FontWeight.w700,
@@ -2502,7 +2502,7 @@ class TariffPage extends StatelessWidget {
                           ),
                           Spacer(),
                           Text(
-                            '500 ГБ',
+                            '500 Р“Р‘',
                             style: TextStyle(
                               color: Color(0xFF64748B),
                               fontWeight: FontWeight.w700,
@@ -2518,8 +2518,8 @@ class TariffPage extends StatelessWidget {
               const SizedBox(height: 10),
               Text(
                 appsDisabled
-                    ? 'База: $baseForGb ₽ (безлимит)'
-                    : 'База: $baseForGb ₽ за $gbInt ГБ',
+                    ? 'Р‘Р°Р·Р°: $baseForGb в‚Ѕ (Р±РµР·Р»РёРјРёС‚)'
+                    : 'Р‘Р°Р·Р°: $baseForGb в‚Ѕ Р·Р° $gbInt Р“Р‘',
                 style: const TextStyle(
                   color: Color(0xFF64748B),
                   fontWeight: FontWeight.w700,
@@ -2529,7 +2529,7 @@ class TariffPage extends StatelessWidget {
               if (appsDisabled) ...const [
                 SizedBox(height: 10),
                 Text(
-                  'Выбран “Безлимит” — безлимитные приложения не нужны (и отключены).',
+                  'Р’С‹Р±СЂР°РЅ вЂњР‘РµР·Р»РёРјРёС‚вЂќ вЂ” Р±РµР·Р»РёРјРёС‚РЅС‹Рµ РїСЂРёР»РѕР¶РµРЅРёСЏ РЅРµ РЅСѓР¶РЅС‹ (Рё РѕС‚РєР»СЋС‡РµРЅС‹).',
                   style: TextStyle(
                     color: Color(0xFF64748B),
                     fontWeight: FontWeight.w700,
@@ -2545,7 +2545,7 @@ class TariffPage extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const _SectionTitle('Безлимитные приложения (дёшево)'),
+              const _SectionTitle('Р‘РµР·Р»РёРјРёС‚РЅС‹Рµ РїСЂРёР»РѕР¶РµРЅРёСЏ (РґС‘С€РµРІРѕ)'),
               const SizedBox(height: 10),
               Wrap(
                 spacing: 10,
@@ -2574,7 +2574,7 @@ class TariffPage extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const _SectionTitle('Устройства'),
+              const _SectionTitle('РЈСЃС‚СЂРѕР№СЃС‚РІР°'),
               const SizedBox(height: 10),
               Row(
                 children: [
@@ -2606,7 +2606,7 @@ class TariffPage extends StatelessWidget {
                   const SizedBox(width: 10),
                   const Expanded(
                     child: Text(
-                      'Сколько девайсов одновременно',
+                      'РЎРєРѕР»СЊРєРѕ РґРµРІР°Р№СЃРѕРІ РѕРґРЅРѕРІСЂРµРјРµРЅРЅРѕ',
                       style: TextStyle(
                         color: Color(0xFF475569),
                         fontWeight: FontWeight.w700,
@@ -2623,25 +2623,25 @@ class TariffPage extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const _SectionTitle('Опции'),
+              const _SectionTitle('РћРїС†РёРё'),
               const SizedBox(height: 6),
               _SwitchRow(
-                title: 'Без рекламы',
-                subtitle: 'Чистый интерфейс в приложении',
+                title: 'Р‘РµР· СЂРµРєР»Р°РјС‹',
+                subtitle: 'Р§РёСЃС‚С‹Р№ РёРЅС‚РµСЂС„РµР№СЃ РІ РїСЂРёР»РѕР¶РµРЅРёРё',
                 value: optNoAds,
                 onChanged: onOptNoAds,
               ),
               const Divider(height: 18),
               _SwitchRow(
-                title: 'Умная маршрутизация',
-                subtitle: 'Нужные сайты/приложения через VPN',
+                title: 'РЈРјРЅР°СЏ РјР°СЂС€СЂСѓС‚РёР·Р°С†РёСЏ',
+                subtitle: 'РќСѓР¶РЅС‹Рµ СЃР°Р№С‚С‹/РїСЂРёР»РѕР¶РµРЅРёСЏ С‡РµСЂРµР· VPN',
                 value: optSmartRouting,
                 onChanged: onOptSmartRouting,
               ),
               const Divider(height: 18),
               _SwitchRow(
-                title: 'Выделенный IP',
-                subtitle: 'Для своих сервисов/доступов',
+                title: 'Р’С‹РґРµР»РµРЅРЅС‹Р№ IP',
+                subtitle: 'Р”Р»СЏ СЃРІРѕРёС… СЃРµСЂРІРёСЃРѕРІ/РґРѕСЃС‚СѓРїРѕРІ',
                 value: optDedicatedIp,
                 onChanged: onOptDedicatedIp,
               ),
@@ -2670,8 +2670,8 @@ class TasksPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const _PlaceholderPage(
-      title: 'Задания',
-      subtitle: 'Позже добавим: бонусы, рефы, промо, ежедневные задания.',
+      title: 'Р—Р°РґР°РЅРёСЏ',
+      subtitle: 'РџРѕР·Р¶Рµ РґРѕР±Р°РІРёРј: Р±РѕРЅСѓСЃС‹, СЂРµС„С‹, РїСЂРѕРјРѕ, РµР¶РµРґРЅРµРІРЅС‹Рµ Р·Р°РґР°РЅРёСЏ.',
       icon: Icons.checklist_rounded,
     );
   }
@@ -2708,8 +2708,8 @@ class SettingsPage extends StatelessWidget {
       child: ListView(
         children: [
           const _PageTitle(
-            title: 'Настройки',
-            subtitle: 'Только косметика и аккаунт',
+            title: 'РќР°СЃС‚СЂРѕР№РєРё',
+            subtitle: 'РўРѕР»СЊРєРѕ РєРѕСЃРјРµС‚РёРєР° Рё Р°РєРєР°СѓРЅС‚',
             icon: Icons.settings_rounded,
           ),
           const SizedBox(height: 12),
@@ -2717,18 +2717,18 @@ class SettingsPage extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const _SectionTitle('Внешний вид'),
+                const _SectionTitle('Р’РЅРµС€РЅРёР№ РІРёРґ'),
                 const SizedBox(height: 8),
                 _SwitchRow(
-                  title: 'Тёмная тема',
-                  subtitle: 'Меняет тему приложения',
+                  title: 'РўС‘РјРЅР°СЏ С‚РµРјР°',
+                  subtitle: 'РњРµРЅСЏРµС‚ С‚РµРјСѓ РїСЂРёР»РѕР¶РµРЅРёСЏ',
                   value: isDark,
                   onChanged: (v) =>
                       onThemeModeChanged(v ? ThemeMode.dark : ThemeMode.light),
                 ),
                 const Divider(height: 18),
                 _SettingsNavRow(
-                  title: 'Язык',
+                  title: 'РЇР·С‹Рє',
                   subtitle: language,
                   icon: Icons.language_rounded,
                   onTap: onPickLanguage,
@@ -2741,18 +2741,18 @@ class SettingsPage extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const _SectionTitle('Аккаунт'),
+                const _SectionTitle('РђРєРєР°СѓРЅС‚'),
                 const SizedBox(height: 8),
                 _SettingsNavRow(
-                  title: 'Почта',
+                  title: 'РџРѕС‡С‚Р°',
                   subtitle: email,
                   icon: Icons.person_rounded,
                   onTap: () {},
                 ),
                 const Divider(height: 18),
                 _SettingsActionRow(
-                  title: 'Выйти',
-                  subtitle: 'Сбросить сессию на этом устройстве',
+                  title: 'Р’С‹Р№С‚Рё',
+                  subtitle: 'РЎР±СЂРѕСЃРёС‚СЊ СЃРµСЃСЃРёСЋ РЅР° СЌС‚РѕРј СѓСЃС‚СЂРѕР№СЃС‚РІРµ',
                   icon: Icons.logout_rounded,
                   onTap: () => onLogout(),
                 ),
@@ -2764,18 +2764,18 @@ class SettingsPage extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const _SectionTitle('О приложении'),
+                const _SectionTitle('Рћ РїСЂРёР»РѕР¶РµРЅРёРё'),
                 const SizedBox(height: 8),
                 _SettingsActionRow(
-                  title: 'Диагностика',
-                  subtitle: 'Проверка WireGuard, прав и конфигурации',
+                  title: 'Р”РёР°РіРЅРѕСЃС‚РёРєР°',
+                  subtitle: 'РџСЂРѕРІРµСЂРєР° WireGuard, РїСЂР°РІ Рё РєРѕРЅС„РёРіСѓСЂР°С†РёРё',
                   icon: Icons.health_and_safety_rounded,
                   onTap: onOpenDiagnostics,
                 ),
                 const Divider(height: 18),
                 _SettingsActionRow(
-                  title: 'О BlueVPN',
-                  subtitle: 'UI-прототип. Дальше подключим сервер и подписку.',
+                  title: 'Рћ BlueVPN',
+                  subtitle: 'UI-РїСЂРѕС‚РѕС‚РёРї. Р”Р°Р»СЊС€Рµ РїРѕРґРєР»СЋС‡РёРј СЃРµСЂРІРµСЂ Рё РїРѕРґРїРёСЃРєСѓ.',
                   icon: Icons.info_outline_rounded,
                   onTap: () => _showAbout(context),
                 ),
@@ -2795,14 +2795,14 @@ class SettingsPage extends StatelessWidget {
         return AlertDialog(
           title: const Text('BlueVPN'),
           content: const Text(
-            'Концепция: максимум простоты для пользователя.\n\n'
-            'Пользователь не видит конфиги и папки.\n'
-            'Конфиг выдаёт сервер после входа.\n',
+            'РљРѕРЅС†РµРїС†РёСЏ: РјР°РєСЃРёРјСѓРј РїСЂРѕСЃС‚РѕС‚С‹ РґР»СЏ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ.\n\n'
+            'РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РІРёРґРёС‚ РєРѕРЅС„РёРіРё Рё РїР°РїРєРё.\n'
+            'РљРѕРЅС„РёРі РІС‹РґР°С‘С‚ СЃРµСЂРІРµСЂ РїРѕСЃР»Рµ РІС…РѕРґР°.\n',
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('Ок'),
+              child: const Text('РћРє'),
             ),
           ],
         );
@@ -3307,7 +3307,7 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
     setState(() => _loading = true);
 
     final app = Platform.environment['APPDATA'] ?? '';
-    _appDataPath = app.isEmpty ? '(APPDATA не найден)' : '$app\\BlueVPN';
+    _appDataPath = app.isEmpty ? '(APPDATA РЅРµ РЅР°Р№РґРµРЅ)' : '$app\\BlueVPN';
 
     final cfg = ConfigStore();
     _configPath = cfg.managedConfigPath;
@@ -3388,17 +3388,17 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
     Clipboard.setData(ClipboardData(text: lines.join('\n')));
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(const SnackBar(content: Text('Отчёт скопирован в буфер.')));
+    ).showSnackBar(const SnackBar(content: Text('РћС‚С‡С‘С‚ СЃРєРѕРїРёСЂРѕРІР°РЅ РІ Р±СѓС„РµСЂ.')));
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Диагностика'),
+        title: const Text('Р”РёР°РіРЅРѕСЃС‚РёРєР°'),
         actions: [
           IconButton(
-            tooltip: 'Обновить',
+            tooltip: 'РћР±РЅРѕРІРёС‚СЊ',
             onPressed: _loading ? null : _refresh,
             icon: const Icon(Icons.refresh_rounded),
           ),
@@ -3410,30 +3410,30 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
               padding: const EdgeInsets.all(16),
               children: [
                 _DiagTile(
-                  title: 'WireGuard установлен',
-                  value: _wgFound ? 'Да' : 'Нет',
+                  title: 'WireGuard СѓСЃС‚Р°РЅРѕРІР»РµРЅ',
+                  value: _wgFound ? 'Р”Р°' : 'РќРµС‚',
                   subtitle: _wgExe,
                   ok: _wgFound,
                 ),
                 const SizedBox(height: 10),
                 _DiagTile(
-                  title: 'Права администратора',
-                  value: _isAdmin ? 'Да' : 'Нет',
+                  title: 'РџСЂР°РІР° Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂР°',
+                  value: _isAdmin ? 'Р”Р°' : 'РќРµС‚',
                   subtitle: _isAdmin
-                      ? 'Ок'
-                      : 'Для подключения/отключения через wireguard.exe нужны права администратора.\nЗапусти приложение от имени администратора.',
+                      ? 'РћРє'
+                      : 'Р”Р»СЏ РїРѕРґРєР»СЋС‡РµРЅРёСЏ/РѕС‚РєР»СЋС‡РµРЅРёСЏ С‡РµСЂРµР· wireguard.exe РЅСѓР¶РЅС‹ РїСЂР°РІР° Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂР°.\nР—Р°РїСѓСЃС‚Рё РїСЂРёР»РѕР¶РµРЅРёРµ РѕС‚ РёРјРµРЅРё Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂР°.',
                   ok: _isAdmin,
                 ),
                 const SizedBox(height: 10),
                 _DiagTile(
-                  title: 'Конфигурация (скрытая)',
-                  value: _configExists ? 'Есть' : 'Нет',
+                  title: 'РљРѕРЅС„РёРіСѓСЂР°С†РёСЏ (СЃРєСЂС‹С‚Р°СЏ)',
+                  value: _configExists ? 'Р•СЃС‚СЊ' : 'РќРµС‚',
                   subtitle: _configPath,
                   ok: _configExists,
                 ),
                 const SizedBox(height: 10),
                 _DiagTile(
-                  title: 'Сервис WireGuard',
+                  title: 'РЎРµСЂРІРёСЃ WireGuard',
                   value: _serviceState,
                   subtitle: _serviceName,
                   ok: _serviceState == 'running' || _serviceState == 'stopped',
@@ -3449,7 +3449,7 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
                       const SizedBox(width: 10),
                       const Expanded(
                         child: Text(
-                          'Скопировать отчёт',
+                          'РЎРєРѕРїРёСЂРѕРІР°С‚СЊ РѕС‚С‡С‘С‚',
                           style: TextStyle(fontWeight: FontWeight.w900),
                         ),
                       ),
@@ -3462,7 +3462,7 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
                           ),
                         ),
                         onPressed: _copyReport,
-                        child: const Text('Копировать'),
+                        child: const Text('РљРѕРїРёСЂРѕРІР°С‚СЊ'),
                       ),
                     ],
                   ),

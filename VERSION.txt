@@ -1,0 +1,4 @@
+BlueVPN 0.1.0-working-freeze
+Build date: 2026-03-12
+Platform: Windows
+Status: stable baseline
