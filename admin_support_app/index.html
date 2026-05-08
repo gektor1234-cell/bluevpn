@@ -1,0 +1,1330 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Green VPN Admin</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">G</div>
+        <div>
+          <strong>Green VPN</strong>
+          <span>Admin Console</span>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="Разделы">
+        <button class="nav-link active" data-section="dashboard" data-permission="dashboard.read">Обзор</button>
+        <button class="nav-link" data-section="analytics" data-permission="analytics.read">Аналитика</button>
+        <button class="nav-link" data-section="incidents" data-permission="incidents.read">Инциденты</button>
+        <button class="nav-link" data-section="support" data-permission="support.read">Поддержка</button>
+        <button class="nav-link" data-section="users" data-permission="users.read">Пользователи</button>
+        <button class="nav-link" data-section="orders" data-permission="billing.read">Платежи</button>
+        <button class="nav-link" data-section="auth" data-permission="audit.read">Входы</button>
+        <button class="nav-link" data-section="staff" data-permission="staff.manage">Команда</button>
+        <button class="nav-link" data-section="audit" data-permission="audit.read">Аудит</button>
+        <button class="nav-link" data-section="updates" data-permission="updates.read">Обновления</button>
+        <button class="nav-link" data-section="flags" data-permission="flags.read">Флаги</button>
+        <button class="nav-link" data-section="runbooks" data-permission="runbooks.read">Инструкции</button>
+        <button class="nav-link" data-section="monitoring" data-permission="monitoring.read">Мониторинг</button>
+        <button class="nav-link" data-section="servers" data-permission="servers.read">Серверы</button>
+        <button class="nav-link" data-section="readiness" data-permission="readiness.read">Готовность</button>
+      </nav>
+
+      <div class="connection-card">
+        <span class="eyebrow">API</span>
+        <strong id="sidebarApiBase">https://api.greenvpn.pro</strong>
+        <span id="sidebarStatus" class="status-pill muted">не подключено</span>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Внутренний инструмент</p>
+          <h1 id="pageTitle">Обзор</h1>
+        </div>
+        <div class="topbar-actions">
+          <button id="refreshButton" class="ghost-button">Обновить</button>
+          <button id="logoutButton" class="ghost-button hidden">Выйти</button>
+          <button id="openLoginButton" class="primary-button">Вход / API</button>
+        </div>
+      </header>
+
+      <section id="loginPanel" class="login-panel">
+        <div class="login-copy">
+          <p class="eyebrow">Безопасный вход</p>
+          <h2>Подключи админский API</h2>
+          <p>
+            Основной режим — вход сотрудника по email и паролю. Bootstrap admin token
+            остаётся аварийным способом на время разработки и не хранится в репозитории.
+          </p>
+        </div>
+        <form id="loginForm" class="login-form">
+          <label>
+            API base URL
+            <input id="apiBaseInput" type="url" value="https://api.greenvpn.pro" autocomplete="off">
+          </label>
+          <div class="form-row stretch">
+            <label>
+              Email сотрудника
+              <input id="adminEmailInput" type="email" autocomplete="username" placeholder="support@greenvpn.pro">
+            </label>
+            <label>
+              Пароль
+              <input id="adminPasswordInput" type="password" autocomplete="current-password" placeholder="Пароль сотрудника">
+            </label>
+          </div>
+          <p class="muted compact-note">
+            Если сотрудник ещё не создан, войди bootstrap-токеном и задай временный пароль в разделе «Команда».
+          </p>
+          <div id="admin2faPanel" class="secondary-login-panel hidden">
+            <div>
+              <strong>Код подтверждения</strong>
+              <p id="admin2faHint" class="muted compact-note">Код отправлен на почту сотрудника.</p>
+            </div>
+            <div class="form-row stretch">
+              <label>
+                Одноразовый код
+                <input id="admin2faCodeInput" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000">
+              </label>
+              <button id="admin2faVerifyButton" class="primary-button" type="button">Подтвердить</button>
+              <button id="admin2faCancelButton" class="small-button" type="button">Отмена</button>
+            </div>
+          </div>
+          <label>
+            Bootstrap admin token
+            <input id="adminTokenInput" type="password" autocomplete="off" placeholder="Вставь токен администратора">
+          </label>
+          <label>
+            Кто работает
+            <input id="adminActorInput" type="text" autocomplete="off" placeholder="Например: Валентин / support">
+          </label>
+          <div class="form-row">
+            <label class="checkbox-line">
+              <input id="rememberTokenInput" type="checkbox">
+              Запомнить на этом компьютере
+            </label>
+            <button class="primary-button" type="submit">Войти</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="notice" class="notice hidden"></section>
+
+      <section id="dashboardSection" class="content-section active">
+        <div class="metric-grid" id="metricGrid"></div>
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Безопасность</p>
+              <h2>Текущий вход</h2>
+            </div>
+          </div>
+          <div id="accountSecuritySummary" class="status-list"></div>
+          <form id="passwordChangeForm" class="card-form compact-form hidden">
+            <div class="form-row stretch">
+              <label>
+                Текущий пароль
+                <input id="currentPasswordInput" type="password" autocomplete="current-password" placeholder="Текущий пароль">
+              </label>
+              <label>
+                Новый пароль
+                <input id="newPasswordInput" type="password" autocomplete="new-password" placeholder="Минимум 10 символов">
+              </label>
+            </div>
+            <button class="primary-button" type="submit">Сменить пароль</button>
+            <button id="revokeOtherSessionsButton" class="ghost-button" type="button">Сбросить другие сессии</button>
+          </form>
+          <div id="adminSessionsList" class="status-list compact-list"></div>
+        </article>
+        <div class="split-grid">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Инфраструктура</p>
+                <h2>Сервисы и доступность</h2>
+              </div>
+            </div>
+            <div id="serviceStatusList" class="status-list"></div>
+          </article>
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Релиз</p>
+                <h2>Готовность production</h2>
+              </div>
+            </div>
+            <div id="launchReadinessSummary" class="readiness-summary"></div>
+            <div id="launchClosurePlanSummary" class="status-list compact-list"></div>
+            <div id="readinessSummary" class="readiness-summary"></div>
+            <div id="siteReadinessSummary" class="status-list compact-list"></div>
+            <div id="networkReadinessSummary" class="status-list compact-list"></div>
+          </article>
+        </div>
+      </section>
+
+      <section id="analyticsSection" class="content-section">
+        <div class="metric-grid" id="analyticsKpiGrid"></div>
+        <div class="split-grid">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Бизнес</p>
+                <h2>Пользователи и подписки</h2>
+              </div>
+            </div>
+            <div id="analyticsBusinessPanel" class="status-list"></div>
+          </article>
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Финансы</p>
+                <h2>Заказы и выручка</h2>
+              </div>
+            </div>
+            <div id="analyticsFinancePanel" class="status-list"></div>
+          </article>
+        </div>
+        <div class="split-grid">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Support</p>
+                <h2>SLA и обращения</h2>
+              </div>
+            </div>
+            <div id="analyticsSupportPanel" class="status-list"></div>
+          </article>
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Ops</p>
+                <h2>Инциденты, обновления, серверы</h2>
+              </div>
+            </div>
+            <div id="analyticsOpsPanel" class="status-list"></div>
+          </article>
+        </div>
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">14 дней</p>
+              <h2>Тренды продукта</h2>
+            </div>
+          </div>
+          <div id="analyticsTrendsPanel" class="detail-grid"></div>
+        </article>
+      </section>
+
+      <section id="incidentsSection" class="content-section">
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Оперативный контроль</p>
+              <h2>Инциденты VPN и сервисов</h2>
+            </div>
+            <div class="filter-row">
+              <select id="incidentStatusFilter">
+                <option value="all">Все статусы</option>
+              </select>
+              <select id="incidentSeverityFilter">
+                <option value="all">Любая важность</option>
+              </select>
+              <select id="incidentAssigneeFilter">
+                <option value="all">Все исполнители</option>
+              </select>
+            </div>
+          </div>
+          <div id="supportSlaSummary" class="status-list"></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Важность</th>
+                  <th>Статус</th>
+                  <th>Что сломалось</th>
+                  <th>Сводка</th>
+                  <th>Исполнитель</th>
+                  <th>Последний сигнал</th>
+                  <th>Алерт</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="incidentsTable"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section id="supportSection" class="content-section">
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Техподдержка</p>
+              <h2>Отчёты пользователей</h2>
+            </div>
+            <div class="filter-row">
+              <input id="supportSearchInput" type="search" placeholder="email, user id или device id">
+              <select id="supportStatusFilter">
+                <option value="all">Все статусы</option>
+                <option value="new">Новые</option>
+                <option value="triage">Разбор</option>
+                <option value="in_progress">В работе</option>
+                <option value="waiting_user">Ждём пользователя</option>
+                <option value="resolved">Решено</option>
+                <option value="closed">Закрыто</option>
+              </select>
+              <select id="supportPriorityFilter">
+                <option value="all">Любой приоритет</option>
+              </select>
+              <select id="supportCategoryFilter">
+                <option value="all">Любая категория</option>
+              </select>
+              <input id="supportAssignedFilter" type="search" placeholder="исполнитель">
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Пользователь</th>
+                  <th>Сводка</th>
+                  <th>Категория</th>
+                  <th>Приоритет</th>
+                  <th>Статус</th>
+                  <th>SLA</th>
+                  <th>Создан</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="supportTable"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Аудит поддержки</p>
+              <h2>Последние действия поддержки</h2>
+            </div>
+            <div class="filter-row compact-filter">
+              <select id="supportActionTypeFilter">
+                <option value="all">Все действия</option>
+              </select>
+              <select id="supportActionStatusFilter">
+                <option value="all">Все статусы</option>
+              </select>
+              <input id="supportActionUserFilter" type="search" placeholder="user id">
+            </div>
+          </div>
+          <div id="supportActionsList"></div>
+        </article>
+      </section>
+
+      <section id="usersSection" class="content-section">
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Аккаунты</p>
+              <h2>Пользователи</h2>
+            </div>
+            <div class="filter-row">
+              <input id="userSearchInput" type="search" placeholder="email, телефон или device id">
+            </div>
+          </div>
+          <div id="subscriptionExpirySummary" class="check-list"></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Email</th>
+                  <th>Телефон</th>
+                  <th>Email verified</th>
+                  <th>Phone verified</th>
+                  <th>Создан</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="usersTable"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section id="ordersSection" class="content-section">
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Финансы</p>
+              <h2>Заказы и платежи</h2>
+            </div>
+          </div>
+          <div id="billingReconciliationSummary" class="check-list"></div>
+          <div id="billingPaymentSmokeSummary" class="check-list"></div>
+          <div id="billingRenewalSummary" class="check-list"></div>
+          <div id="promoReadinessSummary" class="check-list"></div>
+          <div class="split-grid compact-split">
+            <form id="promoForm" class="card-form">
+              <h3>Акции и промокоды</h3>
+              <label>
+                Код
+                <input id="promoCodeInput" type="text" placeholder="STARTGREEN" autocomplete="off" />
+              </label>
+              <div class="form-row stretch">
+                <label>
+                  Название
+                  <input id="promoTitleInput" type="text" placeholder="Стартовая акция" />
+                </label>
+                <label>
+                  Тип скидки
+                  <select id="promoTypeInput">
+                    <option value="percent">Процент</option>
+                    <option value="fixed">Сумма в рублях</option>
+                  </select>
+                </label>
+              </div>
+              <div class="form-row stretch">
+                <label>
+                  Скидка
+                  <input id="promoValueInput" type="number" min="1" value="20" />
+                </label>
+                <label>
+                  Лимит использований
+                  <input id="promoLimitInput" type="number" min="1" placeholder="без лимита" />
+                </label>
+              </div>
+              <div class="form-row stretch">
+                <label>
+                  Начало
+                  <input id="promoStartsInput" type="datetime-local" />
+                </label>
+                <label>
+                  Конец
+                  <input id="promoExpiresInput" type="datetime-local" />
+                </label>
+              </div>
+              <label>
+                Тарифы
+                <input id="promoPlansInput" type="text" placeholder="starter, base, plus, unlimited" />
+              </label>
+              <label>
+                Внутренняя заметка
+                <textarea id="promoNotesInput" placeholder="Например: первый запуск, не для массовой рекламы"></textarea>
+              </label>
+              <label class="checkbox-line">
+                <input id="promoActiveInput" type="checkbox" checked />
+                Активен
+              </label>
+              <div class="row-actions">
+                <button id="promoFillStartButton" class="small-button" type="button">Заполнить START20</button>
+                <button id="promoDraftStartButton" class="small-button" type="button">Черновик START20</button>
+              </div>
+              <button class="primary-button" type="submit">Сохранить акцию</button>
+            </form>
+            <div id="promoList" class="status-list"></div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Order</th>
+                  <th>User</th>
+                  <th>Сумма</th>
+                  <th>Статус</th>
+                  <th>Тариф</th>
+                  <th>Создан</th>
+                </tr>
+              </thead>
+              <tbody id="ordersTable"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section id="authSection" class="content-section">
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Безопасность</p>
+              <h2>События входа</h2>
+            </div>
+            <div class="row-actions">
+              <input id="authSearchInput" type="search" placeholder="email, телефон или user id">
+              <select id="authTypeFilter">
+                <option value="all">Все типы</option>
+                <option value="phone_code_start">SMS старт</option>
+                <option value="phone_code_verify">SMS проверка</option>
+                <option value="email_code_start">Email старт</option>
+                <option value="email_code_verify">Email проверка</option>
+              </select>
+              <select id="authStatusFilter">
+                <option value="all">Все статусы</option>
+                <option value="created">Создан</option>
+                <option value="verified">Подтверждён</option>
+                <option value="invalid_code">Неверный код</option>
+                <option value="too_many_attempts">Лимит попыток</option>
+                <option value="expired">Истёк</option>
+              </select>
+            </div>
+          </div>
+          <div id="authReadinessSummary" class="check-list"></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Тип</th>
+                  <th>Статус</th>
+                  <th>Email/Телефон</th>
+                  <th>IP</th>
+                  <th>Время</th>
+                </tr>
+              </thead>
+              <tbody id="authTable"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section id="staffSection" class="content-section">
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Внутренний доступ</p>
+              <h2>Команда и роли</h2>
+            </div>
+          </div>
+          <div class="split-grid compact-split">
+            <form id="staffForm" class="card-form">
+              <label>
+                Email сотрудника
+                <input id="staffEmailInput" type="email" autocomplete="off" placeholder="support@greenvpn.pro">
+              </label>
+              <label>
+                Имя
+                <input id="staffNameInput" type="text" autocomplete="off" placeholder="Техподдержка">
+              </label>
+              <label>
+                Роль
+                <select id="staffRoleInput"></select>
+              </label>
+              <label>
+                Временный пароль
+                <input id="staffPasswordInput" type="password" autocomplete="new-password" placeholder="Минимум 10 символов">
+              </label>
+              <label class="checkbox-line">
+                <input id="staffActiveInput" type="checkbox" checked>
+                Активен
+              </label>
+              <label class="checkbox-line">
+                <input id="staffTwoFactorInput" type="checkbox">
+                2FA по email для входа
+              </label>
+              <button class="primary-button" type="submit">Добавить / обновить</button>
+              <p class="muted">
+                Bootstrap token нужен только для первичной настройки. Дальше сотрудники входят
+                по email и паролю, а роли уже хранятся на backend.
+              </p>
+            </form>
+            <div id="roleList" class="check-list"></div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Сотрудник</th>
+                  <th>Роль</th>
+                  <th>Статус</th>
+                  <th>2FA</th>
+                  <th>Пароль</th>
+                  <th>Сессии</th>
+                  <th>Обновлён</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="staffTable"></tbody>
+            </table>
+          </div>
+          <div id="staffSessionsPanel" class="status-list compact-list"></div>
+        </article>
+      </section>
+
+      <section id="auditSection" class="content-section">
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Контроль действий</p>
+              <h2>Audit log</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Actor</th>
+                  <th>Action</th>
+                  <th>Target</th>
+                  <th>IP</th>
+                  <th>Время</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody id="auditTable"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section id="updatesSection" class="content-section">
+        <div class="split-grid">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Updater</p>
+                <h2>Manifest для клиента</h2>
+              </div>
+            </div>
+            <div id="updateReadinessSummary" class="check-list"></div>
+            <div id="updateManifestSummary" class="check-list"></div>
+
+            <form id="releaseForm" class="card-form release-form">
+              <div class="form-row stretch">
+                <label>
+                  Версия
+                  <input id="releaseVersionInput" type="text" autocomplete="off" placeholder="0.9.0">
+                </label>
+                <label>
+                  Build
+                  <input id="releaseBuildInput" type="text" autocomplete="off" placeholder="20260504.1">
+                </label>
+              </div>
+              <div class="form-row stretch">
+                <label>
+                  Канал
+                  <select id="releaseChannelInput"></select>
+                </label>
+                <label>
+                  Статус
+                  <select id="releaseStatusInput"></select>
+                </label>
+              </div>
+              <label>
+                Download URL
+                <input id="releaseDownloadUrlInput" type="url" autocomplete="off" placeholder="https://updates.greenvpn.pro/GreenVPN_Setup.exe">
+              </label>
+              <label>
+                SHA256
+                <input id="releaseSha256Input" type="text" autocomplete="off" placeholder="64 hex символа">
+              </label>
+              <div class="form-row stretch">
+                <label>
+                  Rollout %
+                  <input id="releaseRolloutInput" type="number" min="0" max="100" value="100">
+                </label>
+                <label>
+                  Минимальная версия
+                  <input id="releaseMinVersionInput" type="text" autocomplete="off" placeholder="Например 0.8.0">
+                </label>
+              </div>
+              <label class="checkbox-line">
+                <input id="releaseRequiredInput" type="checkbox">
+                Обязательное обновление
+              </label>
+              <label>
+                Changelog
+                <textarea id="releaseChangelogInput" placeholder="Одна строка = один пункт changelog"></textarea>
+              </label>
+              <button class="primary-button" type="submit">Сохранить release</button>
+              <p class="muted">
+                Публикуем stable только когда есть настоящий download URL, SHA256 и готовый rollback.
+                Пока можно готовить draft/internal без влияния на пользователей.
+              </p>
+            </form>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Release control</p>
+                <h2>Версии и rollout</h2>
+              </div>
+              <div class="filter-row compact-filter">
+                <select id="releaseChannelFilter">
+                  <option value="all">Все каналы</option>
+                </select>
+                <select id="releaseStatusFilter">
+                  <option value="all">Все статусы</option>
+                </select>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Версия</th>
+                    <th>Канал</th>
+                    <th>Статус</th>
+                    <th>Rollout</th>
+                    <th>Файл</th>
+                    <th>Обновлён</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="releasesTable"></tbody>
+              </table>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="flagsSection" class="content-section">
+        <div class="split-grid">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Внутренний контроль</p>
+                <h2>Feature flags</h2>
+                <p class="muted">
+                  Готовим рискованные функции без пересборки клиента: платежи, SMS,
+                  поддержку, обновления, мониторинг и будущий fallback-layer.
+                </p>
+              </div>
+            </div>
+
+            <form id="featureFlagForm" class="card-form server-form">
+              <input id="featureFlagIdInput" type="hidden">
+              <div class="form-row stretch">
+                <label>
+                  Key
+                  <input id="featureFlagKeyInput" type="text" autocomplete="off" placeholder="payments.production_enabled">
+                </label>
+                <label>
+                  Название
+                  <input id="featureFlagTitleInput" type="text" autocomplete="off" placeholder="Production платежи">
+                </label>
+              </div>
+              <div class="form-row stretch">
+                <label>
+                  Scope
+                  <select id="featureFlagScopeSelect"></select>
+                </label>
+                <label>
+                  Rollout %
+                  <input id="featureFlagRolloutInput" type="number" min="0" max="100" value="0">
+                </label>
+              </div>
+              <label class="checkbox-line">
+                <input id="featureFlagEnabledInput" type="checkbox">
+                Включён
+              </label>
+              <label>
+                Value JSON
+                <input id="featureFlagValueInput" type="text" autocomplete="off" placeholder='true или {"mode":"manual_mvp"}'>
+              </label>
+              <label>
+                Описание
+                <textarea id="featureFlagDescriptionInput" placeholder="Для чего нужен флаг и что он включает"></textarea>
+              </label>
+              <label>
+                Заметки
+                <textarea id="featureFlagNotesInput" placeholder="Риски, rollout, что проверить перед включением"></textarea>
+              </label>
+              <div class="row-actions left">
+                <button class="primary-button" type="submit">Сохранить флаг</button>
+                <button id="resetFeatureFlagForm" class="ghost-button" type="button">Новый флаг</button>
+              </div>
+            </form>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Control plane</p>
+                <h2>Флаги продукта</h2>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Key</th>
+                    <th>Scope</th>
+                    <th>Состояние</th>
+                    <th>Rollout</th>
+                    <th>Value</th>
+                    <th>Обновлён</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="featureFlagsTable"></tbody>
+              </table>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="runbooksSection" class="content-section">
+        <div class="split-grid">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Техподдержка и ops</p>
+                <h2>Runbooks</h2>
+                <p class="muted">
+                  Инструкции для повторяемых проблем: VPN не поднялся, платеж не активировался,
+                  сервис недоступен, релиз сломан, новый сервер вводится в сетку.
+                </p>
+              </div>
+            </div>
+
+            <form id="runbookForm" class="card-form server-form">
+              <input id="runbookIdInput" type="hidden">
+              <div class="form-row stretch">
+                <label>
+                  Key
+                  <input id="runbookKeyInput" type="text" autocomplete="off" placeholder="vpn_connect_failed">
+                </label>
+                <label>
+                  Название
+                  <input id="runbookTitleInput" type="text" autocomplete="off" placeholder="VPN не подключается">
+                </label>
+              </div>
+              <div class="form-row stretch">
+                <label>
+                  Категория
+                  <select id="runbookCategorySelect"></select>
+                </label>
+                <label>
+                  Важность
+                  <select id="runbookSeveritySelect"></select>
+                </label>
+              </div>
+              <div class="form-row stretch">
+                <label>
+                  Роль-владелец
+                  <input id="runbookOwnerRoleInput" type="text" autocomplete="off" placeholder="support / admin / ops">
+                </label>
+                <label class="checkbox-line">
+                  <input id="runbookActiveInput" type="checkbox" checked>
+                  Активна
+                </label>
+              </div>
+              <label>
+                Краткое описание
+                <textarea id="runbookSummaryInput" placeholder="Когда применять эту инструкцию"></textarea>
+              </label>
+              <label>
+                Шаги
+                <textarea id="runbookStepsInput" placeholder="Один шаг на строку"></textarea>
+              </label>
+              <div class="row-actions left">
+                <button class="primary-button" type="submit">Сохранить инструкцию</button>
+                <button id="resetRunbookForm" class="ghost-button" type="button">Новая инструкция</button>
+              </div>
+            </form>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Support knowledge base</p>
+                <h2>Инструкции</h2>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Key</th>
+                    <th>Категория</th>
+                    <th>Важность</th>
+                    <th>Владелец</th>
+                    <th>Шаги</th>
+                    <th>Обновлён</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="runbooksTable"></tbody>
+              </table>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="serversSection" class="content-section">
+        <div class="split-grid">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Каталог серверов</p>
+                <h2>Будущая сетка VPN endpoint</h2>
+              </div>
+              <div class="row-actions">
+                <button id="createPlannedServerDraftButton" class="ghost-button" type="button">
+                  Черновик нового VPS
+                </button>
+                <button id="seedCurrentServerButton" class="ghost-button" type="button">
+                  Добавить текущий endpoint
+                </button>
+                <button id="probeCurrentServerButton" class="ghost-button" type="button">
+                  Проверить текущий endpoint
+                </button>
+              </div>
+            </div>
+            <div id="serverCatalogSummary" class="check-list"></div>
+
+            <form id="serverForm" class="card-form server-form">
+              <div class="form-row stretch">
+                <label>
+                  Server ID
+                  <input id="serverIdInput" type="text" autocomplete="off" placeholder="germany_frankfurt_01">
+                </label>
+                <label>
+                  Название
+                  <input id="serverTitleInput" type="text" autocomplete="off" placeholder="Germany #1">
+                </label>
+              </div>
+              <label>
+                Подпись
+                <input id="serverSubtitleInput" type="text" autocomplete="off" placeholder="Резервный endpoint Green VPN">
+              </label>
+              <div class="form-row stretch">
+                <label>
+                  Страна
+                  <input id="serverCountryInput" type="text" autocomplete="off" maxlength="8" placeholder="DE">
+                </label>
+                <label>
+                  Город
+                  <input id="serverCityInput" type="text" autocomplete="off" placeholder="Frankfurt">
+                </label>
+                <label>
+                  Провайдер
+                  <input id="serverProviderInput" type="text" autocomplete="off" placeholder="Hetzner / OVH / ...">
+                </label>
+              </div>
+              <div class="form-row stretch">
+                <label>
+                  Host
+                  <input id="serverHostInput" type="text" autocomplete="off" placeholder="1.2.3.4 или de1.greenvpn.pro">
+                </label>
+                <label>
+                  Port
+                  <input id="serverPortInput" type="number" min="1" max="65535" value="443">
+                </label>
+              </div>
+              <div class="form-row stretch">
+                <label>
+                  Протокол
+                  <select id="serverProtocolInput"></select>
+                </label>
+                <label>
+                  Транспорт
+                  <select id="serverTransportInput"></select>
+                </label>
+                <label>
+                  Статус
+                  <select id="serverStatusInput"></select>
+                </label>
+              </div>
+              <label>
+                Профиль выдачи конфига
+                <select id="serverClientConfigProfileInput"></select>
+              </label>
+              <div class="form-row stretch">
+                <label>
+                  Оценка здоровья %
+                  <input id="serverHealthInput" type="number" min="0" max="100" value="0">
+                </label>
+                <label>
+                  Задержка, мс
+                  <input id="serverLatencyInput" type="number" min="0" placeholder="44">
+                </label>
+                <label>
+                  Приоритет
+                  <input id="serverPriorityInput" type="number" min="0" max="10000" value="100">
+                </label>
+              </div>
+              <div class="form-row">
+                <label class="checkbox-line">
+                  <input id="serverActiveInput" type="checkbox">
+                  Активен внутри админки
+                </label>
+                <label class="checkbox-line">
+                  <input id="serverPublicInput" type="checkbox">
+                  Кандидат в публичный catalog
+                </label>
+              </div>
+              <label>
+                Заметки
+                <textarea id="serverNotesInput" placeholder="ASN, цена, доступы у провайдера, что проверить перед публикацией"></textarea>
+              </label>
+              <button class="primary-button" type="submit">Сохранить endpoint</button>
+              <p class="muted">
+                Безопасный режим: эти записи пока не выдаются клиенту. Они нужны, чтобы подготовить серверную сетку
+                до реализации выбора нескольких серверов и перевыдачи WireGuard peer.
+              </p>
+            </form>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Список endpoint</p>
+                <h2>Управляемые серверы</h2>
+              </div>
+              <div class="filter-row compact-filter">
+                <select id="serverStatusFilter">
+                  <option value="all">Все статусы</option>
+                </select>
+                <select id="serverActiveFilter">
+                  <option value="all">Все</option>
+                  <option value="active">Активные</option>
+                  <option value="inactive">Неактивные</option>
+                </select>
+                <select id="serverPublicFilter">
+                  <option value="all">Все публикации</option>
+                  <option value="public">Кандидаты</option>
+                  <option value="internal">Внутренние</option>
+                </select>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Локация</th>
+                    <th>Endpoint</th>
+                    <th>Протокол</th>
+                    <th>Статус</th>
+                    <th>Оценка здоровья</th>
+                    <th>Публичность</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="serversTable"></tbody>
+              </table>
+            </div>
+          </article>
+        </div>
+
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Агенты проверки</p>
+              <h2>Агенты мониторинга</h2>
+              <p class="muted">
+                Управляемые probes, которые регулярно проверяют важные сервисы через Green VPN.
+                Если агент молчит или видит деградацию, проблема появится здесь раньше обращений пользователей.
+              </p>
+            </div>
+          </div>
+          <div id="monitoringProbeAgentsSummary" class="metric-grid compact-grid"></div>
+          <div id="monitoringProbeInstallBundle" class="check-list"></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Probe</th>
+                  <th>Состояние</th>
+                  <th>Наблюдения</th>
+                  <th>Проблемы</th>
+                  <th>Последняя цель</th>
+                  <th>Последнее сообщение</th>
+                </tr>
+              </thead>
+              <tbody id="monitoringProbeAgentsTable"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Наблюдения здоровья</p>
+              <h2>Мониторинг endpoint</h2>
+              <p class="muted">
+                Внутренний слой для будущих probes: кто проверил endpoint, что увидел,
+                какая задержка и где началась деградация.
+              </p>
+            </div>
+            <div class="filter-row compact-filter">
+              <input id="serverHealthEndpointFilter" type="search" autocomplete="off" placeholder="endpoint id">
+              <select id="serverHealthStatusFilter">
+                <option value="all">Все статусы</option>
+                <option value="healthy">Здоровые</option>
+                <option value="degraded">Деградация</option>
+                <option value="down">Упал</option>
+                <option value="unknown">Неизвестно</option>
+              </select>
+            </div>
+          </div>
+          <div id="serverHealthSummary" class="metric-grid compact-grid"></div>
+          <div id="serverHealthProbeReadiness" class="check-list"></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Endpoint</th>
+                  <th>Probe</th>
+                  <th>Статус</th>
+                  <th>Цель</th>
+                  <th>Задержка</th>
+                  <th>Сообщение</th>
+                  <th>Когда</th>
+                </tr>
+              </thead>
+              <tbody id="serverHealthTable"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section id="monitoringSection" class="content-section">
+        <div class="split-grid">
+          <article class="panel">
+            <div class="panel-head">
+            <div>
+              <p class="eyebrow">Service probes</p>
+              <h2>Цели мониторинга</h2>
+                <p class="muted">
+                  Внутренний список сервисов, которые probes должны проверять через Green VPN:
+                  YouTube, Discord, Telegram, API, платежи, обновления и bootstrap.
+                </p>
+              </div>
+              <div class="row-actions right">
+                <button id="seedDefaultMonitoringTargetsButton" class="ghost-button" type="button">
+                  Обновить базовые цели
+                </button>
+              </div>
+            </div>
+            <div id="monitoringTargetsSummary" class="metric-grid compact-grid"></div>
+
+            <form id="monitoringTargetForm" class="card-form server-form">
+              <div class="form-row stretch">
+                <label>
+                  Target ID
+                  <input id="monitoringTargetIdInput" type="text" autocomplete="off" placeholder="youtube_web">
+                </label>
+                <label>
+                  Название
+                  <input id="monitoringTargetTitleInput" type="text" autocomplete="off" placeholder="YouTube Web">
+                </label>
+              </div>
+              <div class="form-row stretch">
+                <label>
+                  Сервис
+                  <input id="monitoringTargetServiceInput" type="text" autocomplete="off" placeholder="youtube / discord / api">
+                </label>
+                <label>
+                  Тип проверки
+                  <select id="monitoringTargetTypeInput"></select>
+                </label>
+                <label>
+                  Статус
+                  <select id="monitoringTargetStatusInput"></select>
+                </label>
+              </div>
+              <label>
+                URL
+                <input id="monitoringTargetUrlInput" type="url" autocomplete="off" placeholder="https://www.youtube.com">
+              </label>
+              <div class="form-row stretch">
+                <label>
+                  Host
+                  <input id="monitoringTargetHostInput" type="text" autocomplete="off" placeholder="www.youtube.com">
+                </label>
+                <label>
+                  Port
+                  <input id="monitoringTargetPortInput" type="number" min="1" max="65535" placeholder="443">
+                </label>
+                <label>
+                  Expected HTTP
+                  <input id="monitoringTargetExpectedInput" type="number" min="100" max="599" placeholder="200">
+                </label>
+              </div>
+              <div class="form-row stretch">
+                <label>
+                  Timeout sec
+                  <input id="monitoringTargetTimeoutInput" type="number" min="1" max="120" value="8">
+                </label>
+                <label>
+                  Interval sec
+                  <input id="monitoringTargetIntervalInput" type="number" min="30" max="86400" value="300">
+                </label>
+              </div>
+              <label>
+                Path
+                <input id="monitoringTargetPathInput" type="text" autocomplete="off" placeholder="/healthz или /">
+              </label>
+              <label>
+                Tags
+                <input id="monitoringTargetTagsInput" type="text" autocomplete="off" placeholder="russia, social, critical">
+              </label>
+              <label class="checkbox-line">
+                <input id="monitoringTargetPublicImpactInput" type="checkbox" checked>
+                Влияет на пользователей и должен поднимать incident
+              </label>
+              <label>
+                Заметки
+                <textarea id="monitoringTargetNotesInput" placeholder="Что именно проверять, какой expected result, что делать при деградации"></textarea>
+              </label>
+              <div class="row-actions left">
+                <button class="primary-button" type="submit">Сохранить цель</button>
+                <button id="resetMonitoringTargetForm" class="ghost-button" type="button">Очистить</button>
+              </div>
+              <p class="muted">
+                Safety: этот раздел только для админки/техподдержки. Обычный клиент Green VPN
+                не увидит эти проверки и технические данные.
+              </p>
+            </form>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Target inventory</p>
+                <h2>Управляемые проверки</h2>
+              </div>
+              <div class="filter-row compact-filter">
+                <select id="monitoringTargetStatusFilter">
+                  <option value="all">Все статусы</option>
+                </select>
+                <input id="monitoringTargetServiceFilter" type="text" autocomplete="off" placeholder="service filter">
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Цель</th>
+                    <th>Сервис</th>
+                    <th>Endpoint</th>
+                    <th>Расписание</th>
+                    <th>Статус</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="monitoringTargetsTable"></tbody>
+              </table>
+            </div>
+          </article>
+        </div>
+
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Service observations</p>
+              <h2>Последние проверки сервисов</h2>
+              <p class="muted">
+                Сюда monitoring agents будут писать реальные результаты: доступен ли сервис,
+                какая задержка, какой probe проверял и где началась деградация.
+              </p>
+            </div>
+            <div class="filter-row compact-filter">
+              <input id="serviceObservationTargetFilter" type="search" autocomplete="off" placeholder="target id">
+              <select id="serviceObservationStatusFilter">
+                <option value="all">Все статусы</option>
+                <option value="green">Работает</option>
+                <option value="yellow">Деградация</option>
+                <option value="red">Недоступно</option>
+                <option value="unknown">Неизвестно</option>
+              </select>
+            </div>
+          </div>
+          <div id="serviceObservationSummary" class="metric-grid compact-grid"></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Цель</th>
+                  <th>Probe</th>
+                  <th>Статус</th>
+                  <th>Latency</th>
+                  <th>Сообщение</th>
+                  <th>Когда</th>
+                </tr>
+              </thead>
+              <tbody id="serviceObservationsTable"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section id="readinessSection" class="content-section">
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Production checklist</p>
+              <h2>Что ещё нужно подключить</h2>
+            </div>
+          </div>
+          <div class="panel-head nested-head">
+            <div>
+              <p class="eyebrow">Сеть</p>
+              <h2>Сайт и VPN endpoint</h2>
+            </div>
+          </div>
+          <div id="readinessLaunchReadiness" class="status-list compact-list"></div>
+          <div id="readinessClosurePlan" class="status-list compact-list"></div>
+          <div id="ownerLaunchPacketSummary" class="check-list"></div>
+          <div id="readinessSiteReadiness" class="status-list compact-list"></div>
+          <div id="readinessNetworkReadiness" class="status-list compact-list"></div>
+          <div id="readinessList" class="check-list"></div>
+          <div class="panel-head nested-head">
+            <div>
+              <p class="eyebrow">Owner actions</p>
+              <h2>Что нужно будет дать мне одним заходом</h2>
+            </div>
+            <button id="testAlertsButton" class="ghost-button" type="button">Проверить Telegram alert</button>
+          </div>
+          <div id="externalActionsList" class="check-list"></div>
+          <div class="panel-head nested-head">
+            <div>
+              <p class="eyebrow">Alert history</p>
+              <h2>Последние incident alerts</h2>
+            </div>
+          </div>
+          <div id="alertEventsList" class="status-list compact-list"></div>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="reportDialog" class="report-dialog">
+    <div class="dialog-head">
+      <div>
+        <p class="eyebrow">Support report</p>
+        <h2 id="reportDialogTitle">Отчёт</h2>
+      </div>
+      <button id="closeReportDialog" class="icon-button" aria-label="Закрыть">×</button>
+    </div>
+    <div id="reportDialogBody" class="dialog-body"></div>
+  </dialog>
+
+  <dialog id="userDialog" class="report-dialog wide-dialog">
+    <div class="dialog-head">
+      <div>
+        <p class="eyebrow">Карточка пользователя</p>
+        <h2 id="userDialogTitle">Пользователь</h2>
+      </div>
+      <button id="closeUserDialog" class="icon-button" aria-label="Закрыть">×</button>
+    </div>
+    <div id="userDialogBody" class="dialog-body"></div>
+  </dialog>
+
+  <script src="./app.js"></script>
+</body>
+</html>

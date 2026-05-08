@@ -12,7 +12,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 
 /*
-  BlueVPN — режим "как пользовательский продукт":
+  Green VPN — режим "как пользовательский продукт":
   - Первый запуск: регистрация/вход (через сервер)
   - Дальше: авто-вход по сохранённой сессии
   - Пользователь НЕ видит: конфиги/папки/импорт/экспорт/профили
@@ -21,22 +21,46 @@ import 'package:flutter/foundation.dart';
   ВАЖНО: в VPN-экране НЕТ карточки "Профиль" (дырка закрыта).
 */
 
-const String kTunnelName = 'BlueVPN';
+const String kTunnelName = 'BlueVPNDev1';
+const String kProductName = 'Green VPN';
+const String kIntelligentSmewHost = '37.220.85.211';
+const String kAppVersion = '0.2.2-windows-mvp';
 
-// TODO: поставь реальный URL API твоего сервера (без / в конце).
 const String kApiBaseUrl = String.fromEnvironment(
   'BLUEVPN_API_BASE_URL',
-  defaultValue: 'http://127.0.0.1:8000',
+  defaultValue: 'https://api.greenvpn.pro',
 );
 
-// DEV-кнопка для входа без сервера появляется ТОЛЬКО в debug.
-// Для релиза не влияет (kDebugMode == false).
-const bool _kEnableDevBypassInDebug = true;
+const String kBuildMarker = 'bluevpn-safety-runtime-20260428-2355';
+
+const Color kBrandPrimary = Color(0xFF12A36F);
+const Color kBrandPrimaryDeep = Color(0xFF08785D);
+const Color kBrandPrimarySoft = Color(0xFFE7F7EF);
+const Color kBrandAccent = Color(0xFF1FA9D8);
+const Color kBrandLightBg = Color(0xFFF4F7F5);
+const Color kBrandDarkBg = Color(0xFF071A14);
+const Color kBrandDarkSurface = Color(0xFF0C241C);
+const Color kBrandText = Color(0xFF101828);
+const Color kBrandMuted = Color(0xFF667085);
+const Color kBrandWarm = Color(0xFFFACC15);
+const Color kBrandDanger = Color(0xFFE5484D);
+
+class _LocalConfigCandidate {
+  final String path;
+  final String content;
+
+  const _LocalConfigCandidate({required this.path, required this.content});
+}
 
 void main() {
   runZonedGuarded(
-    () {
+    () async {
       WidgetsFlutterBinding.ensureInitialized();
+      await appendBlueVpnClientLog('main start build=$kBuildMarker');
+
+      final startupReady = await ensureWindowsStartupReady();
+      await appendBlueVpnClientLog('main startupReady=$startupReady');
+      if (!startupReady) return;
 
       FlutterError.onError = (details) {
         FlutterError.presentError(details);
@@ -105,28 +129,92 @@ class _BlueVPNAppState extends State<BlueVPNApp> {
 
   @override
   Widget build(BuildContext context) {
-    final light = ThemeData(
-      useMaterial3: true,
-      fontFamily: 'Segoe UI',
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xFF2563EB),
-        brightness: Brightness.light,
-      ),
-      scaffoldBackgroundColor: const Color(0xFFF6F8FC),
-    );
+    ThemeData buildTheme(Brightness brightness) {
+      final isDark = brightness == Brightness.dark;
+      final scheme = ColorScheme.fromSeed(
+        seedColor: kBrandPrimary,
+        brightness: brightness,
+      );
 
-    final dark = ThemeData(
-      useMaterial3: true,
-      fontFamily: 'Segoe UI',
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xFF2563EB),
-        brightness: Brightness.dark,
-      ),
-      scaffoldBackgroundColor: const Color(0xFF0B1220),
-    );
+      return ThemeData(
+        useMaterial3: true,
+        fontFamily: 'Segoe UI',
+        colorScheme: scheme,
+        scaffoldBackgroundColor: isDark ? kBrandDarkBg : kBrandLightBg,
+      ).copyWith(
+        dividerColor: scheme.onSurface.withOpacity(isDark ? 0.18 : 0.10),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: isDark ? kBrandDarkSurface : Colors.white,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide(
+              color: scheme.onSurface.withOpacity(isDark ? 0.18 : 0.12),
+            ),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: BorderSide(
+              color: scheme.onSurface.withOpacity(isDark ? 0.18 : 0.12),
+            ),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14),
+            borderSide: const BorderSide(color: kBrandPrimary, width: 1.4),
+          ),
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: kBrandPrimary,
+            foregroundColor: Colors.white,
+            disabledBackgroundColor: scheme.onSurface.withOpacity(0.10),
+            disabledForegroundColor: scheme.onSurface.withOpacity(0.42),
+            elevation: 0,
+            shadowColor: kBrandPrimary.withOpacity(0.22),
+          ),
+        ),
+        outlinedButtonTheme: OutlinedButtonThemeData(
+          style: OutlinedButton.styleFrom(
+            foregroundColor: isDark ? Colors.white : kBrandPrimaryDeep,
+            side: BorderSide(
+              color: scheme.onSurface.withOpacity(isDark ? 0.22 : 0.16),
+            ),
+          ),
+        ),
+        switchTheme: SwitchThemeData(
+          thumbColor: WidgetStateProperty.resolveWith(
+            (states) => states.contains(WidgetState.selected)
+                ? (isDark ? const Color(0xFFB8F5D8) : Colors.white)
+                : (isDark ? const Color(0xFF607068) : null),
+          ),
+          trackColor: WidgetStateProperty.resolveWith(
+            (states) => states.contains(WidgetState.selected)
+                ? kBrandPrimary
+                : scheme.onSurface.withOpacity(isDark ? 0.18 : 0.12),
+          ),
+          trackOutlineColor: WidgetStatePropertyAll(
+            scheme.onSurface.withOpacity(isDark ? 0.22 : 0.12),
+          ),
+        ),
+        sliderTheme: SliderThemeData(
+          activeTrackColor: kBrandPrimary,
+          inactiveTrackColor: kBrandPrimary.withOpacity(isDark ? 0.20 : 0.16),
+          thumbColor: kBrandPrimary,
+          overlayColor: kBrandPrimary.withOpacity(0.14),
+          valueIndicatorColor: kBrandPrimaryDeep,
+          valueIndicatorTextStyle: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      );
+    }
+
+    final light = buildTheme(Brightness.light);
+    final dark = buildTheme(Brightness.dark);
 
     return MaterialApp(
-      title: 'BlueVPN',
+      title: kProductName,
       debugShowCheckedModeBanner: false,
       theme: light,
       darkTheme: dark,
@@ -157,6 +245,8 @@ class _AppBootstrapState extends State<AppBootstrap> {
   final SessionStore _sessionStore = SessionStore();
   Session? _session;
   bool _loading = true;
+  bool _openSessionDirectly = false;
+  String _loadingStage = 'Запускаем Green VPN...';
 
   @override
   void initState() {
@@ -165,50 +255,418 @@ class _AppBootstrapState extends State<AppBootstrap> {
   }
 
   Future<void> _load() async {
+    final startedAt = DateTime.now();
+    await appendBlueVpnClientLog('bootstrap load start');
+    if (mounted) {
+      setState(() => _loadingStage = 'Проверяем системный компонент...');
+    }
+    await _resumeStartupDisconnectIfNeeded();
+    if (mounted) {
+      setState(() => _loadingStage = 'Проверяем сохранённую сессию...');
+    }
     final s = await _sessionStore.read();
+    await appendBlueVpnClientLog(
+      'bootstrap session=${s == null ? "none" : "present"}',
+    );
+    if (s == null && !kIsWeb && Platform.isWindows) {
+      try {
+        if (mounted) {
+          setState(() => _loadingStage = 'Готовим сетевой слой...');
+        }
+        final backend = VpnBackend.createDefault(tunnelName: kTunnelName);
+        await backend.disconnect();
+      } catch (_) {}
+    }
+    final elapsed = DateTime.now().difference(startedAt);
+    const minBootTime = Duration(milliseconds: 850);
+    if (elapsed < minBootTime) {
+      await Future<void>.delayed(minBootTime - elapsed);
+    }
     if (!mounted) return;
     setState(() {
+      _loadingStage = 'Открываем приложение...';
       _session = s;
       _loading = false;
     });
   }
 
+  Future<void> _resumeStartupDisconnectIfNeeded() async {
+    if (kIsWeb || !Platform.isWindows) return;
+    try {
+      final pendingStore = PendingVpnActionStore();
+      final action = await pendingStore.read();
+      if (action != 'disconnect') return;
+
+      final backend = VpnBackend.createDefault(tunnelName: kTunnelName);
+      final res = await backend.disconnect();
+      if (res.ok) {
+        await pendingStore.clear();
+      }
+    } catch (_) {}
+  }
+
   Future<void> _onAuthSuccess(Session s) async {
     await _sessionStore.write(s);
     if (!mounted) return;
-    setState(() => _session = s);
+    setState(() {
+      _session = s;
+      _openSessionDirectly = true;
+    });
   }
 
   Future<void> _logout() async {
     await _sessionStore.clear();
     await ConfigStore().deleteManagedConfig(); // скрыто от пользователя
     if (!mounted) return;
-    setState(() => _session = null);
+    setState(() {
+      _session = null;
+      _openSessionDirectly = false;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) return const _CenteredLoading();
+    if (_loading) return _CenteredLoading(stage: _loadingStage);
 
     if (_session == null) {
       return AuthPage(onAuthSuccess: _onAuthSuccess);
     }
 
-    return RootShell(
+    final shell = RootShell(
       themeMode: widget.themeMode,
       onThemeModeChanged: widget.onThemeModeChanged,
       session: _session!,
       onLogout: _logout,
     );
+    if (_openSessionDirectly) return shell;
+
+    return SessionGatePage(
+      session: _session!,
+      onUseCurrentSession: () {
+        if (!mounted) return;
+        setState(() => _openSessionDirectly = true);
+      },
+      onUseAnotherAccount: _logout,
+      child: shell,
+    );
   }
 }
 
 class _CenteredLoading extends StatelessWidget {
-  const _CenteredLoading();
+  final String stage;
+
+  const _CenteredLoading({required this.stage});
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final surface = isDark ? kBrandDarkSurface : Colors.white;
+    final textColor = theme.colorScheme.onSurface;
+    final mutedColor = textColor.withOpacity(0.62);
+
+    return Scaffold(
+      body: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: isDark
+                ? const [Color(0xFF06130F), Color(0xFF0B2A20)]
+                : const [Color(0xFFF7FBF8), Color(0xFFE9F8F0)],
+          ),
+        ),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Container(
+                padding: const EdgeInsets.all(22),
+                decoration: BoxDecoration(
+                  color: surface,
+                  borderRadius: BorderRadius.circular(28),
+                  border: Border.all(color: kBrandPrimary.withOpacity(0.14)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: kBrandPrimaryDeep.withOpacity(
+                        isDark ? 0.22 : 0.10,
+                      ),
+                      blurRadius: 34,
+                      offset: const Offset(0, 18),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 52,
+                          height: 52,
+                          decoration: BoxDecoration(
+                            color: kBrandPrimarySoft,
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                          child: const Icon(
+                            Icons.vpn_key_rounded,
+                            color: kBrandPrimary,
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Green VPN',
+                                style: TextStyle(
+                                  color: textColor,
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 22,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                'Готовим защищённое подключение',
+                                style: TextStyle(
+                                  color: mutedColor,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 22),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(999),
+                      child: LinearProgressIndicator(
+                        minHeight: 8,
+                        backgroundColor: kBrandPrimary.withOpacity(0.10),
+                        valueColor: const AlwaysStoppedAnimation<Color>(
+                          kBrandPrimary,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      stage,
+                      style: TextStyle(
+                        color: textColor,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Обычно это занимает пару секунд. Если Windows готовит сетевой компонент, приложение само продолжит загрузку.',
+                      style: TextStyle(
+                        color: mutedColor,
+                        fontWeight: FontWeight.w600,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class SessionGatePage extends StatefulWidget {
+  final Session session;
+  final Future<void> Function() onUseAnotherAccount;
+  final VoidCallback onUseCurrentSession;
+  final Widget child;
+
+  const SessionGatePage({
+    super.key,
+    required this.session,
+    required this.onUseAnotherAccount,
+    required this.onUseCurrentSession,
+    required this.child,
+  });
+
+  @override
+  State<SessionGatePage> createState() => _SessionGatePageState();
+}
+
+class _SessionGatePageState extends State<SessionGatePage> {
+  bool _enterApp = false;
+  bool _busy = false;
+
+  Future<void> _continue() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _enterApp = true;
+    });
+    widget.onUseCurrentSession();
+  }
+
+  Future<void> _switchAccount() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await widget.onUseAnotherAccount();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_enterApp) return widget.child;
+
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: _Card(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            color: kBrandPrimarySoft,
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: const Icon(
+                            Icons.vpn_key_rounded,
+                            color: kBrandPrimary,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                kProductName,
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                              SizedBox(height: 2),
+                              Text(
+                                'Выбери, как открыть приложение',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: kBrandMuted,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF8FBF8),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: const Color(0x1A08785D)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Сохранённая сессия',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              color: kBrandMuted,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            widget.session.email,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w900,
+                              color: kBrandText,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          const Text(
+                            'Если это твой аккаунт, можно продолжить. Если устройство новое или нужен другой аккаунт, открой экран входа.',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: kBrandMuted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: _busy ? null : _continue,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: kBrandPrimary,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        child: Text(
+                          _busy
+                              ? 'Подождите…'
+                              : 'Продолжить как ${widget.session.email}',
+                          style: const TextStyle(fontWeight: FontWeight.w900),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton(
+                        onPressed: _busy ? null : _switchAccount,
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                        ),
+                        child: const Text(
+                          'Войти или зарегистрироваться',
+                          style: TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -219,27 +677,465 @@ class _CenteredLoading extends StatelessWidget {
 class Session {
   final String accessToken;
   final String email;
+  final bool emailVerified;
+  final bool emailConfirmationRequired;
+  final String? phone;
+  final bool phoneVerified;
 
-  const Session({required this.accessToken, required this.email});
+  const Session({
+    required this.accessToken,
+    required this.email,
+    this.emailVerified = false,
+    this.emailConfirmationRequired = false,
+    this.phone,
+    this.phoneVerified = false,
+  });
 
-  Map<String, dynamic> toJson() => {'accessToken': accessToken, 'email': email};
+  Map<String, dynamic> toJson() => {
+    'accessToken': accessToken,
+    'email': email,
+    'emailVerified': emailVerified,
+    'emailConfirmationRequired': emailConfirmationRequired,
+    'phone': phone,
+    'phoneVerified': phoneVerified,
+  };
 
   static Session fromJson(Map<String, dynamic> json) {
     return Session(
       accessToken: (json['accessToken'] ?? '').toString(),
       email: (json['email'] ?? '').toString(),
+      emailVerified: json['emailVerified'] == true,
+      emailConfirmationRequired: json['emailConfirmationRequired'] == true,
+      phone: json['phone']?.toString(),
+      phoneVerified: json['phoneVerified'] == true,
     );
+  }
+
+  Session copyWith({
+    String? accessToken,
+    String? email,
+    bool? emailVerified,
+    bool? emailConfirmationRequired,
+    String? phone,
+    bool? phoneVerified,
+  }) {
+    return Session(
+      accessToken: accessToken ?? this.accessToken,
+      email: email ?? this.email,
+      emailVerified: emailVerified ?? this.emailVerified,
+      emailConfirmationRequired:
+          emailConfirmationRequired ?? this.emailConfirmationRequired,
+      phone: phone ?? this.phone,
+      phoneVerified: phoneVerified ?? this.phoneVerified,
+    );
+  }
+}
+
+class WindowsLocalSecurity {
+  const WindowsLocalSecurity._();
+
+  static Future<String?> _currentUserSid() async {
+    if (kIsWeb || !Platform.isWindows) return null;
+    try {
+      final sidRes = await Process.run('whoami', [
+        '/user',
+        '/fo',
+        'csv',
+        '/nh',
+      ]);
+      final columns = (sidRes.stdout ?? '')
+          .toString()
+          .trim()
+          .split(',')
+          .map((v) => v.replaceAll('"', '').trim())
+          .toList();
+      final sidCandidates = columns.where((v) => v.startsWith('S-1-')).toList();
+      return sidCandidates.isEmpty ? null : sidCandidates.last;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> repairDirectoryAcl(String path) async {
+    if (kIsWeb || !Platform.isWindows || path.trim().isEmpty) return;
+    try {
+      final dir = Directory(path);
+      if (!dir.existsSync()) return;
+      final userSid = await _currentUserSid();
+      if (userSid == null) return;
+
+      // Important: never remove inherited permissions here. The previous
+      // hardening was too aggressive and could lock BlueVPN out of AppData.
+      await Process.run('icacls', [
+        dir.path,
+        '/inheritance:e',
+        '/grant',
+        '*$userSid:(OI)(CI)(F)',
+        '*S-1-5-18:(OI)(CI)(F)',
+        '*S-1-5-32-544:(OI)(CI)(F)',
+        '/T',
+      ], runInShell: true);
+    } catch (_) {}
+  }
+
+  static Future<void> repairBlueVpnLocalAcls() async {
+    if (kIsWeb || !Platform.isWindows) return;
+    try {
+      final appData = Platform.environment['APPDATA'];
+      if (appData != null && appData.trim().isNotEmpty) {
+        await repairDirectoryAcl('$appData\\BlueVPN');
+      }
+      final programData = Platform.environment['ProgramData'];
+      if (programData != null && programData.trim().isNotEmpty) {
+        await repairDirectoryAcl('$programData\\BlueVPN');
+      }
+    } catch (_) {}
+  }
+
+  static Future<String> _runPowerShellWithStdin(
+    String script,
+    String stdinText,
+  ) async {
+    final p = await Process.start('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      script,
+    ], runInShell: false);
+
+    p.stdin.write(stdinText);
+    await p.stdin.close();
+
+    final stdoutFuture = p.stdout.transform(utf8.decoder).join();
+    final stderrFuture = p.stderr.transform(utf8.decoder).join();
+    late final List<Object?> result;
+    try {
+      result = await Future.wait<Object?>([
+        stdoutFuture,
+        stderrFuture,
+        p.exitCode,
+      ]).timeout(const Duration(seconds: 4));
+    } on TimeoutException {
+      p.kill(ProcessSignal.sigkill);
+      throw TimeoutException('PowerShell DPAPI timeout');
+    }
+
+    final stdoutText = (result[0] ?? '').toString();
+    final stderrText = (result[1] ?? '').toString();
+    final code = result[2] as int;
+    if (code != 0) {
+      throw Exception('PowerShell failed ($code): $stderrText');
+    }
+    return stdoutText.trimRight();
+  }
+
+  static Future<String?> protectString(String plain) async {
+    if (kIsWeb || !Platform.isWindows) return null;
+    try {
+      const script = r'''
+$plain = [Console]::In.ReadToEnd()
+$bytes = [System.Text.Encoding]::UTF8.GetBytes($plain)
+$entropy = [System.Text.Encoding]::UTF8.GetBytes('BlueVPN-Machine-v1')
+$protected = [System.Security.Cryptography.ProtectedData]::Protect(
+  $bytes,
+  $entropy,
+  [System.Security.Cryptography.DataProtectionScope]::LocalMachine
+)
+[Convert]::ToBase64String($protected)
+''';
+      final encrypted = await _runPowerShellWithStdin(script, plain);
+      return encrypted.trim().isEmpty ? null : encrypted.trim();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<String?> unprotectString(String encrypted) async {
+    if (kIsWeb || !Platform.isWindows) return null;
+    try {
+      const script = r'''
+$encrypted = [Console]::In.ReadToEnd().Trim()
+$bytes = [Convert]::FromBase64String($encrypted)
+$entropy = [System.Text.Encoding]::UTF8.GetBytes('BlueVPN-Machine-v1')
+$plain = [System.Security.Cryptography.ProtectedData]::Unprotect(
+  $bytes,
+  $entropy,
+  [System.Security.Cryptography.DataProtectionScope]::LocalMachine
+)
+[System.Text.Encoding]::UTF8.GetString($plain)
+''';
+      return await _runPowerShellWithStdin(script, encrypted);
+    } catch (_) {
+      try {
+        const legacyScript = r'''
+$encrypted = [Console]::In.ReadToEnd().Trim()
+$secure = ConvertTo-SecureString -String $encrypted
+$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+try {
+  [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+} finally {
+  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+}
+''';
+        return await _runPowerShellWithStdin(legacyScript, encrypted);
+      } catch (_) {
+        return null;
+      }
+    }
+  }
+
+  static Future<void> hardenPath(
+    String path, {
+    bool directory = false,
+    bool hidden = true,
+    bool privateAcl = true,
+  }) async {
+    if (kIsWeb || !Platform.isWindows || path.trim().isEmpty) return;
+    try {
+      final typeFlag = directory ? '+h +s' : '+h';
+      if (hidden) {
+        await Process.run('attrib', [
+          ...typeFlag.split(' '),
+          path,
+        ], runInShell: true);
+      }
+
+      if (!privateAcl) return;
+      final userSid = await _currentUserSid();
+      if (userSid == null) return;
+
+      final grants = directory
+          ? [
+              '*$userSid:(OI)(CI)(F)',
+              '*S-1-5-18:(OI)(CI)(F)',
+              '*S-1-5-32-544:(OI)(CI)(F)',
+            ]
+          : ['*$userSid:(F)', '*S-1-5-18:(F)', '*S-1-5-32-544:(F)'];
+      await Process.run('icacls', [
+        path,
+        '/grant',
+        ...grants,
+      ], runInShell: true);
+    } catch (_) {}
+  }
+
+  static Future<void> repairBlueVpnAppDataAcl() async {
+    if (kIsWeb || !Platform.isWindows) return;
+    try {
+      final base = Platform.environment['APPDATA'];
+      if (base == null || base.trim().isEmpty) return;
+      final dir = Directory('$base\\BlueVPN');
+      if (!dir.existsSync()) return;
+      await repairDirectoryAcl(dir.path);
+    } catch (_) {}
+  }
+
+  static Future<void> prepareSharedStateDirectory(String path) async {
+    if (kIsWeb || !Platform.isWindows || path.trim().isEmpty) return;
+    try {
+      final dir = Directory(path);
+      if (!dir.existsSync()) return;
+      await Process.run('attrib', ['+h', '+s', dir.path], runInShell: true);
+      await Process.run('icacls', [
+        dir.path,
+        '/inheritance:e',
+        '/grant',
+        '*S-1-5-11:(OI)(CI)(M)',
+        '*S-1-5-18:(OI)(CI)(F)',
+        '*S-1-5-32-544:(OI)(CI)(F)',
+        '/T',
+      ], runInShell: true);
+    } catch (_) {}
+  }
+
+  static Future<void> prepareSharedStateFile(String path) async {
+    if (kIsWeb || !Platform.isWindows || path.trim().isEmpty) return;
+    try {
+      await Process.run('attrib', ['+h', path], runInShell: true);
+      await Process.run('icacls', [
+        path,
+        '/inheritance:e',
+        '/grant',
+        '*S-1-5-11:(M)',
+        '*S-1-5-18:(F)',
+        '*S-1-5-32-544:(F)',
+      ], runInShell: true);
+    } catch (_) {}
+  }
+
+  static Future<void> prepareSharedConfigDirectory(String path) async {
+    if (kIsWeb || !Platform.isWindows || path.trim().isEmpty) return;
+    try {
+      final dir = Directory(path);
+      if (!dir.existsSync()) {
+        dir.createSync(recursive: true);
+      }
+      await Process.run('attrib', [
+        '-H',
+        '-S',
+        '-R',
+        dir.path,
+      ], runInShell: true);
+      await Process.run('icacls', [
+        dir.path,
+        '/inheritance:e',
+        '/grant',
+        '*S-1-5-11:(OI)(CI)M',
+        '*S-1-5-18:(OI)(CI)F',
+        '*S-1-5-32-544:(OI)(CI)F',
+      ], runInShell: true);
+    } catch (_) {}
+  }
+
+  static Future<void> prepareSharedConfigFile(String path) async {
+    if (kIsWeb || !Platform.isWindows || path.trim().isEmpty) return;
+    try {
+      final f = File(path);
+      if (!f.existsSync()) return;
+      await Process.run('attrib', ['-H', '-S', '-R', path], runInShell: true);
+      await Process.run('icacls', [
+        path,
+        '/inheritance:e',
+        '/grant',
+        '*S-1-5-11:M',
+        '*S-1-5-18:F',
+        '*S-1-5-32-544:F',
+      ], runInShell: true);
+    } catch (_) {}
+  }
+}
+
+class BlueVpnLocalPaths {
+  const BlueVpnLocalPaths._();
+
+  static String sharedStateDirSync() {
+    final base = Platform.environment['ProgramData'];
+    if (base != null && base.trim().isNotEmpty) {
+      return '$base\\BlueVPN\\state';
+    }
+    return r'C:\ProgramData\BlueVPN\state';
+  }
+
+  static Future<String> sharedStateDir() async {
+    final dir = Directory(sharedStateDirSync());
+    if (!dir.existsSync()) {
+      dir.createSync(recursive: true);
+    }
+    await WindowsLocalSecurity.prepareSharedStateDirectory(dir.path);
+    return dir.path;
+  }
+
+  static Future<List<Directory>> legacyStateDirs() async {
+    final out = <Directory>[];
+    final seen = <String>{};
+
+    void addPath(String? path) {
+      if (path == null || path.trim().isEmpty) return;
+      final dir = Directory(path);
+      final key = dir.path.toLowerCase();
+      if (seen.contains(key) || !dir.existsSync()) return;
+      seen.add(key);
+      out.add(dir);
+    }
+
+    final appData = Platform.environment['APPDATA'];
+    if (appData != null && appData.trim().isNotEmpty) {
+      addPath('$appData\\BlueVPN');
+    }
+
+    final usersRoot = Directory(r'C:\Users');
+    if (usersRoot.existsSync()) {
+      for (final entry in usersRoot.listSync().whereType<Directory>()) {
+        addPath('${entry.path}\\AppData\\Roaming\\BlueVPN');
+      }
+    }
+
+    return out;
+  }
+
+  static Future<File?> firstLegacyFile(String fileName) async {
+    final dirs = await legacyStateDirs();
+    for (final dir in dirs) {
+      final f = File('${dir.path}\\$fileName');
+      if (f.existsSync()) return f;
+    }
+    return null;
+  }
+
+  static bool isSharedStatePath(String path) {
+    final shared = sharedStateDirSync().toLowerCase();
+    final candidate = path.toLowerCase();
+    return candidate == shared || candidate.startsWith('$shared\\');
+  }
+}
+
+class SecureLocalFile {
+  final String path;
+  final bool encrypted;
+
+  const SecureLocalFile(this.path, {this.encrypted = false});
+
+  File get file => File(path);
+
+  Future<String?> readString() async {
+    try {
+      if (!file.existsSync()) return null;
+      final raw = await file.readAsString();
+      if (!encrypted) return raw;
+      return await WindowsLocalSecurity.unprotectString(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> writeString(String value) async {
+    try {
+      final dir = file.parent;
+      if (!dir.existsSync()) {
+        dir.createSync(recursive: true);
+      }
+      if (BlueVpnLocalPaths.isSharedStatePath(dir.path)) {
+        unawaited(WindowsLocalSecurity.prepareSharedStateDirectory(dir.path));
+      } else {
+        unawaited(WindowsLocalSecurity.hardenPath(dir.path, directory: true));
+      }
+
+      if (encrypted && !kIsWeb && Platform.isWindows) {
+        final protected = await WindowsLocalSecurity.protectString(value);
+        if (protected != null && protected.trim().isNotEmpty) {
+          await file.writeAsString(protected);
+          if (BlueVpnLocalPaths.isSharedStatePath(file.path)) {
+            unawaited(WindowsLocalSecurity.prepareSharedStateFile(file.path));
+          } else {
+            unawaited(WindowsLocalSecurity.hardenPath(file.path));
+          }
+          return;
+        }
+      }
+
+      await file.writeAsString(value);
+      if (BlueVpnLocalPaths.isSharedStatePath(file.path)) {
+        unawaited(WindowsLocalSecurity.prepareSharedStateFile(file.path));
+      } else {
+        unawaited(WindowsLocalSecurity.hardenPath(file.path));
+      }
+    } catch (_) {
+      rethrow;
+    }
+  }
+
+  Future<void> delete() async {
+    try {
+      if (file.existsSync()) await file.delete();
+    } catch (_) {}
   }
 }
 
 class SessionStore {
   Future<String> _appDirPath() async {
-    final base = Platform.environment['APPDATA'];
-    final dir = Directory(
-      base != null && base.isNotEmpty ? '$base\\BlueVPN' : 'BlueVPN',
-    );
-    if (!dir.existsSync()) dir.createSync(recursive: true);
-    return dir.path;
+    return BlueVpnLocalPaths.sharedStateDir();
   }
 
   Future<File> _file() async {
@@ -247,15 +1143,46 @@ class SessionStore {
     return File('$dir\\session.json');
   }
 
+  Future<SecureLocalFile> _secureFile() async {
+    final dir = await _appDirPath();
+    return SecureLocalFile('$dir\\session.dat', encrypted: true);
+  }
+
   Future<Session?> read() async {
     if (kIsWeb) return null;
     try {
-      final f = await _file();
-      if (!f.existsSync()) return null;
-      final raw = await f.readAsString();
+      final secure = await _secureFile();
+      var raw = await secure.readString();
+      if (raw == null || raw.trim().isEmpty) {
+        final f = await _file();
+        if (f.existsSync()) {
+          raw = await f.readAsString();
+        } else {
+          final legacySecure = await BlueVpnLocalPaths.firstLegacyFile(
+            'session.dat',
+          );
+          if (legacySecure != null) {
+            raw = await SecureLocalFile(
+              legacySecure.path,
+              encrypted: true,
+            ).readString();
+          }
+          raw ??= await (await BlueVpnLocalPaths.firstLegacyFile(
+            'session.json',
+          ))?.readAsString();
+          if (raw == null || raw.trim().isEmpty) return null;
+        }
+      }
       final jsonMap = jsonDecode(raw) as Map<String, dynamic>;
       final s = Session.fromJson(jsonMap);
       if (s.accessToken.isEmpty) return null;
+      await write(s);
+      final legacy = await _file();
+      if (legacy.existsSync()) {
+        try {
+          await legacy.delete();
+        } catch (_) {}
+      }
       return s;
     } catch (_) {
       return null;
@@ -264,8 +1191,19 @@ class SessionStore {
 
   Future<void> write(Session session) async {
     if (kIsWeb) return;
-    final f = await _file();
-    await f.writeAsString(jsonEncode(session.toJson()));
+    final raw = jsonEncode(session.toJson());
+    try {
+      final f = await _secureFile();
+      await f.writeString(raw);
+      return;
+    } catch (_) {
+      final legacy = await _file();
+      await legacy.writeAsString(raw);
+      unawaited(
+        WindowsLocalSecurity.prepareSharedStateDirectory(legacy.parent.path),
+      );
+      unawaited(WindowsLocalSecurity.prepareSharedStateFile(legacy.path));
+    }
   }
 
   Future<void> clear() async {
@@ -273,18 +1211,14 @@ class SessionStore {
     try {
       final f = await _file();
       if (f.existsSync()) f.deleteSync();
+      await (await _secureFile()).delete();
     } catch (_) {}
   }
 }
 
 class DeviceIdStore {
   Future<String> _appDirPath() async {
-    final base = Platform.environment['APPDATA'];
-    final dir = Directory(
-      base != null && base.isNotEmpty ? '$base\\BlueVPN' : 'BlueVPN',
-    );
-    if (!dir.existsSync()) dir.createSync(recursive: true);
-    return dir.path;
+    return BlueVpnLocalPaths.sharedStateDir();
   }
 
   Future<File> _file() async {
@@ -293,7 +1227,7 @@ class DeviceIdStore {
   }
 
   String _gen() {
-    // Короткий, но уникальный для устройства идентификатор
+    // Short but unique enough for one local device.
     final rnd = Random.secure();
     final bytes = List<int>.generate(16, (_) => rnd.nextInt(256));
     final hex = bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
@@ -304,10 +1238,31 @@ class DeviceIdStore {
     if (kIsWeb) return null;
     try {
       final f = await _file();
-      if (!f.existsSync()) return null;
-      final s = (await f.readAsString()).trim();
+      String? raw;
+      if (f.existsSync()) {
+        raw = await f.readAsString();
+      } else {
+        raw = await (await BlueVpnLocalPaths.firstLegacyFile(
+          'device_id.txt',
+        ))?.readAsString();
+      }
+      if (raw == null) return null;
+      final s = raw.trim();
       if (s.length < 8) return null;
       return s;
+    } on FileSystemException {
+      await WindowsLocalSecurity.prepareSharedStateDirectory(
+        (await _file()).parent.path,
+      );
+      try {
+        final f = await _file();
+        if (!f.existsSync()) return null;
+        final s = (await f.readAsString()).trim();
+        if (s.length < 8) return null;
+        return s;
+      } catch (_) {
+        return null;
+      }
     } catch (_) {
       return null;
     }
@@ -320,8 +1275,468 @@ class DeviceIdStore {
 
     final id = _gen();
     final f = await _file();
-    await f.writeAsString(id);
+    try {
+      await f.writeAsString(id);
+    } on FileSystemException {
+      await WindowsLocalSecurity.prepareSharedStateDirectory(f.parent.path);
+      await f.writeAsString(id);
+    }
+    await WindowsLocalSecurity.prepareSharedStateDirectory(f.parent.path);
+    await WindowsLocalSecurity.prepareSharedStateFile(f.path);
     return id;
+  }
+
+  Future<String> rotate() async {
+    if (kIsWeb) return 'web';
+    final id = _gen();
+    final f = await _file();
+    try {
+      await f.writeAsString(id);
+    } on FileSystemException {
+      await WindowsLocalSecurity.prepareSharedStateDirectory(f.parent.path);
+      await f.writeAsString(id);
+    }
+    await WindowsLocalSecurity.prepareSharedStateDirectory(f.parent.path);
+    await WindowsLocalSecurity.prepareSharedStateFile(f.path);
+    return id;
+  }
+
+  Future<void> clear() async {
+    if (kIsWeb) return;
+    final f = await _file();
+    if (f.existsSync()) {
+      await f.delete();
+    }
+  }
+}
+
+class AdminTokenStore {
+  Future<String> _appDirPath() async {
+    return BlueVpnLocalPaths.sharedStateDir();
+  }
+
+  Future<File> _file() async {
+    final dir = await _appDirPath();
+    return File('$dir\\admin_token.txt');
+  }
+
+  Future<SecureLocalFile> _secureFile() async {
+    final dir = await _appDirPath();
+    return SecureLocalFile('$dir\\admin_token.dat', encrypted: true);
+  }
+
+  Future<String?> read() async {
+    if (kIsWeb) return null;
+    try {
+      final secure = await _secureFile();
+      var raw = (await secure.readString())?.trim();
+      if (raw == null || raw.isEmpty) {
+        final f = await _file();
+        if (f.existsSync()) {
+          raw = (await f.readAsString()).trim();
+          if (raw.isNotEmpty) {
+            await write(raw);
+            try {
+              await f.delete();
+            } catch (_) {}
+          }
+        } else {
+          final legacySecure = await BlueVpnLocalPaths.firstLegacyFile(
+            'admin_token.dat',
+          );
+          if (legacySecure != null) {
+            raw = (await SecureLocalFile(
+              legacySecure.path,
+              encrypted: true,
+            ).readString())?.trim();
+          }
+          raw ??= (await (await BlueVpnLocalPaths.firstLegacyFile(
+            'admin_token.txt',
+          ))?.readAsString())?.trim();
+        }
+      }
+      if (raw == null || raw.isEmpty) return null;
+      return raw;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> write(String token) async {
+    if (kIsWeb) return;
+    final raw = token.trim();
+    try {
+      final f = await _secureFile();
+      await f.writeString(raw);
+      return;
+    } catch (_) {
+      final legacy = await _file();
+      await legacy.writeAsString(raw);
+      unawaited(
+        WindowsLocalSecurity.prepareSharedStateDirectory(legacy.parent.path),
+      );
+      unawaited(WindowsLocalSecurity.prepareSharedStateFile(legacy.path));
+    }
+  }
+
+  Future<void> clear() async {
+    if (kIsWeb) return;
+    final f = await _file();
+    if (f.existsSync()) {
+      await f.delete();
+    }
+    await (await _secureFile()).delete();
+  }
+}
+
+class PendingBillingOrderStore {
+  Future<File> _file() async {
+    final dir = await BlueVpnLocalPaths.sharedStateDir();
+    return File('$dir\\pending_billing_order.json');
+  }
+
+  Future<Map<String, dynamic>?> read() async {
+    if (kIsWeb) return null;
+    try {
+      final f = await _file();
+      if (!f.existsSync()) return null;
+      final raw = await f.readAsString();
+      if (raw.trim().isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return null;
+      final map = Map<String, dynamic>.from(decoded);
+      final orderId = (map['orderId'] ?? '').toString().trim();
+      if (orderId.isEmpty) return null;
+      return map;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> write(Map<String, dynamic> order) async {
+    if (kIsWeb) return;
+    final f = await _file();
+    await f.writeAsString(jsonEncode(order));
+    await WindowsLocalSecurity.prepareSharedStateDirectory(f.parent.path);
+    await WindowsLocalSecurity.prepareSharedStateFile(f.path);
+  }
+
+  Future<void> clear() async {
+    if (kIsWeb) return;
+    try {
+      final f = await _file();
+      if (f.existsSync()) await f.delete();
+    } catch (_) {}
+  }
+}
+
+class PendingVpnActionStore {
+  Future<String> _sharedDirPath() async {
+    return BlueVpnLocalPaths.sharedStateDir();
+  }
+
+  Future<String> _legacyAppDirPath() async {
+    final base = Platform.environment['APPDATA'];
+    final dir = Directory(
+      base != null && base.isNotEmpty ? '$base\\BlueVPN' : 'BlueVPN',
+    );
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+    return dir.path;
+  }
+
+  Future<File> _file() async {
+    final dir = await _sharedDirPath();
+    return File('$dir\\pending_vpn_action.txt');
+  }
+
+  Future<File> _legacyFile() async {
+    final dir = await _legacyAppDirPath();
+    return File('$dir\\pending_vpn_action.txt');
+  }
+
+  Future<String?> read() async {
+    if (kIsWeb || !Platform.isWindows) return null;
+    try {
+      final f = await _file();
+      File? source;
+      if (f.existsSync()) {
+        source = f;
+      } else {
+        final legacy = await _legacyFile();
+        if (legacy.existsSync()) source = legacy;
+      }
+      if (source == null) return null;
+      final raw = (await source.readAsString()).trim().toLowerCase();
+      if (raw != 'connect' && raw != 'disconnect') return null;
+      return raw;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> write(String action) async {
+    if (kIsWeb || !Platform.isWindows) return;
+    final normalized = action.trim().toLowerCase();
+    if (normalized != 'connect' && normalized != 'disconnect') return;
+    try {
+      final f = await _file();
+      await f.writeAsString(normalized);
+      await WindowsLocalSecurity.prepareSharedStateDirectory(f.parent.path);
+      await WindowsLocalSecurity.prepareSharedStateFile(f.path);
+      return;
+    } on FileSystemException {
+      await WindowsLocalSecurity.repairBlueVpnLocalAcls();
+      final f = await _file();
+      await f.writeAsString(normalized);
+      await WindowsLocalSecurity.prepareSharedStateDirectory(f.parent.path);
+      await WindowsLocalSecurity.prepareSharedStateFile(f.path);
+    }
+  }
+
+  Future<void> clear() async {
+    if (kIsWeb || !Platform.isWindows) return;
+    try {
+      final f = await _file();
+      if (f.existsSync()) {
+        await f.delete();
+      }
+      final legacy = await _legacyFile();
+      if (legacy.existsSync()) {
+        await legacy.delete();
+      }
+    } catch (_) {}
+  }
+}
+
+Future<void> appendBlueVpnClientLog(String message) async {
+  if (kIsWeb || !Platform.isWindows) return;
+  try {
+    final f = File(r'C:\ProgramData\BlueVPN\auth.log');
+    final ts = DateTime.now().toIso8601String();
+    await f.writeAsString('[$ts] UI $message\n', mode: FileMode.append);
+  } catch (_) {}
+}
+
+Future<bool> isWindowsProcessElevated() async {
+  if (kIsWeb || !Platform.isWindows) return false;
+  try {
+    final res = await Process.run('whoami', ['/groups'], runInShell: true);
+    final out =
+        ((res.stdout ?? '').toString() + '\n' + (res.stderr ?? '').toString());
+    return out.contains('S-1-16-12288') || out.contains('S-1-16-16384');
+  } catch (_) {
+    return false;
+  }
+}
+
+Future<bool> ensureWindowsStartupReady() async {
+  // Native Windows runner now handles startup self-elevation before Flutter
+  // initializes. Dart keeps only per-action fallback relaunch logic.
+  await applyStartupLocalHardening();
+  return true;
+}
+
+Future<void> applyStartupLocalHardening() async {
+  if (kIsWeb || !Platform.isWindows) return;
+  try {
+    await WindowsLocalSecurity.repairBlueVpnLocalAcls();
+    final sharedStateDir = Directory(BlueVpnLocalPaths.sharedStateDirSync());
+    if (!sharedStateDir.existsSync()) {
+      sharedStateDir.createSync(recursive: true);
+    }
+    await WindowsLocalSecurity.prepareSharedStateDirectory(sharedStateDir.path);
+
+    final appData = Platform.environment['APPDATA'];
+    if (appData != null && appData.trim().isNotEmpty) {
+      final dir = Directory('$appData\\BlueVPN');
+      if (dir.existsSync()) {
+        await WindowsLocalSecurity.hardenPath(dir.path, directory: true);
+        for (final name in const [
+          'session.dat',
+          'session.json',
+          'admin_token.dat',
+          'admin_token.txt',
+          'device_id.txt',
+          'prefs.json',
+          'pending_vpn_action.txt',
+        ]) {
+          final f = File('${dir.path}\\$name');
+          if (f.existsSync()) {
+            await WindowsLocalSecurity.hardenPath(f.path);
+          }
+        }
+      }
+    }
+
+    final programData = Platform.environment['ProgramData'];
+    if (programData != null && programData.trim().isNotEmpty) {
+      final dir = Directory('$programData\\BlueVPN');
+      if (dir.existsSync()) {
+        await WindowsLocalSecurity.prepareSharedConfigDirectory(dir.path);
+        for (final f in dir.listSync().whereType<File>()) {
+          final lower = f.path.toLowerCase();
+          if (lower.endsWith('.conf') ||
+              lower.endsWith('.bak') ||
+              lower.endsWith('.log') ||
+              lower.endsWith('.txt')) {
+            await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
+          }
+        }
+      }
+    }
+  } catch (_) {}
+}
+
+class WireGuardInstallState {
+  final bool installed;
+  final bool wingetAvailable;
+  final String exePath;
+
+  const WireGuardInstallState({
+    required this.installed,
+    required this.wingetAvailable,
+    required this.exePath,
+  });
+
+  String get subtitle {
+    if (installed) return 'WireGuard найден: $exePath';
+    if (wingetAvailable) {
+      return 'WireGuard не установлен. Green VPN может поставить его автоматически.';
+    }
+    return 'WireGuard не установлен. Понадобится ручная установка.';
+  }
+}
+
+class WireGuardInstallResult {
+  final bool ok;
+  final String message;
+
+  const WireGuardInstallResult({required this.ok, required this.message});
+}
+
+String resolveWireGuardExePathShared() {
+  if (kIsWeb || !Platform.isWindows) return 'wireguard.exe';
+
+  final candidates = <String>[];
+  final pf = Platform.environment['ProgramFiles'];
+  final pf86 = Platform.environment['ProgramFiles(x86)'];
+
+  if (pf != null && pf.trim().isNotEmpty) {
+    candidates.add('${pf.trim()}\\WireGuard\\wireguard.exe');
+  }
+  if (pf86 != null && pf86.trim().isNotEmpty) {
+    candidates.add('${pf86.trim()}\\WireGuard\\wireguard.exe');
+  }
+
+  candidates.add(r'C:\Program Files\WireGuard\wireguard.exe');
+  candidates.add(r'C:\Program Files (x86)\WireGuard\wireguard.exe');
+
+  for (final c in candidates) {
+    if (File(c).existsSync()) return c;
+  }
+
+  return 'wireguard.exe';
+}
+
+Future<bool> isWingetAvailable() async {
+  if (kIsWeb || !Platform.isWindows) return false;
+  try {
+    final res = await Process.run('winget', ['--version'], runInShell: true);
+    return res.exitCode == 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+Future<WireGuardInstallState> probeWireGuardInstall() async {
+  final exePath = resolveWireGuardExePathShared();
+  final installed =
+      exePath.toLowerCase() != 'wireguard.exe' && File(exePath).existsSync();
+  final wingetAvailable = await isWingetAvailable();
+  return WireGuardInstallState(
+    installed: installed,
+    wingetAvailable: wingetAvailable,
+    exePath: exePath,
+  );
+}
+
+Future<void> openWireGuardInstallPage() async {
+  if (kIsWeb || !Platform.isWindows) return;
+  try {
+    await Process.start('cmd', [
+      '/c',
+      'start',
+      '',
+      'https://www.wireguard.com/install/',
+    ], runInShell: true);
+  } catch (_) {}
+}
+
+Future<void> openExternalUrl(String url) async {
+  if (kIsWeb || !Platform.isWindows) return;
+  final trimmed = url.trim();
+  if (trimmed.isEmpty) return;
+  try {
+    await Process.start('cmd', ['/c', 'start', '', trimmed], runInShell: true);
+  } catch (_) {}
+}
+
+Future<WireGuardInstallResult> installWireGuardForWindows() async {
+  if (kIsWeb || !Platform.isWindows) {
+    return const WireGuardInstallResult(
+      ok: false,
+      message: 'Автоустановка доступна только на Windows.',
+    );
+  }
+
+  final wingetAvailable = await isWingetAvailable();
+  if (!wingetAvailable) {
+    await openWireGuardInstallPage();
+    return const WireGuardInstallResult(
+      ok: false,
+      message:
+          'winget не найден. Открыл страницу установки WireGuard в браузере.',
+    );
+  }
+
+  final script =
+      r'''Start-Process -FilePath "winget" -Verb RunAs -Wait -ArgumentList @(
+  "install",
+  "--id", "WireGuard.WireGuard",
+  "-e",
+  "--accept-source-agreements",
+  "--accept-package-agreements"
+)''';
+
+  try {
+    final res = await Process.run('powershell', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      script,
+    ], runInShell: true);
+
+    final check = await probeWireGuardInstall();
+    if (check.installed) {
+      return WireGuardInstallResult(
+        ok: true,
+        message: 'WireGuard установлен: ${check.exePath}',
+      );
+    }
+
+    final stderr = (res.stderr ?? '').toString().trim();
+    return WireGuardInstallResult(
+      ok: false,
+      message: stderr.isNotEmpty
+          ? 'Установка не завершилась: $stderr'
+          : 'WireGuard пока не найден после установки. Нажми "Проверить снова".',
+    );
+  } catch (e) {
+    return WireGuardInstallResult(
+      ok: false,
+      message: 'Не удалось запустить установку WireGuard: $e',
+    );
   }
 }
 
@@ -346,6 +1761,7 @@ class Prefs {
   final bool optNoAds;
   final bool optSmartRouting;
   final bool optDedicatedIp;
+  final bool optAutoRenew;
 
   const Prefs({
     required this.themeMode,
@@ -360,6 +1776,7 @@ class Prefs {
     required this.optNoAds,
     required this.optSmartRouting,
     required this.optDedicatedIp,
+    required this.optAutoRenew,
   });
 
   static Prefs defaults() => const Prefs(
@@ -375,6 +1792,7 @@ class Prefs {
     optNoAds: true,
     optSmartRouting: true,
     optDedicatedIp: false,
+    optAutoRenew: true,
   );
 
   Prefs copyWith({
@@ -390,6 +1808,7 @@ class Prefs {
     bool? optNoAds,
     bool? optSmartRouting,
     bool? optDedicatedIp,
+    bool? optAutoRenew,
   }) {
     return Prefs(
       themeMode: themeMode ?? this.themeMode,
@@ -404,6 +1823,7 @@ class Prefs {
       optNoAds: optNoAds ?? this.optNoAds,
       optSmartRouting: optSmartRouting ?? this.optSmartRouting,
       optDedicatedIp: optDedicatedIp ?? this.optDedicatedIp,
+      optAutoRenew: optAutoRenew ?? this.optAutoRenew,
     );
   }
 
@@ -420,6 +1840,7 @@ class Prefs {
     'optNoAds': optNoAds,
     'optSmartRouting': optSmartRouting,
     'optDedicatedIp': optDedicatedIp,
+    'optAutoRenew': optAutoRenew,
   };
 
   static Prefs fromJson(Map<String, dynamic> map) {
@@ -493,18 +1914,14 @@ class Prefs {
       optNoAds: _b('optNoAds', d.optNoAds),
       optSmartRouting: _b('optSmartRouting', d.optSmartRouting),
       optDedicatedIp: _b('optDedicatedIp', d.optDedicatedIp),
+      optAutoRenew: _b('optAutoRenew', d.optAutoRenew),
     );
   }
 }
 
 class PrefsStore {
   Future<String> _appDirPath() async {
-    final base = Platform.environment['APPDATA'];
-    final dir = Directory(
-      base != null && base.isNotEmpty ? '$base\\BlueVPN' : 'BlueVPN',
-    );
-    if (!dir.existsSync()) dir.createSync(recursive: true);
-    return dir.path;
+    return BlueVpnLocalPaths.sharedStateDir();
   }
 
   Future<File> _file() async {
@@ -516,8 +1933,15 @@ class PrefsStore {
     if (kIsWeb) return <String, dynamic>{};
     try {
       final f = await _file();
-      if (!f.existsSync()) return <String, dynamic>{};
-      final raw = await f.readAsString();
+      String? raw;
+      if (f.existsSync()) {
+        raw = await f.readAsString();
+      } else {
+        raw = await (await BlueVpnLocalPaths.firstLegacyFile(
+          'prefs.json',
+        ))?.readAsString();
+      }
+      if (raw == null || raw.trim().isEmpty) return <String, dynamic>{};
       final decoded = jsonDecode(raw);
       if (decoded is Map<String, dynamic>) return decoded;
       return <String, dynamic>{};
@@ -530,6 +1954,8 @@ class PrefsStore {
     if (kIsWeb) return;
     final f = await _file();
     await f.writeAsString(jsonEncode(map));
+    await WindowsLocalSecurity.prepareSharedStateDirectory(f.parent.path);
+    await WindowsLocalSecurity.prepareSharedStateFile(f.path);
   }
 
   Future<Prefs> readPrefs() async {
@@ -561,11 +1987,596 @@ class ApiResult<T> {
   const ApiResult.err(this.message) : ok = false, data = null;
 }
 
+class GreenVpnUpdateManifest {
+  final String currentVersion;
+  final String latestVersion;
+  final String downloadUrl;
+  final String sha256;
+  final bool required;
+  final bool updateAvailable;
+  final bool baseUpdateAvailable;
+  final bool rolloutEligible;
+  final int rolloutPercent;
+  final String rolloutReason;
+  final List<String> changelog;
+  final String releasedAt;
+
+  const GreenVpnUpdateManifest({
+    required this.currentVersion,
+    required this.latestVersion,
+    required this.downloadUrl,
+    required this.sha256,
+    required this.required,
+    required this.updateAvailable,
+    required this.baseUpdateAvailable,
+    required this.rolloutEligible,
+    required this.rolloutPercent,
+    required this.rolloutReason,
+    required this.changelog,
+    required this.releasedAt,
+  });
+
+  bool get serverHasNewerVersion =>
+      latestVersion.trim().isNotEmpty && latestVersion.trim() != currentVersion;
+
+  bool get hasUpdate => updateAvailable && serverHasNewerVersion;
+
+  bool get heldByRollout => serverHasNewerVersion && !updateAvailable;
+
+  bool get canDownload => downloadUrl.trim().isNotEmpty;
+
+  static GreenVpnUpdateManifest fromJson(Map<String, dynamic> json) {
+    bool asBool(dynamic value) {
+      if (value == true) return true;
+      final lower = value?.toString().toLowerCase().trim();
+      return lower == 'true' || lower == '1' || lower == 'yes';
+    }
+
+    int asPercent(dynamic value, {int fallback = 100}) {
+      final parsed = int.tryParse((value ?? '').toString());
+      if (parsed == null) return fallback;
+      if (parsed < 0) return 0;
+      if (parsed > 100) return 100;
+      return parsed;
+    }
+
+    final rawChangelog = json['changelog'];
+    final changelog = rawChangelog is List
+        ? rawChangelog
+              .map((e) => e.toString())
+              .where((e) => e.isNotEmpty)
+              .toList()
+        : <String>[];
+    final current = (json['currentVersion'] ?? kAppVersion).toString();
+    final latest = (json['latestVersion'] ?? '').toString();
+    final fallbackUpdateAvailable =
+        latest.trim().isNotEmpty && latest.trim() != current;
+    final hasExplicitUpdateFlag = json.containsKey('updateAvailable');
+    final updateAvailable = hasExplicitUpdateFlag
+        ? asBool(json['updateAvailable'])
+        : fallbackUpdateAvailable;
+    return GreenVpnUpdateManifest(
+      currentVersion: current,
+      latestVersion: latest,
+      downloadUrl: (json['downloadUrl'] ?? '').toString(),
+      sha256: (json['sha256'] ?? '').toString(),
+      required: asBool(json['required']),
+      updateAvailable: updateAvailable,
+      baseUpdateAvailable: json.containsKey('baseUpdateAvailable')
+          ? asBool(json['baseUpdateAvailable'])
+          : fallbackUpdateAvailable,
+      rolloutEligible: json.containsKey('rolloutEligible')
+          ? asBool(json['rolloutEligible'])
+          : updateAvailable,
+      rolloutPercent: asPercent(json['rolloutPercent']),
+      rolloutReason: (json['rolloutReason'] ?? '').toString(),
+      changelog: changelog,
+      releasedAt: (json['releasedAt'] ?? '').toString(),
+    );
+  }
+}
+
+String authUserMessage(Object error, {String fallback = 'Не удалось войти.'}) {
+  final raw = error.toString().trim();
+  if (raw.isEmpty) return fallback;
+
+  var text = raw
+      .replaceFirst(RegExp(r'^HttpException:\s*'), '')
+      .replaceFirst(RegExp(r'^SocketException:\s*'), '')
+      .replaceFirst(RegExp(r'^HandshakeException:\s*'), '')
+      .replaceFirst(RegExp(r'^FormatException:\s*'), '')
+      .replaceFirst(RegExp(r'^Exception:\s*'), '')
+      .trim();
+
+  text = text.replaceFirst(RegExp(r', uri = .+$'), '').trim();
+  final lower = text.toLowerCase();
+
+  if (lower.contains('user already exists') ||
+      lower.contains('already registered') ||
+      lower.contains('уже зарегистр')) {
+    return 'Пользователь с таким email уже зарегистрирован. Войди по паролю или используй код.';
+  }
+  if (lower.contains('invalid credentials') ||
+      lower.contains('unauthorized') ||
+      lower.contains('401')) {
+    return 'Неверный email или пароль. Проверь данные и попробуй снова.';
+  }
+  if (lower.contains('invalid email')) {
+    return 'Этот email выглядит некорректно. Проверь адрес и попробуй снова.';
+  }
+  if (lower.contains('password too short')) {
+    return 'Пароль слишком короткий. Нужны минимум 6 символов.';
+  }
+  if (lower.contains('invalid_code') ||
+      lower.contains('invalid code') ||
+      lower.contains('expired')) {
+    return 'Код не подошёл или уже истёк. Запроси новый код и попробуй снова.';
+  }
+  if (lower.contains('connection refused') ||
+      lower.contains('failed host lookup') ||
+      lower.contains('timed out') ||
+      lower.contains('network is unreachable') ||
+      lower.contains('connection reset')) {
+    return 'Не получается связаться с сервером Green VPN. Проверь интернет и попробуй ещё раз.';
+  }
+  if (lower.contains('access denied')) {
+    return 'Windows не дала Green VPN доступ к локальным файлам. Переустанови приложение последним установщиком.';
+  }
+
+  if (text.startsWith('Ошибка сети:')) {
+    text = text.replaceFirst('Ошибка сети:', '').trim();
+  }
+  if (text.startsWith('Ошибка входа:')) {
+    text = text.replaceFirst('Ошибка входа:', '').trim();
+  }
+
+  return text.isEmpty ? fallback : text;
+}
+
+String normalizeProvisionedEndpoint(String rawConfig) {
+  return rawConfig.replaceAllMapped(
+    RegExp(
+      r'(^\s*Endpoint\s*=\s*)(37\.202\.85\.211|37\.220\.85\.21)(:\d+\s*$)',
+      multiLine: true,
+      caseSensitive: false,
+    ),
+    (match) => '${match.group(1)}$kIntelligentSmewHost${match.group(3)}',
+  );
+}
+
+String replaceAllowedIpsInConfig(String configText, List<String> allowedIps) {
+  final value = allowedIps.join(', ');
+
+  final regExp = RegExp(
+    r'(^\s*AllowedIPs\s*=\s*.*$)',
+    multiLine: true,
+    caseSensitive: false,
+  );
+
+  if (regExp.hasMatch(configText)) {
+    return configText.replaceFirst(regExp, 'AllowedIPs = $value');
+  }
+
+  final lines = configText.split('\n');
+  final peerIndex = lines.indexWhere(
+    (line) => line.trim().toLowerCase() == '[peer]',
+  );
+
+  if (peerIndex == -1) {
+    return configText;
+  }
+
+  lines.insert(peerIndex + 1, 'AllowedIPs = $value');
+  return lines.join('\n');
+}
+
+class ProvisioningWarmupResult {
+  final bool ok;
+  final String? planName;
+  final String? message;
+
+  const ProvisioningWarmupResult({
+    required this.ok,
+    this.planName,
+    this.message,
+  });
+}
+
+class AuthProvisioningService {
+  final BlueVpnApi api;
+  final ConfigStore cfg;
+  final DeviceIdStore deviceStore;
+
+  const AuthProvisioningService({
+    required this.api,
+    required this.cfg,
+    required this.deviceStore,
+  });
+
+  bool _isDeviceAttachedConflict(String? message) {
+    final raw = (message ?? '').toLowerCase();
+    return raw.contains('409') &&
+        raw.contains('device') &&
+        raw.contains('attached') &&
+        raw.contains('another user');
+  }
+
+  String _buildManagedConfig(String baseConfig) {
+    return replaceAllowedIpsInConfig(baseConfig, const ['0.0.0.0/0', '::/0']);
+  }
+
+  Future<void> _writeProvisionedConfig(String rawConfig) async {
+    await cfg.writeManagedConfig(_buildManagedConfig(rawConfig));
+    try {
+      await cfg.writeBaseConfig(rawConfig);
+    } catch (e) {
+      await appendBlueVpnClientLog(
+        'config write skipped path=${cfg.baseConfigPath} kind=base-auth error=$e',
+      );
+    }
+  }
+
+  Future<bool> _reuseLocalConfigIfPresent(String reason) async {
+    try {
+      await cfg.ensureBaseSeededFromManagedIfMissing();
+      final base = await cfg.readBaseConfig();
+      if (base == null || base.trim().isEmpty) return false;
+      await cfg.writeManagedConfig(_buildManagedConfig(base));
+      await appendBlueVpnClientLog(
+        'auth config fetch failed; using existing local config: $reason',
+      );
+      return true;
+    } catch (e) {
+      await appendBlueVpnClientLog('auth local config fallback failed: $e');
+      return false;
+    }
+  }
+
+  Future<ProvisioningWarmupResult> warmup(Session session) async {
+    if (kIsWeb || !Platform.isWindows) {
+      return const ProvisioningWarmupResult(ok: true);
+    }
+    if (session.accessToken == 'dev-token') {
+      return const ProvisioningWarmupResult(ok: true);
+    }
+
+    var deviceId = await deviceStore.getOrCreate();
+    var boot = await api.bootstrapClient(
+      accessToken: session.accessToken,
+      deviceId: deviceId,
+      deviceName: Platform.localHostname,
+      platform: 'windows',
+      appVersion: kAppVersion,
+    );
+
+    if (_isDeviceAttachedConflict(boot.message)) {
+      deviceId = await deviceStore.rotate();
+      boot = await api.bootstrapClient(
+        accessToken: session.accessToken,
+        deviceId: deviceId,
+        deviceName: Platform.localHostname,
+        platform: 'windows',
+        appVersion: kAppVersion,
+      );
+    }
+
+    if (!boot.ok || boot.data == null) {
+      return ProvisioningWarmupResult(
+        ok: false,
+        message: boot.message ?? 'Не удалось пройти bootstrap.',
+      );
+    }
+
+    final bootMap = boot.data!;
+
+    final planMap = bootMap['subscription'];
+    final planName = planMap is Map
+        ? (planMap['planName'] ?? planMap['planCode'] ?? '').toString().trim()
+        : null;
+
+    final cfgRes = await api.fetchWireGuardConfig(
+      accessToken: session.accessToken,
+      deviceId: deviceId,
+    );
+
+    if (!cfgRes.ok || cfgRes.data == null || cfgRes.data!.trim().isEmpty) {
+      final reused = await _reuseLocalConfigIfPresent(cfgRes.message ?? '');
+      if (reused) {
+        return ProvisioningWarmupResult(ok: true, planName: planName);
+      }
+      return ProvisioningWarmupResult(
+        ok: false,
+        message: cfgRes.message ?? 'Не удалось получить WireGuard-конфиг.',
+      );
+    }
+
+    await _writeProvisionedConfig(normalizeProvisionedEndpoint(cfgRes.data!));
+    return ProvisioningWarmupResult(ok: true, planName: planName);
+  }
+}
+
 class BlueVpnApi {
   final String baseUrl;
   const BlueVpnApi({required this.baseUrl});
 
+  static const int _wslRelayPort = 18000;
+  static Uri? _cachedWslRelayUri;
+  static Future<Uri?>? _wslRelayStartFuture;
+  static Process? _wslRelayProcess;
+
   Uri _u(String path) => Uri.parse('$baseUrl$path');
+  Uri _uFor(String resolvedBaseUrl, String path) =>
+      Uri.parse('$resolvedBaseUrl$path');
+
+  HttpClient _client({bool direct = true}) {
+    final client = HttpClient();
+    if (direct) {
+      client.findProxy = (_) => 'DIRECT';
+    }
+    client.connectionTimeout = const Duration(seconds: 12);
+    return client;
+  }
+
+  bool _isRetriableNetworkError(Object error) {
+    return error is SocketException || error is HttpException;
+  }
+
+  bool _isWindowsDevBackend() {
+    if (kIsWeb || !Platform.isWindows) return false;
+    try {
+      final uri = Uri.parse(baseUrl);
+      return uri.host == kIntelligentSmewHost;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _canReachLocalRelay(int port) async {
+    try {
+      final socket = await Socket.connect(
+        '127.0.0.1',
+        port,
+        timeout: const Duration(seconds: 2),
+      );
+      await socket.close();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _canReachPrimaryTcp({
+    Duration timeout = const Duration(milliseconds: 1200),
+  }) async {
+    try {
+      final uri = Uri.parse(baseUrl);
+      if (uri.host.isEmpty) return false;
+      final port = uri.hasPort ? uri.port : (uri.scheme == 'https' ? 443 : 80);
+      final socket = await Socket.connect(uri.host, port, timeout: timeout);
+      await socket.close();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  String _wslRelayPythonScript() {
+    return '''
+import socket
+import sys
+import threading
+
+REMOTE_HOST = sys.argv[1]
+REMOTE_PORT = int(sys.argv[2])
+LISTEN_PORT = int(sys.argv[3])
+
+def pipe(src, dst):
+    try:
+        while True:
+            data = src.recv(65536)
+            if not data:
+                break
+            dst.sendall(data)
+    except Exception:
+        pass
+    finally:
+        try:
+            dst.shutdown(socket.SHUT_WR)
+        except Exception:
+            pass
+        try:
+            dst.close()
+        except Exception:
+            pass
+
+def handle(client):
+    upstream = None
+    try:
+        upstream = socket.create_connection((REMOTE_HOST, REMOTE_PORT), timeout=10)
+        threading.Thread(target=pipe, args=(client, upstream), daemon=True).start()
+        pipe(upstream, client)
+    except Exception:
+        try:
+            client.close()
+        except Exception:
+            pass
+        if upstream is not None:
+            try:
+                upstream.close()
+            except Exception:
+                pass
+
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+server.bind(("0.0.0.0", LISTEN_PORT))
+server.listen(128)
+
+while True:
+    client, _ = server.accept()
+    threading.Thread(target=handle, args=(client,), daemon=True).start()
+''';
+  }
+
+  Future<Uri?> _ensureWslRelayUri() async {
+    if (kIsWeb || !Platform.isWindows) return null;
+
+    if (_cachedWslRelayUri != null &&
+        await _canReachLocalRelay(_cachedWslRelayUri!.port)) {
+      return _cachedWslRelayUri;
+    }
+
+    final primaryUri = Uri.parse(baseUrl);
+    if (primaryUri.scheme != 'http' || primaryUri.host.isEmpty) return null;
+
+    final relayUri = Uri.parse('http://127.0.0.1:$_wslRelayPort');
+    if (await _canReachLocalRelay(_wslRelayPort)) {
+      _cachedWslRelayUri = relayUri;
+      return relayUri;
+    }
+
+    final existingStart = _wslRelayStartFuture;
+    if (existingStart != null) return existingStart;
+
+    final startFuture = _startWslRelay(primaryUri, relayUri);
+    _wslRelayStartFuture = startFuture;
+    try {
+      return await startFuture;
+    } finally {
+      _wslRelayStartFuture = null;
+    }
+  }
+
+  Future<Uri?> _startWslRelay(Uri primaryUri, Uri relayUri) async {
+    try {
+      final relayScript = File(
+        '${Directory.systemTemp.path}\\bluevpn_wsl_backend_relay.py',
+      );
+      await relayScript.parent.create(recursive: true);
+      await relayScript.writeAsString(_wslRelayPythonScript());
+
+      final remotePort = primaryUri.hasPort
+          ? primaryUri.port
+          : (primaryUri.scheme == 'https' ? 443 : 80);
+      final wslScriptPath = relayScript.path.replaceAll(r'\', '/');
+      final wslCommand =
+          'exec python3 "${wslScriptPath.replaceFirst('C:/', '/mnt/c/')}" '
+          '${primaryUri.host} $remotePort $_wslRelayPort';
+
+      final process = await Process.start('wsl.exe', [
+        'bash',
+        '-lc',
+        wslCommand,
+      ], mode: ProcessStartMode.normal);
+      _wslRelayProcess = process;
+      unawaited(process.stdout.drain<void>());
+      unawaited(process.stderr.drain<void>());
+      unawaited(
+        process.exitCode.then((code) async {
+          if (identical(_wslRelayProcess, process)) {
+            _wslRelayProcess = null;
+          }
+          await _authLog('WSL relay exited code=$code');
+        }),
+      );
+      await _authLog('WSL relay spawned pid=${process.pid}');
+
+      await Future<void>.delayed(const Duration(milliseconds: 900));
+      if (await _canReachLocalRelay(_wslRelayPort)) {
+        _cachedWslRelayUri = relayUri;
+        return relayUri;
+      }
+    } catch (e) {
+      await _authLog('WSL relay spawn error=$e');
+    }
+
+    return null;
+  }
+
+  Future<Uri?> _preferredRelayUriIfNeeded() async {
+    if (!_isWindowsDevBackend()) return null;
+    if (await _canReachPrimaryTcp()) return null;
+    return _ensureWslRelayUri();
+  }
+
+  Future<T> _withHttpRetry<T>(
+    Future<T> Function(HttpClient client, bool direct, String resolvedBaseUrl)
+    action,
+  ) async {
+    Object? lastError;
+
+    final preferredRelay = await _preferredRelayUriIfNeeded();
+    if (preferredRelay != null) {
+      final client = _client(direct: false);
+      try {
+        await _authLog('HTTP preferred WSL relay base=$preferredRelay');
+        return await action(client, false, preferredRelay.toString());
+      } catch (e) {
+        lastError = e;
+      } finally {
+        client.close(force: true);
+      }
+    }
+
+    for (final direct in const [true, false]) {
+      final client = _client(direct: direct);
+      try {
+        return await action(client, direct, baseUrl);
+      } catch (e) {
+        lastError = e;
+        if (!_isRetriableNetworkError(e) || !direct) {
+          break;
+        }
+      } finally {
+        client.close(force: true);
+      }
+    }
+
+    if (lastError != null && _isRetriableNetworkError(lastError)) {
+      final relayUri = await _ensureWslRelayUri();
+      if (relayUri != null) {
+        final client = _client(direct: false);
+        try {
+          await _authLog('HTTP retry via WSL relay base=$relayUri');
+          return await action(client, false, relayUri.toString());
+        } finally {
+          client.close(force: true);
+        }
+      }
+    }
+
+    throw lastError ?? Exception('Unknown HTTP retry failure');
+  }
+
+  File? _authLogFile() {
+    if (kIsWeb || !Platform.isWindows) return null;
+    return File(r'C:\ProgramData\BlueVPN\auth.log');
+  }
+
+  Future<void> _authLog(String s) async {
+    try {
+      final f = _authLogFile();
+      if (f == null) return;
+      final ts = DateTime.now().toIso8601String();
+      await f.writeAsString('[' + ts + '] ' + s + '\n', mode: FileMode.append);
+    } catch (_) {}
+  }
+
+  Future<String> _tcpPreflight(String path) async {
+    final uri = _u(path);
+    try {
+      final socket = await Socket.connect(
+        uri.host,
+        uri.port,
+        timeout: const Duration(seconds: 5),
+      );
+      final remote =
+          socket.remoteAddress.address + ':' + socket.remotePort.toString();
+      await socket.close();
+      return 'tcp=ok remote=' + remote;
+    } catch (e) {
+      return 'tcp=fail error=' + e.toString();
+    }
+  }
 
   Future<ApiResult<Session>> register({
     required String email,
@@ -587,27 +2598,442 @@ class BlueVpnApi {
     });
   }
 
-    Future<ApiResult<String>> fetchPlanName({
+  Future<ApiResult<Map<String, dynamic>>> startEmailCodeAuth({
+    required String email,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'POST',
+      path: '/api/v1/auth/email/code/start',
+      payload: {'email': email},
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ auth/email/code/start.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<Session>> verifyEmailCodeAuth({
+    required String email,
+    required String code,
+    String? deviceUid,
+    String? deviceName,
+    String? platform,
+    String? appVersion,
+  }) async {
+    return _postSession('/api/v1/auth/email/code/verify', {
+      'email': email,
+      'code': code,
+      if (deviceUid != null) 'deviceUid': deviceUid,
+      if (deviceName != null) 'deviceName': deviceName,
+      if (platform != null) 'platform': platform,
+      if (appVersion != null) 'appVersion': appVersion,
+    });
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> startPhoneCodeAuth({
+    required String phone,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'POST',
+      path: '/api/v1/auth/phone/login/start',
+      payload: {'phone': phone},
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ auth/phone/login/start.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<Session>> verifyPhoneCodeAuth({
+    required String phone,
+    required String code,
+    String? deviceUid,
+    String? deviceName,
+    String? platform,
+    String? appVersion,
+  }) async {
+    return _postSession('/api/v1/auth/phone/login/verify', {
+      'phone': phone,
+      'code': code,
+      if (deviceUid != null) 'deviceUid': deviceUid,
+      if (deviceName != null) 'deviceName': deviceName,
+      if (platform != null) 'platform': platform,
+      if (appVersion != null) 'appVersion': appVersion,
+    });
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> startAuthChallenge({
+    required String method,
+    String? phone,
+    String? email,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'POST',
+      path: '/api/v1/auth/challenge/start',
+      payload: {
+        'method': method,
+        if (phone != null) 'phone': phone,
+        if (email != null) 'email': email,
+      },
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ auth/challenge/start.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<Session>> verifyAuthChallenge({
+    required String method,
+    required String code,
+    String? phone,
+    String? email,
+    String? deviceUid,
+    String? deviceName,
+    String? platform,
+    String? appVersion,
+  }) async {
+    return _postSession('/api/v1/auth/challenge/verify', {
+      'method': method,
+      'code': code,
+      if (phone != null) 'phone': phone,
+      if (email != null) 'email': email,
+      if (deviceUid != null) 'deviceUid': deviceUid,
+      if (deviceName != null) 'deviceName': deviceName,
+      if (platform != null) 'platform': platform,
+      if (appVersion != null) 'appVersion': appVersion,
+    });
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> fetchWindowsBootstrap() async {
+    final res = await _jsonRequest(
+      method: 'GET',
+      path: '/api/v1/bootstrap/windows?currentVersion=$kAppVersion',
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ bootstrap/windows.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<String>> fetchPlanName({
     required String accessToken,
     String? deviceId,
   }) async {
     try {
-      final client = HttpClient();
-      final req = await client.getUrl(_u('/api/v1/subscription/me'));
-      req.headers.set('Authorization', 'Bearer $accessToken');
-      final res = await req.close();
-      final body = await utf8.decodeStream(res);
+      final body = await _withHttpRetry<String>((
+        client,
+        _,
+        resolvedBaseUrl,
+      ) async {
+        final uri = _uFor(resolvedBaseUrl, '/api/v1/subscription/me');
+        final req = await client.getUrl(uri);
+        req.headers.set('Authorization', 'Bearer $accessToken');
+        final res = await req.close();
+        final body = await utf8.decodeStream(res);
 
-      if (res.statusCode >= 200 && res.statusCode < 300) {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          throw HttpException(
+            'Ошибка сервера (${res.statusCode}): $body',
+            uri: uri,
+          );
+        }
+        return body;
+      });
+
+      {
         final jsonMap = Map<String, dynamic>.from(jsonDecode(body) as Map);
         final p = (jsonMap['planName'] ?? jsonMap['planCode'] ?? 'Base')
             .toString();
         return ApiResult.ok(p.isEmpty ? 'Base' : p);
       }
-      return ApiResult.err('РћС€РёР±РєР° СЃРµСЂРІРµСЂР° (${res.statusCode}): $body');
     } catch (e) {
-      return ApiResult.err('РћС€РёР±РєР° СЃРµС‚Рё: $e');
+      return ApiResult.err('Ошибка сети: $e');
     }
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> fetchSubscriptionProfile({
+    required String accessToken,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'GET',
+      path: '/api/v1/subscription/me',
+      bearerToken: accessToken,
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ subscription/me.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> fetchEmailStatus({
+    required String accessToken,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'GET',
+      path: '/api/v1/auth/email/status',
+      bearerToken: accessToken,
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ auth/email/status.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> resendEmailConfirmation({
+    required String accessToken,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'POST',
+      path: '/api/v1/auth/email/resend',
+      bearerToken: accessToken,
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ auth/email/resend.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> fetchPhoneStatus({
+    required String accessToken,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'GET',
+      path: '/api/v1/auth/phone/status',
+      bearerToken: accessToken,
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ auth/phone/status.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> startPhoneConfirmation({
+    required String accessToken,
+    required String phone,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'POST',
+      path: '/api/v1/auth/phone/start',
+      bearerToken: accessToken,
+      payload: {'phone': phone},
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ auth/phone/start.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> verifyPhoneConfirmation({
+    required String accessToken,
+    required String phone,
+    required String code,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'POST',
+      path: '/api/v1/auth/phone/verify',
+      bearerToken: accessToken,
+      payload: {'phone': phone, 'code': code},
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ auth/phone/verify.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> sendSupportReport({
+    required String accessToken,
+    required String report,
+    required String summary,
+    String? appVersion,
+    String? deviceUid,
+  }) async {
+    final payload = <String, dynamic>{
+      'report': report,
+      'summary': summary,
+      'appVersion': appVersion ?? kAppVersion,
+    };
+    final cleanDeviceUid = deviceUid?.trim();
+    if (cleanDeviceUid != null && cleanDeviceUid.isNotEmpty) {
+      payload['deviceUid'] = cleanDeviceUid;
+    }
+
+    final res = await _jsonRequest(
+      method: 'POST',
+      path: '/api/v1/support/reports',
+      bearerToken: accessToken,
+      payload: payload,
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ support/reports.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> fetchTariffCatalog() async {
+    final res = await _jsonRequest(
+      method: 'GET',
+      path: '/api/v1/catalog/tariffs',
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ catalog/tariffs.');
+    }
+    final map = Map<String, dynamic>.from(res.data as Map);
+    final catalog = map['catalog'];
+    if (catalog is! Map) {
+      return const ApiResult.err('Сервер не вернул каталог тарифов.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(catalog));
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> fetchServerCatalog() async {
+    final res = await _jsonRequest(
+      method: 'GET',
+      path: '/api/v1/catalog/servers',
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ catalog/servers.');
+    }
+    final map = Map<String, dynamic>.from(res.data as Map);
+    final catalog = map['catalog'];
+    if (catalog is! Map) {
+      return const ApiResult.err('Сервер не вернул каталог серверов.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(catalog));
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> fetchMonitoringStatus() async {
+    final res = await _jsonRequest(
+      method: 'GET',
+      path: '/api/v1/monitoring/status',
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ monitoring/status.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<GreenVpnUpdateManifest>> fetchWindowsUpdateManifest({
+    required String currentVersion,
+    String? clientId,
+  }) async {
+    final query = <String, String>{
+      'currentVersion': currentVersion,
+      if ((clientId ?? '').trim().isNotEmpty) 'clientId': clientId!.trim(),
+    };
+    final path = Uri(
+      path: '/api/v1/updates/windows',
+      queryParameters: query,
+    ).toString();
+    final res = await _jsonRequest(method: 'GET', path: path);
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ updates/windows.');
+    }
+    final map = Map<String, dynamic>.from(res.data as Map);
+    final rawManifest = map['manifest'];
+    final manifest = rawManifest is Map
+        ? Map<String, dynamic>.from(rawManifest)
+        : map;
+    return ApiResult.ok(GreenVpnUpdateManifest.fromJson(manifest));
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> quoteTariff({
+    required String trafficPack,
+    required int trafficGb,
+    required List<String> unlimitedApps,
+    required int devices,
+    required bool dedicatedIp,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'POST',
+      path: '/api/v1/subscription/quote',
+      payload: {
+        'trafficPack': trafficPack,
+        'trafficGb': trafficGb,
+        'unlimitedApps': unlimitedApps,
+        'devices': devices,
+        'dedicatedIp': dedicatedIp,
+      },
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ subscription/quote.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> createBillingOrder({
+    required String accessToken,
+    required String trafficPack,
+    required int trafficGb,
+    required List<String> unlimitedApps,
+    required int devices,
+    required bool dedicatedIp,
+    required bool autoRenew,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'POST',
+      path: '/api/v1/billing/orders',
+      bearerToken: accessToken,
+      payload: {
+        'trafficPack': trafficPack,
+        'trafficGb': trafficGb,
+        'unlimitedApps': unlimitedApps,
+        'devices': devices,
+        'dedicatedIp': dedicatedIp,
+        'autoRenew': autoRenew,
+      },
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ billing/orders.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> fetchBillingOrder({
+    required String accessToken,
+    required String orderId,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'GET',
+      path: '/api/v1/billing/orders/${Uri.encodeComponent(orderId)}',
+      bearerToken: accessToken,
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ billing order.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> cancelAutoRenew({
+    required String accessToken,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'POST',
+      path: '/api/v1/subscription/auto-renew/cancel',
+      bearerToken: accessToken,
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ auto-renew/cancel.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
   }
 
   Future<ApiResult<Map<String, dynamic>>> bootstrapClient({
@@ -618,29 +3044,41 @@ class BlueVpnApi {
     String appVersion = '0.1.0',
   }) async {
     try {
-      final client = HttpClient();
-      final req = await client.postUrl(_u('/api/v1/client/bootstrap'));
-      req.headers.contentType = ContentType.json;
-      req.headers.set('Authorization', 'Bearer $accessToken');
-      req.write(
-        jsonEncode({
-          'deviceUid': deviceId,
-          'deviceName': deviceName,
-          'platform': platform,
-          'appVersion': appVersion,
-        }),
-      );
+      final body = await _withHttpRetry<String>((
+        client,
+        _,
+        resolvedBaseUrl,
+      ) async {
+        final uri = _uFor(resolvedBaseUrl, '/api/v1/client/bootstrap');
+        final req = await client.postUrl(uri);
+        req.headers.contentType = ContentType.json;
+        req.headers.set('Authorization', 'Bearer $accessToken');
+        req.write(
+          jsonEncode({
+            'deviceUid': deviceId,
+            'deviceName': deviceName,
+            'platform': platform,
+            'appVersion': appVersion,
+          }),
+        );
 
-      final res = await req.close();
-      final body = await utf8.decodeStream(res);
+        final res = await req.close();
+        final body = await utf8.decodeStream(res);
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          throw HttpException(
+            'Ошибка bootstrap (${res.statusCode}): $body',
+            uri: uri,
+          );
+        }
+        return body;
+      });
 
-      if (res.statusCode >= 200 && res.statusCode < 300) {
+      {
         final jsonMap = Map<String, dynamic>.from(jsonDecode(body) as Map);
         return ApiResult.ok(jsonMap);
       }
-      return ApiResult.err('РћС€РёР±РєР° bootstrap (${res.statusCode}): $body');
     } catch (e) {
-      return ApiResult.err('РћС€РёР±РєР° bootstrap: $e');
+      return ApiResult.err('Ошибка bootstrap: $e');
     }
   }
 
@@ -651,40 +3089,54 @@ class BlueVpnApi {
   }) async {
     try {
       if (deviceId == null || deviceId.trim().isEmpty) {
-        return const ApiResult.err('РћС‚СЃСѓС‚СЃС‚РІСѓРµС‚ device id.');
+        return const ApiResult.err('Отсутствует device id.');
       }
 
-      final client = HttpClient();
-      final req = await client.postUrl(_u('/api/v1/client/config'));
-      req.headers.contentType = ContentType.json;
-      req.headers.set('Authorization', 'Bearer $accessToken');
-      req.write(
-        jsonEncode({
+      final body = await _withHttpRetry<String>((
+        client,
+        _,
+        resolvedBaseUrl,
+      ) async {
+        final uri = _uFor(resolvedBaseUrl, '/api/v1/client/config');
+        final req = await client.postUrl(uri);
+        req.headers.contentType = ContentType.json;
+        req.headers.set('Authorization', 'Bearer $accessToken');
+        final payload = <String, dynamic>{
           'deviceUid': deviceId,
           'mode': 'full',
-        }),
-      );
+        };
+        if (serverId != null && serverId.trim().isNotEmpty) {
+          payload['serverId'] = serverId.trim();
+        }
+        req.write(jsonEncode(payload));
 
-      final res = await req.close();
-      final body = await utf8.decodeStream(res);
+        final res = await req.close();
+        final body = await utf8.decodeStream(res);
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          throw HttpException(
+            'Ошибка сервера (${res.statusCode}): $body',
+            uri: uri,
+          );
+        }
+        return body;
+      });
 
-      if (res.statusCode >= 200 && res.statusCode < 300) {
+      {
         final trimmed = body.trim();
         if (trimmed.isEmpty) {
-          return const ApiResult.err('РЎРµСЂРІРµСЂ РІРµСЂРЅСѓР» РїСѓСЃС‚РѕР№ РєРѕРЅС„РёРі.');
+          return const ApiResult.err('Сервер вернул пустой конфиг.');
         }
 
         final jsonMap = Map<String, dynamic>.from(jsonDecode(trimmed) as Map);
-        final cfg = (jsonMap['configText'] ?? jsonMap['config'] ?? '').toString();
+        final cfg = (jsonMap['configText'] ?? jsonMap['config'] ?? '')
+            .toString();
         if (cfg.trim().isEmpty) {
-          return const ApiResult.err('РЎРµСЂРІРµСЂ РІРµСЂРЅСѓР» РїСѓСЃС‚РѕР№ configText.');
+          return const ApiResult.err('Сервер вернул пустой configText.');
         }
         return ApiResult.ok(cfg);
       }
-
-      return ApiResult.err('РћС€РёР±РєР° СЃРµСЂРІРµСЂР° (${res.statusCode}): $body');
     } catch (e) {
-      return ApiResult.err('РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РєРѕРЅС„РёРі: $e');
+      return ApiResult.err('Не удалось получить конфиг: $e');
     }
   }
 
@@ -693,15 +3145,47 @@ class BlueVpnApi {
     Map<String, dynamic> payload,
   ) async {
     try {
-      final client = HttpClient();
-      final req = await client.postUrl(_u(path));
-      req.headers.contentType = ContentType.json;
-      req.write(jsonEncode(payload));
+      await _authLog(
+        'POST ' + path + ' email=' + ((payload['email'] ?? '').toString()),
+      );
+      await _authLog(await _tcpPreflight(path));
+      final body = await _withHttpRetry<String>((
+        client,
+        direct,
+        resolvedBaseUrl,
+      ) async {
+        final uri = _uFor(resolvedBaseUrl, path);
+        final req = await client.postUrl(uri);
+        req.headers.contentType = ContentType.json;
+        req.write(jsonEncode(payload));
 
-      final res = await req.close();
-      final body = await utf8.decodeStream(res);
+        final res = await req.close();
+        final body = await utf8.decodeStream(res);
+        await _authLog(
+          'HTTP ' +
+              path +
+              ' status=' +
+              res.statusCode.toString() +
+              ' route=' +
+              (direct ? 'direct' : 'system') +
+              ' base=' +
+              resolvedBaseUrl,
+        );
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          final friendly = _friendlyAuthError(
+            path: path,
+            statusCode: res.statusCode,
+            body: body,
+          );
+          throw HttpException(
+            friendly ?? 'Ошибка сервера (${res.statusCode}): $body',
+            uri: uri,
+          );
+        }
+        return body;
+      });
 
-      if (res.statusCode >= 200 && res.statusCode < 300) {
+      {
         final jsonMap = jsonDecode(body) as Map<String, dynamic>;
         final token = (jsonMap['accessToken'] ?? '').toString();
         final email = (jsonMap['email'] ?? payload['email'] ?? '').toString();
@@ -710,11 +3194,315 @@ class BlueVpnApi {
           return const ApiResult.err('Сервер не вернул accessToken.');
         return ApiResult.ok(Session(accessToken: token, email: email));
       }
-
-      return ApiResult.err('Ошибка сервера (${res.statusCode}): $body');
     } catch (e) {
+      await _authLog('HTTP ' + path + ' exception=' + e.toString());
+      return ApiResult.err(authUserMessage(e, fallback: 'Ошибка авторизации.'));
+    }
+  }
+
+  String? _friendlyAuthError({
+    required String path,
+    required int statusCode,
+    required String body,
+  }) {
+    String detail = body.trim();
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is Map && decoded['detail'] != null) {
+        detail = decoded['detail'].toString().trim();
+      }
+    } catch (_) {}
+
+    final lower = detail.toLowerCase();
+
+    if (path.endsWith('/auth/register')) {
+      if (statusCode == 409 ||
+          lower.contains('user already exists') ||
+          lower.contains('already exists')) {
+        return 'Пользователь с таким email уже зарегистрирован. Просто войди в аккаунт.';
+      }
+      if (statusCode == 400 && lower.contains('invalid email')) {
+        return 'Этот email выглядит некорректно. Проверь адрес и попробуй снова.';
+      }
+      if (statusCode == 400 && lower.contains('password too short')) {
+        return 'Пароль слишком короткий. Нужны минимум 6 символов.';
+      }
+    }
+
+    if (path.endsWith('/auth/login')) {
+      if (statusCode == 401 ||
+          lower.contains('invalid credentials') ||
+          lower.contains('unauthorized')) {
+        return 'Неверный email или пароль. Проверь данные и попробуй снова.';
+      }
+    }
+
+    if (path.endsWith('/auth/challenge/verify') ||
+        path.endsWith('/auth/email/code/verify') ||
+        path.endsWith('/auth/phone/login/verify')) {
+      if (statusCode == 401 ||
+          lower.contains('invalid_code') ||
+          lower.contains('invalid code') ||
+          lower.contains('expired')) {
+        return 'Код не подошёл или уже истёк. Запроси новый код и попробуй снова.';
+      }
+    }
+
+    return null;
+  }
+
+  Future<ApiResult<dynamic>> _jsonRequest({
+    required String method,
+    required String path,
+    String? bearerToken,
+    String? adminToken,
+    Map<String, dynamic>? payload,
+  }) async {
+    try {
+      await _authLog('API $method $path start');
+      final body = await _withHttpRetry<String>((
+        client,
+        direct,
+        resolvedBaseUrl,
+      ) async {
+        final uri = _uFor(resolvedBaseUrl, path);
+        final req = method == 'GET'
+            ? await client.getUrl(uri)
+            : await client.postUrl(uri);
+
+        if (payload != null) {
+          req.headers.contentType = ContentType.json;
+          req.write(jsonEncode(payload));
+        }
+        if (bearerToken != null && bearerToken.trim().isNotEmpty) {
+          req.headers.set('Authorization', 'Bearer $bearerToken');
+        }
+        if (adminToken != null && adminToken.trim().isNotEmpty) {
+          req.headers.set('X-Admin-Token', adminToken.trim());
+        }
+
+        final res = await req.close();
+        final body = await utf8.decodeStream(res);
+        await _authLog(
+          'API $method $path status=${res.statusCode} route=${direct ? 'direct' : 'system'} base=$resolvedBaseUrl',
+        );
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          throw HttpException(
+            'Ошибка сервера (${res.statusCode}): $body',
+            uri: uri,
+          );
+        }
+        return body;
+      });
+
+      if (body.trim().isEmpty) {
+        return const ApiResult.ok(<String, dynamic>{});
+      }
+
+      return ApiResult.ok(jsonDecode(body));
+    } catch (e) {
+      await _authLog('API $method $path exception=$e');
       return ApiResult.err('Ошибка сети: $e');
     }
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> adminOverview({
+    required String adminToken,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'GET',
+      path: '/api/v1/admin/overview',
+      adminToken: adminToken,
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ admin overview.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<List<Map<String, dynamic>>>> adminUsers({
+    required String adminToken,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'GET',
+      path: '/api/v1/admin/users',
+      adminToken: adminToken,
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ admin users.');
+    }
+    final map = Map<String, dynamic>.from(res.data as Map);
+    final raw = map['users'];
+    if (raw is! List) return const ApiResult.ok(<Map<String, dynamic>>[]);
+    final out = raw
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    return ApiResult.ok(out);
+  }
+
+  Future<ApiResult<List<Map<String, dynamic>>>> adminBillingOrders({
+    required String adminToken,
+    String status = 'pending',
+  }) async {
+    final suffix = status.trim().isEmpty
+        ? ''
+        : '?status=${Uri.encodeQueryComponent(status.trim())}';
+    final res = await _jsonRequest(
+      method: 'GET',
+      path: '/api/v1/admin/billing/orders$suffix',
+      adminToken: adminToken,
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ admin billing orders.');
+    }
+    final map = Map<String, dynamic>.from(res.data as Map);
+    final raw = map['orders'];
+    if (raw is! List) return const ApiResult.ok(<Map<String, dynamic>>[]);
+    final out = raw
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    return ApiResult.ok(out);
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> adminMarkBillingOrderPaid({
+    required String adminToken,
+    required String orderId,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'POST',
+      path:
+          '/api/v1/admin/billing/orders/${Uri.encodeComponent(orderId)}/mark-paid',
+      adminToken: adminToken,
+      payload: const <String, dynamic>{},
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ mark billing order paid.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<List<Map<String, dynamic>>>> adminUserDevices({
+    required String adminToken,
+    required int userId,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'GET',
+      path: '/api/v1/admin/users/$userId/devices',
+      adminToken: adminToken,
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ admin user devices.');
+    }
+    final map = Map<String, dynamic>.from(res.data as Map);
+    final raw = map['devices'];
+    if (raw is! List) return const ApiResult.ok(<Map<String, dynamic>>[]);
+    final out = raw
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .toList();
+    return ApiResult.ok(out);
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> adminDisableDevice({
+    required String adminToken,
+    required String deviceUid,
+    String reason = 'disabled_by_admin',
+  }) async {
+    final res = await _jsonRequest(
+      method: 'POST',
+      path: '/api/v1/admin/devices/$deviceUid/disable',
+      adminToken: adminToken,
+      payload: {'reason': reason},
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ disable device.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> adminEnableDevice({
+    required String adminToken,
+    required String deviceUid,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'POST',
+      path: '/api/v1/admin/devices/$deviceUid/enable',
+      adminToken: adminToken,
+      payload: const <String, dynamic>{},
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ enable device.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> adminSetSubscription({
+    required String adminToken,
+    required int userId,
+    required String planCode,
+    required String planName,
+    required int maxDevices,
+    required bool isActive,
+    String? expiresAt,
+  }) async {
+    final payload = <String, dynamic>{
+      'planCode': planCode,
+      'planName': planName,
+      'maxDevices': maxDevices,
+      'isActive': isActive,
+    };
+    if (expiresAt != null && expiresAt.trim().isNotEmpty) {
+      payload['expiresAt'] = expiresAt.trim();
+    }
+
+    final res = await _jsonRequest(
+      method: 'POST',
+      path: '/api/v1/admin/users/$userId/subscription',
+      adminToken: adminToken,
+      payload: payload,
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ set subscription.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> adminApplyTariff({
+    required String adminToken,
+    required int userId,
+    required String trafficPack,
+    required int trafficGb,
+    required List<String> unlimitedApps,
+    required int devices,
+    required bool dedicatedIp,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'POST',
+      path: '/api/v1/admin/users/$userId/tariff/apply',
+      adminToken: adminToken,
+      payload: {
+        'trafficPack': trafficPack,
+        'trafficGb': trafficGb,
+        'unlimitedApps': unlimitedApps,
+        'devices': devices,
+        'dedicatedIp': dedicatedIp,
+      },
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ admin apply tariff.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
   }
 }
 
@@ -723,99 +3511,297 @@ class BlueVpnApi {
    ========================= */
 
 class ConfigStore {
+  static Future<void> _configIoBarrier = Future<void>.value();
+
+  Future<T> _runConfigIo<T>(Future<T> Function() action) {
+    final completer = Completer<T>();
+    _configIoBarrier = _configIoBarrier.then((_) async {
+      try {
+        completer.complete(await action());
+      } catch (e, st) {
+        completer.completeError(e, st);
+      }
+    });
+    return completer.future;
+  }
+
   // Active managed config path. Stored in ProgramData so the WireGuard service (LocalSystem) can read it.
   String get managedConfigPath {
     if (kIsWeb) return '';
     if (!Platform.isWindows) return '';
-    return r'C:\ProgramData\BlueVPN\BlueVPN.conf';
+    return r'C:\ProgramData\BlueVPN\BlueVPNDev1.conf';
   }
 
   // Hidden base config received from server/dev seed. We never apply it directly.
   String get baseConfigPath {
     if (kIsWeb) return '';
     if (!Platform.isWindows) return '';
-    return r'C:\ProgramData\BlueVPN\BlueVPN.base.conf';
+    return r'C:\ProgramData\BlueVPN\BlueVPNDev1.base.conf';
   }
 
   Future<bool> hasManagedConfig() async {
-    if (kIsWeb) return false;
-    final p = managedConfigPath;
-    if (p.isEmpty) return false;
-    return File(p).existsSync();
+    return _runConfigIo(() async {
+      if (kIsWeb) return false;
+      final p = managedConfigPath;
+      if (p.isEmpty) return false;
+      return File(p).existsSync();
+    });
   }
 
   Future<bool> hasBaseConfig() async {
-    if (kIsWeb) return false;
-    final p = baseConfigPath;
-    if (p.isEmpty) return false;
-    return File(p).existsSync();
+    return _runConfigIo(() async {
+      if (kIsWeb) return false;
+      final p = baseConfigPath;
+      if (p.isEmpty) return false;
+      return File(p).existsSync();
+    });
   }
 
-  Future<void> writeManagedConfig(String content) async {
-    if (kIsWeb) return;
-    final p = managedConfigPath;
-    if (p.isEmpty) return;
-    final f = File(p);
-    if (!f.parent.existsSync()) {
-      f.parent.createSync(recursive: true);
-    }
-    await f.writeAsString(content);
+  Future<String?> readManagedConfig() async {
+    return _runConfigIo(() async {
+      if (kIsWeb) return null;
+      final p = managedConfigPath;
+      if (p.isEmpty) return null;
+      final f = File(p);
+      if (!f.existsSync()) return null;
+      await WindowsLocalSecurity.prepareSharedConfigDirectory(f.parent.path);
+      await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
+      try {
+        return await f.readAsString();
+      } on FileSystemException {
+        await appendBlueVpnClientLog(
+          'config read retry path=${f.path} kind=managed',
+        );
+        await WindowsLocalSecurity.repairBlueVpnLocalAcls();
+        await WindowsLocalSecurity.prepareSharedConfigDirectory(f.parent.path);
+        await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
+        return f.existsSync() ? await f.readAsString() : null;
+      }
+    });
   }
 
-  Future<void> writeBaseConfig(String content) async {
-    if (kIsWeb) return;
-    final p = baseConfigPath;
-    if (p.isEmpty) return;
-    final f = File(p);
-    if (!f.parent.existsSync()) {
-      f.parent.createSync(recursive: true);
-    }
-    await f.writeAsString(content);
-  }
-
-  Future<String?> readBaseConfig() async {
+  Future<String?> _readManagedConfigUnlocked() async {
     if (kIsWeb) return null;
-    final p = baseConfigPath;
+    final p = managedConfigPath;
     if (p.isEmpty) return null;
     final f = File(p);
     if (!f.existsSync()) return null;
-    return f.readAsString();
+    await WindowsLocalSecurity.prepareSharedConfigDirectory(f.parent.path);
+    await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
+    try {
+      return await f.readAsString();
+    } on FileSystemException {
+      await appendBlueVpnClientLog(
+        'config read retry path=${f.path} kind=managed',
+      );
+      await WindowsLocalSecurity.repairBlueVpnLocalAcls();
+      await WindowsLocalSecurity.prepareSharedConfigDirectory(f.parent.path);
+      await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
+      return f.existsSync() ? await f.readAsString() : null;
+    }
+  }
+
+  Future<void> writeManagedConfig(String content) async {
+    await _runConfigIo(() async {
+      if (kIsWeb) return;
+      final p = managedConfigPath;
+      if (p.isEmpty) return;
+      final f = File(p);
+      if (!f.parent.existsSync()) {
+        f.parent.createSync(recursive: true);
+      }
+      await WindowsLocalSecurity.prepareSharedConfigDirectory(f.parent.path);
+      if (f.existsSync()) {
+        await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
+      }
+      try {
+        await f.writeAsString(content);
+      } on FileSystemException {
+        await appendBlueVpnClientLog(
+          'config write retry path=${f.path} kind=managed',
+        );
+        await WindowsLocalSecurity.repairBlueVpnLocalAcls();
+        await WindowsLocalSecurity.prepareSharedConfigDirectory(f.parent.path);
+        if (f.existsSync()) {
+          await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
+        }
+        await f.writeAsString(content);
+      }
+      await WindowsLocalSecurity.prepareSharedConfigDirectory(f.parent.path);
+      await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
+    });
+  }
+
+  Future<void> writeBaseConfig(String content) async {
+    await _runConfigIo(() async {
+      if (kIsWeb) return;
+      final p = baseConfigPath;
+      if (p.isEmpty) return;
+      final f = File(p);
+      if (!f.parent.existsSync()) {
+        f.parent.createSync(recursive: true);
+      }
+      await WindowsLocalSecurity.prepareSharedConfigDirectory(f.parent.path);
+      if (f.existsSync()) {
+        await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
+      }
+      try {
+        await f.writeAsString(content);
+      } on FileSystemException {
+        await appendBlueVpnClientLog(
+          'config write retry path=${f.path} kind=base',
+        );
+        await WindowsLocalSecurity.repairBlueVpnLocalAcls();
+        await WindowsLocalSecurity.prepareSharedConfigDirectory(f.parent.path);
+        if (f.existsSync()) {
+          await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
+        }
+        await f.writeAsString(content);
+      }
+      await WindowsLocalSecurity.prepareSharedConfigDirectory(f.parent.path);
+      await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
+    });
+  }
+
+  Future<String?> readBaseConfig() async {
+    return _runConfigIo(() async {
+      if (kIsWeb) return null;
+      final p = baseConfigPath;
+      if (p.isEmpty) return null;
+      final f = File(p);
+      if (!f.existsSync()) {
+        return _readManagedConfigUnlocked();
+      }
+      await WindowsLocalSecurity.prepareSharedConfigDirectory(f.parent.path);
+      await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
+      try {
+        return await f.readAsString();
+      } on FileSystemException {
+        await appendBlueVpnClientLog(
+          'config read retry path=${f.path} kind=base',
+        );
+        await WindowsLocalSecurity.repairBlueVpnLocalAcls();
+        await WindowsLocalSecurity.prepareSharedConfigDirectory(f.parent.path);
+        await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
+        if (f.existsSync()) {
+          return await f.readAsString();
+        }
+        return _readManagedConfigUnlocked();
+      }
+    });
   }
 
   Future<void> ensureBaseSeededFromManagedIfMissing() async {
-    if (kIsWeb) return;
-    final hasBase = await hasBaseConfig();
-    if (hasBase) return;
+    await _runConfigIo(() async {
+      if (kIsWeb) return;
+      final base = baseConfigPath;
+      if (base.isNotEmpty && File(base).existsSync()) return;
 
-    final managed = managedConfigPath;
-    if (managed.isEmpty) return;
+      final managed = managedConfigPath;
+      if (managed.isEmpty) return;
 
-    final mf = File(managed);
-    if (!mf.existsSync()) return;
+      final mf = File(managed);
+      if (!mf.existsSync()) return;
 
-    final raw = await mf.readAsString();
-    if (raw.trim().isEmpty) return;
-    await writeBaseConfig(raw);
+      await WindowsLocalSecurity.prepareSharedConfigDirectory(mf.parent.path);
+      await WindowsLocalSecurity.prepareSharedConfigFile(mf.path);
+      String raw;
+      try {
+        raw = await mf.readAsString();
+      } on FileSystemException {
+        await appendBlueVpnClientLog(
+          'config read retry path=${mf.path} kind=managed-seed',
+        );
+        await WindowsLocalSecurity.repairBlueVpnLocalAcls();
+        await WindowsLocalSecurity.prepareSharedConfigDirectory(mf.parent.path);
+        await WindowsLocalSecurity.prepareSharedConfigFile(mf.path);
+        raw = await mf.readAsString();
+      }
+      if (raw.trim().isEmpty) return;
+
+      final bf = File(base);
+      if (!bf.parent.existsSync()) {
+        bf.parent.createSync(recursive: true);
+      }
+      await WindowsLocalSecurity.prepareSharedConfigDirectory(bf.parent.path);
+      if (bf.existsSync()) {
+        await WindowsLocalSecurity.prepareSharedConfigFile(bf.path);
+      }
+      try {
+        await bf.writeAsString(raw);
+      } on FileSystemException {
+        await appendBlueVpnClientLog(
+          'config write retry path=${bf.path} kind=base-seed',
+        );
+        await WindowsLocalSecurity.repairBlueVpnLocalAcls();
+        await WindowsLocalSecurity.prepareSharedConfigDirectory(bf.parent.path);
+        if (bf.existsSync()) {
+          await WindowsLocalSecurity.prepareSharedConfigFile(bf.path);
+        }
+        try {
+          await bf.writeAsString(raw);
+        } on FileSystemException {
+          await appendBlueVpnClientLog(
+            'config write skipped path=${bf.path} kind=base-seed',
+          );
+          return;
+        }
+      }
+      await WindowsLocalSecurity.prepareSharedConfigDirectory(bf.parent.path);
+      await WindowsLocalSecurity.prepareSharedConfigFile(bf.path);
+    });
   }
 
   Future<void> deleteManagedConfig() async {
-    if (kIsWeb) return;
+    await _runConfigIo(() async {
+      if (kIsWeb) return;
 
-    final managed = managedConfigPath;
-    if (managed.isNotEmpty) {
-      final f = File(managed);
-      if (f.existsSync()) {
-        await f.delete();
+      final managed = managedConfigPath;
+      if (managed.isNotEmpty) {
+        final f = File(managed);
+        if (f.existsSync()) {
+          try {
+            await WindowsLocalSecurity.prepareSharedConfigDirectory(
+              f.parent.path,
+            );
+            await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
+            await f.delete();
+          } on FileSystemException {
+            await WindowsLocalSecurity.repairBlueVpnLocalAcls();
+            await WindowsLocalSecurity.prepareSharedConfigDirectory(
+              f.parent.path,
+            );
+            await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
+            if (f.existsSync()) {
+              await f.delete();
+            }
+          }
+        }
       }
-    }
 
-    final base = baseConfigPath;
-    if (base.isNotEmpty) {
-      final f = File(base);
-      if (f.existsSync()) {
-        await f.delete();
+      final base = baseConfigPath;
+      if (base.isNotEmpty) {
+        final f = File(base);
+        if (f.existsSync()) {
+          try {
+            await WindowsLocalSecurity.prepareSharedConfigDirectory(
+              f.parent.path,
+            );
+            await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
+            await f.delete();
+          } on FileSystemException {
+            await WindowsLocalSecurity.repairBlueVpnLocalAcls();
+            await WindowsLocalSecurity.prepareSharedConfigDirectory(
+              f.parent.path,
+            );
+            await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
+            if (f.existsSync()) {
+              await f.delete();
+            }
+          }
+        }
       }
-    }
+    });
   }
 } /* =========================
    AUTH UI
@@ -833,22 +3819,44 @@ class _AuthPageState extends State<AuthPage>
     with SingleTickerProviderStateMixin {
   late final TabController _tabs;
   final _api = const BlueVpnApi(baseUrl: kApiBaseUrl);
+  final _cfg = ConfigStore();
+  final _deviceStore = DeviceIdStore();
 
-  final _email = TextEditingController();
-  final _password = TextEditingController();
+  final _phone = TextEditingController();
+  final _phoneCode = TextEditingController();
+  final _emailCodeEmail = TextEditingController();
+  final _emailCode = TextEditingController();
+  final _legacyEmail = TextEditingController();
+  final _legacyPassword = TextEditingController();
+
   bool _busy = false;
+  String? _authStatus;
+  String? _activePhone;
+  String? _activeEmailCodeAddress;
+  bool _phoneCodeRequested = false;
+  bool _emailCodeRequested = false;
+  WireGuardInstallState? _wireGuardState;
+  bool _wireGuardBusy = false;
 
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 2, vsync: this);
+    _tabs = TabController(length: 3, vsync: this);
+    _tabs.addListener(() {
+      if (mounted) setState(() {});
+    });
+    unawaited(_refreshWireGuardState());
   }
 
   @override
   void dispose() {
     _tabs.dispose();
-    _email.dispose();
-    _password.dispose();
+    _phone.dispose();
+    _phoneCode.dispose();
+    _emailCodeEmail.dispose();
+    _emailCode.dispose();
+    _legacyEmail.dispose();
+    _legacyPassword.dispose();
     super.dispose();
   }
 
@@ -856,11 +3864,254 @@ class _AuthPageState extends State<AuthPage>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
-  Future<void> _submit({required bool isRegister}) async {
+  void _setAuthStatus(String? text) {
+    if (!mounted) return;
+    setState(() => _authStatus = text);
+  }
+
+  Future<void> _authLog(String text) async {
+    if (kIsWeb || !Platform.isWindows) return;
+    try {
+      final f = File(r'C:\ProgramData\BlueVPN\auth.log');
+      final ts = DateTime.now().toIso8601String();
+      await f.writeAsString('[$ts] $text\n', mode: FileMode.append);
+    } catch (_) {}
+  }
+
+  Future<void> _refreshWireGuardState() async {
+    final state = await probeWireGuardInstall();
+    if (!mounted) return;
+    setState(() => _wireGuardState = state);
+  }
+
+  Future<void> _installWireGuard() async {
+    if (_wireGuardBusy) return;
+    setState(() => _wireGuardBusy = true);
+    try {
+      await _authLog('wireguard install requested from auth');
+      final res = await installWireGuardForWindows();
+      await _authLog('wireguard install auth ok=${res.ok} msg=${res.message}');
+      if (mounted) {
+        _toast(res.message);
+      }
+      await _refreshWireGuardState();
+    } finally {
+      if (mounted) {
+        setState(() => _wireGuardBusy = false);
+      }
+    }
+  }
+
+  Future<bool> _prepareNetworkForAuth(String actionLabel) async {
+    if (kIsWeb || !Platform.isWindows) return true;
+    try {
+      _setAuthStatus('Готовим сеть...');
+      final backend = VpnBackend.createDefault(tunnelName: kTunnelName);
+      final off = await backend.disconnect();
+      await _authLog(
+        'disconnect before $actionLabel ok=${off.ok} msg=${off.message ?? ''}',
+      );
+      if (!off.ok) {
+        final text = off.message ?? 'Не удалось подготовить сеть для входа.';
+        _setAuthStatus(text);
+        _toast(text);
+        return false;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+    } catch (e, st) {
+      await _authLog('disconnect before $actionLabel exception=$e stack=$st');
+    }
+    return true;
+  }
+
+  Future<String?> _deviceIdForAuth() async {
+    if (kIsWeb) return 'web';
+    try {
+      return await _deviceStore.getOrCreate();
+    } catch (e, st) {
+      await _authLog('device id for auth exception=$e stack=$st');
+      return null;
+    }
+  }
+
+  String get _deviceNameForAuth => kIsWeb ? 'Web' : Platform.localHostname;
+
+  String get _platformForAuth => kIsWeb ? 'web' : Platform.operatingSystem;
+
+  String _challengeDeliveryMessage({
+    required bool phone,
+    required String delivery,
+    required bool deliveryReady,
+  }) {
+    if (phone) {
+      if (delivery == 'sent') return 'SMS-код отправлен.';
+      if (delivery == 'failed' || !deliveryReady) {
+        return 'SMS сейчас недоступна. Используй вход по email-коду.';
+      }
+      return 'Код подготовлен. Проверь SMS.';
+    }
+    if (delivery == 'sent') return 'Код отправлен на email.';
+    if (delivery == 'failed' || !deliveryReady) {
+      return 'Email сейчас недоступен. Попробуй позже или войди по паролю.';
+    }
+    return 'Код подготовлен. Проверь email.';
+  }
+
+  Future<void> _startChallenge({required bool phone}) async {
     if (_busy) return;
 
-    final email = _email.text.trim();
-    final pass = _password.text;
+    final contact = phone ? _phone.text.trim() : _emailCodeEmail.text.trim();
+    if (phone) {
+      if (contact.isEmpty) {
+        _toast('Введи номер телефона.');
+        return;
+      }
+    } else if (contact.isEmpty || !contact.contains('@')) {
+      _toast('Введи корректный email.');
+      return;
+    }
+
+    setState(() => _busy = true);
+    try {
+      await _authLog(
+        'challenge start method=${phone ? 'phone_sms' : 'email_code'}',
+      );
+      final networkReady = await _prepareNetworkForAuth(
+        phone ? 'phone_challenge_start' : 'email_challenge_start',
+      );
+      if (!networkReady) return;
+
+      _setAuthStatus(phone ? 'Отправляем SMS-код...' : 'Отправляем код...');
+      final res = await _api.startAuthChallenge(
+        method: phone ? 'phone_sms' : 'email_code',
+        phone: phone ? contact : null,
+        email: phone ? null : contact,
+      );
+      await _authLog(
+        'challenge start result ok=${res.ok} msg=${res.message ?? ''}',
+      );
+
+      if (!res.ok || res.data == null) {
+        final text = authUserMessage(
+          res.message ?? 'Не удалось отправить код.',
+          fallback: 'Не удалось отправить код.',
+        );
+        _setAuthStatus(text);
+        _toast(text);
+        return;
+      }
+
+      final data = res.data!;
+      final normalized = (data[phone ? 'phone' : 'email'] ?? contact)
+          .toString();
+      final delivery = (data['deliveryStatus'] ?? '').toString();
+      final deliveryReady = data['deliveryReady'] == true;
+      final message = _challengeDeliveryMessage(
+        phone: phone,
+        delivery: delivery,
+        deliveryReady: deliveryReady,
+      );
+      final canEnterCode = delivery != 'failed' && deliveryReady;
+
+      if (!mounted) return;
+      setState(() {
+        _authStatus = message;
+        if (phone) {
+          _activePhone = normalized;
+          _phone.text = normalized;
+          _phoneCode.clear();
+          _phoneCodeRequested = canEnterCode;
+        } else {
+          _activeEmailCodeAddress = normalized;
+          _emailCodeEmail.text = normalized;
+          _emailCode.clear();
+          _emailCodeRequested = canEnterCode;
+        }
+      });
+      _toast(message);
+    } catch (e, st) {
+      await _authLog('challenge start exception=$e stack=$st');
+      final text = authUserMessage(e, fallback: 'Не удалось отправить код.');
+      _setAuthStatus(text);
+      _toast(text);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _verifyChallenge({required bool phone}) async {
+    if (_busy) return;
+
+    final contact = phone
+        ? (_activePhone ?? _phone.text).trim()
+        : (_activeEmailCodeAddress ?? _emailCodeEmail.text).trim();
+    final code = phone ? _phoneCode.text.trim() : _emailCode.text.trim();
+    if (contact.isEmpty) {
+      _toast(phone ? 'Введи номер телефона.' : 'Введи email.');
+      return;
+    }
+    if (code.isEmpty) {
+      _toast('Введи код.');
+      return;
+    }
+
+    setState(() => _busy = true);
+    try {
+      await _authLog(
+        'challenge verify method=${phone ? 'phone_sms' : 'email_code'}',
+      );
+      final networkReady = await _prepareNetworkForAuth(
+        phone ? 'phone_challenge_verify' : 'email_challenge_verify',
+      );
+      if (!networkReady) return;
+
+      final deviceId = await _deviceIdForAuth();
+      _setAuthStatus('Проверяем код...');
+      final res = await _api.verifyAuthChallenge(
+        method: phone ? 'phone_sms' : 'email_code',
+        phone: phone ? contact : null,
+        email: phone ? null : contact,
+        code: code,
+        deviceUid: deviceId,
+        deviceName: _deviceNameForAuth,
+        platform: _platformForAuth,
+        appVersion: kAppVersion,
+      );
+      await _authLog(
+        'challenge verify result ok=${res.ok} msg=${res.message ?? ''}',
+      );
+
+      if (!res.ok || res.data == null) {
+        final text = authUserMessage(
+          res.message ?? 'Не удалось войти по коду.',
+          fallback: 'Не удалось войти по коду.',
+        );
+        _setAuthStatus(text);
+        _toast(text);
+        return;
+      }
+
+      await _completeAuth(
+        res.data!,
+        progressText: phone
+            ? 'Телефон подтверждён. Готовим VPN для этого устройства...'
+            : 'Email подтверждён. Готовим VPN для этого устройства...',
+      );
+    } catch (e, st) {
+      await _authLog('challenge verify exception=$e stack=$st');
+      final text = authUserMessage(e, fallback: 'Ошибка входа.');
+      _setAuthStatus(text);
+      _toast(text);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _submitLegacy({required bool isRegister}) async {
+    if (_busy) return;
+
+    final email = _legacyEmail.text.trim();
+    final pass = _legacyPassword.text;
 
     if (email.isEmpty || !email.contains('@')) {
       _toast('Введи корректный email.');
@@ -873,155 +4124,424 @@ class _AuthPageState extends State<AuthPage>
 
     setState(() => _busy = true);
     try {
+      _setAuthStatus(
+        isRegister
+            ? 'Создаём аккаунт и сразу войдём в приложение...'
+            : 'Входим в аккаунт...',
+      );
+      await _authLog(
+        'legacy auth action=${isRegister ? 'register' : 'login'} email=$email',
+      );
+      final networkReady = await _prepareNetworkForAuth(
+        isRegister ? 'legacy_register' : 'legacy_login',
+      );
+      if (!networkReady) return;
+
+      _setAuthStatus(
+        isRegister ? 'Регистрируем аккаунт...' : 'Проверяем данные...',
+      );
       final res = isRegister
           ? await _api.register(email: email, password: pass)
           : await _api.login(email: email, password: pass);
+      await _authLog(
+        'legacy auth result ok=${res.ok} msg=${res.message ?? ''}',
+      );
 
       if (!res.ok || res.data == null) {
-        _toast(res.message ?? 'Ошибка авторизации.');
+        final text = authUserMessage(
+          res.message ?? 'Ошибка авторизации.',
+          fallback: 'Ошибка авторизации.',
+        );
+        _setAuthStatus(text);
+        _toast(text);
         return;
       }
 
-      await widget.onAuthSuccess(res.data!);
+      await _completeAuth(
+        res.data!,
+        progressText: isRegister
+            ? 'Аккаунт создан. Готовим VPN для этого устройства...'
+            : 'Готовим VPN для этого устройства...',
+      );
+    } catch (e, st) {
+      await _authLog('legacy auth exception=$e stack=$st');
+      final text = authUserMessage(e, fallback: 'Ошибка входа.');
+      _setAuthStatus(text);
+      _toast(text);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _devBypass() async {
-    if (!(kDebugMode && _kEnableDevBypassInDebug)) return;
-    final email = _email.text.trim().isEmpty
-        ? 'dev@bluevpn.local'
-        : _email.text.trim();
-    await widget.onAuthSuccess(Session(accessToken: 'dev-token', email: email));
+  Future<void> _completeAuth(
+    Session session, {
+    required String progressText,
+  }) async {
+    _setAuthStatus(progressText);
+    final warmup = await AuthProvisioningService(
+      api: _api,
+      cfg: _cfg,
+      deviceStore: _deviceStore,
+    ).warmup(session);
+    await _authLog('warmup ok=${warmup.ok} msg=${warmup.message ?? ''}');
+    if (!warmup.ok && mounted) {
+      _toast(
+        'Вход выполнен, но серверный VPN-конфиг пока не прогрелся. '
+        'Продолжим вход и дотянем конфиг на главном экране.',
+      );
+    }
+
+    _setAuthStatus('Открываем Green VPN...');
+    try {
+      await widget.onAuthSuccess(session);
+      await _authLog('onAuthSuccess ok=true');
+    } catch (e, st) {
+      await _authLog('onAuthSuccess exception=$e stack=$st');
+      final text =
+          'Вход прошёл, но не удалось сохранить сессию на этом ПК. Попробуй запустить Green VPN от имени администратора или переустановить.';
+      _setAuthStatus(text);
+      _toast(text);
+    }
+  }
+
+  Widget _buildPrimaryButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback? onPressed,
+  }) {
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton.icon(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: kBrandPrimary,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+        ),
+        onPressed: onPressed,
+        icon: Icon(icon),
+        label: Text(
+          _busy ? 'Подождите...' : label,
+          style: const TextStyle(fontWeight: FontWeight.w900),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildResendButton({
+    required String label,
+    required VoidCallback? onPressed,
+  }) {
+    return SizedBox(
+      width: double.infinity,
+      child: OutlinedButton.icon(
+        style: OutlinedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(vertical: 13),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+        ),
+        onPressed: onPressed,
+        icon: const Icon(Icons.refresh_rounded),
+        label: Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
+      ),
+    );
+  }
+
+  Widget _buildPhoneAuthForm() {
+    return Column(
+      children: [
+        TextField(
+          controller: _phone,
+          enabled: !_busy,
+          keyboardType: TextInputType.phone,
+          textInputAction: _phoneCodeRequested
+              ? TextInputAction.next
+              : TextInputAction.done,
+          decoration: const InputDecoration(
+            labelText: 'Телефон',
+            hintText: '+7 900 000-00-00',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (_) {
+            if (!_busy && !_phoneCodeRequested) {
+              unawaited(_startChallenge(phone: true));
+            }
+          },
+        ),
+        if (_phoneCodeRequested) ...[
+          const SizedBox(height: 10),
+          TextField(
+            controller: _phoneCode,
+            enabled: !_busy,
+            keyboardType: TextInputType.number,
+            textInputAction: TextInputAction.done,
+            decoration: const InputDecoration(
+              labelText: 'Код из SMS',
+              hintText: '000000',
+              border: OutlineInputBorder(),
+            ),
+            onSubmitted: (_) {
+              if (!_busy) unawaited(_verifyChallenge(phone: true));
+            },
+          ),
+        ],
+        const SizedBox(height: 14),
+        _buildPrimaryButton(
+          icon: _phoneCodeRequested ? Icons.login_rounded : Icons.sms_rounded,
+          label: _phoneCodeRequested ? 'Войти по коду' : 'Получить код',
+          onPressed: _busy
+              ? null
+              : () => _phoneCodeRequested
+                    ? _verifyChallenge(phone: true)
+                    : _startChallenge(phone: true),
+        ),
+        if (_phoneCodeRequested) ...[
+          const SizedBox(height: 8),
+          _buildResendButton(
+            label: 'Получить новый код',
+            onPressed: _busy ? null : () => _startChallenge(phone: true),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildEmailCodeAuthForm() {
+    return Column(
+      children: [
+        TextField(
+          controller: _emailCodeEmail,
+          enabled: !_busy,
+          keyboardType: TextInputType.emailAddress,
+          textInputAction: _emailCodeRequested
+              ? TextInputAction.next
+              : TextInputAction.done,
+          decoration: const InputDecoration(
+            labelText: 'Email',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (_) {
+            if (!_busy && !_emailCodeRequested) {
+              unawaited(_startChallenge(phone: false));
+            }
+          },
+        ),
+        if (_emailCodeRequested) ...[
+          const SizedBox(height: 10),
+          TextField(
+            controller: _emailCode,
+            enabled: !_busy,
+            keyboardType: TextInputType.number,
+            textInputAction: TextInputAction.done,
+            decoration: const InputDecoration(
+              labelText: 'Код из письма',
+              hintText: '000000',
+              border: OutlineInputBorder(),
+            ),
+            onSubmitted: (_) {
+              if (!_busy) unawaited(_verifyChallenge(phone: false));
+            },
+          ),
+        ],
+        const SizedBox(height: 14),
+        _buildPrimaryButton(
+          icon: _emailCodeRequested
+              ? Icons.login_rounded
+              : Icons.mark_email_read_rounded,
+          label: _emailCodeRequested ? 'Войти по коду' : 'Получить код',
+          onPressed: _busy
+              ? null
+              : () => _emailCodeRequested
+                    ? _verifyChallenge(phone: false)
+                    : _startChallenge(phone: false),
+        ),
+        if (_emailCodeRequested) ...[
+          const SizedBox(height: 8),
+          _buildResendButton(
+            label: 'Получить новый код',
+            onPressed: _busy ? null : () => _startChallenge(phone: false),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildLegacyPasswordForm() {
+    return Column(
+      children: [
+        TextField(
+          controller: _legacyEmail,
+          enabled: !_busy,
+          keyboardType: TextInputType.emailAddress,
+          textInputAction: TextInputAction.next,
+          decoration: const InputDecoration(
+            labelText: 'Email',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 10),
+        TextField(
+          controller: _legacyPassword,
+          enabled: !_busy,
+          obscureText: true,
+          textInputAction: TextInputAction.done,
+          decoration: const InputDecoration(
+            labelText: 'Пароль',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (_) {
+            if (!_busy) unawaited(_submitLegacy(isRegister: false));
+          },
+        ),
+        const SizedBox(height: 14),
+        _buildPrimaryButton(
+          icon: Icons.login_rounded,
+          label: 'Войти по паролю',
+          onPressed: _busy ? null : () => _submitLegacy(isRegister: false),
+        ),
+        const SizedBox(height: 8),
+        _buildResendButton(
+          label: 'Создать аккаунт',
+          onPressed: _busy ? null : () => _submitLegacy(isRegister: true),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildActiveAuthForm() {
+    switch (_tabs.index) {
+      case 1:
+        return _buildEmailCodeAuthForm();
+      case 2:
+        return _buildLegacyPasswordForm();
+      case 0:
+      default:
+        return _buildPhoneAuthForm();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final wireGuardState = _wireGuardState;
+    final wireGuardMissing =
+        wireGuardState != null && !wireGuardState.installed;
 
     return Scaffold(
       body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 520),
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: _Card(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 44,
-                          height: 44,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFEFF6FF),
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: const Icon(
-                            Icons.vpn_key_rounded,
-                            color: Color(0xFF2563EB),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        const Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'BlueVPN',
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w900,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return SingleChildScrollView(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 520),
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: _Card(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  width: 44,
+                                  height: 44,
+                                  decoration: BoxDecoration(
+                                    color: kBrandPrimarySoft,
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                  child: const Icon(
+                                    Icons.vpn_key_rounded,
+                                    color: kBrandPrimary,
+                                  ),
                                 ),
+                                const SizedBox(width: 12),
+                                const Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        kProductName,
+                                        style: TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                      ),
+                                      SizedBox(height: 2),
+                                      Text(
+                                        'Войти или зарегистрироваться',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w700,
+                                          color: kBrandMuted,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            if (wireGuardMissing) ...[
+                              _WireGuardSetupCard(
+                                title: 'Нужен WireGuard',
+                                subtitle: wireGuardState.subtitle,
+                                busy: _wireGuardBusy,
+                                onInstall: _installWireGuard,
+                                onRefresh: _refreshWireGuardState,
                               ),
-                              SizedBox(height: 2),
-                              Text(
-                                'Войти или зарегистрироваться',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700,
-                                  color: Color(0xFF64748B),
+                              const SizedBox(height: 12),
+                            ],
+                            TabBar(
+                              controller: _tabs,
+                              labelStyle: const TextStyle(
+                                fontWeight: FontWeight.w900,
+                              ),
+                              tabs: const [
+                                Tab(text: 'Телефон'),
+                                Tab(text: 'Email-код'),
+                                Tab(text: 'Пароль'),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 160),
+                              child: KeyedSubtree(
+                                key: ValueKey<int>(_tabs.index),
+                                child: _buildActiveAuthForm(),
+                              ),
+                            ),
+                            if (_authStatus != null &&
+                                _authStatus!.trim().isNotEmpty) ...[
+                              const SizedBox(height: 10),
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  _authStatus!,
+                                  style: TextStyle(
+                                    color: theme.colorScheme.onSurface
+                                        .withOpacity(0.72),
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 12,
+                                  ),
                                 ),
                               ),
                             ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    TabBar(
-                      controller: _tabs,
-                      labelStyle: const TextStyle(fontWeight: FontWeight.w900),
-                      tabs: const [
-                        Tab(text: 'Вход'),
-                        Tab(text: 'Регистрация'),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: _email,
-                      keyboardType: TextInputType.emailAddress,
-                      decoration: const InputDecoration(
-                        labelText: 'Email',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: _password,
-                      obscureText: true,
-                      decoration: const InputDecoration(
-                        labelText: 'Пароль',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 14),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF2563EB),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                        ),
-                        onPressed: _busy
-                            ? null
-                            : () => _submit(isRegister: _tabs.index == 1),
-                        child: Text(
-                          _busy
-                              ? 'Подождите…'
-                              : (_tabs.index == 1
-                                    ? 'Создать аккаунт'
-                                    : 'Войти'),
-                          style: const TextStyle(fontWeight: FontWeight.w900),
+                          ],
                         ),
                       ),
                     ),
-                    if (kDebugMode && _kEnableDevBypassInDebug) ...[
-                      const SizedBox(height: 10),
-                      TextButton(
-                        onPressed: _busy ? null : _devBypass,
-                        child: Text(
-                          'DEV: войти без сервера',
-                          style: TextStyle(
-                            color: theme.colorScheme.onSurface.withOpacity(
-                              0.65,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
+                  ),
                 ),
               ),
-            ),
-          ),
+            );
+          },
         ),
       ),
     );
@@ -1040,16 +4560,71 @@ class ServerLocation {
   final String id;
   final String title;
   final String subtitle;
+  final String? endpointHost;
   final int? pingMs;
   final bool isAuto;
+  final String country;
+  final String city;
+  final String status;
+  final bool available;
+  final int? healthScore;
+  final String protocolLabel;
 
   const ServerLocation({
     required this.id,
     required this.title,
     required this.subtitle,
+    this.endpointHost,
     this.pingMs,
     this.isAuto = false,
+    this.country = '',
+    this.city = '',
+    this.status = 'unknown',
+    this.available = true,
+    this.healthScore,
+    this.protocolLabel = 'WireGuard',
   });
+
+  static ServerLocation fromCatalogJson(Map<String, dynamic> json) {
+    final endpoint = json['endpoint'];
+    final endpointMap = endpoint is Map
+        ? Map<String, dynamic>.from(endpoint)
+        : <String, dynamic>{};
+    final protocols = json['protocols'];
+    String protocolLabel = 'WireGuard';
+    if (protocols is List && protocols.isNotEmpty && protocols.first is Map) {
+      final first = Map<String, dynamic>.from(protocols.first as Map);
+      protocolLabel = (first['title'] ?? first['code'] ?? protocolLabel)
+          .toString();
+    }
+    final latencyRaw = json['latencyMs'];
+    final scoreRaw = json['healthScore'];
+    final country = (json['country'] ?? '').toString();
+    final city = (json['city'] ?? '').toString();
+    final provider = (json['provider'] ?? '').toString();
+    final defaultSubtitle = [
+      if (city.isNotEmpty) city,
+      if (country.isNotEmpty) country,
+      if (provider.isNotEmpty) provider,
+    ].join(' • ');
+    return ServerLocation(
+      id: (json['id'] ?? '').toString(),
+      title: (json['title'] ?? json['name'] ?? 'Green VPN endpoint').toString(),
+      subtitle: (json['subtitle'] ?? defaultSubtitle).toString(),
+      endpointHost: (endpointMap['host'] ?? json['endpointHost'] ?? '')
+          .toString(),
+      pingMs: latencyRaw is num ? latencyRaw.toInt() : null,
+      isAuto: false,
+      country: country,
+      city: city,
+      status: (json['status'] ?? 'unknown').toString(),
+      available:
+          json['available'] != false &&
+          (json['status'] ?? 'unknown').toString() != 'disabled',
+      healthScore: scoreRaw is num ? scoreRaw.toInt() : null,
+      protocolLabel: protocolLabel,
+    );
+  }
 }
 
 enum SocialApp {
@@ -1086,6 +4661,7 @@ class RootShell extends StatefulWidget {
 class _RootShellState extends State<RootShell> {
   final _api = const BlueVpnApi(baseUrl: kApiBaseUrl);
   final _cfg = ConfigStore();
+  final _pendingBillingOrderStore = PendingBillingOrderStore();
 
   // device identifier (for server-side provisioning) — hidden from user
   final DeviceIdStore _deviceStore = DeviceIdStore();
@@ -1129,7 +4705,7 @@ class _RootShellState extends State<RootShell> {
   bool vpnEnabled = false;
   bool vpnBusy = false;
 
-  // “Только для соцсетей”
+  // "Только для соцсетей"
   bool socialOnlyEnabled = false;
   final Set<SocialApp> socialOnlyApps = {
     SocialApp.telegram,
@@ -1137,82 +4713,419 @@ class _RootShellState extends State<RootShell> {
   };
 
   // Сервер
-  final List<ServerLocation> servers = const [
+  List<ServerLocation> servers = const [
     ServerLocation(
       id: 'auto',
       title: 'Авто',
-      subtitle: 'Самая быстрая локация',
+      subtitle: 'Безопасный dev-сервер Intelligent Smew',
       pingMs: null,
       isAuto: true,
     ),
     ServerLocation(
-      id: 'nl',
-      title: 'Нидерланды',
-      subtitle: 'Амстердам',
-      pingMs: 32,
-    ),
-    ServerLocation(
-      id: 'de',
-      title: 'Германия',
-      subtitle: 'Франкфурт',
+      id: 'intelligent_smew',
+      title: 'Intelligent Smew',
+      subtitle: 'Сервер разработки, 37.220.85.211',
+      endpointHost: kIntelligentSmewHost,
       pingMs: 44,
+      country: 'NL',
+      city: 'Amsterdam',
+      status: 'healthy',
+      healthScore: 95,
     ),
-    ServerLocation(
-      id: 'fi',
-      title: 'Финляндия',
-      subtitle: 'Хельсинки',
-      pingMs: 48,
-    ),
-    ServerLocation(
-      id: 'uk',
-      title: 'Великобритания',
-      subtitle: 'Лондон',
-      pingMs: 58,
-    ),
-    ServerLocation(id: 'us', title: 'США', subtitle: 'Нью-Йорк', pingMs: 120),
   ];
 
   ServerLocation selectedServer = const ServerLocation(
     id: 'auto',
     title: 'Авто',
-    subtitle: 'Самая быстрая локация',
+    subtitle: 'Безопасный dev-сервер Intelligent Smew',
     pingMs: null,
     isAuto: true,
   );
 
   // ===== TARIFF STATE =====
   final Set<TariffApp> selectedApps = {};
-  TrafficPack trafficPack = TrafficPack.gb20; // “режим” (по ГБ / безлимит)
+  TrafficPack trafficPack = TrafficPack.gb20; // "режим" (по ГБ / безлимит)
   double trafficGb = 20; // любой объём ГБ
   int devices = 1;
 
   bool optNoAds = true;
-  bool optSmartRouting = true; // этим флагом управляем доступностью “соцсетей”
+  bool optSmartRouting = true; // этим флагом управляем доступностью "соцсетей"
   bool optDedicatedIp = false;
+  bool optAutoRenew = true;
 
   // ===== SETTINGS (косметика) =====
   String sLanguage = 'Русский';
 
   // Local prefs (persist UI settings)
   final PrefsStore _prefsStore = PrefsStore();
+  final PendingVpnActionStore _pendingVpnActionStore = PendingVpnActionStore();
   Timer? _prefsDebounce;
+  Timer? _tariffDebounce;
+  Timer? _vpnTapCooldownTimer;
+  Timer? _pendingBillingPollTimer;
+  WireGuardInstallState? _wireGuardState;
+  bool _wireGuardBusy = false;
+  bool _tariffBusy = false;
+  bool _serverCatalogBusy = false;
+  Map<String, dynamic>? _tariffCatalog;
+  Map<String, dynamic>? _tariffQuote;
+  String? _tariffStatus;
+  String? _serverCatalogStatus;
+  bool _subscriptionActive = false;
+  bool _subscriptionAutoRenew = false;
+  bool _paymentMethodSaved = false;
+  String? _subscriptionExpiresAt;
+  int? _subscriptionMonthlyPriceRub;
+  bool _vpnTapCooldown = false;
+  bool _pendingBillingCheckRunning = false;
+  String? _vpnBusyStage;
+  String? _vpnBusyHint;
+  bool _pendingVpnResumeScheduled = false;
+  Map<String, dynamic>? _pendingBillingOrder;
+  late bool _emailVerified;
+  late bool _emailConfirmationRequired;
+  bool _emailStatusBusy = false;
+  String? _emailStatusMessage;
+  String? _phone;
+  bool _phoneVerified = false;
+  bool _phoneStatusBusy = false;
+  String? _phoneStatusMessage;
 
   void goToTab(int i) => setState(() => _index = i);
+
+  bool get _vpnInteractionLocked => vpnBusy || _vpnTapCooldown;
 
   @override
   void initState() {
     super.initState();
     _vpnBackend = VpnBackend.createDefault(tunnelName: kTunnelName);
+    _emailVerified = widget.session.emailVerified;
+    _emailConfirmationRequired = widget.session.emailConfirmationRequired;
+    _phone = widget.session.phone;
+    _phoneVerified = widget.session.phoneVerified;
 
     _loadPrefsAndApply();
 
     _syncVpnStatus();
     _ensureProvisionedConfigSilently();
     _syncPlanSilently();
+    _syncTariffFromServerSilently();
+    _loadPendingBillingOrder();
+    _refreshTariffServerState(showToast: false);
+    _refreshServerCatalog(showToast: false);
+    _refreshEmailStatus(showToast: false);
+    _refreshPhoneStatus(showToast: false);
+    unawaited(_refreshWireGuardState());
   }
 
   void _toast(BuildContext context, String text) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  Future<void> _refreshWireGuardState() async {
+    final state = await probeWireGuardInstall();
+    if (!mounted) return;
+    setState(() => _wireGuardState = state);
+  }
+
+  Future<void> _installWireGuard() async {
+    if (_wireGuardBusy) return;
+    setState(() => _wireGuardBusy = true);
+    try {
+      final res = await installWireGuardForWindows();
+      if (mounted) {
+        _toast(context, res.message);
+      }
+      await _refreshWireGuardState();
+      await _syncVpnStatus();
+    } finally {
+      if (mounted) {
+        setState(() => _wireGuardBusy = false);
+      }
+    }
+  }
+
+  Future<void> _refreshEmailStatus({required bool showToast}) async {
+    if (kIsWeb || widget.session.accessToken == 'dev-token') return;
+    if (_emailStatusBusy) return;
+    setState(() => _emailStatusBusy = true);
+    try {
+      final res = await _api.fetchEmailStatus(
+        accessToken: widget.session.accessToken,
+      );
+      if (!mounted) return;
+      if (!res.ok || res.data == null) {
+        final text = res.message ?? 'Не удалось проверить статус почты.';
+        setState(() => _emailStatusMessage = text);
+        if (showToast) _toast(context, text);
+        return;
+      }
+      final data = res.data!;
+      final verified = data['emailVerified'] == true;
+      final required = data['emailConfirmationRequired'] == true;
+      setState(() {
+        _emailVerified = verified;
+        _emailConfirmationRequired = required;
+        _emailStatusMessage = verified
+            ? 'Почта подтверждена.'
+            : 'Почта пока не подтверждена.';
+      });
+      if (showToast) _toast(context, _emailStatusMessage!);
+    } finally {
+      if (mounted) setState(() => _emailStatusBusy = false);
+    }
+  }
+
+  Future<void> _resendEmailConfirmation() async {
+    if (kIsWeb || widget.session.accessToken == 'dev-token') return;
+    if (_emailStatusBusy) return;
+    setState(() {
+      _emailStatusBusy = true;
+      _emailStatusMessage = 'Отправляем письмо подтверждения...';
+    });
+    try {
+      final res = await _api.resendEmailConfirmation(
+        accessToken: widget.session.accessToken,
+      );
+      if (!mounted) return;
+      if (!res.ok || res.data == null) {
+        final text = res.message ?? 'Не удалось отправить письмо.';
+        setState(() => _emailStatusMessage = text);
+        _toast(context, text);
+        return;
+      }
+      final data = res.data!;
+      final verified = data['emailVerified'] == true;
+      final delivery = (data['deliveryStatus'] ?? '').toString();
+      final text = verified
+          ? 'Почта уже подтверждена.'
+          : delivery == 'sent'
+          ? 'Письмо отправлено. Проверь почту.'
+          : 'Письмо подготовлено. Отправка включится после подключения почтового сервиса.';
+      setState(() {
+        _emailVerified = verified;
+        _emailConfirmationRequired = data['emailConfirmationRequired'] == true;
+        _emailStatusMessage = text;
+      });
+      _toast(context, text);
+    } finally {
+      if (mounted) setState(() => _emailStatusBusy = false);
+    }
+  }
+
+  Future<void> _refreshPhoneStatus({required bool showToast}) async {
+    if (kIsWeb || widget.session.accessToken == 'dev-token') return;
+    if (_phoneStatusBusy) return;
+    setState(() => _phoneStatusBusy = true);
+    try {
+      final res = await _api.fetchPhoneStatus(
+        accessToken: widget.session.accessToken,
+      );
+      if (!mounted) return;
+      if (!res.ok || res.data == null) {
+        final text = res.message ?? 'Не удалось проверить статус телефона.';
+        setState(() => _phoneStatusMessage = text);
+        if (showToast) _toast(context, text);
+        return;
+      }
+      final data = res.data!;
+      final phone = (data['phone'] ?? '').toString().trim();
+      final verified = data['phoneVerified'] == true;
+      setState(() {
+        _phone = phone.isEmpty ? null : phone;
+        _phoneVerified = verified;
+        _phoneStatusMessage = verified
+            ? 'Телефон подтверждён.'
+            : 'Телефон пока не подтверждён.';
+      });
+      if (showToast) _toast(context, _phoneStatusMessage!);
+    } finally {
+      if (mounted) setState(() => _phoneStatusBusy = false);
+    }
+  }
+
+  Future<Map<String, dynamic>?> _startPhoneConfirmation(String phone) async {
+    if (_phoneStatusBusy) return null;
+    setState(() {
+      _phoneStatusBusy = true;
+      _phoneStatusMessage = 'Готовим SMS-код...';
+    });
+    try {
+      final res = await _api.startPhoneConfirmation(
+        accessToken: widget.session.accessToken,
+        phone: phone,
+      );
+      if (!mounted) return null;
+      if (!res.ok || res.data == null) {
+        final text = authUserMessage(
+          res.message ?? 'Не удалось отправить SMS.',
+          fallback: 'Не удалось отправить SMS.',
+        );
+        setState(() => _phoneStatusMessage = text);
+        _toast(context, text);
+        return null;
+      }
+      final data = res.data!;
+      final normalizedPhone = (data['phone'] ?? phone).toString();
+      final verified = data['phoneVerified'] == true;
+      final delivery = (data['deliveryStatus'] ?? '').toString();
+      final text = verified
+          ? 'Телефон уже подтверждён.'
+          : delivery == 'sent'
+          ? 'SMS-код отправлен.'
+          : delivery == 'failed'
+          ? 'SMS не отправилось. Проверь настройки SMS-провайдера.'
+          : 'Телефон подготовлен. Реальная отправка включится после подключения SMS-провайдера.';
+      setState(() {
+        _phone = normalizedPhone;
+        _phoneVerified = verified;
+        _phoneStatusMessage = text;
+      });
+      _toast(context, text);
+      return data;
+    } finally {
+      if (mounted) setState(() => _phoneStatusBusy = false);
+    }
+  }
+
+  Future<bool> _verifyPhoneConfirmation(String phone, String code) async {
+    if (_phoneStatusBusy) return false;
+    setState(() {
+      _phoneStatusBusy = true;
+      _phoneStatusMessage = 'Проверяем SMS-код...';
+    });
+    try {
+      final res = await _api.verifyPhoneConfirmation(
+        accessToken: widget.session.accessToken,
+        phone: phone,
+        code: code,
+      );
+      if (!mounted) return false;
+      if (!res.ok || res.data == null || res.data!['ok'] != true) {
+        final status = (res.data?['status'] ?? '').toString();
+        final text = status == 'expired'
+            ? 'SMS-код истёк. Запроси новый код.'
+            : status == 'invalid_code'
+            ? 'Неверный SMS-код.'
+            : res.message ?? 'Не удалось подтвердить телефон.';
+        setState(() => _phoneStatusMessage = text);
+        _toast(context, text);
+        return false;
+      }
+      final verifiedPhone = (res.data!['phone'] ?? phone).toString();
+      setState(() {
+        _phone = verifiedPhone;
+        _phoneVerified = true;
+        _phoneStatusMessage = 'Телефон подтверждён.';
+      });
+      _toast(context, 'Телефон подтверждён.');
+      return true;
+    } finally {
+      if (mounted) setState(() => _phoneStatusBusy = false);
+    }
+  }
+
+  Future<void> _showPhoneBindingDialog() async {
+    if (kIsWeb || widget.session.accessToken == 'dev-token') return;
+    final phoneController = TextEditingController(text: _phone ?? '');
+    final codeController = TextEditingController();
+    bool codeRequested = false;
+    String? activePhone = _phone;
+
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) {
+          return StatefulBuilder(
+            builder: (dialogContext, setDialogState) {
+              return AlertDialog(
+                title: const Text('Привязать телефон'),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    TextField(
+                      controller: phoneController,
+                      keyboardType: TextInputType.phone,
+                      decoration: const InputDecoration(
+                        labelText: 'Телефон',
+                        hintText: '+7 900 000-00-00',
+                      ),
+                    ),
+                    if (codeRequested) ...[
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: codeController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Код из SMS',
+                          hintText: '000000',
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    Text(
+                      _phoneStatusMessage ??
+                          'SMS-вход подготовлен. После подключения провайдера код будет приходить автоматически.',
+                      style: const TextStyle(
+                        color: kBrandMuted,
+                        fontWeight: FontWeight.w700,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(dialogContext).pop(),
+                    child: const Text('Закрыть'),
+                  ),
+                  FilledButton(
+                    onPressed: _phoneStatusBusy
+                        ? null
+                        : () async {
+                            if (!codeRequested) {
+                              final data = await _startPhoneConfirmation(
+                                phoneController.text,
+                              );
+                              if (data == null) return;
+                              activePhone =
+                                  (data['phone'] ?? phoneController.text)
+                                      .toString();
+                              phoneController.text =
+                                  activePhone ?? phoneController.text;
+                              if (data['phoneVerified'] == true) {
+                                if (dialogContext.mounted) {
+                                  Navigator.of(dialogContext).pop();
+                                }
+                                return;
+                              }
+                              if (data['deliveryStatus'] == 'sent') {
+                                setDialogState(() => codeRequested = true);
+                              }
+                              return;
+                            }
+
+                            final ok = await _verifyPhoneConfirmation(
+                              activePhone ?? phoneController.text,
+                              codeController.text,
+                            );
+                            if (ok && dialogContext.mounted) {
+                              Navigator.of(dialogContext).pop();
+                            }
+                          },
+                    child: Text(codeRequested ? 'Подтвердить' : 'Получить код'),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+    } finally {
+      phoneController.dispose();
+      codeController.dispose();
+    }
   }
 
   Future<void> _loadPrefsAndApply() async {
@@ -1222,8 +5135,8 @@ class _RootShellState extends State<RootShell> {
       final p = await _prefsStore.readPrefs();
       if (!mounted) return;
 
-      // Apply language
-      sLanguage = p.language;
+      // English UI is not shipped yet, so do not expose a fake broken switch.
+      sLanguage = 'Русский';
 
       // Apply server
       final srv = servers.firstWhere(
@@ -1271,10 +5184,11 @@ class _RootShellState extends State<RootShell> {
       trafficGb = p.trafficGb.clamp(1.0, 500.0);
       devices = p.devices.clamp(1, 5);
 
-      optNoAds = p.optNoAds;
+      optNoAds = true;
       optSmartRouting =
           true; // временно всегда разрешаем Social Only в Windows-клиенте
       optDedicatedIp = p.optDedicatedIp;
+      optAutoRenew = p.optAutoRenew;
 
       await _repairProvisionedConfigFromPreferredDevSource(showToast: false);
       await _cfg.ensureBaseSeededFromManagedIfMissing();
@@ -1286,6 +5200,43 @@ class _RootShellState extends State<RootShell> {
       if (mounted) setState(() {});
     } catch (_) {
       // ignore
+    } finally {
+      if (!_pendingVpnResumeScheduled) {
+        _pendingVpnResumeScheduled = true;
+        unawaited(_resumePendingVpnActionIfNeeded());
+      }
+    }
+  }
+
+  Future<void> _resumePendingVpnActionIfNeeded() async {
+    if (kIsWeb || !Platform.isWindows) return;
+
+    final action = await _pendingVpnActionStore.read();
+    if (action == null || action.isEmpty) return;
+    await appendBlueVpnClientLog('resume pending start action=$action');
+
+    final elevated = await isWindowsProcessElevated();
+    await appendBlueVpnClientLog(
+      'resume pending elevated=$elevated action=$action vpnEnabled=$vpnEnabled',
+    );
+    if (!elevated) return;
+
+    await _pendingVpnActionStore.clear();
+    await appendBlueVpnClientLog('resume pending cleared action=$action');
+
+    if (!mounted) return;
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    if (!mounted) return;
+
+    if (action == 'connect' && !vpnEnabled) {
+      await appendBlueVpnClientLog('resume pending invoking connect');
+      await _toggleVpnReal();
+      return;
+    }
+
+    if (action == 'disconnect' && vpnEnabled) {
+      await appendBlueVpnClientLog('resume pending invoking disconnect');
+      await _toggleVpnReal();
     }
   }
 
@@ -1303,54 +5254,570 @@ class _RootShellState extends State<RootShell> {
           'trafficPack': trafficPack.name,
           'trafficGb': trafficGb,
           'devices': devices,
-          'optNoAds': optNoAds,
+          'optNoAds': true,
           'optSmartRouting': true,
           'optDedicatedIp': optDedicatedIp,
+          'optAutoRenew': optAutoRenew,
         }),
       );
     });
   }
 
-  bool _configLooksLikeFullTunnel(String raw) {
-    final line = RegExp(
-      r'^\s*AllowedIPs\s*=\s*(.*)$',
+  List<String> _selectedTariffAppCodes() {
+    return selectedApps.map((e) => e.name).toList()..sort();
+  }
+
+  void _applyTariffSelectionFromServer(Map<String, dynamic> selection) {
+    final packName = (selection['trafficPack'] ?? '').toString().trim();
+    final nextPack = TrafficPack.values.firstWhere(
+      (item) => item.name == packName,
+      orElse: () => TrafficPack.gb20,
+    );
+
+    final nextGb = ((selection['trafficGb'] ?? trafficGb) as num).toDouble();
+    final nextDevices = (selection['devices'] ?? devices) as int;
+    final nextDedicatedIp = selection['dedicatedIp'] == true;
+    final nextAutoRenew = selection['autoRenew'] == true;
+    final rawApps = (selection['unlimitedApps'] as List?) ?? const [];
+    final nextApps = <TariffApp>{};
+    for (final item in rawApps) {
+      final name = item.toString();
+      final match = TariffApp.values.where((entry) => entry.name == name);
+      if (match.isNotEmpty) {
+        nextApps.add(match.first);
+      }
+    }
+
+    setState(() {
+      trafficPack = nextPack;
+      trafficGb = nextGb.clamp(1.0, 500.0);
+      devices = nextDevices.clamp(1, 5);
+      optNoAds = true;
+      optSmartRouting = true;
+      optDedicatedIp = nextDedicatedIp;
+      optAutoRenew = nextAutoRenew;
+      selectedApps
+        ..clear()
+        ..addAll(nextApps);
+    });
+  }
+
+  void _scheduleTariffRefresh() {
+    if (kIsWeb || widget.session.accessToken == 'dev-token') return;
+    _tariffDebounce?.cancel();
+    _tariffDebounce = Timer(const Duration(milliseconds: 450), () {
+      unawaited(_refreshTariffServerState(showToast: false));
+    });
+  }
+
+  Future<void> _loadPendingBillingOrder() async {
+    final order = await _pendingBillingOrderStore.read();
+    if (!mounted || order == null) return;
+    setState(() => _pendingBillingOrder = order);
+    _startPendingBillingPolling();
+    unawaited(_checkPendingBillingOrder(showToast: false, showBusy: false));
+  }
+
+  void _startPendingBillingPolling() {
+    if (kIsWeb || widget.session.accessToken == 'dev-token') return;
+    if (_pendingBillingPollTimer != null) return;
+    _pendingBillingPollTimer = Timer.periodic(const Duration(seconds: 8), (_) {
+      if (!mounted || _pendingBillingOrder == null) {
+        _stopPendingBillingPolling();
+        return;
+      }
+      unawaited(_checkPendingBillingOrder(showToast: false, showBusy: false));
+    });
+  }
+
+  void _stopPendingBillingPolling() {
+    _pendingBillingPollTimer?.cancel();
+    _pendingBillingPollTimer = null;
+    _pendingBillingCheckRunning = false;
+  }
+
+  Future<void> _openPaymentUrl(String url) async {
+    _startPendingBillingPolling();
+    await openExternalUrl(url);
+  }
+
+  Future<void> _syncTariffFromServerSilently() async {
+    if (kIsWeb || widget.session.accessToken == 'dev-token') return;
+    try {
+      final res = await _api.fetchSubscriptionProfile(
+        accessToken: widget.session.accessToken,
+      );
+      if (!res.ok || res.data == null) return;
+
+      final plan = (res.data!['planName'] ?? '').toString().trim();
+      final selection = res.data!['selection'];
+      final subscription = res.data!['subscription'];
+      if (!mounted) return;
+
+      if (selection is Map) {
+        _applyTariffSelectionFromServer(Map<String, dynamic>.from(selection));
+      }
+      setState(() {
+        if (plan.isNotEmpty) {
+          planName = plan;
+        }
+        _applySubscriptionUiState(res.data!, subscription);
+      });
+    } catch (_) {}
+  }
+
+  void _applySubscriptionUiState(
+    Map<String, dynamic> profile,
+    Object? subscription,
+  ) {
+    Map<String, dynamic>? sub;
+    if (subscription is Map) {
+      sub = Map<String, dynamic>.from(subscription);
+    }
+
+    _subscriptionActive =
+        profile['isActive'] == true || sub?['isActive'] == true;
+    final expiresRaw = profile['expiresAt'] ?? sub?['expiresAt'];
+    final expires = expiresRaw == null ? '' : expiresRaw.toString().trim();
+    _subscriptionExpiresAt = expires.isEmpty ? null : expires;
+
+    final monthlyRaw = profile['monthlyPriceRub'] ?? sub?['monthlyPriceRub'];
+    _subscriptionMonthlyPriceRub = monthlyRaw is num
+        ? monthlyRaw.toInt()
+        : int.tryParse((monthlyRaw ?? '').toString());
+
+    final autoRenewRaw = profile['autoRenew'] ?? sub?['autoRenew'];
+    _subscriptionAutoRenew = autoRenewRaw == true;
+    final paymentMethodRaw =
+        profile['paymentMethodSaved'] ?? sub?['paymentMethodSaved'];
+    _paymentMethodSaved = paymentMethodRaw == true;
+  }
+
+  Future<void> _cancelAutoRenew() async {
+    if (kIsWeb) return;
+    if (widget.session.accessToken == 'dev-token') {
+      _toast(context, 'DEV-вход: отключение автопродления недоступно.');
+      return;
+    }
+
+    if (mounted) setState(() => _tariffBusy = true);
+    try {
+      final res = await _api.cancelAutoRenew(
+        accessToken: widget.session.accessToken,
+      );
+      if (!mounted) return;
+      if (!res.ok || res.data == null) {
+        final text = res.message ?? 'Не удалось отключить автопродление.';
+        setState(() => _tariffStatus = text);
+        _toast(context, text);
+        return;
+      }
+
+      final rawSub = res.data!['subscription'];
+      final sub = rawSub is Map
+          ? Map<String, dynamic>.from(rawSub)
+          : <String, dynamic>{};
+      final selection = sub['selection'];
+      if (selection is Map) {
+        _applyTariffSelectionFromServer(Map<String, dynamic>.from(selection));
+      }
+      setState(() {
+        optAutoRenew = false;
+        _applySubscriptionUiState(const <String, dynamic>{}, sub);
+        _tariffStatus =
+            'Автопродление отключено. Текущий оплаченный период останется активным.';
+      });
+      _schedulePrefsSave();
+      _toast(context, 'Автопродление отключено.');
+    } finally {
+      if (mounted) setState(() => _tariffBusy = false);
+    }
+  }
+
+  Future<void> _refreshTariffServerState({required bool showToast}) async {
+    if (kIsWeb) return;
+    if (widget.session.accessToken == 'dev-token') {
+      if (mounted) {
+        setState(() {
+          _tariffCatalog = null;
+          _tariffQuote = null;
+          _tariffStatus = 'DEV-вход: серверный тарифный каталог недоступен.';
+        });
+      }
+      return;
+    }
+
+    if (mounted) setState(() => _tariffBusy = true);
+    try {
+      final catalogRes = await _api.fetchTariffCatalog();
+      final quoteRes = await _api.quoteTariff(
+        trafficPack: trafficPack.name,
+        trafficGb: trafficGb.round(),
+        unlimitedApps: _selectedTariffAppCodes(),
+        devices: devices,
+        dedicatedIp: optDedicatedIp,
+      );
+
+      if (!mounted) return;
+
+      if (!catalogRes.ok || catalogRes.data == null) {
+        setState(
+          () => _tariffStatus =
+              catalogRes.message ?? 'Не удалось загрузить каталог тарифов.',
+        );
+        if (showToast) {
+          _toast(context, _tariffStatus!);
+        }
+        return;
+      }
+
+      if (!quoteRes.ok || quoteRes.data == null) {
+        setState(() {
+          _tariffCatalog = catalogRes.data;
+          _tariffStatus = quoteRes.message ?? 'Не удалось пересчитать тариф.';
+        });
+        if (showToast) {
+          _toast(context, _tariffStatus!);
+        }
+        return;
+      }
+
+      setState(() {
+        _tariffCatalog = catalogRes.data;
+        _tariffQuote = quoteRes.data;
+        final quote = quoteRes.data!['quote'];
+        final monthly = quote is Map ? quote['monthlyPriceRub'] : null;
+        _tariffStatus = monthly == null
+            ? 'Цена обновлена.'
+            : 'Цена обновлена: $monthly ₽/мес.';
+      });
+
+      if (showToast) {
+        _toast(context, _tariffStatus!);
+      }
+    } finally {
+      if (mounted) setState(() => _tariffBusy = false);
+    }
+  }
+
+  Future<void> _createTariffOrderOnServer() async {
+    if (kIsWeb) return;
+    if (widget.session.accessToken == 'dev-token') {
+      _toast(context, 'Сначала войди в аккаунт, чтобы подключить тариф.');
+      return;
+    }
+
+    if (mounted) setState(() => _tariffBusy = true);
+    try {
+      final res = await _api.createBillingOrder(
+        accessToken: widget.session.accessToken,
+        trafficPack: trafficPack.name,
+        trafficGb: trafficGb.round(),
+        unlimitedApps: _selectedTariffAppCodes(),
+        devices: devices,
+        dedicatedIp: optDedicatedIp,
+        autoRenew: optAutoRenew,
+      );
+
+      if (!mounted) return;
+      if (!res.ok || res.data == null) {
+        final text = res.message ?? 'Не удалось создать заказ на оплату.';
+        setState(() => _tariffStatus = text);
+        _toast(context, text);
+        return;
+      }
+
+      final order = res.data!['order'];
+      final orderMap = order is Map ? Map<String, dynamic>.from(order) : null;
+      final selection = orderMap?['selection'];
+      final quote = orderMap?['quote'];
+
+      if (selection is Map) {
+        _applyTariffSelectionFromServer(Map<String, dynamic>.from(selection));
+      }
+
+      setState(() {
+        _tariffQuote = {
+          if (selection is Map)
+            'selection': Map<String, dynamic>.from(selection),
+          if (quote is Map) 'quote': Map<String, dynamic>.from(quote),
+          if (orderMap != null) 'order': orderMap,
+        };
+        if (orderMap != null) {
+          _pendingBillingOrder = orderMap;
+        }
+        final orderId = (orderMap?['orderId'] ?? '').toString();
+        _tariffStatus = orderId.isEmpty
+            ? 'Заказ на оплату создан. Тариф активируется после подтверждения оплаты.'
+            : 'Заказ $orderId создан. Тариф активируется после подтверждения оплаты.';
+      });
+      if (orderMap != null) {
+        await _pendingBillingOrderStore.write(orderMap);
+        _startPendingBillingPolling();
+      }
+      _schedulePrefsSave();
+      _toast(context, 'Заказ на оплату создан.');
+      final paymentUrl = (orderMap?['paymentUrl'] ?? '').toString().trim();
+      if (paymentUrl.isNotEmpty) {
+        await _openPaymentUrl(paymentUrl);
+      }
+    } finally {
+      if (mounted) setState(() => _tariffBusy = false);
+    }
+  }
+
+  Future<void> _checkPendingBillingOrder({
+    required bool showToast,
+    bool showBusy = true,
+  }) async {
+    if (kIsWeb) return;
+    if (widget.session.accessToken == 'dev-token') {
+      if (showToast) {
+        _toast(context, 'DEV-вход: проверка оплаты недоступна.');
+      }
+      return;
+    }
+    if (_pendingBillingCheckRunning) return;
+
+    final order =
+        _pendingBillingOrder ?? await _pendingBillingOrderStore.read();
+    final orderId = (order?['orderId'] ?? '').toString().trim();
+    if (orderId.isEmpty) {
+      _stopPendingBillingPolling();
+      if (showToast) {
+        _toast(context, 'Активного заказа на оплату нет.');
+      }
+      return;
+    }
+
+    _pendingBillingCheckRunning = true;
+    if (showBusy && mounted) setState(() => _tariffBusy = true);
+    try {
+      final res = await _api.fetchBillingOrder(
+        accessToken: widget.session.accessToken,
+        orderId: orderId,
+      );
+      if (!mounted) return;
+      if (!res.ok || res.data == null) {
+        final text = res.message ?? 'Не удалось проверить оплату.';
+        setState(() => _tariffStatus = text);
+        if (showToast) _toast(context, text);
+        return;
+      }
+
+      final rawOrder = res.data!['order'];
+      final freshOrder = rawOrder is Map
+          ? Map<String, dynamic>.from(rawOrder)
+          : <String, dynamic>{};
+      final status = (freshOrder['status'] ?? '').toString().trim();
+
+      if (status == 'activated' || status == 'paid') {
+        await _pendingBillingOrderStore.clear();
+        _stopPendingBillingPolling();
+        setState(() {
+          _pendingBillingOrder = null;
+          _tariffStatus = 'Оплата подтверждена. Тариф активирован.';
+        });
+        await _syncTariffFromServerSilently();
+        await _syncPlanSilently();
+        await _refreshTariffServerState(showToast: false);
+        if (showToast && mounted) {
+          _toast(context, 'Оплата подтверждена, тариф активирован.');
+        }
+        return;
+      }
+
+      if (status == 'canceled' || status == 'expired') {
+        await _pendingBillingOrderStore.clear();
+        _stopPendingBillingPolling();
+        setState(() {
+          _pendingBillingOrder = null;
+          _tariffStatus = status == 'expired'
+              ? 'Срок оплаты заказа истёк. Создай новый заказ.'
+              : 'Заказ отменён. Можно создать новый заказ на оплату.';
+        });
+        if (showToast) {
+          _toast(context, 'Заказ больше не ожидает оплату.');
+        }
+        return;
+      }
+
+      await _pendingBillingOrderStore.write(freshOrder);
+      setState(() {
+        _pendingBillingOrder = freshOrder;
+        _tariffStatus =
+            'Заказ ещё ожидает подтверждения оплаты. Green VPN проверяет оплату автоматически.';
+      });
+      if (showToast) {
+        _toast(context, 'Оплата пока не подтверждена.');
+      }
+    } finally {
+      _pendingBillingCheckRunning = false;
+      if (showBusy && mounted) setState(() => _tariffBusy = false);
+    }
+  }
+
+  String? _readConfigField(String rawConfig, String fieldName) {
+    final match = RegExp(
+      '^\\s*$fieldName\\s*=\\s*(.+?)\\s*\$',
       multiLine: true,
       caseSensitive: false,
-    ).firstMatch(raw);
+    ).firstMatch(rawConfig);
+    final value = match?.group(1)?.trim();
+    if (value == null || value.isEmpty) return null;
+    return value;
+  }
 
-    if (line == null) return false;
-    final value = (line.group(1) ?? '').toLowerCase();
-    return value.contains('0.0.0.0/0') || value.contains('::/0');
+  String? _endpointHostFromConfig(String rawConfig) {
+    final endpoint = (_readConfigField(rawConfig, 'Endpoint') ?? '')
+        .toLowerCase();
+    if (endpoint.isEmpty) return null;
+
+    final value = endpoint.trim();
+    if (value.startsWith('[')) {
+      final endBracket = value.indexOf(']');
+      if (endBracket > 1) {
+        return value.substring(1, endBracket);
+      }
+    }
+
+    final lastColon = value.lastIndexOf(':');
+    if (lastColon <= 0) return value;
+    return value.substring(0, lastColon);
+  }
+
+  bool _configLooksLikeDedicatedDev1(String rawConfig) {
+    final endpointHost = _endpointHostFromConfig(rawConfig);
+    if (endpointHost == null || endpointHost.isEmpty) return false;
+
+    if (rawConfig.contains('engage.cloudflareclient.com')) return false;
+    if (rawConfig.contains('\n    S1 =') ||
+        rawConfig.contains('\r\n    S1 =')) {
+      return false;
+    }
+
+    return endpointHost == kIntelligentSmewHost;
+  }
+
+  String _normalizeDevEndpoint(String rawConfig) {
+    return normalizeProvisionedEndpoint(rawConfig);
+  }
+
+  bool _configLooksLikeSupportedLocalServer(String rawConfig) {
+    return _configLooksLikeDedicatedDev1(rawConfig);
+  }
+
+  String? _expectedEndpointHostForSelection() {
+    if (selectedServer.isAuto) return null;
+    return selectedServer.endpointHost;
+  }
+
+  bool _configMatchesSelectedServer(String rawConfig) {
+    final endpointHost = _endpointHostFromConfig(rawConfig);
+    if (endpointHost == null || endpointHost.isEmpty) return false;
+
+    final expectedHost = _expectedEndpointHostForSelection();
+    if (expectedHost == null) {
+      return endpointHost == kIntelligentSmewHost;
+    }
+
+    return endpointHost == expectedHost;
   }
 
   List<String> _preferredLocalConfigCandidates() {
-    if (kIsWeb) return const [];
-    final home = Platform.environment['USERPROFILE'];
-    if (home == null || home.isEmpty) return const [];
+    if (kIsWeb || !Platform.isWindows) return const [];
 
-    return <String>[
-      '$home\\OneDrive\\Desktop\\WARP.conf',
-      '$home\\Desktop\\WARP.conf',
-      '$home\\Downloads\\WARP.conf',
-      '$home\\Downloads\\WARP (1).conf',
-      '$home\\Downloads\\Telegram Desktop\\WARP.conf',
-      '$home\\Downloads\\Telegram Desktop\\WARP (2).conf',
-      '$home\\Downloads\\Telegram Desktop\\WARP (3).conf',
-      '$home\\Desktop\\$kTunnelName.conf',
-      '$home\\Downloads\\$kTunnelName.conf',
-      '$home\\Desktop\\BlueVPN.conf',
-      '$home\\Downloads\\BlueVPN.conf',
-    ];
+    final out = <String>[];
+    final seen = <String>{};
+
+    void addCandidate(String? path) {
+      if (path == null) return;
+      final trimmed = path.trim();
+      if (trimmed.isEmpty) return;
+      final key = trimmed.toLowerCase();
+      if (seen.add(key)) {
+        out.add(trimmed);
+      }
+    }
+
+    final programData = Platform.environment['ProgramData'];
+    if (programData != null && programData.isNotEmpty) {
+      final bluevpnDir = Directory('$programData\\BlueVPN');
+      addCandidate('$programData\\BlueVPN\\BlueVPNDev1.base.conf');
+      addCandidate('$programData\\BlueVPN\\BlueVPNDev1.conf');
+      addCandidate('$programData\\BlueVPN\\BlueVPNDev1.real.conf');
+      addCandidate('$programData\\BlueVPN\\BlueVPNDev1.seed.conf');
+      addCandidate('$programData\\BlueVPN\\BlueVPN.base.conf');
+      addCandidate('$programData\\BlueVPN\\BlueVPN.conf');
+      addCandidate('$programData\\BlueVPN\\BlueVPN.conf.full.bak');
+
+      final systemDrive = Platform.environment['SystemDrive'] ?? 'C:';
+      addCandidate('$systemDrive\\313\\BlueVPNDev1.real.conf');
+
+      if (bluevpnDir.existsSync()) {
+        final backupDirs =
+            bluevpnDir
+                .listSync()
+                .whereType<Directory>()
+                .where(
+                  (dir) =>
+                      dir.path.toLowerCase().contains('\\backup_dev1_') ||
+                      dir.path.toLowerCase().contains(
+                        '\\backup_reseed_dev1_',
+                      ) ||
+                      dir.path.toLowerCase().contains('\\backup_reset_') ||
+                      dir.path.toLowerCase().contains(
+                        '\\backup_switch_to_warp_',
+                      ),
+                )
+                .toList()
+              ..sort((a, b) => b.path.compareTo(a.path));
+
+        for (final dir in backupDirs) {
+          addCandidate('${dir.path}\\BlueVPNDev1.conf');
+          addCandidate('${dir.path}\\BlueVPNDev1.base.conf');
+          addCandidate('${dir.path}\\BlueVPN.conf');
+          addCandidate('${dir.path}\\BlueVPN.base.conf');
+        }
+      }
+    }
+
+    final resolvedExecutable = Platform.resolvedExecutable;
+    if (resolvedExecutable.isNotEmpty) {
+      final exeDir = File(resolvedExecutable).parent.path;
+      addCandidate('$exeDir\\BlueVPNDev1.real.conf');
+      addCandidate('$exeDir\\BlueVPNDev1.conf');
+      addCandidate('$exeDir\\BlueVPN.conf');
+    }
+
+    final cwd = Directory.current.path;
+    addCandidate('$cwd\\BlueVPNDev1.real.conf');
+    addCandidate('$cwd\\BlueVPNDev1.conf');
+    addCandidate('$cwd\\BlueVPN.conf');
+
+    final userProfile = Platform.environment['USERPROFILE'];
+    if (userProfile != null && userProfile.isNotEmpty) {
+      addCandidate('$userProfile\\Desktop\\BlueVPNDev1.real.conf');
+      addCandidate('$userProfile\\Desktop\\BlueVPNDev1.conf');
+      addCandidate('$userProfile\\Downloads\\BlueVPNDev1.real.conf');
+      addCandidate('$userProfile\\Downloads\\BlueVPNDev1.conf');
+      addCandidate('$userProfile\\Downloads\\WARP.conf');
+      addCandidate('$userProfile\\Desktop\\WARP.conf');
+    }
+
+    return out;
   }
 
-  Future<String?> _findPreferredLocalConfig() async {
+  Future<_LocalConfigCandidate?> _findPreferredLocalConfig() async {
     for (final p in _preferredLocalConfigCandidates()) {
       final f = File(p);
       if (!f.existsSync()) continue;
       try {
-        final raw = await f.readAsString();
+        final raw = _normalizeDevEndpoint(await f.readAsString());
         if (raw.trim().isEmpty) continue;
-        return raw;
+        if (!_configLooksLikeSupportedLocalServer(raw)) continue;
+        if (!_configMatchesSelectedServer(raw)) continue;
+        return _LocalConfigCandidate(path: p, content: raw);
       } catch (_) {
         // ignore and try next
       }
@@ -1358,11 +5825,12 @@ class _RootShellState extends State<RootShell> {
     return null;
   }
 
-  Future<void> _repairProvisionedConfigFromPreferredDevSource({
+  Future<bool> _repairProvisionedConfigFromPreferredDevSource({
     required bool showToast,
   }) async {
-    if (kIsWeb) return;
-    if (widget.session.accessToken != 'dev-token') return;
+    if (kIsWeb || !Platform.isWindows) return false;
+
+    await _cfg.ensureBaseSeededFromManagedIfMissing();
 
     String? base;
     try {
@@ -1371,20 +5839,26 @@ class _RootShellState extends State<RootShell> {
       base = null;
     }
 
-    if (base != null &&
-        base.trim().isNotEmpty &&
-        _configLooksLikeFullTunnel(base)) {
-      return;
+    final normalizedBase = base == null ? null : _normalizeDevEndpoint(base);
+    if (normalizedBase != null &&
+        normalizedBase.trim().isNotEmpty &&
+        _configLooksLikeSupportedLocalServer(normalizedBase) &&
+        _configMatchesSelectedServer(normalizedBase)) {
+      if (normalizedBase != base) {
+        await _writeProvisionedConfig(normalizedBase);
+      }
+      return true;
     }
 
     final preferred = await _findPreferredLocalConfig();
-    if (preferred == null || preferred.trim().isEmpty) return;
+    if (preferred == null || preferred.content.trim().isEmpty) return false;
 
-    await _writeProvisionedConfig(preferred);
+    await _writeProvisionedConfig(preferred.content);
 
     if (showToast && mounted) {
-      _toast(context, 'Локальный WARP/BlueVPN конфиг восстановлен.');
+      _toast(context, 'BlueVPNDev1 конфиг восстановлен из ${preferred.path}');
     }
+    return true;
   }
 
   List<String> _resolveSocialAllowedIps(Set<SocialApp> apps) {
@@ -1407,29 +5881,7 @@ class _RootShellState extends State<RootShell> {
   }
 
   String _replaceAllowedIps(String configText, List<String> allowedIps) {
-    final value = allowedIps.join(', ');
-
-    final regExp = RegExp(
-      r'(^\s*AllowedIPs\s*=\s*.*$)',
-      multiLine: true,
-      caseSensitive: false,
-    );
-
-    if (regExp.hasMatch(configText)) {
-      return configText.replaceFirst(regExp, 'AllowedIPs = $value');
-    }
-
-    final lines = configText.split('\n');
-    final peerIndex = lines.indexWhere(
-      (line) => line.trim().toLowerCase() == '[peer]',
-    );
-
-    if (peerIndex == -1) {
-      return configText;
-    }
-
-    lines.insert(peerIndex + 1, 'AllowedIPs = $value');
-    return lines.join('\n');
+    return replaceAllowedIpsInConfig(configText, allowedIps);
   }
 
   String _buildManagedConfigFromBase(String baseConfig) {
@@ -1442,8 +5894,45 @@ class _RootShellState extends State<RootShell> {
   }
 
   Future<void> _writeProvisionedConfig(String rawConfig) async {
-    await _cfg.writeBaseConfig(rawConfig);
     await _cfg.writeManagedConfig(_buildManagedConfigFromBase(rawConfig));
+    try {
+      await _cfg.writeBaseConfig(rawConfig);
+    } catch (e) {
+      await appendBlueVpnClientLog(
+        'config write skipped path=${_cfg.baseConfigPath} kind=base-root error=$e',
+      );
+    }
+  }
+
+  Future<bool> _reuseExistingProvisionedConfig({
+    required String reason,
+    required bool showToast,
+  }) async {
+    try {
+      await _cfg.ensureBaseSeededFromManagedIfMissing();
+      final base = await _cfg.readBaseConfig();
+      if (base == null || base.trim().isEmpty) return false;
+
+      final normalizedBase = _normalizeDevEndpoint(base);
+      if (!_configLooksLikeSupportedLocalServer(normalizedBase) ||
+          !_configMatchesSelectedServer(normalizedBase)) {
+        return false;
+      }
+
+      await _cfg.writeManagedConfig(
+        _buildManagedConfigFromBase(normalizedBase),
+      );
+      await appendBlueVpnClientLog(
+        'ensure config fetch failed; using existing local config: $reason',
+      );
+      if (showToast && mounted) {
+        _toast(context, 'Использую сохранённый VPN-конфиг.');
+      }
+      return true;
+    } catch (e) {
+      await appendBlueVpnClientLog('local config fallback failed: $e');
+      return false;
+    }
   }
 
   Future<bool> _applyCurrentConfigMode({
@@ -1498,13 +5987,74 @@ class _RootShellState extends State<RootShell> {
   }
 
   void _setLanguage(String v) {
-    setState(() => sLanguage = v);
+    setState(() => sLanguage = 'Русский');
     _schedulePrefsSave();
   }
 
   Future<void> _syncVpnStatus() async {
+    final wgState = _wireGuardState;
+    if (wgState != null && !wgState.installed) {
+      if (mounted) setState(() => vpnEnabled = false);
+      return;
+    }
     final on = await _vpnBackend.isConnected();
     if (mounted) setState(() => vpnEnabled = on);
+  }
+
+  bool _isDeviceAttachedConflict(String? message) {
+    final raw = (message ?? '').toLowerCase();
+    return raw.contains('409') &&
+        raw.contains('device') &&
+        raw.contains('attached') &&
+        raw.contains('another user');
+  }
+
+  Future<String?> _rotateDeviceId() async {
+    if (kIsWeb) return null;
+    final next = await _deviceStore.rotate();
+    _deviceId = next;
+    return next;
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> _bootstrapWithDeviceRetry({
+    required bool showToastOnRotate,
+  }) async {
+    var did = await _ensureDeviceId();
+    if (did == null || did.isEmpty) {
+      return const ApiResult.err('Не удалось получить device id.');
+    }
+
+    var boot = await _api.bootstrapClient(
+      accessToken: widget.session.accessToken,
+      deviceId: did,
+      deviceName: Platform.localHostname,
+      platform: 'windows',
+      appVersion: kAppVersion,
+    );
+
+    if (!_isDeviceAttachedConflict(boot.message)) {
+      return boot;
+    }
+
+    did = await _rotateDeviceId();
+    if (did == null || did.isEmpty) {
+      return const ApiResult.err('Не удалось перевыпустить device id.');
+    }
+
+    if (showToastOnRotate && mounted) {
+      _toast(
+        context,
+        'Устройство было привязано к старому аккаунту. Создаю новый device id...',
+      );
+    }
+
+    return _api.bootstrapClient(
+      accessToken: widget.session.accessToken,
+      deviceId: did,
+      deviceName: Platform.localHostname,
+      platform: 'windows',
+      appVersion: kAppVersion,
+    );
   }
 
   Future<String?> _ensureDeviceId() async {
@@ -1531,33 +6081,27 @@ class _RootShellState extends State<RootShell> {
   }
 
   Future<bool> _trySeedDevConfig({required bool showToast}) async {
-    // Для разработки без сервера: ищем сначала WARP.conf, потом BlueVPN.conf.
-    if (kIsWeb) return false;
-
-    for (final p in _preferredLocalConfigCandidates()) {
-      final f = File(p);
-      if (!f.existsSync()) continue;
-      try {
-        final cfg = await f.readAsString();
-        if (cfg.trim().isEmpty) continue;
-        await _writeProvisionedConfig(cfg);
-        if (showToast) {
-          _toast(context, 'DEV: конфиг подхвачен из $p');
-        }
-        return true;
-      } catch (_) {
-        // ignore and try next
-      }
-    }
-
-    return false;
+    return _repairProvisionedConfigFromPreferredDevSource(showToast: showToast);
   }
 
-    Future<void> _ensureProvisionedConfigSilently() async {
+  Future<void> _ensureProvisionedConfigSilently() async {
     if (kIsWeb) return;
     try {
       if (widget.session.accessToken == 'dev-token') {
-        await _repairProvisionedConfigFromPreferredDevSource(showToast: false);
+        final repaired = await _repairProvisionedConfigFromPreferredDevSource(
+          showToast: false,
+        );
+        if (repaired) {
+          await _cfg.ensureBaseSeededFromManagedIfMissing();
+          final base = await _cfg.readBaseConfig();
+          if (base != null && base.trim().isNotEmpty) {
+            await _cfg.writeManagedConfig(_buildManagedConfigFromBase(base));
+          }
+          return;
+        }
+
+        await _trySeedDevConfig(showToast: false);
+        return;
       }
 
       final has = await _cfg.hasManagedConfig();
@@ -1567,28 +6111,13 @@ class _RootShellState extends State<RootShell> {
         if (base != null && base.trim().isNotEmpty) {
           await _cfg.writeManagedConfig(_buildManagedConfigFromBase(base));
         }
-        return;
       }
 
-      if (widget.session.accessToken == 'dev-token') {
-        await _trySeedDevConfig(showToast: false);
-        return;
-      }
+      final boot = await _bootstrapWithDeviceRetry(showToastOnRotate: false);
+      if (!boot.ok || boot.data == null) return;
 
       final did = await _ensureDeviceId();
       if (did == null || did.isEmpty) return;
-
-      final boot = await _api.bootstrapClient(
-        accessToken: widget.session.accessToken,
-        deviceId: did,
-        deviceName: Platform.localHostname,
-        platform: 'windows',
-        appVersion: '0.2.0-auth-gate',
-      );
-      if (!boot.ok || boot.data == null) return;
-
-      final canConnect = boot.data!['canConnect'] == true;
-      if (!canConnect) return;
 
       final sub = boot.data!['subscription'];
       if (sub is Map) {
@@ -1604,51 +6133,51 @@ class _RootShellState extends State<RootShell> {
         serverId: selectedServer.id == 'auto' ? null : selectedServer.id,
       );
       if (res.ok && res.data != null) {
-        await _writeProvisionedConfig(res.data!);
+        await _writeProvisionedConfig(_normalizeDevEndpoint(res.data!));
+      } else {
+        await _reuseExistingProvisionedConfig(
+          reason: res.message ?? '',
+          showToast: false,
+        );
       }
     } catch (_) {}
   }
 
-    Future<bool> _ensureProvisionedConfigInteractive() async {
+  Future<bool> _ensureProvisionedConfigInteractive() async {
     if (kIsWeb) return false;
+    await appendBlueVpnClientLog(
+      'ensure config interactive start token=${widget.session.accessToken == "dev-token" ? "dev" : "real"} server=${selectedServer.id}',
+    );
 
     if (widget.session.accessToken == 'dev-token') {
       final ok = await _trySeedDevConfig(showToast: true);
+      await appendBlueVpnClientLog('ensure config interactive dev result=$ok');
       if (ok) return true;
       _toast(
         context,
-        'DEV: РЅРµ РЅР°Р№РґРµРЅ Р»РѕРєР°Р»СЊРЅС‹Р№ РєРѕРЅС„РёРі. РџРѕР»РѕР¶Рё $kTunnelName.conf РЅР° Desktop/Downloads РёР»Рё РїРѕРґРЅРёРјРё СЃРµСЂРІРµСЂ.',
+        'Тестовый локальный режим недоступен. Войди в аккаунт, чтобы получить VPN-конфигурацию с сервера.',
       );
       return false;
     }
 
-    final did = await _ensureDeviceId();
-    if (did == null || did.isEmpty) {
-      _toast(context, 'РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ device id.');
-      return false;
-    }
-
-    final boot = await _api.bootstrapClient(
-      accessToken: widget.session.accessToken,
-      deviceId: did,
-      deviceName: Platform.localHostname,
-      platform: 'windows',
-      appVersion: '0.2.0-auth-gate',
+    final boot = await _bootstrapWithDeviceRetry(showToastOnRotate: true);
+    await appendBlueVpnClientLog(
+      'ensure config bootstrap ok=${boot.ok} message=${boot.message ?? ""}',
     );
 
     if (!boot.ok || boot.data == null) {
-      _toast(context, boot.message ?? 'РќРµ СѓРґР°Р»РѕСЃСЊ РїСЂРѕР№С‚Рё bootstrap.');
+      _toast(context, boot.message ?? 'Не удалось пройти bootstrap.');
+      return false;
+    }
+
+    final did = await _ensureDeviceId();
+    await appendBlueVpnClientLog('ensure config deviceId=${did ?? "null"}');
+    if (did == null || did.isEmpty) {
+      _toast(context, 'Не удалось получить device id.');
       return false;
     }
 
     final bootMap = boot.data!;
-    final canConnect = bootMap['canConnect'] == true;
-    if (!canConnect) {
-      final reason = (bootMap['reason'] ?? 'connect_not_allowed').toString();
-      _toast(context, 'РџРѕРґРєР»СЋС‡РµРЅРёРµ Р·Р°РїСЂРµС‰РµРЅРѕ: $reason');
-      return false;
-    }
-
     final sub = bootMap['subscription'];
     if (sub is Map) {
       final p = (sub['planName'] ?? sub['planCode'] ?? '').toString().trim();
@@ -1662,57 +6191,128 @@ class _RootShellState extends State<RootShell> {
       deviceId: did,
       serverId: selectedServer.id == 'auto' ? null : selectedServer.id,
     );
-    if (!res.ok || res.data == null) {
-      _toast(context, res.message ?? 'РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕР»СѓС‡РёС‚СЊ РєРѕРЅС„РёРі СЃ СЃРµСЂРІРµСЂР°.');
+    await appendBlueVpnClientLog(
+      'ensure config fetch ok=${res.ok} message=${res.message ?? ""} bytes=${res.data?.length ?? 0}',
+    );
+    if (!res.ok || res.data == null || res.data!.trim().isEmpty) {
+      final reused = await _reuseExistingProvisionedConfig(
+        reason: res.message ?? '',
+        showToast: true,
+      );
+      if (reused) return true;
+      _toast(context, res.message ?? 'Не удалось получить конфиг с сервера.');
       return false;
     }
 
-    await _writeProvisionedConfig(res.data!);
+    await _writeProvisionedConfig(_normalizeDevEndpoint(res.data!));
     return true;
   }
 
   Future<void> _toggleVpnReal() async {
-    if (vpnBusy) return;
+    await appendBlueVpnClientLog(
+      'toggle requested vpnEnabled=$vpnEnabled busy=$vpnBusy cooldown=$_vpnTapCooldown',
+    );
+    if (vpnBusy) {
+      _toast(
+        context,
+        vpnEnabled
+            ? 'Green VPN уже отключает туннель. Подожди пару секунд.'
+            : 'Green VPN уже запускает туннель. Подожди пару секунд.',
+      );
+      return;
+    }
+    if (_vpnTapCooldown) {
+      _toast(
+        context,
+        vpnEnabled
+            ? 'VPN только что переключился. Дай ему секунду спокойно зафиксироваться.'
+            : 'Green VPN уже начал переключение. Повторно нажимать не нужно.',
+      );
+      return;
+    }
+    _setVpnBusyUi(
+      stage: vpnEnabled ? 'Отключаем...' : 'Готовим подключение...',
+      hint: vpnEnabled
+          ? 'Снимаем сервис WireGuard и очищаем маршруты.'
+          : 'Проверяем доступ и готовим рабочий конфиг. Повторно нажимать не нужно.',
+    );
 
     if (kIsWeb) {
       _toast(
         context,
         'Web-режим: реальный VPN недоступен. Запусти приложение как Windows.',
       );
+      _clearVpnBusyUi();
       return;
     }
 
-    setState(() => vpnBusy = true);
+    _setVpnBusyUi(
+      stage: 'Проверяем системный компонент...',
+      hint:
+          'Green VPN использует права, выданные один раз при установке. Дополнительный UAC при запуске не нужен.',
+    );
+    final elevated = await isWindowsProcessElevated();
+    await appendBlueVpnClientLog(
+      'toggle elevated=$elevated vpnEnabled=$vpnEnabled',
+    );
+
     try {
       if (!vpnEnabled) {
+        await appendBlueVpnClientLog('toggle connect branch start');
+        _setVpnBusyUi(
+          stage: 'Получаем конфиг...',
+          hint:
+              'Регистрируем устройство на сервере и забираем конфиг именно для этого ПК.',
+        );
         final ok = await _ensureProvisionedConfigInteractive();
+        await appendBlueVpnClientLog('toggle connect ensureConfig=$ok');
         if (!ok) return;
 
+        _setVpnBusyUi(
+          stage: socialOnlyEnabled
+              ? 'Подключаем Social Only...'
+              : 'Запускаем VPN...',
+          hint: socialOnlyEnabled
+              ? 'Поднимаем туннель WireGuard в режиме только для выбранных приложений.'
+              : 'Поднимаем туннель WireGuard и ждём честный handshake.',
+        );
         final configPath = _cfg.managedConfigPath;
+        await appendBlueVpnClientLog(
+          'toggle connect backend start cfg=$configPath',
+        );
         final res = await _vpnBackend.connect(configPath: configPath);
+        await appendBlueVpnClientLog(
+          'toggle connect backend ok=${res.ok} message=${res.message ?? ""}',
+        );
         if (!res.ok) {
           _toast(context, res.message ?? 'Не удалось подключить VPN.');
           await _syncVpnStatus();
-          var onNow = false;
-          for (var i = 0; i < 40; i++) {
-            onNow = await _vpnBackend.isConnected();
-            if (onNow) break;
-            await Future.delayed(const Duration(milliseconds: 250));
-          }
-          if (mounted) setState(() => vpnEnabled = onNow);
-          if (!onNow) {
-            _toast(context, 'VPN did not start (service not RUNNING).');
-            await _syncVpnStatus();
-            return;
-          }
-
           return;
         }
 
+        _setVpnBusyUi(
+          stage: 'Проверяем статус...',
+          hint: 'Сверяем handshake, трафик и реальное состояние туннеля.',
+        );
         await _syncVpnStatus();
+        await appendBlueVpnClientLog(
+          'toggle connect sync done vpnEnabled=$vpnEnabled',
+        );
+        _startVpnTapCooldown(
+          hint:
+              'VPN только что включился. Кнопка разблокируется через секунду, чтобы избежать случайного двойного нажатия.',
+        );
         _toast(context, 'VPN включён.');
       } else {
+        await appendBlueVpnClientLog('toggle disconnect branch start');
+        _setVpnBusyUi(
+          stage: 'Отключаем VPN...',
+          hint: 'Останавливаем сервис и аккуратно снимаем туннель.',
+        );
         final res = await _vpnBackend.disconnect();
+        await appendBlueVpnClientLog(
+          'toggle disconnect backend ok=${res.ok} message=${res.message ?? ""}',
+        );
         if (!res.ok) {
           _toast(context, res.message ?? 'Не удалось отключить VPN.');
           await _syncVpnStatus();
@@ -1722,16 +6322,101 @@ class _RootShellState extends State<RootShell> {
           return;
         }
 
+        _setVpnBusyUi(
+          stage: 'Проверяем статус...',
+          hint: 'Убеждаемся, что интерфейс и маршруты действительно сняты.',
+        );
         await _syncVpnStatus();
+        await appendBlueVpnClientLog(
+          'toggle disconnect sync done vpnEnabled=$vpnEnabled',
+        );
+        _startVpnTapCooldown(
+          hint:
+              'VPN только что выключился. Кнопка разблокируется через секунду, чтобы состояние успело обновиться.',
+        );
         _toast(context, 'VPN выключен.');
       }
+    } catch (e, st) {
+      await appendBlueVpnClientLog('toggle exception=$e stack=$st');
+      if (mounted) {
+        _toast(context, 'Ошибка VPN: $e');
+      }
+      await _syncVpnStatus();
     } finally {
-      if (mounted) setState(() => vpnBusy = false);
+      _clearVpnBusyUi();
     }
   }
 
+  Future<void> _refreshServerCatalog({required bool showToast}) async {
+    if (_serverCatalogBusy) return;
+    if (mounted) {
+      setState(() {
+        _serverCatalogBusy = true;
+        if (showToast) _serverCatalogStatus = 'Обновляем список серверов...';
+      });
+    }
+    try {
+      final res = await _api.fetchServerCatalog();
+      if (!mounted) return;
+      if (!res.ok || res.data == null) {
+        setState(() {
+          _serverCatalogStatus =
+              res.message ?? 'Не удалось загрузить список серверов.';
+        });
+        if (showToast) _toast(context, _serverCatalogStatus!);
+        return;
+      }
+
+      final rawServers = res.data!['servers'];
+      final nextServers = <ServerLocation>[
+        const ServerLocation(
+          id: 'auto',
+          title: 'Авто',
+          subtitle: 'Самый здоровый endpoint из каталога',
+          pingMs: null,
+          isAuto: true,
+          status: 'healthy',
+          available: true,
+        ),
+      ];
+
+      if (rawServers is List) {
+        for (final item in rawServers) {
+          if (item is! Map) continue;
+          final parsed = ServerLocation.fromCatalogJson(
+            Map<String, dynamic>.from(item),
+          );
+          if (parsed.id.trim().isEmpty) continue;
+          nextServers.add(parsed);
+        }
+      }
+
+      if (nextServers.length == 1) {
+        nextServers.addAll(servers.where((s) => !s.isAuto));
+      }
+
+      final stillSelected = nextServers.any((s) => s.id == selectedServer.id);
+      setState(() {
+        servers = nextServers;
+        if (!stillSelected) {
+          selectedServer = nextServers.first;
+        } else {
+          selectedServer = nextServers.firstWhere(
+            (s) => s.id == selectedServer.id,
+            orElse: () => nextServers.first,
+          );
+        }
+        _serverCatalogStatus =
+            'Каталог серверов обновлён: ${nextServers.length - 1} endpoint.';
+      });
+      if (showToast) _toast(context, _serverCatalogStatus!);
+    } finally {
+      if (mounted) setState(() => _serverCatalogBusy = false);
+    }
+  }
 
   Future<void> _openServerPicker(BuildContext context) async {
+    await _refreshServerCatalog(showToast: false);
     final picked = await showDialog<ServerLocation>(
       context: context,
       builder: (ctx) {
@@ -1746,22 +6431,37 @@ class _RootShellState extends State<RootShell> {
                   final selected = s.id == selectedServer.id;
                   final subtitle = s.isAuto
                       ? 'Авто-подбор'
-                      : '${s.subtitle}${s.pingMs != null ? ' • ${s.pingMs} ms' : ''}';
+                      : [
+                          s.subtitle,
+                          if (s.protocolLabel.isNotEmpty) s.protocolLabel,
+                          if (s.pingMs != null) '${s.pingMs} ms',
+                          if (s.healthScore != null) 'health ${s.healthScore}%',
+                        ].where((e) => e.isNotEmpty).join(' • ');
                   return ListTile(
                     contentPadding: EdgeInsets.zero,
                     leading: Icon(
-                      s.isAuto ? Icons.auto_awesome_rounded : Icons.public_rounded,
-                      color: const Color(0xFF2563EB),
+                      s.isAuto
+                          ? Icons.auto_awesome_rounded
+                          : (s.available
+                                ? Icons.public_rounded
+                                : Icons.warning_amber_rounded),
+                      color: s.available ? kBrandPrimary : kBrandWarm,
                     ),
                     title: Text(
                       s.title,
                       style: const TextStyle(fontWeight: FontWeight.w900),
                     ),
                     subtitle: Text(subtitle),
+                    enabled: s.isAuto || s.available,
                     trailing: selected
-                        ? const Icon(Icons.check_circle_rounded, color: Color(0xFF2563EB))
+                        ? const Icon(
+                            Icons.check_circle_rounded,
+                            color: kBrandPrimary,
+                          )
                         : const Icon(Icons.chevron_right_rounded),
-                    onTap: () => Navigator.of(ctx).pop(s),
+                    onTap: (s.isAuto || s.available)
+                        ? () => Navigator.of(ctx).pop(s)
+                        : null,
                   );
                 }).toList(),
               ),
@@ -1788,7 +6488,6 @@ class _RootShellState extends State<RootShell> {
       }
     }
   }
-
 
   Future<void> _openSocialAppsPicker(BuildContext context) async {
     final temp = Set<SocialApp>.from(socialOnlyApps);
@@ -1818,7 +6517,7 @@ class _RootShellState extends State<RootShell> {
                           });
                         },
                         title: Text(app.title),
-                        secondary: Icon(app.icon, color: const Color(0xFF2563EB)),
+                        secondary: Icon(app.icon, color: kBrandPrimary),
                         controlAffinity: ListTileControlAffinity.trailing,
                         contentPadding: EdgeInsets.zero,
                       );
@@ -1865,20 +6564,82 @@ class _RootShellState extends State<RootShell> {
     }
   }
 
-
   @override
   void dispose() {
     _prefsDebounce?.cancel();
+    _tariffDebounce?.cancel();
+    _vpnTapCooldownTimer?.cancel();
+    _pendingBillingPollTimer?.cancel();
     super.dispose();
+  }
+
+  void _setVpnBusyUi({required String stage, required String hint}) {
+    if (!mounted) return;
+    setState(() {
+      vpnBusy = true;
+      _vpnBusyStage = stage;
+      _vpnBusyHint = hint;
+    });
+  }
+
+  void _clearVpnBusyUi() {
+    if (!mounted) return;
+    setState(() {
+      vpnBusy = false;
+      _vpnBusyStage = null;
+      if (!_vpnTapCooldown) {
+        _vpnBusyHint = null;
+      }
+    });
+  }
+
+  void _startVpnTapCooldown({
+    Duration duration = const Duration(seconds: 2),
+    required String hint,
+  }) {
+    _vpnTapCooldownTimer?.cancel();
+    if (!mounted) return;
+    setState(() {
+      _vpnTapCooldown = true;
+      _vpnBusyHint = hint;
+    });
+    _vpnTapCooldownTimer = Timer(duration, () {
+      if (!mounted) return;
+      setState(() {
+        _vpnTapCooldown = false;
+        if (!vpnBusy) {
+          _vpnBusyHint = null;
+        }
+      });
+    });
   }
 
   @override
   Widget build(BuildContext context) {
+    final wireGuardState = _wireGuardState;
     final pages = <Widget>[
       VpnPage(
         planName: planName,
         vpnEnabled: vpnEnabled,
-        onToggleVpn: () => _toggleVpnReal(),
+        vpnBusy: vpnBusy,
+        vpnInteractionLocked: _vpnInteractionLocked,
+        vpnBusyStage: _vpnBusyStage,
+        vpnBusyHint: _vpnBusyHint,
+        wireGuardInstalled: wireGuardState?.installed ?? true,
+        wireGuardStatusText: wireGuardState?.subtitle,
+        wireGuardBusy: _wireGuardBusy,
+        onInstallWireGuard: _installWireGuard,
+        onRefreshWireGuard: _refreshWireGuardState,
+        onToggleVpn: () {
+          if (wireGuardState != null && !wireGuardState.installed) {
+            _toast(
+              context,
+              'Сначала установи WireGuard. После этого кнопка VPN заработает.',
+            );
+            return;
+          }
+          unawaited(_toggleVpnReal());
+        },
 
         // Сервер
         selectedServer: selectedServer,
@@ -1886,13 +6647,16 @@ class _RootShellState extends State<RootShell> {
 
         // Соцсети
         socialOnlyEnabled: socialOnlyEnabled,
-        socialOnlyAllowed: true,
+        socialOnlyAllowed: optSmartRouting,
         socialOnlyApps: socialOnlyApps,
         onToggleSocialOnly: (v) async {
-          if (vpnBusy) return;
+          if (_vpnInteractionLocked) return;
 
           setState(() {
             vpnBusy = true;
+            _vpnBusyStage = 'Обновляем режим...';
+            _vpnBusyHint =
+                'Пересобираем конфиг и аккуратно применяем новый режим трафика.';
             socialOnlyEnabled = v;
           });
           _schedulePrefsSave();
@@ -1904,12 +6668,18 @@ class _RootShellState extends State<RootShell> {
             );
           } finally {
             if (mounted) {
-              setState(() => vpnBusy = false);
+              setState(() {
+                vpnBusy = false;
+                _vpnBusyStage = null;
+                if (!_vpnTapCooldown) {
+                  _vpnBusyHint = null;
+                }
+              });
             }
           }
         },
         onConfigureSocialApps: () async {
-          if (vpnBusy) return;
+          if (_vpnInteractionLocked) return;
           await _openSocialAppsPicker(context);
         },
 
@@ -1917,6 +6687,7 @@ class _RootShellState extends State<RootShell> {
       ),
 
       TariffPage(
+        planName: planName,
         selectedApps: selectedApps,
         trafficPack: trafficPack,
         trafficGb: trafficGb,
@@ -1924,6 +6695,22 @@ class _RootShellState extends State<RootShell> {
         optNoAds: optNoAds,
         optSmartRouting: optSmartRouting,
         optDedicatedIp: optDedicatedIp,
+        optAutoRenew: optAutoRenew,
+        tariffCatalog: _tariffCatalog,
+        tariffQuote: _tariffQuote,
+        tariffStatus: _tariffStatus,
+        pendingBillingOrder: _pendingBillingOrder,
+        subscriptionActive: _subscriptionActive,
+        subscriptionAutoRenew: _subscriptionAutoRenew,
+        paymentMethodSaved: _paymentMethodSaved,
+        subscriptionExpiresAt: _subscriptionExpiresAt,
+        subscriptionMonthlyPriceRub: _subscriptionMonthlyPriceRub,
+        tariffBusy: _tariffBusy,
+        onApplyTariff: _createTariffOrderOnServer,
+        onCheckPendingBillingOrder: () =>
+            _checkPendingBillingOrder(showToast: true),
+        onCancelAutoRenew: _cancelAutoRenew,
+        onOpenPaymentUrl: _openPaymentUrl,
         onToggleApp: (app) {
           setState(() {
             if (selectedApps.contains(app)) {
@@ -1933,31 +6720,40 @@ class _RootShellState extends State<RootShell> {
             }
           });
           _schedulePrefsSave();
+          _scheduleTariffRefresh();
         },
         onTrafficChanged: (p) {
           setState(() => trafficPack = p);
           _schedulePrefsSave();
+          _scheduleTariffRefresh();
         },
         onTrafficGbChanged: (gb) {
           setState(() => trafficGb = gb);
           _schedulePrefsSave();
+          _scheduleTariffRefresh();
         },
         onDevicesChanged: (v) {
           setState(() => devices = v.clamp(1, 5));
           _schedulePrefsSave();
+          _scheduleTariffRefresh();
         },
         onOptNoAds: (v) {
-          setState(() => optNoAds = v);
+          setState(() => optNoAds = true);
           _schedulePrefsSave();
         },
         onOptSmartRouting: (v) {
           setState(() {
-            optSmartRouting = v;
+            optSmartRouting = true;
           });
           _schedulePrefsSave();
         },
         onOptDedicatedIp: (v) {
           setState(() => optDedicatedIp = v);
+          _schedulePrefsSave();
+          _scheduleTariffRefresh();
+        },
+        onOptAutoRenew: (v) {
+          setState(() => optAutoRenew = v);
           _schedulePrefsSave();
         },
       ),
@@ -1972,26 +6768,48 @@ class _RootShellState extends State<RootShell> {
           context,
           title: 'Язык',
           current: sLanguage,
-          items: const ['Русский', 'English'],
+          items: const ['Русский'],
           onSelect: (v) => _setLanguage(v),
         ),
         email: widget.session.email,
+        emailVerified: _emailVerified,
+        emailConfirmationRequired: _emailConfirmationRequired,
+        emailStatusBusy: _emailStatusBusy,
+        emailStatusMessage: _emailStatusMessage,
+        onResendEmailConfirmation: _resendEmailConfirmation,
+        onRefreshEmailStatus: () => _refreshEmailStatus(showToast: true),
+        phone: _phone,
+        phoneVerified: _phoneVerified,
+        phoneStatusBusy: _phoneStatusBusy,
+        phoneStatusMessage: _phoneStatusMessage,
+        onRefreshPhoneStatus: () => _refreshPhoneStatus(showToast: true),
+        onBindPhone: _showPhoneBindingDialog,
         onLogout: widget.onLogout,
-        onOpenDiagnostics: () {
+        onOpenUpdates: () {
           Navigator.of(
             context,
-          ).push(MaterialPageRoute(builder: (_) => const DiagnosticsPage()));
+          ).push(MaterialPageRoute(builder: (_) => const UpdatesPage()));
+        },
+        onOpenDiagnostics: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => DiagnosticsPage(
+                accessToken: widget.session.accessToken,
+                email: widget.session.email,
+              ),
+            ),
+          );
         },
       ),
     ];
 
     return Scaffold(
-      body: SafeArea(child: pages[_index]),
+      body: _DesktopShellBody(child: pages[_index]),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _index,
         type: BottomNavigationBarType.fixed,
         onTap: (i) => setState(() => _index = i),
-        selectedItemColor: const Color(0xFF2563EB),
+        selectedItemColor: kBrandPrimary,
         unselectedItemColor: const Color(0xFF94A3B8),
         items: const [
           BottomNavigationBarItem(
@@ -2052,10 +6870,10 @@ class _RootShellState extends State<RootShell> {
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: const Color(0x140F172A)),
+                      border: Border.all(color: const Color(0x1A08785D)),
                       color: Theme.of(ctx).brightness == Brightness.dark
-                          ? const Color(0xFF0F172A)
-                          : const Color(0xFFF8FAFC),
+                          ? kBrandText
+                          : const Color(0xFFF8FBF8),
                     ),
                     child: Row(
                       children: [
@@ -2070,7 +6888,7 @@ class _RootShellState extends State<RootShell> {
                               ? Icons.check_circle_rounded
                               : Icons.chevron_right_rounded,
                           color: on
-                              ? const Color(0xFF2563EB)
+                              ? kBrandPrimary
                               : Theme.of(
                                   ctx,
                                 ).colorScheme.onSurface.withOpacity(0.35),
@@ -2097,6 +6915,15 @@ class _RootShellState extends State<RootShell> {
 class VpnPage extends StatelessWidget {
   final String planName;
   final bool vpnEnabled;
+  final bool vpnBusy;
+  final bool vpnInteractionLocked;
+  final String? vpnBusyStage;
+  final String? vpnBusyHint;
+  final bool wireGuardInstalled;
+  final String? wireGuardStatusText;
+  final bool wireGuardBusy;
+  final Future<void> Function() onInstallWireGuard;
+  final Future<void> Function() onRefreshWireGuard;
   final VoidCallback onToggleVpn;
   final VoidCallback onOpenTariff;
   final ServerLocation selectedServer;
@@ -2111,6 +6938,15 @@ class VpnPage extends StatelessWidget {
     super.key,
     required this.planName,
     required this.vpnEnabled,
+    required this.vpnBusy,
+    required this.vpnInteractionLocked,
+    required this.vpnBusyStage,
+    required this.vpnBusyHint,
+    required this.wireGuardInstalled,
+    required this.wireGuardStatusText,
+    required this.wireGuardBusy,
+    required this.onInstallWireGuard,
+    required this.onRefreshWireGuard,
     required this.onToggleVpn,
     required this.onOpenTariff,
     required this.selectedServer,
@@ -2124,7 +6960,13 @@ class VpnPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final statusText = vpnEnabled ? 'Включено' : 'Отключено';
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final textColor = theme.colorScheme.onSurface;
+    final mutedColor = textColor.withOpacity(isDark ? 0.72 : 0.62);
+    final statusText = vpnBusy
+        ? (vpnBusyStage ?? (vpnEnabled ? 'Отключаем...' : 'Подключаем...'))
+        : (vpnEnabled ? 'Включено' : 'Отключено');
     final serverTitle = selectedServer.isAuto
         ? 'Самая быстрая локация'
         : selectedServer.title;
@@ -2171,17 +7013,48 @@ class VpnPage extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 18),
+        if (!wireGuardInstalled) ...[
+          _WireGuardSetupCard(
+            title: 'Установи WireGuard перед первым подключением',
+            subtitle:
+                wireGuardStatusText ??
+                'Green VPN не сможет включать туннель, пока WireGuard не установлен.',
+            busy: wireGuardBusy,
+            onInstall: onInstallWireGuard,
+            onRefresh: onRefreshWireGuard,
+          ),
+          const SizedBox(height: 12),
+        ],
         _Card(
           child: Column(
             children: [
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
-                  onPressed: onToggleVpn,
-                  icon: Icon(
-                    vpnEnabled ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                  onPressed: wireGuardInstalled && !vpnInteractionLocked
+                      ? onToggleVpn
+                      : null,
+                  icon: vpnBusy
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : Icon(
+                          vpnEnabled
+                              ? Icons.pause_rounded
+                              : Icons.play_arrow_rounded,
+                        ),
+                  label: Text(
+                    vpnBusy
+                        ? (vpnEnabled
+                              ? 'Отключаем VPN...'
+                              : 'Подключаем VPN...')
+                        : (vpnEnabled ? 'Отключить VPN' : 'Подключить VPN'),
                   ),
-                  label: Text(vpnEnabled ? 'Отключить VPN' : 'Подключить VPN'),
                   style: ElevatedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 18),
                     shape: RoundedRectangleBorder(
@@ -2193,12 +7066,37 @@ class VpnPage extends StatelessWidget {
               const SizedBox(height: 12),
               Text(
                 statusText,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 22,
                   fontWeight: FontWeight.w900,
-                  color: Color(0xFF334155),
+                  color: textColor,
                 ),
               ),
+              if (vpnBusy) ...[
+                const SizedBox(height: 8),
+                Text(
+                  vpnBusyHint ??
+                      'Подожди пару секунд. Мы уже запускаем туннель и специально блокируем повторные нажатия.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+              if (!vpnBusy && vpnBusyHint != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  vpnBusyHint!,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -2243,10 +7141,10 @@ class VpnPage extends StatelessWidget {
               const SizedBox(height: 8),
               Text(
                 socialOnlyAllowed
-                    ? 'Функция активна. Кнопка выше должна открывать выбор приложений.'
+                    ? 'Функция активна. Выбранные приложения пойдут через VPN, остальной трафик останется обычным.'
                     : 'Функция временно недоступна для текущего режима.',
-                style: const TextStyle(
-                  color: Color(0xFF64748B),
+                style: TextStyle(
+                  color: mutedColor,
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
                 ),
@@ -2256,17 +7154,14 @@ class VpnPage extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         _Card(
-          tint: const Color(0xFFEFF6FF),
+          tint: isDark ? kBrandDarkSurface : kBrandPrimarySoft,
           child: ListTile(
             contentPadding: EdgeInsets.zero,
             onTap: onOpenServerPicker,
-            leading: const Icon(Icons.bolt_rounded, color: Color(0xFF2563EB)),
-            title: const Text(
+            leading: const Icon(Icons.bolt_rounded, color: kBrandPrimary),
+            title: Text(
               'Сервер',
-              style: TextStyle(
-                color: Color(0xFF64748B),
-                fontSize: 12,
-              ),
+              style: TextStyle(color: mutedColor, fontSize: 12),
             ),
             subtitle: Padding(
               padding: const EdgeInsets.only(top: 4),
@@ -2276,8 +7171,8 @@ class VpnPage extends StatelessWidget {
                 children: [
                   Text(
                     serverTitle,
-                    style: const TextStyle(
-                      color: Color(0xFF0F172A),
+                    style: TextStyle(
+                      color: textColor,
                       fontWeight: FontWeight.w900,
                       fontSize: 15,
                     ),
@@ -2285,8 +7180,8 @@ class VpnPage extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                     serverSub,
-                    style: const TextStyle(
-                      color: Color(0xFF64748B),
+                    style: TextStyle(
+                      color: mutedColor,
                       fontWeight: FontWeight.w700,
                       fontSize: 12,
                     ),
@@ -2298,6 +7193,104 @@ class VpnPage extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _WireGuardSetupCard extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final bool busy;
+  final Future<void> Function() onInstall;
+  final Future<void> Function() onRefresh;
+
+  const _WireGuardSetupCard({
+    required this.title,
+    required this.subtitle,
+    required this.busy,
+    required this.onInstall,
+    required this.onRefresh,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return _Card(
+      tint: const Color(0xFFFFFBEB),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.download_rounded, color: Color(0xFFD97706)),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Подготовка Windows',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w900,
+              color: kBrandText,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            subtitle,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: kBrandMuted,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: busy ? null : () => onInstall(),
+                  icon: const Icon(Icons.download_for_offline_rounded),
+                  label: Text(
+                    busy ? 'Установка…' : 'Установить WireGuard',
+                    style: const TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: kBrandPrimary,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              OutlinedButton(
+                onPressed: busy ? null : () => onRefresh(),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 14,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+                child: const Text(
+                  'Проверить снова',
+                  style: TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
@@ -2315,7 +7308,7 @@ class _TariffBanner extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
-          color: const Color(0xFF1E3A8A),
+          color: kBrandPrimaryDeep,
           borderRadius: BorderRadius.circular(14),
           boxShadow: const [
             BoxShadow(
@@ -2327,7 +7320,7 @@ class _TariffBanner extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Icon(Icons.star_rounded, color: Color(0xFFFBBF24)),
+            Icon(Icons.star_rounded, color: kBrandWarm),
             SizedBox(width: 10),
             Expanded(
               child: Column(
@@ -2345,7 +7338,7 @@ class _TariffBanner extends StatelessWidget {
                   Text(
                     'Текущий: $planName • настрой подписку',
                     style: TextStyle(
-                      color: Color(0xFFBFDBFE),
+                      color: kBrandPrimarySoft,
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
                     ),
@@ -2353,7 +7346,7 @@ class _TariffBanner extends StatelessWidget {
                 ],
               ),
             ),
-            Icon(Icons.chevron_right_rounded, color: Color(0xFFBFDBFE)),
+            Icon(Icons.chevron_right_rounded, color: kBrandPrimarySoft),
           ],
         ),
       ),
@@ -2377,7 +7370,9 @@ class _BigToggle extends StatelessWidget {
         label: Text(enabled ? 'Отключить VPN' : 'Подключить VPN'),
         style: ElevatedButton.styleFrom(
           padding: const EdgeInsets.symmetric(vertical: 18),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
         ),
       ),
     );
@@ -2403,11 +7398,11 @@ enum TariffApp {
 }
 
 enum TrafficPack {
-  gb5('5 ГБ', 99),
-  gb20('20 ГБ', 199),
-  gb50('50 ГБ', 299),
-  gb100('100 ГБ', 399),
-  unlimited('Безлимит', 799);
+  gb5('5 ГБ', 79),
+  gb20('20 ГБ', 149),
+  gb50('50 ГБ', 229),
+  gb100('100 ГБ', 329),
+  unlimited('Безлимит', 549);
 
   const TrafficPack(this.title, this.basePriceRub);
   final String title;
@@ -2415,6 +7410,7 @@ enum TrafficPack {
 }
 
 class TariffPage extends StatelessWidget {
+  final String planName;
   final Set<TariffApp> selectedApps;
   final TrafficPack trafficPack;
   final double trafficGb;
@@ -2423,6 +7419,17 @@ class TariffPage extends StatelessWidget {
   final bool optNoAds;
   final bool optSmartRouting;
   final bool optDedicatedIp;
+  final bool optAutoRenew;
+  final Map<String, dynamic>? tariffCatalog;
+  final Map<String, dynamic>? tariffQuote;
+  final String? tariffStatus;
+  final Map<String, dynamic>? pendingBillingOrder;
+  final bool subscriptionActive;
+  final bool subscriptionAutoRenew;
+  final bool paymentMethodSaved;
+  final String? subscriptionExpiresAt;
+  final int? subscriptionMonthlyPriceRub;
+  final bool tariffBusy;
 
   final void Function(TariffApp) onToggleApp;
   final void Function(TrafficPack) onTrafficChanged;
@@ -2432,9 +7439,15 @@ class TariffPage extends StatelessWidget {
   final void Function(bool) onOptNoAds;
   final void Function(bool) onOptSmartRouting;
   final void Function(bool) onOptDedicatedIp;
+  final void Function(bool) onOptAutoRenew;
+  final Future<void> Function() onApplyTariff;
+  final Future<void> Function() onCheckPendingBillingOrder;
+  final Future<void> Function() onCancelAutoRenew;
+  final void Function(String url) onOpenPaymentUrl;
 
   const TariffPage({
     super.key,
+    required this.planName,
     required this.selectedApps,
     required this.trafficPack,
     required this.trafficGb,
@@ -2442,6 +7455,17 @@ class TariffPage extends StatelessWidget {
     required this.optNoAds,
     required this.optSmartRouting,
     required this.optDedicatedIp,
+    required this.optAutoRenew,
+    required this.tariffCatalog,
+    required this.tariffQuote,
+    required this.tariffStatus,
+    required this.pendingBillingOrder,
+    required this.subscriptionActive,
+    required this.subscriptionAutoRenew,
+    required this.paymentMethodSaved,
+    required this.subscriptionExpiresAt,
+    required this.subscriptionMonthlyPriceRub,
+    required this.tariffBusy,
     required this.onToggleApp,
     required this.onTrafficChanged,
     required this.onTrafficGbChanged,
@@ -2449,19 +7473,24 @@ class TariffPage extends StatelessWidget {
     required this.onOptNoAds,
     required this.onOptSmartRouting,
     required this.onOptDedicatedIp,
+    required this.onOptAutoRenew,
+    required this.onApplyTariff,
+    required this.onCheckPendingBillingOrder,
+    required this.onCancelAutoRenew,
+    required this.onOpenPaymentUrl,
   });
 
   int _basePriceForGb(double gb) {
     final g = gb.clamp(1.0, 500.0);
 
     const points = <_GbPricePoint>[
-      _GbPricePoint(1, 79),
-      _GbPricePoint(5, 99),
-      _GbPricePoint(20, 199),
-      _GbPricePoint(50, 299),
-      _GbPricePoint(100, 399),
-      _GbPricePoint(200, 499),
-      _GbPricePoint(500, 699),
+      _GbPricePoint(1, 59),
+      _GbPricePoint(5, 79),
+      _GbPricePoint(20, 149),
+      _GbPricePoint(50, 229),
+      _GbPricePoint(100, 329),
+      _GbPricePoint(200, 429),
+      _GbPricePoint(500, 599),
     ];
 
     for (var i = 0; i < points.length - 1; i++) {
@@ -2476,6 +7505,34 @@ class TariffPage extends StatelessWidget {
     return points.last.price;
   }
 
+  int _appsPriceRub() {
+    if (trafficPack == TrafficPack.unlimited) return 0;
+    switch (selectedApps.length) {
+      case 0:
+        return 0;
+      case 1:
+        return 15;
+      case 2:
+        return 25;
+      case 3:
+        return 35;
+      case 4:
+        return 45;
+      case 5:
+        return 55;
+      default:
+        return 65;
+    }
+  }
+
+  int _devicesPriceRub() {
+    return max(0, devices - 1) * 39;
+  }
+
+  int _extrasPriceRub() {
+    return optDedicatedIp ? 149 : 0;
+  }
+
   int _calcPriceRub() {
     final isUnlimited = trafficPack == TrafficPack.unlimited;
 
@@ -2483,21 +7540,84 @@ class TariffPage extends StatelessWidget {
         ? trafficPack.basePriceRub
         : _basePriceForGb(trafficGb);
 
-    final apps = isUnlimited ? 0 : selectedApps.length * 49;
-
-    final dev = (devices - 1) * 49;
-    final extras =
-        (optNoAds ? 49 : 0) +
-        (optSmartRouting ? 29 : 0) +
-        (optDedicatedIp ? 149 : 0);
+    final apps = _appsPriceRub();
+    final dev = _devicesPriceRub();
+    final extras = _extrasPriceRub();
 
     final total = base + apps + dev + extras;
     return total < 0 ? 0 : total;
   }
 
+  bool get _hasPaidPlan {
+    final code = planName.trim().toLowerCase();
+    if (!subscriptionActive) return false;
+    return code.isNotEmpty &&
+        code != 'base' &&
+        code != 'trial' &&
+        code != 'free';
+  }
+
+  bool get _hadPaidPlanBefore {
+    final code = planName.trim().toLowerCase();
+    return code.isNotEmpty &&
+        code != 'base' &&
+        code != 'trial' &&
+        code != 'free';
+  }
+
+  String _primaryCtaText() {
+    if (tariffBusy) return 'Обновляем...';
+    if (_hasPaidPlan) return 'Обновить тариф';
+    if (_hadPaidPlanBefore) return 'Продлить тариф';
+    return 'Оплатить тариф';
+  }
+
+  String _currentPlanText() {
+    if (_hasPaidPlan) {
+      final price = subscriptionMonthlyPriceRub;
+      final priceText = price == null ? '' : ' • $price ₽/мес';
+      final expiresText = subscriptionExpiresAt == null
+          ? ''
+          : ' • до ${_formatCompactDate(subscriptionExpiresAt!)}';
+      return '$planName$priceText$expiresText';
+    }
+    if (_hadPaidPlanBefore) {
+      return '$planName закончился. Можно продлить или выбрать другой набор.';
+    }
+    return 'Активного платного тарифа пока нет.';
+  }
+
+  String _shortOrderId(Object? raw) {
+    final id = (raw ?? '').toString().trim();
+    if (id.isEmpty) return 'без номера';
+    if (id.length <= 16) return id;
+    return '${id.substring(0, 16)}…';
+  }
+
+  String _formatCompactDate(String raw) {
+    final dt = DateTime.tryParse(raw);
+    if (dt == null) return raw.length > 10 ? raw.substring(0, 10) : raw;
+    final day = dt.day.toString().padLeft(2, '0');
+    final month = dt.month.toString().padLeft(2, '0');
+    return '$day.$month.${dt.year}';
+  }
+
   @override
   Widget build(BuildContext context) {
-    final price = _calcPriceRub();
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final textColor = theme.colorScheme.onSurface;
+    final mutedColor = textColor.withOpacity(isDark ? 0.72 : 0.62);
+    final localPrice = _calcPriceRub();
+    final appsPrice = _appsPriceRub();
+    final devicesPrice = _devicesPriceRub();
+    final quote = tariffQuote?['quote'];
+    final serverQuote = quote is Map<String, dynamic>
+        ? quote
+        : (quote is Map ? Map<String, dynamic>.from(quote) : null);
+    final serverPrice = serverQuote?['monthlyPriceRub'];
+    final serverPlanName = (serverQuote?['planName'] ?? '').toString().trim();
+    final price = serverPrice is num ? serverPrice.toInt() : localPrice;
 
     final appsText = selectedApps.isEmpty
         ? 'Без безлимитных приложений'
@@ -2505,21 +7625,23 @@ class TariffPage extends StatelessWidget {
 
     final appsDisabled = trafficPack == TrafficPack.unlimited;
 
-    final gbInt = trafficGb.round().clamp(1, 500);
+    final gbInt = trafficGb.round().clamp(1, 100);
     final baseForGb = appsDisabled
         ? trafficPack.basePriceRub
         : _basePriceForGb(trafficGb);
+    final primaryCta = _primaryCtaText();
+    final planLine = _currentPlanText();
 
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
         const _PageTitle(
           title: 'Тариф',
-          subtitle: 'Гигабайты или безлимит + докупай безлимит на приложения',
+          subtitle:
+              'Собери подписку из трафика, безлимитных приложений и устройств',
           icon: Icons.star_rounded,
         ),
         const SizedBox(height: 12),
-
         _Card(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2558,34 +7680,86 @@ class TariffPage extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Slider(
-                        value: gbInt.toDouble(),
-                        min: 1,
-                        max: 500,
-                        divisions: 499,
-                        label: '$gbInt ГБ',
-                        onChanged: (v) => onTrafficGbChanged(v.roundToDouble()),
-                      ),
-                      Row(
-                        children: const [
-                          Text(
-                            '1 ГБ',
-                            style: TextStyle(
-                              color: Color(0xFF64748B),
-                              fontWeight: FontWeight.w700,
-                              fontSize: 12,
-                            ),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _ChipButton(
+                            icon: Icons.storage_rounded,
+                            text: '5 ГБ',
+                            selected: gbInt == 5,
+                            onTap: () => onTrafficGbChanged(5.0),
                           ),
-                          Spacer(),
-                          Text(
-                            '500 ГБ',
-                            style: TextStyle(
-                              color: Color(0xFF64748B),
-                              fontWeight: FontWeight.w700,
-                              fontSize: 12,
-                            ),
+                          _ChipButton(
+                            icon: Icons.storage_rounded,
+                            text: '20 ГБ',
+                            selected: gbInt == 20,
+                            onTap: () => onTrafficGbChanged(20.0),
+                          ),
+                          _ChipButton(
+                            icon: Icons.storage_rounded,
+                            text: '50 ГБ',
+                            selected: gbInt == 50,
+                            onTap: () => onTrafficGbChanged(50.0),
+                          ),
+                          _ChipButton(
+                            icon: Icons.storage_rounded,
+                            text: '100 ГБ',
+                            selected: gbInt == 100,
+                            onTap: () => onTrafficGbChanged(100.0),
                           ),
                         ],
+                      ),
+                      const SizedBox(height: 16),
+                      Container(
+                        padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+                        decoration: BoxDecoration(
+                          color: kBrandPrimarySoft.withOpacity(0.55),
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                            color: kBrandPrimary.withOpacity(0.14),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(
+                                  Icons.tune_rounded,
+                                  color: kBrandPrimary,
+                                  size: 18,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Точный объём',
+                                    style: TextStyle(
+                                      color: textColor,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                ),
+                                Text(
+                                  '$gbInt ГБ',
+                                  style: const TextStyle(
+                                    color: kBrandPrimaryDeep,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Slider(
+                              value: gbInt.clamp(1, 100).toDouble(),
+                              min: 1,
+                              max: 100,
+                              divisions: 99,
+                              label: '$gbInt ГБ',
+                              onChanged: (value) =>
+                                  onTrafficGbChanged(value.roundToDouble()),
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -2596,18 +7770,18 @@ class TariffPage extends StatelessWidget {
                 appsDisabled
                     ? 'База: $baseForGb ₽ (безлимит)'
                     : 'База: $baseForGb ₽ за $gbInt ГБ',
-                style: const TextStyle(
-                  color: Color(0xFF64748B),
+                style: TextStyle(
+                  color: mutedColor,
                   fontWeight: FontWeight.w700,
                   fontSize: 12,
                 ),
               ),
-              if (appsDisabled) ...const [
-                SizedBox(height: 10),
+              if (appsDisabled) ...[
+                const SizedBox(height: 10),
                 Text(
-                  'Выбран “Безлимит” — безлимитные приложения не нужны (и отключены).',
+                  'Выбран "Безлимит" — безлимитные приложения не нужны (и отключены).',
                   style: TextStyle(
-                    color: Color(0xFF64748B),
+                    color: mutedColor,
                     fontWeight: FontWeight.w700,
                     fontSize: 12,
                   ),
@@ -2621,7 +7795,18 @@ class TariffPage extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const _SectionTitle('Безлимитные приложения (дёшево)'),
+              const _SectionTitle('Безлимитные приложения'),
+              const SizedBox(height: 10),
+              Text(
+                appsDisabled
+                    ? 'При полном безлимите приложения уже не тарифицируются отдельно.'
+                    : 'Можно докупить только нужные сервисы, не переплачивая за весь безлимит.',
+                style: TextStyle(
+                  color: mutedColor,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
+              ),
               const SizedBox(height: 10),
               Wrap(
                 spacing: 10,
@@ -2641,6 +7826,17 @@ class TariffPage extends StatelessWidget {
                     ),
                   );
                 }).toList(),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                appsDisabled
+                    ? 'Всё уже включено в безлимит.'
+                    : 'Сейчас: $appsText${appsPrice > 0 ? ' • +$appsPrice ₽/мес' : ''}',
+                style: TextStyle(
+                  color: mutedColor,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
               ),
             ],
           ),
@@ -2664,14 +7860,14 @@ class TariffPage extends StatelessWidget {
                       vertical: 8,
                     ),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFEFF6FF),
+                      color: kBrandPrimarySoft,
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Text(
                       '$devices',
                       style: const TextStyle(
                         fontWeight: FontWeight.w900,
-                        color: Color(0xFF1E3A8A),
+                        color: kBrandPrimaryDeep,
                       ),
                     ),
                   ),
@@ -2680,46 +7876,320 @@ class TariffPage extends StatelessWidget {
                     icon: const Icon(Icons.add_circle_outline_rounded),
                   ),
                   const SizedBox(width: 10),
-                  const Expanded(
+                  Expanded(
                     child: Text(
-                      'Сколько девайсов одновременно',
+                      devices == 1
+                          ? 'Одно устройство уже входит в тариф'
+                          : 'Дополнительные устройства: +$devicesPrice ₽/мес',
                       style: TextStyle(
-                        color: Color(0xFF475569),
+                        color: mutedColor,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
                   ),
                 ],
               ),
+              const Divider(height: 18),
+              _SwitchRow(
+                title: 'Выделенный IP',
+                subtitle:
+                    'Для личных сервисов и стабильных доступов (+149 ₽/мес)',
+                value: optDedicatedIp,
+                onChanged: onOptDedicatedIp,
+              ),
+              const Divider(height: 18),
+              _SwitchRow(
+                title: 'Автопродление',
+                subtitle:
+                    'После первой оплаты тариф будет продлеваться автоматически, если платёжный провайдер это подтвердит',
+                value: optAutoRenew,
+                onChanged: onOptAutoRenew,
+              ),
             ],
           ),
         ),
         const SizedBox(height: 12),
         _Card(
+          tint: isDark ? kBrandDarkSurface : kBrandPrimarySoft,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const _SectionTitle('Опции'),
-              const SizedBox(height: 6),
-              _SwitchRow(
-                title: 'Без рекламы',
-                subtitle: 'Чистый интерфейс в приложении',
-                value: optNoAds,
-                onChanged: onOptNoAds,
+              Text(
+                'Сейчас',
+                style: TextStyle(
+                  color: mutedColor,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 12,
+                ),
               ),
-              const Divider(height: 18),
-              _SwitchRow(
-                title: 'Умная маршрутизация',
-                subtitle: 'Нужные сайты/приложения через VPN',
-                value: optSmartRouting,
-                onChanged: onOptSmartRouting,
+              const SizedBox(height: 4),
+              Text(
+                planLine,
+                style: TextStyle(
+                  color: textColor,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 14,
+                ),
               ),
-              const Divider(height: 18),
-              _SwitchRow(
-                title: 'Выделенный IP',
-                subtitle: 'Для своих сервисов/доступов',
-                value: optDedicatedIp,
-                onChanged: onOptDedicatedIp,
+              const SizedBox(height: 16),
+              Text(
+                'К оплате',
+                style: TextStyle(
+                  color: mutedColor,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 12,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '$price ₽',
+                    style: const TextStyle(
+                      fontSize: 34,
+                      fontWeight: FontWeight.w900,
+                      color: kBrandPrimary,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 5),
+                    child: Text(
+                      appsDisabled
+                          ? 'безлимитный тариф'
+                          : '$gbInt ГБ + выбранные опции',
+                      style: TextStyle(
+                        color: mutedColor,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (serverPlanName.isNotEmpty && serverPlanName != planName) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Будет подключён: $serverPlanName',
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: const [
+                  _IncludedBadge(
+                    icon: Icons.block_rounded,
+                    text: 'Без рекламы',
+                  ),
+                  _IncludedBadge(
+                    icon: Icons.alt_route_rounded,
+                    text: 'Social Only',
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                optAutoRenew
+                    ? 'Цена пересчитывается автоматически. После оплаты тариф активируется сервером, а автопродление включится только после подтверждения платёжного провайдера.'
+                    : 'Цена пересчитывается автоматически. После оплаты тариф активируется сервером без автопродления.',
+                style: TextStyle(
+                  color: mutedColor,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
+              ),
+              if (_hasPaidPlan && subscriptionAutoRenew) ...[
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: isDark ? kBrandDarkSurface : Colors.white,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: kBrandPrimary.withOpacity(isDark ? 0.28 : 0.18),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(
+                            Icons.autorenew_rounded,
+                            color: kBrandPrimary,
+                            size: 20,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Автопродление включено',
+                              style: TextStyle(
+                                color: textColor,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        paymentMethodSaved
+                            ? 'Способ оплаты сохранён у платёжного провайдера. Можно отключить автопродление, текущий период останется активным.'
+                            : 'Автопродление отмечено в подписке. Сохранение способа оплаты подтвердит платёжный провайдер после production-подключения.',
+                        style: TextStyle(
+                          color: mutedColor,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: tariffBusy ? null : onCancelAutoRenew,
+                          icon: const Icon(Icons.pause_circle_outline_rounded),
+                          label: const Text('Отключить автопродление'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              if (pendingBillingOrder != null) ...[
+                const SizedBox(height: 12),
+                Builder(
+                  builder: (context) {
+                    final paymentUrl =
+                        (pendingBillingOrder!['paymentUrl'] ?? '')
+                            .toString()
+                            .trim();
+                    final hasPaymentUrl = paymentUrl.isNotEmpty;
+                    return Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? kBrandDarkSurface
+                            : const Color(0xFFFFFFFF),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: theme.colorScheme.onSurface.withOpacity(
+                            isDark ? 0.16 : 0.10,
+                          ),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Ожидает оплаты',
+                            style: TextStyle(
+                              color: textColor,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Заказ ${_shortOrderId(pendingBillingOrder!['orderId'])}'
+                            ' • ${pendingBillingOrder!['amountRub'] ?? price} ₽'
+                            ' • ${pendingBillingOrder!['status'] ?? 'pending'}',
+                            style: TextStyle(
+                              color: mutedColor,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 12,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            'После оплаты можно вернуться в Green VPN. Мы проверяем статус автоматически.',
+                            style: TextStyle(
+                              color: mutedColor,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 12,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          if (hasPaymentUrl) ...[
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton.icon(
+                                onPressed: tariffBusy
+                                    ? null
+                                    : () => onOpenPaymentUrl(paymentUrl),
+                                icon: const Icon(Icons.open_in_browser_rounded),
+                                label: const Text('Открыть оплату'),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                          ],
+                          SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              onPressed: tariffBusy
+                                  ? null
+                                  : () => onCheckPendingBillingOrder(),
+                              icon: const Icon(Icons.refresh_rounded),
+                              label: const Text('Проверить оплату'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ],
+              if (price != localPrice) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'Итоговая цена подтверждена сервером: $price ₽/мес.',
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+              if (tariffStatus != null && tariffStatus!.trim().isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Text(
+                  tariffStatus!,
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: tariffBusy ? null : () => onApplyTariff(),
+                  icon: tariffBusy
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.payment_rounded),
+                  label: Text(
+                    primaryCta,
+                    style: const TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                ),
               ),
             ],
           ),
@@ -2761,7 +8231,20 @@ class SettingsPage extends StatelessWidget {
   final VoidCallback onPickLanguage;
 
   final String email;
+  final bool emailVerified;
+  final bool emailConfirmationRequired;
+  final bool emailStatusBusy;
+  final String? emailStatusMessage;
+  final Future<void> Function() onResendEmailConfirmation;
+  final Future<void> Function() onRefreshEmailStatus;
+  final String? phone;
+  final bool phoneVerified;
+  final bool phoneStatusBusy;
+  final String? phoneStatusMessage;
+  final Future<void> Function() onRefreshPhoneStatus;
+  final Future<void> Function() onBindPhone;
   final Future<void> Function() onLogout;
+  final VoidCallback onOpenUpdates;
   final VoidCallback onOpenDiagnostics;
 
   const SettingsPage({
@@ -2771,7 +8254,20 @@ class SettingsPage extends StatelessWidget {
     required this.language,
     required this.onPickLanguage,
     required this.email,
+    required this.emailVerified,
+    required this.emailConfirmationRequired,
+    required this.emailStatusBusy,
+    required this.emailStatusMessage,
+    required this.onResendEmailConfirmation,
+    required this.onRefreshEmailStatus,
+    required this.phone,
+    required this.phoneVerified,
+    required this.phoneStatusBusy,
+    required this.phoneStatusMessage,
+    required this.onRefreshPhoneStatus,
+    required this.onBindPhone,
     required this.onLogout,
+    required this.onOpenUpdates,
     required this.onOpenDiagnostics,
   });
 
@@ -2821,9 +8317,21 @@ class SettingsPage extends StatelessWidget {
                 const SizedBox(height: 8),
                 _SettingsNavRow(
                   title: 'Почта',
-                  subtitle: email,
-                  icon: Icons.person_rounded,
-                  onTap: () {},
+                  subtitle: email.isEmpty ? 'Не указана' : email,
+                  icon: Icons.alternate_email_rounded,
+                  onTap: () {
+                    unawaited(onRefreshEmailStatus());
+                  },
+                ),
+                const Divider(height: 18),
+                _SettingsNavRow(
+                  title: 'Телефон',
+                  subtitle: phone?.isNotEmpty == true ? phone! : 'Не добавлен',
+                  icon: Icons.phone_iphone_rounded,
+                  onTap: () {
+                    unawaited(onRefreshPhoneStatus());
+                    unawaited(onBindPhone());
+                  },
                 ),
                 const Divider(height: 18),
                 _SettingsActionRow(
@@ -2843,15 +8351,22 @@ class SettingsPage extends StatelessWidget {
                 const _SectionTitle('О приложении'),
                 const SizedBox(height: 8),
                 _SettingsActionRow(
-                  title: 'Диагностика',
-                  subtitle: 'Проверка WireGuard, прав и конфигурации',
+                  title: 'Обновления',
+                  subtitle: 'Проверить свежую версию Green VPN',
+                  icon: Icons.system_update_alt_rounded,
+                  onTap: onOpenUpdates,
+                ),
+                const Divider(height: 18),
+                _SettingsActionRow(
+                  title: 'Поддержка',
+                  subtitle: 'Отправить закодированный отчёт в поддержку',
                   icon: Icons.health_and_safety_rounded,
                   onTap: onOpenDiagnostics,
                 ),
                 const Divider(height: 18),
                 _SettingsActionRow(
-                  title: 'О BlueVPN',
-                  subtitle: 'UI-прототип. Дальше подключим сервер и подписку.',
+                  title: 'О Green VPN',
+                  subtitle: 'Версия $kAppVersion, Windows MVP',
                   icon: Icons.info_outline_rounded,
                   onTap: () => _showAbout(context),
                 ),
@@ -2869,11 +8384,12 @@ class SettingsPage extends StatelessWidget {
       context: context,
       builder: (_) {
         return AlertDialog(
-          title: const Text('BlueVPN'),
+          title: const Text(kProductName),
           content: const Text(
-            'Концепция: максимум простоты для пользователя.\n\n'
-            'Пользователь не видит конфиги и папки.\n'
-            'Конфиг выдаёт сервер после входа.\n',
+            'Green VPN для Windows.\n\n'
+            'Версия: $kAppVersion\n'
+            'Системный компонент управляет VPN-действиями, а приложение остаётся обычным пользовательским интерфейсом.\n\n'
+            'Если что-то не работает, раздел “Поддержка” отправит закодированный отчёт без паролей, токенов и приватных ключей.',
           ),
           actions: [
             TextButton(
@@ -2883,6 +8399,1592 @@ class SettingsPage extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+}
+
+class UpdatesPage extends StatefulWidget {
+  const UpdatesPage({super.key});
+
+  @override
+  State<UpdatesPage> createState() => _UpdatesPageState();
+}
+
+class _UpdatesPageState extends State<UpdatesPage> {
+  final _api = const BlueVpnApi(baseUrl: kApiBaseUrl);
+  final _deviceStore = DeviceIdStore();
+
+  bool _loading = true;
+  GreenVpnUpdateManifest? _manifest;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  Future<void> _refresh() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    String? clientId;
+    try {
+      clientId = await _deviceStore.getOrCreate();
+    } catch (_) {
+      clientId = null;
+    }
+
+    final res = await _api.fetchWindowsUpdateManifest(
+      currentVersion: kAppVersion,
+      clientId: clientId,
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      if (res.ok && res.data != null) {
+        _manifest = res.data;
+      } else {
+        _error = res.message ?? 'Не удалось проверить обновления.';
+      }
+    });
+  }
+
+  Future<void> _openDownload() async {
+    final url = _manifest?.downloadUrl.trim() ?? '';
+    if (url.isEmpty) return;
+    await openExternalUrl(url);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final manifest = _manifest;
+    final hasUpdate = manifest?.hasUpdate ?? false;
+    final heldByRollout = manifest?.heldByRollout ?? false;
+    final requiredUpdate = manifest?.required ?? false;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Обновления'),
+        actions: [
+          IconButton(
+            tooltip: 'Проверить',
+            onPressed: _loading ? null : _refresh,
+            icon: const Icon(Icons.refresh_rounded),
+          ),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                _PageTitle(
+                  title: hasUpdate
+                      ? (requiredUpdate
+                            ? 'Требуется обновление'
+                            : 'Есть новая версия')
+                      : 'Версия актуальна',
+                  subtitle: hasUpdate
+                      ? 'Скачай свежий установщик Green VPN и поставь его поверх текущей версии.'
+                      : heldByRollout
+                      ? 'Сервер обновлений работает. Новая версия будет предложена, когда дойдёт очередь этого устройства.'
+                      : 'Green VPN проверил сервер обновлений.',
+                  icon: hasUpdate
+                      ? Icons.system_update_alt_rounded
+                      : Icons.verified_rounded,
+                ),
+                const SizedBox(height: 12),
+                if (_error != null)
+                  _Card(
+                    child: Text(
+                      _error!,
+                      style: const TextStyle(
+                        color: kBrandDanger,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  )
+                else if (manifest != null) ...[
+                  _Card(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _SupportStatusLine(
+                          title: 'Текущая версия',
+                          ok: true,
+                          value: kAppVersion,
+                        ),
+                        const SizedBox(height: 10),
+                        _SupportStatusLine(
+                          title: 'Версия на сервере',
+                          ok: !hasUpdate,
+                          value: manifest.latestVersion.isEmpty
+                              ? 'не задана'
+                              : manifest.latestVersion,
+                        ),
+                        if (manifest.sha256.trim().isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          _SupportStatusLine(
+                            title: 'Проверка файла',
+                            ok: true,
+                            value: 'SHA256 получен',
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  if (manifest.changelog.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    _Card(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Что изменилось',
+                            style: TextStyle(fontWeight: FontWeight.w900),
+                          ),
+                          const SizedBox(height: 8),
+                          for (final item in manifest.changelog)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 6),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    '• ',
+                                    style: TextStyle(
+                                      color: kBrandPrimary,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: Text(
+                                      item,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  if (hasUpdate) ...[
+                    const SizedBox(height: 12),
+                    _Card(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            requiredUpdate
+                                ? 'Это критическое обновление.'
+                                : 'Обновление можно установить сейчас.',
+                            style: const TextStyle(fontWeight: FontWeight.w900),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            manifest.canDownload
+                                ? 'После скачивания Windows попросит подтвердить установку.'
+                                : 'Ссылка на скачивание пока не настроена на сервере.',
+                            style: TextStyle(
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurface.withOpacity(0.62),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: kBrandPrimary,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                            ),
+                            onPressed: manifest.canDownload
+                                ? _openDownload
+                                : null,
+                            child: const Text('Скачать обновление'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ],
+            ),
+    );
+  }
+}
+
+class BackendAdminPage extends StatefulWidget {
+  final Session session;
+
+  const BackendAdminPage({super.key, required this.session});
+
+  @override
+  State<BackendAdminPage> createState() => _BackendAdminPageState();
+}
+
+class _BackendAdminPageState extends State<BackendAdminPage> {
+  final _api = const BlueVpnApi(baseUrl: kApiBaseUrl);
+  final _store = AdminTokenStore();
+  final _tokenCtl = TextEditingController();
+
+  bool _busy = false;
+  String? _status;
+  Map<String, dynamic>? _overview;
+  List<Map<String, dynamic>> _users = const [];
+  List<Map<String, dynamic>> _billingOrders = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedToken();
+  }
+
+  @override
+  void dispose() {
+    _tokenCtl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadSavedToken() async {
+    final token = await _store.read();
+    if (!mounted) return;
+    _tokenCtl.text = token ?? '';
+    if (_tokenCtl.text.trim().isNotEmpty) {
+      await _refresh();
+    } else {
+      setState(() {
+        _status =
+            'Вставь admin token с сервера: /opt/bluevpn/backend/data/admin_token.txt';
+      });
+    }
+  }
+
+  void _toast(String text) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  Future<void> _saveToken() async {
+    final token = _tokenCtl.text.trim();
+    if (token.isEmpty) {
+      await _store.clear();
+      if (!mounted) return;
+      setState(() => _status = 'Локальный admin token удалён.');
+      return;
+    }
+    await _store.write(token);
+    if (!mounted) return;
+    setState(() => _status = 'Admin token сохранён локально.');
+  }
+
+  Future<void> _refresh() async {
+    final token = _tokenCtl.text.trim();
+    if (token.isEmpty) {
+      setState(() => _status = 'Сначала вставь admin token.');
+      return;
+    }
+
+    setState(() => _busy = true);
+    try {
+      await _store.write(token);
+
+      final overview = await _api.adminOverview(adminToken: token);
+      if (!overview.ok || overview.data == null) {
+        if (!mounted) return;
+        setState(() {
+          _status = overview.message ?? 'Не удалось загрузить overview.';
+        });
+        return;
+      }
+
+      final users = await _api.adminUsers(adminToken: token);
+      if (!users.ok || users.data == null) {
+        if (!mounted) return;
+        setState(() {
+          _overview = overview.data;
+          _status =
+              users.message ?? 'Не удалось загрузить список пользователей.';
+        });
+        return;
+      }
+
+      final orders = await _api.adminBillingOrders(adminToken: token);
+      if (!orders.ok || orders.data == null) {
+        if (!mounted) return;
+        setState(() {
+          _overview = overview.data;
+          _users = users.data!;
+          _status = orders.message ?? 'Не удалось загрузить заказы на оплату.';
+        });
+        return;
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _overview = overview.data;
+        _users = users.data!;
+        _billingOrders = orders.data!;
+        _status = 'Backend admin синхронизирован.';
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  String _subLabel(Map<String, dynamic> user) {
+    final sub = user['subscription'];
+    if (sub is! Map) return 'подписка неизвестна';
+    final map = Map<String, dynamic>.from(sub);
+    final plan = (map['planName'] ?? map['planCode'] ?? 'Unknown').toString();
+    final maxDevices = (map['maxDevices'] ?? '?').toString();
+    final active = map['isActive'] == true ? 'активна' : 'неактивна';
+    final monthlyPrice = map['monthlyPriceRub'];
+    final selection = map['selection'];
+    final parts = <String>['$plan', active];
+    final price = _formatRub(monthlyPrice);
+    if (price != null) parts.add('$price/мес');
+    final selectionText = _selectionShort(selection);
+    if (selectionText != null) parts.add(selectionText);
+    parts.add('лимит: $maxDevices');
+    return parts.join(' • ');
+  }
+
+  String? _formatRub(Object? raw) {
+    final value = raw is int ? raw : int.tryParse((raw ?? '').toString());
+    if (value == null || value <= 0) return null;
+    return '$value ₽';
+  }
+
+  String? _selectionShort(Object? raw) {
+    if (raw is! Map) return null;
+    final map = Map<String, dynamic>.from(raw);
+    final trafficPack = (map['trafficPack'] ?? '').toString().trim();
+    final trafficGb = int.tryParse((map['trafficGb'] ?? '').toString()) ?? 0;
+    final apps = ((map['unlimitedApps'] as List?) ?? const []).length;
+    final dedicatedIp = map['dedicatedIp'] == true;
+    final parts = <String>[];
+    if (trafficPack == 'unlimited') {
+      parts.add('безлимит');
+    } else if (trafficGb > 0) {
+      parts.add('$trafficGb ГБ');
+    }
+    if (apps > 0) {
+      parts.add('apps: $apps');
+    }
+    if (dedicatedIp) {
+      parts.add('IP');
+    }
+    if (parts.isEmpty) return null;
+    return parts.join(' + ');
+  }
+
+  int? _asInt(Object? raw) {
+    if (raw is int) return raw;
+    if (raw is num) return raw.toInt();
+    return int.tryParse((raw ?? '').toString());
+  }
+
+  String? _formatCompactDate(Object? raw) {
+    final text = (raw ?? '').toString().trim();
+    if (text.isEmpty) return null;
+    try {
+      final dt = DateTime.parse(text).toLocal();
+      final day = dt.day.toString().padLeft(2, '0');
+      final month = dt.month.toString().padLeft(2, '0');
+      final year = dt.year.toString();
+      final hour = dt.hour.toString().padLeft(2, '0');
+      final minute = dt.minute.toString().padLeft(2, '0');
+      return '$day.$month.$year $hour:$minute';
+    } catch (_) {
+      return text;
+    }
+  }
+
+  String _userLabelForOrder(Map<String, dynamic> order) {
+    final userId = _asInt(order['userId']);
+    if (userId == null) return 'пользователь неизвестен';
+    for (final user in _users) {
+      if (_asInt(user['id']) == userId) {
+        final email = (user['email'] ?? '').toString().trim();
+        if (email.isNotEmpty) return email;
+      }
+    }
+    return 'user #$userId';
+  }
+
+  String _shortOrderId(Map<String, dynamic> order) {
+    final id = (order['orderId'] ?? '').toString().trim();
+    if (id.isEmpty) return 'заказ без номера';
+    if (id.length <= 16) return id;
+    return '${id.substring(0, 16)}…';
+  }
+
+  String _orderPlanLabel(Map<String, dynamic> order) {
+    final quote = order['quote'];
+    if (quote is Map) {
+      final map = Map<String, dynamic>.from(quote);
+      final plan = (map['planName'] ?? map['planCode'] ?? '').toString().trim();
+      if (plan.isNotEmpty) return plan;
+    }
+
+    final selection = _selectionShort(order['selection']);
+    return selection ?? 'тариф без деталей';
+  }
+
+  String _orderAmountLabel(Map<String, dynamic> order) {
+    return _formatRub(order['amountRub']) ?? 'сумма неизвестна';
+  }
+
+  Future<void> _markOrderPaid(Map<String, dynamic> order) async {
+    final token = _tokenCtl.text.trim();
+    final orderId = (order['orderId'] ?? '').toString().trim();
+    if (token.isEmpty) {
+      _toast('Сначала вставь admin token.');
+      return;
+    }
+    if (orderId.isEmpty) {
+      _toast('У заказа нет order id.');
+      return;
+    }
+
+    setState(() => _busy = true);
+    try {
+      final res = await _api.adminMarkBillingOrderPaid(
+        adminToken: token,
+        orderId: orderId,
+      );
+      if (!mounted) return;
+      if (!res.ok || res.data == null) {
+        setState(() {
+          _status = res.message ?? 'Не удалось подтвердить оплату.';
+        });
+        _toast(_status!);
+        return;
+      }
+
+      _toast('Оплата подтверждена, тариф активирован.');
+      await _refresh();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final overview = _overview;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Backend Admin')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          const _PageTitle(
+            title: 'Backend Admin',
+            subtitle: 'Скрытая панель управления пользователями и устройствами',
+            icon: Icons.admin_panel_settings_rounded,
+          ),
+          const SizedBox(height: 12),
+          _Card(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const _SectionTitle('Admin token'),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _tokenCtl,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Admin token',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: _busy ? null : _saveToken,
+                        child: const Text('Сохранить токен'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: _busy ? null : _refresh,
+                        child: Text(_busy ? 'Обновление…' : 'Обновить'),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _status ??
+                      'Токен лежит на сервере: /opt/bluevpn/backend/data/admin_token.txt',
+                  style: const TextStyle(
+                    color: kBrandMuted,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (overview != null) ...[
+            _Card(
+              child: Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  _AdminMiniStat(
+                    title: 'Версия',
+                    value: (overview['version'] ?? '-').toString(),
+                  ),
+                  _AdminMiniStat(
+                    title: 'Пользователи',
+                    value: (overview['usersCount'] ?? '-').toString(),
+                  ),
+                  _AdminMiniStat(
+                    title: 'Устройства',
+                    value: (overview['devicesCount'] ?? '-').toString(),
+                  ),
+                  _AdminMiniStat(
+                    title: 'Активные',
+                    value: (overview['enabledDevicesCount'] ?? '-').toString(),
+                  ),
+                  _AdminMiniStat(
+                    title: 'Подписки',
+                    value: (overview['activeSubscriptionsCount'] ?? '-')
+                        .toString(),
+                  ),
+                  _AdminMiniStat(
+                    title: 'Заказы',
+                    value: (overview['pendingBillingOrdersCount'] ?? '-')
+                        .toString(),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+          _Card(
+            tint: kBrandPrimarySoft,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const _SectionTitle('Заказы на оплату'),
+                const SizedBox(height: 10),
+                if (_billingOrders.isEmpty)
+                  const Text(
+                    'Новых заказов нет.',
+                    style: TextStyle(
+                      color: kBrandMuted,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  )
+                else
+                  ..._billingOrders.map((order) {
+                    final status = (order['status'] ?? '-').toString();
+                    final created = _formatCompactDate(order['createdAt']);
+                    final canConfirm = status == 'pending';
+                    return Column(
+                      children: [
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(
+                            Icons.receipt_long_rounded,
+                            color: kBrandPrimary,
+                          ),
+                          title: Text(
+                            '${_orderAmountLabel(order)} • ${_orderPlanLabel(order)}',
+                            style: const TextStyle(fontWeight: FontWeight.w900),
+                          ),
+                          subtitle: Text(
+                            [
+                              _userLabelForOrder(order),
+                              'заказ: ${_shortOrderId(order)}',
+                              'статус: $status',
+                              if (created != null) 'создан: $created',
+                            ].join('\n'),
+                          ),
+                          isThreeLine: true,
+                        ),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton.icon(
+                            onPressed: _busy || !canConfirm
+                                ? null
+                                : () => _markOrderPaid(order),
+                            icon: const Icon(Icons.verified_rounded),
+                            label: Text(
+                              canConfirm ? 'Оплата получена' : 'Уже обработан',
+                            ),
+                          ),
+                        ),
+                        if (order != _billingOrders.last)
+                          const Divider(height: 18),
+                      ],
+                    );
+                  }),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          _Card(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const _SectionTitle('Пользователи'),
+                const SizedBox(height: 10),
+                if (_users.isEmpty)
+                  const Text(
+                    'Список пока пуст или ещё не загружен.',
+                    style: TextStyle(
+                      color: kBrandMuted,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  )
+                else
+                  ..._users.map((user) {
+                    final email = (user['email'] ?? '-').toString();
+                    final deviceCount = (user['deviceCount'] ?? 0).toString();
+                    final enabledDeviceCount = (user['enabledDeviceCount'] ?? 0)
+                        .toString();
+                    final lastSeen = _formatCompactDate(user['lastSeenAt']);
+                    return Column(
+                      children: [
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(
+                            Icons.person_rounded,
+                            color: kBrandPrimary,
+                          ),
+                          title: Text(
+                            email,
+                            style: const TextStyle(fontWeight: FontWeight.w900),
+                          ),
+                          subtitle: Text(
+                            '${_subLabel(user)} • устройств: $enabledDeviceCount/$deviceCount'
+                            '${lastSeen == null ? '' : '\nБыл в сети: $lastSeen'}',
+                          ),
+                          isThreeLine: lastSeen != null,
+                          trailing: const Icon(Icons.chevron_right_rounded),
+                          onTap: () {
+                            final token = _tokenCtl.text.trim();
+                            if (token.isEmpty) {
+                              _toast('Сначала вставь admin token.');
+                              return;
+                            }
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => BackendAdminUserPage(
+                                  api: _api,
+                                  adminToken: token,
+                                  user: user,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                        if (user != _users.last) const Divider(height: 14),
+                      ],
+                    );
+                  }),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class BackendAdminUserPage extends StatefulWidget {
+  final BlueVpnApi api;
+  final String adminToken;
+  final Map<String, dynamic> user;
+
+  const BackendAdminUserPage({
+    super.key,
+    required this.api,
+    required this.adminToken,
+    required this.user,
+  });
+
+  @override
+  State<BackendAdminUserPage> createState() => _BackendAdminUserPageState();
+}
+
+class _BackendAdminUserPageState extends State<BackendAdminUserPage> {
+  bool _busy = false;
+  String? _status;
+  List<Map<String, dynamic>> _devices = const [];
+  late String _planCode;
+  late String _planName;
+  late int _maxDevices;
+  late bool _isActive;
+  Map<String, dynamic>? _catalog;
+  Map<String, dynamic>? _quote;
+  late String _trafficPackCode;
+  late int _trafficGb;
+  late bool _dedicatedIp;
+  final Set<String> _unlimitedAppCodes = <String>{};
+  int? _monthlyPriceRub;
+  String? _expiresAt;
+
+  @override
+  void initState() {
+    super.initState();
+    final sub = widget.user['subscription'];
+    final subMap = sub is Map<String, dynamic>
+        ? sub
+        : (sub is Map ? Map<String, dynamic>.from(sub) : <String, dynamic>{});
+    _planCode = (subMap['planCode'] ?? 'trial').toString();
+    _planName = (subMap['planName'] ?? 'Trial').toString();
+    _maxDevices = (subMap['maxDevices'] is int)
+        ? subMap['maxDevices'] as int
+        : int.tryParse((subMap['maxDevices'] ?? '1').toString()) ?? 1;
+    _isActive = subMap['isActive'] == true;
+    _monthlyPriceRub = _asInt(subMap['monthlyPriceRub']);
+    _expiresAt = (subMap['expiresAt'] ?? '').toString().trim();
+    _applySelectionFromServer(subMap['selection']);
+    _loadDevices();
+    unawaited(_loadTariffCatalog());
+    unawaited(_refreshQuote());
+  }
+
+  void _toast(String text) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  int get _userId {
+    final raw = widget.user['id'];
+    if (raw is int) return raw;
+    return int.tryParse(raw.toString()) ?? 0;
+  }
+
+  int? _asInt(Object? raw) {
+    if (raw is int) return raw;
+    return int.tryParse((raw ?? '').toString());
+  }
+
+  void _applySelectionFromServer(Object? raw) {
+    final map = raw is Map<String, dynamic>
+        ? raw
+        : (raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{});
+    final trafficPack = (map['trafficPack'] ?? '').toString().trim();
+    final trafficGb = _asInt(map['trafficGb']);
+    final devices = _asInt(map['devices']);
+
+    _trafficPackCode = trafficPack.isEmpty ? 'gb20' : trafficPack;
+    _trafficGb = trafficGb == null || trafficGb <= 0 ? 20 : trafficGb;
+    _dedicatedIp = map['dedicatedIp'] == true;
+    if (devices != null && devices > 0) {
+      _maxDevices = devices;
+    }
+
+    _unlimitedAppCodes
+      ..clear()
+      ..addAll(
+        (((map['unlimitedApps'] as List?) ?? const []).map(
+          (item) => item.toString().trim().toLowerCase(),
+        )).where((item) => item.isNotEmpty),
+      );
+  }
+
+  String? _formatRub(Object? raw) {
+    final value = _asInt(raw);
+    if (value == null || value <= 0) return null;
+    return '$value ?';
+  }
+
+  String _formatDate(Object? raw) {
+    final text = (raw ?? '').toString().trim();
+    if (text.isEmpty) return 'не задан';
+    try {
+      final dt = DateTime.parse(text).toLocal();
+      final day = dt.day.toString().padLeft(2, '0');
+      final month = dt.month.toString().padLeft(2, '0');
+      final year = dt.year.toString();
+      final hour = dt.hour.toString().padLeft(2, '0');
+      final minute = dt.minute.toString().padLeft(2, '0');
+      return '$day.$month.$year $hour:$minute';
+    } catch (_) {
+      return text;
+    }
+  }
+
+  String _formatTariffSummary() {
+    final parts = <String>[];
+    if (_trafficPackCode == 'unlimited') {
+      parts.add('Безлимит');
+    } else {
+      parts.add('$_trafficGb ГБ');
+    }
+    if (_unlimitedAppCodes.isNotEmpty) {
+      parts.add('приложений: ${_unlimitedAppCodes.length}');
+    }
+    if (_dedicatedIp) {
+      parts.add('выделенный IP');
+    }
+    parts.add('устройств: $_maxDevices');
+    return parts.join(' • ');
+  }
+
+  String _appTitle(String code) {
+    for (final app in TariffApp.values) {
+      if (app.name == code) return app.title;
+    }
+    return code;
+  }
+
+  List<String> _catalogAppCodes() {
+    final raw = (_catalog?['unlimitedApps'] as List?) ?? const [];
+    final out = <String>[];
+    for (final item in raw) {
+      if (item is Map) {
+        final code = (item['code'] ?? '').toString().trim().toLowerCase();
+        if (code.isNotEmpty) out.add(code);
+      }
+    }
+    if (out.isNotEmpty) return out;
+    return TariffApp.values.map((app) => app.name).toList();
+  }
+
+  List<Map<String, dynamic>> _catalogTrafficPacks() {
+    final raw = (_catalog?['trafficPacks'] as List?) ?? const [];
+    return raw
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList();
+  }
+
+  Future<void> _loadTariffCatalog() async {
+    final res = await widget.api.fetchTariffCatalog();
+    if (!mounted || !res.ok || res.data == null) return;
+    setState(() => _catalog = res.data);
+  }
+
+  Future<void> _refreshQuote() async {
+    final res = await widget.api.quoteTariff(
+      trafficPack: _trafficPackCode,
+      trafficGb: _trafficGb,
+      unlimitedApps: _unlimitedAppCodes.toList(),
+      devices: _maxDevices.clamp(1, 5),
+      dedicatedIp: _dedicatedIp,
+    );
+    if (!mounted) return;
+    if (!res.ok || res.data == null) {
+      setState(() {
+        _quote = null;
+        _status = res.message ?? 'Не удалось пересчитать тариф.';
+      });
+      return;
+    }
+    setState(() => _quote = res.data);
+  }
+
+  Map<String, dynamic>? _quoteMap() {
+    if (_quote == null) return null;
+    final raw = _quote!['quote'];
+    if (raw is Map<String, dynamic>) return raw;
+    if (raw is Map) return Map<String, dynamic>.from(raw);
+    return _quote;
+  }
+
+  Future<void> _loadDevices() async {
+    if (_userId <= 0) {
+      setState(() => _status = 'Не удалось определить user id.');
+      return;
+    }
+
+    setState(() => _busy = true);
+    try {
+      final res = await widget.api.adminUserDevices(
+        adminToken: widget.adminToken,
+        userId: _userId,
+      );
+      if (!res.ok || res.data == null) {
+        if (!mounted) return;
+        setState(
+          () => _status = res.message ?? 'Не удалось загрузить устройства.',
+        );
+        return;
+      }
+      if (!mounted) return;
+      setState(() {
+        _devices = res.data!;
+        _status = 'Данные пользователя обновлены.';
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _saveSubscription() async {
+    if (_userId <= 0) return;
+    setState(() => _busy = true);
+    try {
+      final res = await widget.api.adminSetSubscription(
+        adminToken: widget.adminToken,
+        userId: _userId,
+        planCode: _planCode,
+        planName: _planName,
+        maxDevices: _maxDevices.clamp(1, 100),
+        isActive: _isActive,
+      );
+      if (!mounted) return;
+      setState(() {
+        _status = res.ok
+            ? 'Подписка обновлена.'
+            : (res.message ?? 'Не удалось обновить подписку.');
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _applyTariffForUser() async {
+    if (_userId <= 0) return;
+    setState(() => _busy = true);
+    try {
+      final res = await widget.api.adminApplyTariff(
+        adminToken: widget.adminToken,
+        userId: _userId,
+        trafficPack: _trafficPackCode,
+        trafficGb: _trafficGb,
+        unlimitedApps: _unlimitedAppCodes.toList(),
+        devices: _maxDevices.clamp(1, 5),
+        dedicatedIp: _dedicatedIp,
+      );
+      if (!mounted) return;
+      if (!res.ok || res.data == null) {
+        setState(() {
+          _status = res.message ?? 'Не удалось выдать тариф пользователю.';
+        });
+        return;
+      }
+
+      final subRaw = res.data!['subscription'];
+      final subMap = subRaw is Map<String, dynamic>
+          ? subRaw
+          : (subRaw is Map
+                ? Map<String, dynamic>.from(subRaw)
+                : <String, dynamic>{});
+      final selectionRaw = res.data!['selection'];
+      _applySelectionFromServer(selectionRaw);
+
+      setState(() {
+        _planCode = (subMap['planCode'] ?? _planCode).toString();
+        _planName = (subMap['planName'] ?? _planName).toString();
+        _isActive = subMap['isActive'] == true;
+        _maxDevices =
+            _asInt(subMap['maxDevices'])?.clamp(1, 100) ?? _maxDevices;
+        _monthlyPriceRub = _asInt(subMap['monthlyPriceRub']);
+        _expiresAt = (subMap['expiresAt'] ?? '').toString().trim();
+        _quote = res.data;
+        _status = 'Тариф сохранён на сервере для этого пользователя.';
+      });
+      _toast('Тариф выдан пользователю.');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _toggleDevice(Map<String, dynamic> device, bool enable) async {
+    final uid = (device['deviceUid'] ?? '').toString();
+    if (uid.isEmpty) return;
+
+    setState(() => _busy = true);
+    try {
+      final res = enable
+          ? await widget.api.adminEnableDevice(
+              adminToken: widget.adminToken,
+              deviceUid: uid,
+            )
+          : await widget.api.adminDisableDevice(
+              adminToken: widget.adminToken,
+              deviceUid: uid,
+              reason: 'manual_block',
+            );
+
+      if (!mounted) return;
+      if (!res.ok) {
+        setState(() {
+          _status = res.message ?? 'Операция с устройством не удалась.';
+        });
+        return;
+      }
+      _toast(enable ? 'Устройство включено.' : 'Устройство отключено.');
+      await _loadDevices();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final email = (widget.user['email'] ?? '-').toString();
+    final quoteMap = _quoteMap();
+    final displayedPlan = (quoteMap?['planName'] ?? _planName).toString();
+    final displayedPrice = _formatRub(
+      quoteMap?['monthlyPriceRub'] ?? _monthlyPriceRub,
+    );
+    final lineItems = ((quoteMap?['lineItems'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList();
+    final trafficPacks = _catalogTrafficPacks();
+    final appCodes = _catalogAppCodes();
+
+    return Scaffold(
+      appBar: AppBar(title: Text(email)),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          if (_status != null) ...[
+            _Card(
+              child: Text(
+                _status!,
+                style: const TextStyle(
+                  color: kBrandMuted,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+          _Card(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const _SectionTitle('Тариф по каталогу'),
+                const SizedBox(height: 8),
+                Text(
+                  'Серверный план: $displayedPlan',
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  [
+                    if (displayedPrice != null) 'Цена: $displayedPrice/мес',
+                    'Истекает: ${_formatDate(_expiresAt)}',
+                  ].join(' • '),
+                  style: const TextStyle(
+                    color: kBrandMuted,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _formatTariffSummary(),
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 14),
+                const Text(
+                  'Трафик',
+                  style: TextStyle(fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children:
+                      (trafficPacks.isNotEmpty
+                              ? trafficPacks
+                              : [
+                                  {'code': 'gb5', 'title': '5 ГБ', 'gb': 5},
+                                  {'code': 'gb20', 'title': '20 ГБ', 'gb': 20},
+                                  {'code': 'gb50', 'title': '50 ГБ', 'gb': 50},
+                                  {
+                                    'code': 'gb100',
+                                    'title': '100 ГБ',
+                                    'gb': 100,
+                                  },
+                                  {
+                                    'code': 'unlimited',
+                                    'title': 'Безлимит',
+                                    'gb': 999,
+                                  },
+                                ])
+                          .map((pack) {
+                            final code = (pack['code'] ?? '').toString();
+                            final title = (pack['title'] ?? code).toString();
+                            final gb = _asInt(pack['gb']) ?? _trafficGb;
+                            return _ChipButton(
+                              icon: Icons.public_rounded,
+                              text: title,
+                              selected: _trafficPackCode == code,
+                              onTap: _busy
+                                  ? () {}
+                                  : () {
+                                      setState(() {
+                                        _trafficPackCode = code;
+                                        if (code == 'unlimited') {
+                                          _trafficGb = 500;
+                                          _unlimitedAppCodes.clear();
+                                        } else {
+                                          _trafficGb = gb.clamp(1, 500);
+                                        }
+                                      });
+                                      unawaited(_refreshQuote());
+                                    },
+                            );
+                          })
+                          .toList(),
+                ),
+                if (_trafficPackCode != 'unlimited') ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    'Объём: $_trafficGb ГБ',
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  Slider(
+                    value: _trafficGb.clamp(1, 500).toDouble(),
+                    min: 1,
+                    max: 500,
+                    divisions: 499,
+                    onChanged: _busy
+                        ? null
+                        : (v) {
+                            setState(() => _trafficGb = v.round());
+                          },
+                    onChangeEnd: _busy
+                        ? null
+                        : (_) {
+                            unawaited(_refreshQuote());
+                          },
+                  ),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [5, 20, 50, 100]
+                        .map(
+                          (gb) => _ChipButton(
+                            icon: Icons.speed_rounded,
+                            text: '$gb ГБ',
+                            selected: _trafficGb == gb,
+                            onTap: _busy
+                                ? () {}
+                                : () {
+                                    setState(() => _trafficGb = gb);
+                                    unawaited(_refreshQuote());
+                                  },
+                          ),
+                        )
+                        .toList(),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                const Text(
+                  'Безлимитные приложения',
+                  style: TextStyle(fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: appCodes.map((code) {
+                    final selected = _unlimitedAppCodes.contains(code);
+                    return _ChipButton(
+                      icon: TariffApp.values
+                          .firstWhere(
+                            (app) => app.name == code,
+                            orElse: () => TariffApp.telegram,
+                          )
+                          .icon,
+                      text: _appTitle(code),
+                      selected: selected,
+                      onTap: _busy || _trafficPackCode == 'unlimited'
+                          ? () {}
+                          : () {
+                              setState(() {
+                                if (selected) {
+                                  _unlimitedAppCodes.remove(code);
+                                } else {
+                                  _unlimitedAppCodes.add(code);
+                                }
+                              });
+                              unawaited(_refreshQuote());
+                            },
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    IconButton(
+                      onPressed: _busy
+                          ? null
+                          : () {
+                              setState(
+                                () =>
+                                    _maxDevices = (_maxDevices - 1).clamp(1, 5),
+                              );
+                              unawaited(_refreshQuote());
+                            },
+                      icon: const Icon(Icons.remove_circle_outline_rounded),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: kBrandPrimarySoft,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        '$_maxDevices',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w900,
+                          color: kBrandPrimaryDeep,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: _busy
+                          ? null
+                          : () {
+                              setState(
+                                () =>
+                                    _maxDevices = (_maxDevices + 1).clamp(1, 5),
+                              );
+                              unawaited(_refreshQuote());
+                            },
+                      icon: const Icon(Icons.add_circle_outline_rounded),
+                    ),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Text(
+                        'Устройства в тарифе',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ],
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text(
+                    'Выделенный IP',
+                    style: TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                  subtitle: const Text('Опция для продвинутых тарифов'),
+                  value: _dedicatedIp,
+                  onChanged: _busy
+                      ? null
+                      : (v) {
+                          setState(() => _dedicatedIp = v);
+                          unawaited(_refreshQuote());
+                        },
+                ),
+                const SizedBox(height: 8),
+                if (quoteMap != null) ...[
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: kBrandPrimarySoft,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Сервер считает: ${quoteMap['planName'] ?? displayedPlan}'
+                          '${displayedPrice == null ? '' : ' • $displayedPrice/мес'}',
+                          style: const TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                        if (lineItems.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          ...lineItems.map((item) {
+                            final title = (item['title'] ?? '-').toString();
+                            final price = _formatRub(item['priceRub']) ?? '0 ₽';
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 4),
+                              child: Text(
+                                '$title: $price',
+                                style: const TextStyle(
+                                  color: kBrandMuted,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            );
+                          }),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: _busy ? null : _refreshQuote,
+                        child: const Text('Пересчитать'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: _busy ? null : _applyTariffForUser,
+                        child: const Text('Выдать тариф'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          _Card(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const _SectionTitle('Ручной режим доступа'),
+                const SizedBox(height: 10),
+                const Text(
+                  'Оставляем как аварийный инструмент. Основной способ теперь — серверный тариф по каталогу выше.',
+                  style: TextStyle(
+                    color: kBrandMuted,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _ChipButton(
+                        icon: Icons.flash_on_rounded,
+                        text: 'Trial',
+                        selected: _planCode == 'trial',
+                        onTap: () {
+                          setState(() {
+                            _planCode = 'trial';
+                            _planName = 'Trial';
+                          });
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _ChipButton(
+                        icon: Icons.workspace_premium_rounded,
+                        text: 'Base',
+                        selected: _planCode == 'base',
+                        onTap: () {
+                          setState(() {
+                            _planCode = 'base';
+                            _planName = 'Base';
+                          });
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    IconButton(
+                      onPressed: () => setState(
+                        () => _maxDevices = (_maxDevices - 1).clamp(1, 100),
+                      ),
+                      icon: const Icon(Icons.remove_circle_outline_rounded),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      decoration: BoxDecoration(
+                        color: kBrandPrimarySoft,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        '$_maxDevices',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w900,
+                          color: kBrandPrimaryDeep,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => setState(
+                        () => _maxDevices = (_maxDevices + 1).clamp(1, 100),
+                      ),
+                      icon: const Icon(Icons.add_circle_outline_rounded),
+                    ),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Text(
+                        'Лимит устройств',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ],
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text(
+                    'Подписка активна',
+                    style: TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                  subtitle: const Text(
+                    'Если выключить, доступ к VPN будет закрыт',
+                  ),
+                  value: _isActive,
+                  onChanged: (v) => setState(() => _isActive = v),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: _busy ? null : _saveSubscription,
+                    child: const Text('Сохранить подписку'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          _Card(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Expanded(child: _SectionTitle('Устройства')),
+                    TextButton(
+                      onPressed: _busy ? null : _loadDevices,
+                      child: const Text('Обновить'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                if (_status != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      _status!,
+                      style: const TextStyle(
+                        color: kBrandMuted,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                if (_devices.isEmpty)
+                  const Text(
+                    'Устройств пока нет.',
+                    style: TextStyle(
+                      color: kBrandMuted,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  )
+                else
+                  ..._devices.map((device) {
+                    final enabled = device['isEnabled'] == true;
+                    final uid = (device['deviceUid'] ?? '-').toString();
+                    final ip = (device['assignedIp'] ?? 'нет ip').toString();
+                    final disabledReason = (device['disabledReason'] ?? '')
+                        .toString();
+                    final lastSeen = _formatDate(device['lastSeenAt']);
+                    final lastConfig = _formatDate(device['lastConfigAt']);
+                    return Column(
+                      children: [
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: Icon(
+                            enabled
+                                ? Icons.devices_rounded
+                                : Icons.device_unknown_rounded,
+                            color: enabled ? kBrandPrimary : kBrandDanger,
+                          ),
+                          title: Text(
+                            (device['deviceName'] ?? uid).toString(),
+                            style: const TextStyle(fontWeight: FontWeight.w900),
+                          ),
+                          subtitle: Text(
+                            '$uid\n$ip • ${(device['platform'] ?? 'unknown').toString()}'
+                            '\nПоследняя активность: $lastSeen'
+                            '\nПоследний конфиг: $lastConfig'
+                            '${disabledReason.isEmpty ? '' : '\nПричина: $disabledReason'}',
+                          ),
+                          isThreeLine: true,
+                          trailing: TextButton(
+                            onPressed: _busy
+                                ? null
+                                : () => _toggleDevice(device, !enabled),
+                            child: Text(enabled ? 'Отключить' : 'Включить'),
+                          ),
+                        ),
+                        if (device != _devices.last) const Divider(height: 14),
+                      ],
+                    );
+                  }),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AdminMiniStat extends StatelessWidget {
+  final String title;
+  final String value;
+
+  const _AdminMiniStat({required this.title, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 120,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: kBrandPrimarySoft,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              color: kBrandMuted,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: const TextStyle(
+              color: kBrandText,
+              fontWeight: FontWeight.w900,
+              fontSize: 18,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -2932,11 +10034,11 @@ class _BottomSheetFrame extends StatelessWidget {
                   height: 44,
                   decoration: BoxDecoration(
                     color: theme.brightness == Brightness.dark
-                        ? const Color(0xFF111827)
-                        : const Color(0xFFEFF6FF),
+                        ? kBrandDarkSurface
+                        : kBrandPrimarySoft,
                     borderRadius: BorderRadius.circular(14),
                   ),
-                  child: Icon(leading, color: const Color(0xFF2563EB)),
+                  child: Icon(leading, color: kBrandPrimary),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -2973,6 +10075,44 @@ class _BottomSheetFrame extends StatelessWidget {
   }
 }
 
+class _DesktopShellBody extends StatelessWidget {
+  final Widget child;
+
+  const _DesktopShellBody({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? const [kBrandDarkBg, Color(0xFF0A2019), Color(0xFF06130F)]
+              : const [kBrandLightBg, Color(0xFFEFF8F2), Color(0xFFF8FBF8)],
+        ),
+      ),
+      child: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final maxWidth = constraints.maxWidth >= 760 ? 980.0 : 560.0;
+            return Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: maxWidth),
+                child: child,
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
 class _PageTitle extends StatelessWidget {
   final String title;
   final String subtitle;
@@ -2986,16 +10126,20 @@ class _PageTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final textColor = theme.colorScheme.onSurface;
+    final mutedColor = textColor.withOpacity(isDark ? 0.72 : 0.62);
     return Row(
       children: [
         Container(
           width: 44,
           height: 44,
           decoration: BoxDecoration(
-            color: const Color(0xFFEFF6FF),
+            color: isDark ? kBrandDarkSurface : kBrandPrimarySoft,
             borderRadius: BorderRadius.circular(14),
           ),
-          child: Icon(icon, color: const Color(0xFF2563EB)),
+          child: Icon(icon, color: kBrandPrimary),
         ),
         const SizedBox(width: 12),
         Expanded(
@@ -3004,17 +10148,17 @@ class _PageTitle extends StatelessWidget {
             children: [
               Text(
                 title,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.w900,
-                  color: Color(0xFF0F172A),
+                  color: textColor,
                 ),
               ),
               const SizedBox(height: 2),
               Text(
                 subtitle,
-                style: const TextStyle(
-                  color: Color(0xFF64748B),
+                style: TextStyle(
+                  color: mutedColor,
                   fontWeight: FontWeight.w700,
                   fontSize: 12,
                 ),
@@ -3033,12 +10177,13 @@ class _SectionTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Text(
       text,
-      style: const TextStyle(
+      style: TextStyle(
         fontSize: 14,
         fontWeight: FontWeight.w900,
-        color: Color(0xFF0F172A),
+        color: theme.colorScheme.onSurface,
       ),
     );
   }
@@ -3113,11 +10258,11 @@ class _SettingsNavRow extends StatelessWidget {
             height: 42,
             decoration: BoxDecoration(
               color: theme.brightness == Brightness.dark
-                  ? const Color(0xFF111827)
-                  : const Color(0xFFEFF6FF),
+                  ? kBrandDarkSurface
+                  : kBrandPrimarySoft,
               borderRadius: BorderRadius.circular(14),
             ),
-            child: Icon(icon, color: const Color(0xFF2563EB)),
+            child: Icon(icon, color: kBrandPrimary),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -3177,11 +10322,11 @@ class _SettingsActionRow extends StatelessWidget {
             height: 42,
             decoration: BoxDecoration(
               color: theme.brightness == Brightness.dark
-                  ? const Color(0xFF111827)
-                  : const Color(0xFFEFF6FF),
+                  ? kBrandDarkSurface
+                  : kBrandPrimarySoft,
               borderRadius: BorderRadius.circular(14),
             ),
-            child: Icon(icon, color: const Color(0xFF2563EB)),
+            child: Icon(icon, color: kBrandPrimary),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -3229,8 +10374,15 @@ class _ChipButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bg = selected ? const Color(0xFF2563EB) : const Color(0xFFEFF6FF);
-    final fg = selected ? Colors.white : const Color(0xFF1E3A8A);
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final bg = selected
+        ? kBrandPrimary
+        : (isDark ? kBrandDarkSurface : kBrandPrimarySoft);
+    final fg = selected ? Colors.white : theme.colorScheme.onSurface;
+    final borderColor = selected
+        ? kBrandPrimary.withOpacity(0.20)
+        : theme.colorScheme.onSurface.withOpacity(isDark ? 0.16 : 0.12);
 
     return InkWell(
       borderRadius: BorderRadius.circular(999),
@@ -3240,7 +10392,7 @@ class _ChipButton extends StatelessWidget {
         decoration: BoxDecoration(
           color: bg,
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: const Color(0x1A1E3A8A)),
+          border: Border.all(color: borderColor),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -3253,6 +10405,45 @@ class _ChipButton extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _IncludedBadge extends StatelessWidget {
+  final IconData icon;
+  final String text;
+
+  const _IncludedBadge({required this.icon, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: isDark ? kBrandDarkSurface : Colors.white,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: theme.colorScheme.onSurface.withOpacity(isDark ? 0.16 : 0.10),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: kBrandPrimary),
+          const SizedBox(width: 8),
+          Text(
+            text,
+            style: TextStyle(
+              color: theme.colorScheme.onSurface,
+              fontWeight: FontWeight.w800,
+              fontSize: 12,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -3271,6 +10462,8 @@ class _PlaceholderPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Center(
@@ -3281,10 +10474,10 @@ class _PlaceholderPage extends StatelessWidget {
                 width: 48,
                 height: 48,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFEFF6FF),
+                  color: isDark ? kBrandDarkSurface : kBrandPrimarySoft,
                   borderRadius: BorderRadius.circular(14),
                 ),
-                child: Icon(icon, color: const Color(0xFF2563EB)),
+                child: Icon(icon, color: kBrandPrimary),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -3294,17 +10487,17 @@ class _PlaceholderPage extends StatelessWidget {
                   children: [
                     Text(
                       title,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w900,
-                        color: Color(0xFF0F172A),
+                        color: theme.colorScheme.onSurface,
                       ),
                     ),
                     const SizedBox(height: 6),
                     Text(
                       subtitle,
-                      style: const TextStyle(
-                        color: Color(0xFF64748B),
+                      style: TextStyle(
+                        color: theme.colorScheme.onSurface.withOpacity(0.62),
                         fontWeight: FontWeight.w700,
                         fontSize: 12,
                       ),
@@ -3328,17 +10521,29 @@ class _Card extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final surface = theme.colorScheme.surface;
+    final fill = tint == null
+        ? surface
+        : (isDark ? Color.alphaBlend(tint!.withOpacity(0.16), surface) : tint!);
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: tint ?? Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0x110F172A)),
-        boxShadow: const [
+        color: fill,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: isDark
+              ? Colors.white.withOpacity(0.10)
+              : kBrandPrimaryDeep.withOpacity(0.10),
+        ),
+        boxShadow: [
           BoxShadow(
-            blurRadius: 14,
-            offset: Offset(0, 8),
-            color: Color(0x14000000),
+            blurRadius: 22,
+            offset: const Offset(0, 12),
+            color: isDark
+                ? Colors.black.withOpacity(0.24)
+                : kBrandPrimaryDeep.withOpacity(0.08),
           ),
         ],
       ),
@@ -3351,27 +10556,501 @@ class _Card extends StatelessWidget {
    DIAGNOSTICS (READ-ONLY)
    ========================= */
 
+class WireGuardRuntimeStatus {
+  final String tunnelName;
+  final String serviceName;
+  final String serviceState;
+  final bool interfacePresent;
+  final String? configEndpoint;
+  final String? activeEndpoint;
+  final String configMode;
+  final int? latestHandshakeEpochSeconds;
+  final int rxBytes;
+  final int txBytes;
+  final String rawWgDump;
+  final List<String> otherActiveWireGuardInterfaces;
+  final List<String> otherRunningWireGuardServices;
+  final String? primaryDefaultRouteAlias;
+
+  const WireGuardRuntimeStatus({
+    required this.tunnelName,
+    required this.serviceName,
+    required this.serviceState,
+    required this.interfacePresent,
+    required this.configEndpoint,
+    required this.activeEndpoint,
+    required this.configMode,
+    required this.latestHandshakeEpochSeconds,
+    required this.rxBytes,
+    required this.txBytes,
+    required this.rawWgDump,
+    required this.otherActiveWireGuardInterfaces,
+    required this.otherRunningWireGuardServices,
+    required this.primaryDefaultRouteAlias,
+  });
+
+  bool get hasRecentHandshake {
+    final epoch = latestHandshakeEpochSeconds;
+    if (epoch == null || epoch <= 0) return false;
+    final handshakeAt = DateTime.fromMillisecondsSinceEpoch(epoch * 1000);
+    return DateTime.now().difference(handshakeAt).inSeconds <= 180;
+  }
+
+  bool get hasTraffic => rxBytes > 0 || txBytes > 0;
+
+  bool get hasCompetingTunnel =>
+      otherActiveWireGuardInterfaces.isNotEmpty ||
+      otherRunningWireGuardServices.isNotEmpty;
+
+  bool get isReallyConnected =>
+      serviceState == 'running' &&
+      interfacePresent &&
+      hasRecentHandshake &&
+      hasTraffic;
+
+  String get bestEndpoint {
+    final endpoint = activeEndpoint ?? configEndpoint;
+    if (endpoint == null || endpoint.trim().isEmpty) {
+      return 'не найден';
+    }
+    return endpoint;
+  }
+
+  String get modeLabel {
+    switch (configMode) {
+      case 'full_tunnel':
+        return 'full tunnel';
+      case 'social_only':
+        return 'social only';
+      default:
+        return 'unknown';
+    }
+  }
+
+  String get handshakeLabel {
+    final epoch = latestHandshakeEpochSeconds;
+    if (epoch == null || epoch <= 0) return 'нет';
+    final handshakeAt = DateTime.fromMillisecondsSinceEpoch(epoch * 1000);
+    final age = DateTime.now().difference(handshakeAt);
+    if (age.inSeconds < 60) return '${age.inSeconds} сек назад';
+    if (age.inMinutes < 60) return '${age.inMinutes} мин назад';
+    return '${age.inHours} ч назад';
+  }
+
+  String get trafficLabel =>
+      'rx ${_formatBytes(rxBytes)} / tx ${_formatBytes(txBytes)}';
+
+  String get competingTunnelsLabel {
+    final combined = <String>{
+      ...otherActiveWireGuardInterfaces,
+      ...otherRunningWireGuardServices,
+    }.toList()..sort();
+    if (combined.isEmpty) return 'none';
+    return combined.join(', ');
+  }
+
+  String get routeOwnerLabel {
+    final alias = primaryDefaultRouteAlias?.trim();
+    if (alias == null || alias.isEmpty) return 'unknown';
+    return alias;
+  }
+
+  String get routeConflictHint {
+    if (hasCompetingTunnel) {
+      return 'Есть другой активный WireGuard-интерфейс или сервис. Он может мешать маршрутизации и рукопожатию BlueVPNDev1.';
+    }
+    if (routeOwnerLabel != 'unknown' && routeOwnerLabel != tunnelName) {
+      return 'Основной IPv4-маршрут сейчас принадлежит не BlueVPNDev1, а $routeOwnerLabel.';
+    }
+    if (routeOwnerLabel == tunnelName) {
+      return 'Основной IPv4-маршрут уже у BlueVPNDev1.';
+    }
+    return 'Владелец основного IPv4-маршрута определить не удалось.';
+  }
+
+  String describe() {
+    return 'service=$serviceState, interface=${interfacePresent ? "present" : "missing"}, handshake=$handshakeLabel, traffic=$trafficLabel, endpoint=$bestEndpoint, mode=$modeLabel, competing=$competingTunnelsLabel, primaryRoute=$routeOwnerLabel';
+  }
+
+  static String _formatBytes(int value) {
+    if (value < 1024) return '$value B';
+    final kb = value / 1024;
+    if (kb < 1024) return '${kb.toStringAsFixed(1)} KiB';
+    final mb = kb / 1024;
+    if (mb < 1024) return '${mb.toStringAsFixed(1)} MiB';
+    final gb = mb / 1024;
+    return '${gb.toStringAsFixed(2)} GiB';
+  }
+
+  static String _serviceNameForTunnel(String tunnelName) =>
+      r'WireGuardTunnel$' + tunnelName;
+
+  static String _psSingleQuoted(String value) => value.replaceAll("'", "''");
+
+  static String? _readConfigField(String configText, String fieldName) {
+    final match = RegExp(
+      '^\\s*$fieldName\\s*=\\s*(.+?)\\s*\$',
+      multiLine: true,
+      caseSensitive: false,
+    ).firstMatch(configText);
+    return match?.group(1)?.trim();
+  }
+
+  static String _detectMode(String configText) {
+    final allowed = (_readConfigField(configText, 'AllowedIPs') ?? '')
+        .toLowerCase();
+    final isFull =
+        allowed.contains('0.0.0.0/0') ||
+        allowed.contains('::/0') ||
+        (allowed.contains('0.0.0.0/1') && allowed.contains('128.0.0.0/1'));
+    return isFull ? 'full_tunnel' : 'social_only';
+  }
+
+  static String _resolveWgExe(String wireguardExePath) {
+    if (wireguardExePath.trim().isNotEmpty &&
+        wireguardExePath.toLowerCase().endsWith(r'\wireguard.exe')) {
+      final wgPath =
+          wireguardExePath.substring(
+            0,
+            wireguardExePath.length - 'wireguard.exe'.length,
+          ) +
+          'wg.exe';
+      if (File(wgPath).existsSync()) return wgPath;
+    }
+
+    final candidates = <String>[
+      r'C:\Program Files\WireGuard\wg.exe',
+      r'C:\Program Files (x86)\WireGuard\wg.exe',
+      'wg.exe',
+    ];
+
+    for (final c in candidates) {
+      if (c == 'wg.exe' || File(c).existsSync()) return c;
+    }
+    return 'wg.exe';
+  }
+
+  static List<String> _parseNonEmptyLines(ProcessResult result) {
+    return (result.stdout ?? '')
+        .toString()
+        .split(RegExp(r'\r?\n'))
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .toList();
+  }
+
+  static Future<List<String>> _queryOtherActiveWireGuardInterfaces(
+    String tunnelName,
+  ) async {
+    if (!Platform.isWindows) return const [];
+    try {
+      final res = await Process.run('powershell', [
+        '-NoProfile',
+        '-Command',
+        r'''
+$ErrorActionPreference="SilentlyContinue"
+$tunnel = '__TUNNEL__'
+$labels = New-Object System.Collections.Generic.List[string]
+function Add-Label([string]$value) {
+  if (-not [string]::IsNullOrWhiteSpace($value) -and -not $labels.Contains($value)) {
+    $labels.Add($value) | Out-Null
+  }
+}
+try {
+  Get-NetAdapter -IncludeHidden |
+    Where-Object {
+      $_.Name -ne $tunnel -and
+      ($_.Status -eq 'Up' -or $_.Status -eq 'Connected') -and
+      (
+        $_.InterfaceDescription -match '(?i)(WireGuard|Wintun|Amnezia|WARP|Cloudflare)' -or
+        $_.Name -match '(?i)(WireGuard|Wintun|Amnezia|WARP|Cloudflare|device[0-9_]+)'
+      )
+    } |
+    ForEach-Object { Add-Label ("adapter:" + $_.Name) }
+} catch {}
+try {
+  Get-CimInstance Win32_NetworkAdapter |
+    Where-Object {
+      $_.NetEnabled -eq $true -and
+      (
+        $_.Name -match '(?i)(WireGuard|Wintun|Amnezia|WARP|Cloudflare)' -or
+        $_.NetConnectionID -match '(?i)(WireGuard|Wintun|Amnezia|WARP|Cloudflare|device[0-9_]+)' -or
+        $_.ServiceName -match '(?i)(WireGuard|Wintun|Amnezia|WARP|Cloudflare)'
+      )
+    } |
+    ForEach-Object {
+      $name = $_.NetConnectionID
+      if ([string]::IsNullOrWhiteSpace($name)) { $name = $_.Name }
+      if ($name -ne $tunnel) { Add-Label ("adapter:" + $name) }
+    }
+} catch {}
+$labels | Sort-Object -Unique
+'''
+            .replaceAll('__TUNNEL__', _psSingleQuoted(tunnelName)),
+      ], runInShell: true);
+      if (res.exitCode != 0) return const [];
+      return _parseNonEmptyLines(res);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  static Future<List<String>> _queryOtherRunningWireGuardServices(
+    String ownServiceName,
+  ) async {
+    if (!Platform.isWindows) return const [];
+    try {
+      final res = await Process.run('powershell', [
+        '-NoProfile',
+        '-Command',
+        r'''
+$ErrorActionPreference="SilentlyContinue"
+$ownService = '__SERVICE__'
+Get-CimInstance Win32_Service |
+  Where-Object {
+    (
+      ($_.Name -like 'WireGuardTunnel$*' -and $_.Name -ne $ownService) -or
+      $_.Name -like 'AmneziaWGTunnel$*' -or
+      $_.Name -match '(?i)(CloudflareWARP|Cloudflare WARP|WARP)'
+    ) -and
+    $_.State -eq 'Running' -and
+    $_.Name -ne 'WireGuardManager' -and
+    $_.Name -ne 'AmneziaWGManager'
+  } |
+  ForEach-Object { "service:" + $_.Name } |
+  Sort-Object -Unique
+'''
+            .replaceAll('__SERVICE__', _psSingleQuoted(ownServiceName)),
+      ], runInShell: true);
+      if (res.exitCode != 0) return const [];
+      return _parseNonEmptyLines(res);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  static Future<String?> _queryPrimaryDefaultRouteAlias() async {
+    if (!Platform.isWindows) return null;
+    try {
+      final res = await Process.run('powershell', [
+        '-NoProfile',
+        '-Command',
+        r'''
+$ErrorActionPreference="SilentlyContinue"
+$route = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' |
+  Sort-Object RouteMetric, InterfaceMetric |
+  Select-Object -First 1
+if ($route) { $route.InterfaceAlias }
+''',
+      ], runInShell: true);
+      if (res.exitCode != 0) return null;
+      final lines = _parseNonEmptyLines(res);
+      if (lines.isEmpty) return null;
+      return lines.first;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<String> _queryServiceState(String serviceName) async {
+    if (!Platform.isWindows) return 'unsupported';
+    try {
+      final res = await Process.run('sc', [
+        'query',
+        serviceName,
+      ], runInShell: true);
+      if (res.exitCode != 0) return 'not_installed';
+      final out = (res.stdout ?? '').toString();
+      if (out.contains('RUNNING')) return 'running';
+      if (out.contains('STOPPED')) return 'stopped';
+      return 'unknown';
+    } catch (_) {
+      return 'unknown';
+    }
+  }
+
+  static Future<WireGuardRuntimeStatus> query({
+    required String tunnelName,
+    required String configPath,
+    required String wireguardExePath,
+  }) async {
+    final serviceName = _serviceNameForTunnel(tunnelName);
+    final serviceState = await _queryServiceState(serviceName);
+
+    String? configEndpoint;
+    String configMode = 'unknown';
+    try {
+      final configFile = File(configPath);
+      if (configFile.existsSync()) {
+        final rawConfig = await configFile.readAsString();
+        configEndpoint = _readConfigField(rawConfig, 'Endpoint');
+        configMode = _detectMode(rawConfig);
+      }
+    } catch (_) {}
+
+    final otherActiveWireGuardInterfaces =
+        await _queryOtherActiveWireGuardInterfaces(tunnelName);
+    final otherRunningWireGuardServices =
+        await _queryOtherRunningWireGuardServices(serviceName);
+    final primaryDefaultRouteAlias = await _queryPrimaryDefaultRouteAlias();
+
+    final wgExe = _resolveWgExe(wireguardExePath);
+    try {
+      final res = await Process.run(wgExe, [
+        'show',
+        tunnelName,
+        'dump',
+      ], runInShell: true);
+      final rawWgDump =
+          ((res.stdout ?? '').toString() + '\n' + (res.stderr ?? '').toString())
+              .trim();
+
+      if (res.exitCode != 0 || rawWgDump.isEmpty) {
+        return WireGuardRuntimeStatus(
+          tunnelName: tunnelName,
+          serviceName: serviceName,
+          serviceState: serviceState,
+          interfacePresent: false,
+          configEndpoint: configEndpoint,
+          activeEndpoint: null,
+          configMode: configMode,
+          latestHandshakeEpochSeconds: null,
+          rxBytes: 0,
+          txBytes: 0,
+          rawWgDump: rawWgDump,
+          otherActiveWireGuardInterfaces: otherActiveWireGuardInterfaces,
+          otherRunningWireGuardServices: otherRunningWireGuardServices,
+          primaryDefaultRouteAlias: primaryDefaultRouteAlias,
+        );
+      }
+
+      final lines = rawWgDump
+          .split(RegExp(r'\r?\n'))
+          .where((line) => line.trim().isNotEmpty)
+          .toList();
+
+      if (lines.length < 2) {
+        return WireGuardRuntimeStatus(
+          tunnelName: tunnelName,
+          serviceName: serviceName,
+          serviceState: serviceState,
+          interfacePresent: true,
+          configEndpoint: configEndpoint,
+          activeEndpoint: null,
+          configMode: configMode,
+          latestHandshakeEpochSeconds: null,
+          rxBytes: 0,
+          txBytes: 0,
+          rawWgDump: rawWgDump,
+          otherActiveWireGuardInterfaces: otherActiveWireGuardInterfaces,
+          otherRunningWireGuardServices: otherRunningWireGuardServices,
+          primaryDefaultRouteAlias: primaryDefaultRouteAlias,
+        );
+      }
+
+      String? activeEndpoint;
+      int? latestHandshakeEpochSeconds;
+      var rxBytes = 0;
+      var txBytes = 0;
+
+      for (final peerLine in lines.skip(1)) {
+        final parts = peerLine.split('\t');
+        if (parts.length < 7) continue;
+
+        final offset = parts.length >= 9 && parts[0].trim() == tunnelName
+            ? 1
+            : 0;
+        if (parts.length < offset + 7) continue;
+
+        final peerEndpoint = parts[offset + 2].trim();
+        final handshake = int.tryParse(parts[offset + 4].trim()) ?? 0;
+        final rx = int.tryParse(parts[offset + 5].trim()) ?? 0;
+        final tx = int.tryParse(parts[offset + 6].trim()) ?? 0;
+
+        if (activeEndpoint == null &&
+            peerEndpoint.isNotEmpty &&
+            peerEndpoint != '(none)') {
+          activeEndpoint = peerEndpoint;
+        }
+
+        if (latestHandshakeEpochSeconds == null ||
+            handshake > latestHandshakeEpochSeconds) {
+          latestHandshakeEpochSeconds = handshake > 0 ? handshake : null;
+          rxBytes = rx;
+          txBytes = tx;
+        }
+      }
+
+      return WireGuardRuntimeStatus(
+        tunnelName: tunnelName,
+        serviceName: serviceName,
+        serviceState: serviceState,
+        interfacePresent: true,
+        configEndpoint: configEndpoint,
+        activeEndpoint: activeEndpoint,
+        configMode: configMode,
+        latestHandshakeEpochSeconds: latestHandshakeEpochSeconds,
+        rxBytes: rxBytes,
+        txBytes: txBytes,
+        rawWgDump: rawWgDump,
+        otherActiveWireGuardInterfaces: otherActiveWireGuardInterfaces,
+        otherRunningWireGuardServices: otherRunningWireGuardServices,
+        primaryDefaultRouteAlias: primaryDefaultRouteAlias,
+      );
+    } catch (e) {
+      return WireGuardRuntimeStatus(
+        tunnelName: tunnelName,
+        serviceName: serviceName,
+        serviceState: serviceState,
+        interfacePresent: false,
+        configEndpoint: configEndpoint,
+        activeEndpoint: null,
+        configMode: configMode,
+        latestHandshakeEpochSeconds: null,
+        rxBytes: 0,
+        txBytes: 0,
+        rawWgDump: 'wg.exe error: $e',
+        otherActiveWireGuardInterfaces: otherActiveWireGuardInterfaces,
+        otherRunningWireGuardServices: otherRunningWireGuardServices,
+        primaryDefaultRouteAlias: primaryDefaultRouteAlias,
+      );
+    }
+  }
+}
+
 class DiagnosticsPage extends StatefulWidget {
-  const DiagnosticsPage({super.key});
+  final String accessToken;
+  final String email;
+
+  const DiagnosticsPage({
+    super.key,
+    required this.accessToken,
+    required this.email,
+  });
 
   @override
   State<DiagnosticsPage> createState() => _DiagnosticsPageState();
 }
 
 class _DiagnosticsPageState extends State<DiagnosticsPage> {
-  bool _loading = true;
+  final _api = const BlueVpnApi(baseUrl: kApiBaseUrl);
 
-  String _appDataPath = '';
+  bool _loading = true;
+  bool _sending = false;
+
+  String _statePath = '';
   String _configPath = '';
   bool _configExists = false;
+  String _deviceUid = '';
+  String? _lastSendMessage;
 
   bool _isAdmin = false;
 
   String _wgExe = '';
   bool _wgFound = false;
 
-  String _serviceName = '';
-  String _serviceState = 'unknown';
+  WireGuardRuntimeStatus? _runtimeStatus;
+  String? _fallbackReportCode;
 
   @override
   void initState() {
@@ -3382,8 +11061,16 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
   Future<void> _refresh() async {
     setState(() => _loading = true);
 
-    final app = Platform.environment['APPDATA'] ?? '';
-    _appDataPath = app.isEmpty ? '(APPDATA не найден)' : '$app\\BlueVPN';
+    _statePath = BlueVpnLocalPaths.sharedStateDirSync();
+    _deviceUid = '';
+    try {
+      final deviceFile = File('$_statePath\\device_id.txt');
+      if (await deviceFile.exists()) {
+        _deviceUid = (await deviceFile.readAsString()).trim();
+      }
+    } catch (_) {
+      _deviceUid = '';
+    }
 
     final cfg = ConfigStore();
     _configPath = cfg.managedConfigPath;
@@ -3394,9 +11081,11 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
         File(_wgExe).existsSync() || _wgExe.toLowerCase() == 'wireguard.exe';
 
     _isAdmin = await _isAdminWindows();
-
-    _serviceName = 'WireGuardTunnel\$${kTunnelName}';
-    _serviceState = await _queryServiceState(_serviceName);
+    _runtimeStatus = await WireGuardRuntimeStatus.query(
+      tunnelName: kTunnelName,
+      configPath: _configPath,
+      wireguardExePath: _wgExe,
+    );
 
     if (!mounted) return;
     setState(() => _loading = false);
@@ -3426,52 +11115,108 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
       final res = await Process.run('whoami', ['/groups'], runInShell: true);
       if (res.exitCode != 0) return false;
       final out = (res.stdout ?? '').toString();
-      return out.contains('S-1-5-32-544');
+      return out.contains('S-1-16-12288') || out.contains('S-1-16-16384');
     } catch (_) {
       return false;
     }
   }
 
-  static Future<String> _queryServiceState(String serviceName) async {
-    if (!Platform.isWindows) return 'unsupported';
-    try {
-      final res = await Process.run('sc', [
-        'query',
-        serviceName,
-      ], runInShell: true);
-      if (res.exitCode != 0) return 'not_installed';
-      final out = (res.stdout ?? '').toString();
-      if (out.contains('RUNNING')) return 'running';
-      if (out.contains('STOPPED')) return 'stopped';
-      return 'unknown';
-    } catch (_) {
-      return 'unknown';
-    }
+  String _buildSupportReportCode() {
+    final runtime = _runtimeStatus;
+    final payload = <String, Object?>{
+      'schema': 1,
+      'product': kProductName,
+      'appVersion': kAppVersion,
+      'build': kBuildMarker,
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+      'platform': Platform.operatingSystem,
+      'email': widget.email,
+      'deviceUid': _deviceUid,
+      'configExists': _configExists,
+      'wireGuardFound': _wgFound,
+      'admin': _isAdmin,
+      'service': runtime?.serviceState ?? 'unknown',
+      'mode': runtime?.modeLabel ?? 'unknown',
+      'hasHandshake': runtime?.hasRecentHandshake ?? false,
+      'hasTraffic': runtime?.hasTraffic ?? false,
+      'traffic': runtime?.trafficLabel ?? 'rx 0 B / tx 0 B',
+      'realTunnel': runtime?.isReallyConnected ?? false,
+      'competingVpn': runtime?.competingTunnelsLabel ?? 'none',
+      'routeOwner': runtime?.routeOwnerLabel ?? 'unknown',
+      'routeHint': runtime?.routeConflictHint ?? '',
+      'endpoint': runtime?.bestEndpoint ?? '',
+    };
+    final jsonBytes = utf8.encode(jsonEncode(payload));
+    final packed = gzip.encode(jsonBytes);
+    return 'GVPN1.${base64UrlEncode(packed)}';
   }
 
-  void _copyReport() {
-    final lines = <String>[
-      'BlueVPN Diagnostics',
-      'AppData: $_appDataPath',
-      'Config: $_configPath',
-      'Config exists: $_configExists',
-      'WireGuard exe: $_wgExe',
-      'WireGuard found: $_wgFound',
-      'Admin: $_isAdmin',
-      'Service: $_serviceName ($_serviceState)',
+  String _supportSummary() {
+    final runtime = _runtimeStatus;
+    final parts = <String>[
+      'service=${runtime?.serviceState ?? 'unknown'}',
+      'mode=${runtime?.modeLabel ?? 'unknown'}',
+      'handshake=${runtime?.hasRecentHandshake == true ? 'yes' : 'no'}',
+      'traffic=${runtime?.trafficLabel ?? 'rx 0 B / tx 0 B'}',
+      'competing=${runtime?.competingTunnelsLabel ?? 'none'}',
+      'route=${runtime?.routeOwnerLabel ?? 'unknown'}',
     ];
+    return parts.join(', ');
+  }
 
-    Clipboard.setData(ClipboardData(text: lines.join('\n')));
+  Future<void> _sendReport() async {
+    if (_sending) return;
+    setState(() {
+      _sending = true;
+      _lastSendMessage = null;
+    });
+
+    final reportCode = _buildSupportReportCode();
+    final result = await _api.sendSupportReport(
+      accessToken: widget.accessToken,
+      report: reportCode,
+      summary: _supportSummary(),
+      appVersion: kAppVersion,
+      deviceUid: _deviceUid,
+    );
+
+    if (!mounted) return;
+    final message = result.ok
+        ? 'Отчёт отправлен в поддержку.'
+        : 'Не удалось отправить отчёт. Можно скопировать код и передать его поддержке.';
+    setState(() {
+      _sending = false;
+      _lastSendMessage = message;
+      _fallbackReportCode = result.ok ? null : reportCode;
+    });
     ScaffoldMessenger.of(
       context,
-    ).showSnackBar(const SnackBar(content: Text('Отчёт скопирован в буфер.')));
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _copyFallbackReportCode() async {
+    final code = _fallbackReportCode;
+    if (code == null || code.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: code));
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Код отчёта скопирован.')));
   }
 
   @override
   Widget build(BuildContext context) {
+    final runtime = _runtimeStatus;
+    final serviceState = runtime?.serviceState ?? 'unknown';
+    final handshakeOk = runtime?.hasRecentHandshake ?? false;
+    final trafficOk = runtime?.hasTraffic ?? false;
+    final realTunnelOk = runtime?.isReallyConnected ?? false;
+    final competingTunnels = runtime?.competingTunnelsLabel ?? 'none';
+    final serviceOk = serviceState == 'running' || serviceState == 'stopped';
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Диагностика'),
+        title: const Text('Поддержка'),
         actions: [
           IconButton(
             tooltip: 'Обновить',
@@ -3485,61 +11230,105 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                _DiagTile(
-                  title: 'WireGuard установлен',
-                  value: _wgFound ? 'Да' : 'Нет',
-                  subtitle: _wgExe,
-                  ok: _wgFound,
+                const _PageTitle(
+                  title: 'Помощь и отчёт',
+                  subtitle:
+                      'Если VPN не подключается или работает странно, отправь отчёт в поддержку одной кнопкой.',
+                  icon: Icons.support_agent_rounded,
                 ),
-                const SizedBox(height: 10),
-                _DiagTile(
-                  title: 'Права администратора',
-                  value: _isAdmin ? 'Да' : 'Нет',
-                  subtitle: _isAdmin
-                      ? 'Ок'
-                      : 'Для подключения/отключения через wireguard.exe нужны права администратора.\nЗапусти приложение от имени администратора.',
-                  ok: _isAdmin,
-                ),
-                const SizedBox(height: 10),
-                _DiagTile(
-                  title: 'Конфигурация (скрытая)',
-                  value: _configExists ? 'Есть' : 'Нет',
-                  subtitle: _configPath,
-                  ok: _configExists,
-                ),
-                const SizedBox(height: 10),
-                _DiagTile(
-                  title: 'Сервис WireGuard',
-                  value: _serviceState,
-                  subtitle: _serviceName,
-                  ok: _serviceState == 'running' || _serviceState == 'stopped',
-                ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 12),
                 _Card(
-                  child: Row(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Icon(
-                        Icons.content_copy_rounded,
-                        color: Color(0xFF2563EB),
+                      _SupportStatusLine(
+                        title: 'Системный компонент',
+                        ok: serviceOk,
+                        value: serviceOk ? 'готов' : 'нужно переустановить',
                       ),
-                      const SizedBox(width: 10),
-                      const Expanded(
-                        child: Text(
-                          'Скопировать отчёт',
-                          style: TextStyle(fontWeight: FontWeight.w900),
+                      const SizedBox(height: 10),
+                      _SupportStatusLine(
+                        title: 'VPN-конфигурация',
+                        ok: _configExists,
+                        value: _configExists ? 'получена' : 'ещё не получена',
+                      ),
+                      const SizedBox(height: 10),
+                      _SupportStatusLine(
+                        title: 'Подключение',
+                        ok: realTunnelOk,
+                        value: realTunnelOk
+                            ? 'активно'
+                            : handshakeOk || trafficOk
+                            ? 'проверяется'
+                            : 'не активно',
+                      ),
+                      const SizedBox(height: 10),
+                      _SupportStatusLine(
+                        title: 'Другие VPN',
+                        ok: competingTunnels == 'none',
+                        value: competingTunnels == 'none'
+                            ? 'не мешают'
+                            : 'обнаружен другой VPN',
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _Card(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text(
+                        'Отчёт для поддержки',
+                        style: TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'В отчёте нет пароля, токенов и приватных ключей. Он закодирован, чтобы на экране не светились технические данные.',
+                        style: TextStyle(
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.onSurface.withOpacity(0.62),
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
+                      if (_lastSendMessage != null) ...[
+                        const SizedBox(height: 10),
+                        Text(
+                          _lastSendMessage!,
+                          style: const TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                      ],
+                      const SizedBox(height: 14),
                       ElevatedButton(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF2563EB),
+                          backgroundColor: kBrandPrimary,
                           foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(14),
                           ),
                         ),
-                        onPressed: _copyReport,
-                        child: const Text('Копировать'),
+                        onPressed: _sending ? null : _sendReport,
+                        child: Text(
+                          _sending ? 'Отправляем...' : 'Отправить отчёт',
+                        ),
                       ),
+                      if (_fallbackReportCode != null) ...[
+                        const SizedBox(height: 10),
+                        OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 13),
+                            side: const BorderSide(color: kBrandPrimary),
+                            foregroundColor: kBrandPrimaryDeep,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          onPressed: _copyFallbackReportCode,
+                          child: const Text('Скопировать код отчёта'),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -3549,69 +11338,42 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
   }
 }
 
-class _DiagTile extends StatelessWidget {
+class _SupportStatusLine extends StatelessWidget {
   final String title;
-  final String value;
-  final String subtitle;
   final bool ok;
+  final String value;
 
-  const _DiagTile({
+  const _SupportStatusLine({
     required this.title,
-    required this.value,
-    required this.subtitle,
     required this.ok,
+    required this.value,
   });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return _Card(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: ok ? const Color(0xFFEFF6FF) : const Color(0xFFFFF1F2),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: Icon(
-              ok ? Icons.check_circle_rounded : Icons.error_rounded,
-              color: ok ? const Color(0xFF2563EB) : const Color(0xFFDC2626),
-            ),
+    return Row(
+      children: [
+        Icon(
+          ok ? Icons.check_circle_rounded : Icons.info_rounded,
+          color: ok ? kBrandPrimary : kBrandWarm,
+          size: 20,
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            title,
+            style: const TextStyle(fontWeight: FontWeight.w800),
           ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(fontWeight: FontWeight.w900),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  value,
-                  style: TextStyle(
-                    color: theme.colorScheme.onSurface.withOpacity(0.7),
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    color: theme.colorScheme.onSurface.withOpacity(0.55),
-                    fontWeight: FontWeight.w600,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
+        ),
+        Text(
+          value,
+          style: TextStyle(
+            color: theme.colorScheme.onSurface.withOpacity(0.65),
+            fontWeight: FontWeight.w800,
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
@@ -3664,6 +11426,110 @@ class UnsupportedVpnBackend extends VpnBackend {
   Future<bool> isConnected() async => false;
 }
 
+class _GreenVpnSystemServiceResponse {
+  final bool ok;
+  final int statusCode;
+  final int? exitCode;
+  final String? message;
+
+  const _GreenVpnSystemServiceResponse({
+    required this.ok,
+    required this.statusCode,
+    this.exitCode,
+    this.message,
+  });
+
+  bool get unavailable => statusCode == 0;
+}
+
+class _GreenVpnSystemServiceClient {
+  const _GreenVpnSystemServiceClient();
+
+  static final Uri _baseUri = Uri.parse('http://127.0.0.1:48737');
+
+  Future<_GreenVpnSystemServiceResponse> ping() => _request(
+    'GET',
+    '/ping',
+    connectTimeout: const Duration(milliseconds: 700),
+    responseTimeout: const Duration(seconds: 2),
+  );
+
+  Future<_GreenVpnSystemServiceResponse> connect() => _request(
+    'POST',
+    '/connect',
+    connectTimeout: const Duration(seconds: 2),
+    responseTimeout: const Duration(seconds: 130),
+  );
+
+  Future<_GreenVpnSystemServiceResponse> disconnect() => _request(
+    'POST',
+    '/disconnect',
+    connectTimeout: const Duration(seconds: 2),
+    responseTimeout: const Duration(seconds: 130),
+  );
+
+  Future<_GreenVpnSystemServiceResponse> _request(
+    String method,
+    String path, {
+    required Duration connectTimeout,
+    required Duration responseTimeout,
+  }) async {
+    final client = HttpClient()..connectionTimeout = connectTimeout;
+    try {
+      final uri = _baseUri.resolve(path);
+      final request = method == 'POST'
+          ? await client.postUrl(uri).timeout(connectTimeout)
+          : await client.getUrl(uri).timeout(connectTimeout);
+      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      if (method == 'POST') {
+        request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
+        request.add(utf8.encode('{}'));
+      }
+
+      final response = await request.close().timeout(responseTimeout);
+      final body = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 5));
+
+      Map<String, dynamic> json = const <String, dynamic>{};
+      try {
+        final decoded = jsonDecode(body);
+        if (decoded is Map<String, dynamic>) {
+          json = decoded;
+        } else if (decoded is Map) {
+          json = decoded.map((key, value) => MapEntry('$key', value));
+        }
+      } catch (_) {}
+
+      final ok =
+          response.statusCode >= 200 &&
+          response.statusCode < 300 &&
+          json['ok'] == true;
+      return _GreenVpnSystemServiceResponse(
+        ok: ok,
+        statusCode: response.statusCode,
+        exitCode: _intFromJson(json['exitCode']),
+        message: json['message']?.toString(),
+      );
+    } catch (e) {
+      return _GreenVpnSystemServiceResponse(
+        ok: false,
+        statusCode: 0,
+        message: e.toString(),
+      );
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  static int? _intFromJson(Object? value) {
+    if (value is int) return value;
+    if (value == null) return null;
+    return int.tryParse(value.toString());
+  }
+}
+
 class WireGuardWindowsBackend extends VpnBackend {
   final String tunnelName;
   final String _exe;
@@ -3700,71 +11566,125 @@ class WireGuardWindowsBackend extends VpnBackend {
   // Use raw string + concat.
   String get _serviceName => r'WireGuardTunnel$' + tunnelName;
 
+  static const String _connectTaskName = 'GreenVPNConnect';
+  static const String _disconnectTaskName = 'GreenVPNDisconnect';
+
   Future<ProcessResult> _run(String exe, List<String> args) async {
     return Process.run(exe, args, runInShell: true);
   }
 
-  List<int> _utf16le(String s) {
-    final units = s.codeUnits;
-    final bytes = BytesBuilder(copy: false);
-    for (final u in units) {
-      bytes.addByte(u & 0xFF);
-      bytes.addByte((u >> 8) & 0xFF);
-    }
-    return bytes.toBytes();
+  Future<bool> _scheduledVpnTaskExists(String taskName) async {
+    final res = await _run('schtasks', ['/Query', '/TN', taskName]);
+    return res.exitCode == 0;
   }
 
-  Future<ProcessResult> _runElevatedPowerShell(String innerScript) async {
-    // Run innerScript with UAC using -EncodedCommand (UTF-16LE Base64)
-    final encoded = base64.encode(_utf16le(innerScript));
+  Future<ProcessResult> _runScheduledVpnTask(String taskName) {
+    return _run('schtasks', ['/Run', '/TN', taskName]);
+  }
 
-    final outer =
-        r'''
-$ErrorActionPreference="Stop"
-$enc="__ENC__"
-$p = Start-Process -FilePath "powershell.exe" -Verb RunAs -Wait -PassThru -ArgumentList @(
-  "-NoProfile",
-  "-ExecutionPolicy","Bypass",
-  "-EncodedCommand",$enc
-)
-exit $p.ExitCode
+  Future<ProcessResult> _setTunnelServiceManualStart() {
+    // WireGuard installs tunnel services as AUTO_START by default. That is bad
+    // for an MVP client because a full-tunnel service can come back on reboot
+    // and fight with Amnezia/WARP/other VPNs before our UI is even open.
+    return _run('sc', ['config', _serviceName, 'start=', 'demand']);
+  }
+
+  Future<ProcessResult> _cleanupLingeringAdapter({
+    required bool elevated,
+  }) async {
+    // Safety policy: do not manually remove routes/IPs or disable the Wintun
+    // adapter. WireGuard owns tunnel teardown; forcing adapter mutations can
+    // race with Wintun/AmneziaWG and has caused freezes on testers' machines.
+    return ProcessResult(
+      0,
+      0,
+      'adapter cleanup skipped; WireGuard service owns teardown; elevated=$elevated',
+      '',
+    );
+  }
+
+  String _adapterStateScript() {
+    return r'''$ErrorActionPreference = "SilentlyContinue"
+$tun = "__TUN__"
+$adapter = Get-NetAdapter -Name $tun
+$route = Get-NetRoute -InterfaceAlias $tun | Where-Object { $_.DestinationPrefix -eq '0.0.0.0/0' -or $_.DestinationPrefix -eq '::/0' }
+$ip = Get-NetIPAddress -InterfaceAlias $tun
+if ($null -eq $adapter) { "adapter=missing" } else { "adapter=" + $adapter.Status }
+if ($null -eq $route) { "route=missing" } else { "route=present" }
+if ($null -eq $ip) { "ip=missing" } else { "ip=present" }
 '''
-            .replaceAll('__ENC__', encoded);
+        .replaceAll('__TUN__', tunnelName);
+  }
 
-    return _run('powershell', [
+  Future<String> _queryAdapterState() async {
+    final res = await _run('powershell', [
       '-NoProfile',
       '-ExecutionPolicy',
       'Bypass',
       '-Command',
-      outer,
+      _adapterStateScript(),
     ]);
+    return ((res.stdout ?? '').toString() +
+            '\n' +
+            (res.stderr ?? '').toString())
+        .trim();
   }
 
-  static String? _extractEndpointIPv4(String cfg) {
-    final re = RegExp(
-      r'^\s*Endpoint\s*=\s*([0-9]{1,3}(?:\.[0-9]{1,3}){3})\s*:\s*\d+\s*$',
-      multiLine: true,
+  Future<int?> _queryServicePid() async {
+    final script =
+        r'''
+$ErrorActionPreference = "SilentlyContinue"
+$svc = Get-CimInstance Win32_Service -Filter "Name='__SVC__'"
+if ($null -eq $svc) { exit 0 }
+[Console]::WriteLine($svc.ProcessId)
+'''
+            .replaceAll('__SVC__', _serviceName.replaceAll("'", "''"));
+    final res = await _run('powershell', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      script,
+    ]);
+    final raw =
+        ((res.stdout ?? '').toString() + '\n' + (res.stderr ?? '').toString())
+            .trim();
+    return int.tryParse(raw);
+  }
+
+  Future<void> _forceKillServicePid({
+    required Future<void> Function(String) log,
+  }) async {
+    final pid = await _queryServicePid();
+    await log(
+      'service pid=' +
+          (pid?.toString() ?? 'none') +
+          '; taskkill skipped by safety policy',
     );
-    final m = re.firstMatch(cfg);
-    return m?.group(1);
   }
 
-  Future<String?> _configPathForCleanup() async {
-    if (_lastConfigPath != null && _lastConfigPath!.trim().isNotEmpty) {
-      return _lastConfigPath;
-    }
-    // best effort: try to parse from sc qc if service exists
-    try {
-      final res = await _run('sc', ['qc', _serviceName]);
-      if (res.exitCode != 0) return null;
-      final out = ('${res.stdout}\n${res.stderr}').toString();
-      final re = RegExp(r'([A-Za-z]:\\[^"\r\n]+\.conf)', caseSensitive: false);
-      return re.firstMatch(out)?.group(1);
-    } catch (_) {
-      return null;
-    }
+  bool _adapterStillBlocksTraffic(String state) {
+    final raw = state.toLowerCase();
+    return raw.contains('adapter=up') ||
+        raw.contains('route=present') ||
+        raw.contains('ip=present');
   }
 
+  Future<bool> _waitForAdapterCleanup({
+    required Future<void> Function(String) log,
+    int loops = 16,
+  }) async {
+    for (var i = 0; i < loops; i++) {
+      final state = await _queryAdapterState();
+      await log(
+        'adapter-state[$i] ' +
+            state.replaceAll('\r', ' ').replaceAll('\n', ' | '),
+      );
+      if (!_adapterStillBlocksTraffic(state)) return true;
+      await Future.delayed(const Duration(milliseconds: 350));
+    }
+    return false;
+  }
 
   @override
   Future<VpnBackendResult> connect({required String configPath}) async {
@@ -3782,16 +11702,64 @@ exit $p.ExitCode
     }
 
     String outOf(ProcessResult r) =>
-        ((r.stdout ?? '').toString() + '\n' + (r.stderr ?? '').toString()).trim();
+        ((r.stdout ?? '').toString() + '\n' + (r.stderr ?? '').toString())
+            .trim();
 
     bool isRunningText(String out) => out.contains('RUNNING');
     Future<ProcessResult> scQueryEx() => _run('sc', ['queryex', _serviceName]);
+    Future<WireGuardRuntimeStatus> runtimeStatus() =>
+        WireGuardRuntimeStatus.query(
+          tunnelName: tunnelName,
+          configPath: configPath,
+          wireguardExePath: _exe,
+        );
+    Future<void> prepareConfigForService() async {
+      try {
+        final f = File(configPath);
+        if (!f.parent.existsSync()) {
+          f.parent.createSync(recursive: true);
+        }
+        await Process.run('attrib', [
+          '-H',
+          '-S',
+          '-R',
+          f.parent.path,
+        ], runInShell: true);
+        await Process.run('icacls', [
+          f.parent.path,
+          '/inheritance:e',
+          '/grant',
+          '*S-1-5-11:(OI)(CI)M',
+          '*S-1-5-18:(OI)(CI)F',
+          '*S-1-5-32-544:(OI)(CI)F',
+        ], runInShell: true);
+        if (f.existsSync()) {
+          await Process.run('attrib', [
+            '-H',
+            '-S',
+            '-R',
+            f.path,
+          ], runInShell: true);
+          await Process.run('icacls', [
+            f.path,
+            '/inheritance:e',
+            '/grant',
+            '*S-1-5-11:M',
+            '*S-1-5-18:F',
+            '*S-1-5-32-544:F',
+          ], runInShell: true);
+        }
+      } catch (_) {}
+    }
 
     Future<bool> waitRunning({int loops = 60}) async {
       for (var i = 0; i < loops; i++) {
         final q = await scQueryEx();
         final o = outOf(q);
-        await log('queryex(connect)[$i] ec=${q.exitCode} :: ' + o.replaceAll('\r', ' ').replaceAll('\n', ' | '));
+        await log(
+          'queryex(connect)[$i] ec=${q.exitCode} :: ' +
+              o.replaceAll('\r', ' ').replaceAll('\n', ' | '),
+        );
         if (q.exitCode == 0 && isRunningText(o)) return true;
         await Future.delayed(const Duration(milliseconds: 250));
       }
@@ -3801,8 +11769,11 @@ exit $p.ExitCode
     Future<bool> isAdmin() async {
       try {
         final res = await _run('whoami', ['/groups']);
-        final out = ((res.stdout ?? '').toString() + '\n' + (res.stderr ?? '').toString());
-        return out.contains('S-1-5-32-544');
+        final out =
+            ((res.stdout ?? '').toString() +
+            '\n' +
+            (res.stderr ?? '').toString());
+        return out.contains('S-1-16-12288') || out.contains('S-1-16-16384');
       } catch (_) {
         return false;
       }
@@ -3813,70 +11784,201 @@ exit $p.ExitCode
       await log('service=' + _serviceName);
       await log('exe=' + _exe);
       await log('cfg=' + configPath);
+      await prepareConfigForService();
 
       if (!File(configPath).existsSync()) {
         await log('ERROR: configPath does not exist');
-        return VpnBackendResult(ok: false, message: 'Config not found: $configPath');
+        return VpnBackendResult(
+          ok: false,
+          message: 'Config not found: $configPath',
+        );
+      }
+
+      final preflight = await WireGuardRuntimeStatus.query(
+        tunnelName: tunnelName,
+        configPath: configPath,
+        wireguardExePath: _exe,
+      );
+      await log('preflight(connect) ' + preflight.describe());
+      if (preflight.hasCompetingTunnel) {
+        await log(
+          '=== CONNECT BLOCKED: competing VPN active :: ' +
+              preflight.competingTunnelsLabel,
+        );
+        return VpnBackendResult(
+          ok: false,
+          message:
+              'Другой VPN уже активен: ${preflight.competingTunnelsLabel}. Green VPN не будет включаться поверх него, чтобы не сломать сеть. Отключи Amnezia/WARP/другой VPN и попробуй снова.',
+        );
       }
 
       final q0 = await scQueryEx();
       final o0 = outOf(q0);
-      await log('queryex(initial) ec=${q0.exitCode} :: ' + o0.replaceAll('\r', ' ').replaceAll('\n', ' | '));
+      await log(
+        'queryex(initial) ec=${q0.exitCode} :: ' +
+            o0.replaceAll('\r', ' ').replaceAll('\n', ' | '),
+      );
 
       final admin = await isAdmin();
       await log('isAdmin=' + admin.toString());
 
       if (admin) {
-        if (q0.exitCode != 0) {
-          final ins = await _run(_exe, ['/installtunnelservice', configPath]);
-          await log('wireguard install ec=${ins.exitCode} :: ' + outOf(ins).replaceAll('\r', ' ').replaceAll('\n', ' | '));
+        if (q0.exitCode == 0) {
+          final stop = await _run('sc', ['stop', _serviceName]);
+          await log(
+            'sc stop before reinstall ec=${stop.exitCode} :: ' +
+                outOf(stop).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+          );
+          await Future.delayed(const Duration(milliseconds: 700));
+          final un = await _run(_exe, ['/uninstalltunnelservice', tunnelName]);
+          await log(
+            'wireguard uninstall before reinstall ec=${un.exitCode} :: ' +
+                outOf(un).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+          );
         }
-        final st = await _run('sc', ['start', _serviceName]);
-        await log('sc start ec=${st.exitCode} :: ' + outOf(st).replaceAll('\r', ' ').replaceAll('\n', ' | '));
-      } else {
-        final ps = r'''$ErrorActionPreference = "Stop"
-$svc = "__SVC__"
-$cfg = "__CFG__"
-$wg  = "__WG__"
-if (!(Test-Path $cfg)) { throw "Config not found: $cfg" }
-sc.exe queryex $svc *> $null
-if ($LASTEXITCODE -ne 0) {
-  & $wg /installtunnelservice $cfg | Out-Null
-}
-sc.exe start $svc | Out-Null
-'''
-            .replaceAll('__SVC__', _serviceName)
-            .replaceAll('__CFG__', configPath)
-            .replaceAll('__WG__', _exe);
 
-        final elevated = await _runElevatedPowerShell(ps);
-        await log('elevated connect ec=${elevated.exitCode} :: ' + outOf(elevated).replaceAll('\r', ' ').replaceAll('\n', ' | '));
+        final cleanup = await _cleanupLingeringAdapter(elevated: true);
+        await log(
+          'adapter cleanup before install ec=${cleanup.exitCode} :: ' +
+              outOf(cleanup).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+        );
+        final cleaned = await _waitForAdapterCleanup(log: log);
+        await log(
+          'adapter cleanup before install settled=' + cleaned.toString(),
+        );
+
+        final ins = await _run(_exe, ['/installtunnelservice', configPath]);
+        await log(
+          'wireguard install ec=${ins.exitCode} :: ' +
+              outOf(ins).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+        );
+        final manualStart = await _setTunnelServiceManualStart();
+        await log(
+          'sc config demand ec=${manualStart.exitCode} :: ' +
+              outOf(manualStart).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+        );
+        final st = await _run('sc', ['start', _serviceName]);
+        await log(
+          'sc start ec=${st.exitCode} :: ' +
+              outOf(st).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+        );
+      } else {
+        final cleanup = await _cleanupLingeringAdapter(elevated: false);
+        await log(
+          'scheduled adapter cleanup before install ec=${cleanup.exitCode} :: ' +
+              outOf(cleanup).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+        );
+        final cleaned = await _waitForAdapterCleanup(log: log);
+        await log(
+          'scheduled adapter cleanup before install settled=' +
+              cleaned.toString(),
+        );
+
+        var elevatedStarted = false;
+        const systemService = _GreenVpnSystemServiceClient();
+        final servicePing = await systemService.ping();
+        await log(
+          'native service ping ok=${servicePing.ok} http=${servicePing.statusCode} msg=${servicePing.message ?? ''}',
+        );
+        if (servicePing.ok) {
+          final serviceConnect = await systemService.connect();
+          await log(
+            'native service connect ok=${serviceConnect.ok} http=${serviceConnect.statusCode} exit=${serviceConnect.exitCode} msg=${serviceConnect.message ?? ''}',
+          );
+          if (serviceConnect.ok) {
+            elevatedStarted = true;
+          } else if (serviceConnect.statusCode == HttpStatus.conflict ||
+              serviceConnect.exitCode == 2) {
+            return const VpnBackendResult(
+              ok: false,
+              message:
+                  'Другой VPN уже активен. Green VPN не будет включаться поверх него, чтобы не сломать сеть. Отключи Amnezia/WARP/другой VPN и попробуй снова.',
+            );
+          }
+        }
+
+        if (!elevatedStarted) {
+          await log('native service unavailable/failed; using scheduled task');
+          if (!await _scheduledVpnTaskExists(_connectTaskName)) {
+            await log('scheduled task missing: $_connectTaskName');
+            return const VpnBackendResult(
+              ok: false,
+              message:
+                  'Системный компонент Green VPN не установлен. Переустанови последнюю версию GreenVPN_Setup.exe один раз с правами администратора.',
+            );
+          }
+
+          final elevated = await _runScheduledVpnTask(_connectTaskName);
+          await log(
+            'scheduled connect ec=${elevated.exitCode} :: ' +
+                outOf(elevated).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+          );
+          if (elevated.exitCode != 0) {
+            return VpnBackendResult(
+              ok: false,
+              message:
+                  'Не удалось запустить системный компонент Green VPN. Переустанови GreenVPN_Setup.exe. ${outOf(elevated)}',
+            );
+          }
+        }
       }
 
       final ok = await waitRunning(loops: 60);
       if (!ok) {
         await log('=== CONNECT FAIL: not RUNNING after wait ===');
-        return const VpnBackendResult(ok: false, message: 'VPN did not start (service not RUNNING). See backend.log');
+        if (await isAdmin()) {
+          final un = await _run(_exe, ['/uninstalltunnelservice', tunnelName]);
+          await log(
+            'wireguard uninstall after failed start ec=${un.exitCode} :: ' +
+                outOf(un).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+          );
+        } else {
+          const systemService = _GreenVpnSystemServiceClient();
+          final serviceDisconnect = await systemService.disconnect();
+          await log(
+            'native service uninstall after failed start ok=${serviceDisconnect.ok} http=${serviceDisconnect.statusCode} exit=${serviceDisconnect.exitCode} msg=${serviceDisconnect.message ?? ''}',
+          );
+          if (!serviceDisconnect.ok) {
+            final elevated = await _runScheduledVpnTask(_disconnectTaskName);
+            await log(
+              'scheduled uninstall after failed start ec=${elevated.exitCode} :: ' +
+                  outOf(elevated).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+            );
+          }
+        }
+        return const VpnBackendResult(
+          ok: false,
+          message: 'VPN did not start (service not RUNNING). See backend.log',
+        );
       }
 
-      for (var i = 0; i < 40; i++) {
-        final on = await isConnected();
-        await log('verify(connect)[$i] isConnected=' + on.toString());
-        if (on) {
+      for (var i = 0; i < 35; i++) {
+        final status = await runtimeStatus();
+        await log('verify(connect)[$i] ' + status.describe());
+        if (status.isReallyConnected) {
           await log('=== CONNECT OK ===');
           return const VpnBackendResult(ok: true);
         }
-        await Future.delayed(const Duration(milliseconds: 250));
+        await Future.delayed(const Duration(seconds: 1));
       }
 
-      await log('=== CONNECT FAIL: verify isConnected still false ===');
-      return const VpnBackendResult(ok: false, message: 'Service RUNNING but isConnected() false. See backend.log');
+      final status = await runtimeStatus();
+      await log(
+        '=== CONNECT FAIL: real tunnel not confirmed :: ' + status.describe(),
+      );
+      return VpnBackendResult(
+        ok: false,
+        message:
+            'BlueVPNDev1 поднял сервис, но не подтвердил реальный handshake/traffic. ${status.describe()}. Открой Diagnostics и пришли endpoint, handshake и traffic.',
+      );
     } catch (e) {
       await log('EXCEPTION(connect): ' + e.toString());
-      return VpnBackendResult(ok: false, message: 'Connect error: $e (see backend.log)');
+      return VpnBackendResult(
+        ok: false,
+        message: 'Connect error: $e (see backend.log)',
+      );
     }
   }
-
 
   @override
   Future<VpnBackendResult> disconnect() async {
@@ -3885,12 +11987,16 @@ sc.exe start $svc | Out-Null
     Future<void> log(String s) async {
       try {
         final ts = DateTime.now().toIso8601String();
-        await logFile.writeAsString('[' + ts + '] ' + s + '\n', mode: FileMode.append);
+        await logFile.writeAsString(
+          '[' + ts + '] ' + s + '\n',
+          mode: FileMode.append,
+        );
       } catch (_) {}
     }
 
     String outOf(ProcessResult r) =>
-        ((r.stdout ?? '').toString() + '\n' + (r.stderr ?? '').toString()).trim();
+        ((r.stdout ?? '').toString() + '\n' + (r.stderr ?? '').toString())
+            .trim();
 
     bool isStoppedText(String out) => out.contains('STOPPED');
     Future<ProcessResult> scQueryEx() => _run('sc', ['queryex', _serviceName]);
@@ -3899,7 +12005,10 @@ sc.exe start $svc | Out-Null
       for (var i = 0; i < loops; i++) {
         final q = await scQueryEx();
         final o = outOf(q);
-        await log('queryex[$i] ec=${q.exitCode} :: ' + o.replaceAll('\r', ' ').replaceAll('\n', ' | '));
+        await log(
+          'queryex[$i] ec=${q.exitCode} :: ' +
+              o.replaceAll('\r', ' ').replaceAll('\n', ' | '),
+        );
         if (q.exitCode != 0) return true;
         if (isStoppedText(o)) return true;
         await Future.delayed(const Duration(milliseconds: 250));
@@ -3910,8 +12019,11 @@ sc.exe start $svc | Out-Null
     Future<bool> isAdmin() async {
       try {
         final res = await _run('whoami', ['/groups']);
-        final out = ((res.stdout ?? '').toString() + '\n' + (res.stderr ?? '').toString());
-        return out.contains('S-1-5-32-544');
+        final out =
+            ((res.stdout ?? '').toString() +
+            '\n' +
+            (res.stderr ?? '').toString());
+        return out.contains('S-1-16-12288') || out.contains('S-1-16-16384');
       } catch (_) {
         return false;
       }
@@ -3925,45 +12037,124 @@ sc.exe start $svc | Out-Null
 
       if (admin) {
         final stop = await _run('sc', ['stop', _serviceName]);
-        await log('sc stop ec=${stop.exitCode} :: ' + outOf(stop).replaceAll('\r', ' ').replaceAll('\n', ' | '));
+        await log(
+          'sc stop ec=${stop.exitCode} :: ' +
+              outOf(stop).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+        );
         final un = await _run(_exe, ['/uninstalltunnelservice', tunnelName]);
-        await log('wireguard uninstall ec=${un.exitCode} :: ' + outOf(un).replaceAll('\r', ' ').replaceAll('\n', ' | '));
+        await log(
+          'wireguard uninstall ec=${un.exitCode} :: ' +
+              outOf(un).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+        );
+        final cleanup = await _cleanupLingeringAdapter(elevated: true);
+        await log(
+          'adapter cleanup ec=${cleanup.exitCode} :: ' +
+              outOf(cleanup).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+        );
       } else {
-        final ps = r'''$ErrorActionPreference = "SilentlyContinue"
-$svc = "__SVC__"
-$wg  = "__WG__"
-sc.exe stop $svc | Out-Null
-Start-Sleep -Milliseconds 700
-& $wg /uninstalltunnelservice __TUN__ | Out-Null
-'''
-            .replaceAll('__SVC__', _serviceName)
-            .replaceAll('__WG__', _exe)
-            .replaceAll('__TUN__', tunnelName);
-        final elevated = await _runElevatedPowerShell(ps);
-        await log('elevated disconnect ec=${elevated.exitCode} :: ' + outOf(elevated).replaceAll('\r', ' ').replaceAll('\n', ' | '));
+        var elevatedStopped = false;
+        const systemService = _GreenVpnSystemServiceClient();
+        final servicePing = await systemService.ping();
+        await log(
+          'native service ping(disconnect) ok=${servicePing.ok} http=${servicePing.statusCode} msg=${servicePing.message ?? ''}',
+        );
+        if (servicePing.ok) {
+          final serviceDisconnect = await systemService.disconnect();
+          await log(
+            'native service disconnect ok=${serviceDisconnect.ok} http=${serviceDisconnect.statusCode} exit=${serviceDisconnect.exitCode} msg=${serviceDisconnect.message ?? ''}',
+          );
+          elevatedStopped = serviceDisconnect.ok;
+        }
+
+        if (!elevatedStopped) {
+          await log(
+            'native service unavailable/failed for disconnect; using scheduled task',
+          );
+          if (!await _scheduledVpnTaskExists(_disconnectTaskName)) {
+            await log('scheduled task missing: $_disconnectTaskName');
+            return const VpnBackendResult(
+              ok: false,
+              message:
+                  'Системный компонент Green VPN не установлен. Переустанови последнюю версию GreenVPN_Setup.exe один раз с правами администратора.',
+            );
+          }
+
+          final elevated = await _runScheduledVpnTask(_disconnectTaskName);
+          await log(
+            'scheduled disconnect ec=${elevated.exitCode} :: ' +
+                outOf(elevated).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+          );
+          if (elevated.exitCode != 0) {
+            return VpnBackendResult(
+              ok: false,
+              message:
+                  'Не удалось запустить системное отключение Green VPN. ${outOf(elevated)}',
+            );
+          }
+        }
+        final cleanup = await _cleanupLingeringAdapter(elevated: false);
+        await log(
+          'scheduled adapter cleanup ec=${cleanup.exitCode} :: ' +
+              outOf(cleanup).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+        );
       }
 
       final stopped = await waitStopped(loops: 40);
       if (!stopped) {
-        await log('=== DISCONNECT FAIL: still RUNNING ===');
-        return const VpnBackendResult(ok: false, message: 'Service still RUNNING after stop/uninstall. See backend.log');
+        await log(
+          'disconnect stalled, retrying WireGuard uninstall without taskkill',
+        );
+        await _forceKillServicePid(log: log);
+        final un2 = await _run(_exe, ['/uninstalltunnelservice', tunnelName]);
+        await log(
+          'wireguard uninstall retry ec=${un2.exitCode} :: ' +
+              outOf(un2).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+        );
+      }
+
+      final stoppedAfterKill = stopped || await waitStopped(loops: 20);
+      if (!stoppedAfterKill) {
+        await log('=== DISCONNECT FAIL: still RUNNING after safe retry ===');
+        return const VpnBackendResult(
+          ok: false,
+          message:
+              'Service still RUNNING after stop/uninstall retry. See backend.log',
+        );
+      }
+
+      final cleaned = await _waitForAdapterCleanup(log: log);
+      if (!cleaned) {
+        await log(
+          '=== DISCONNECT FAIL: adapter/default-route still present ===',
+        );
+        return const VpnBackendResult(
+          ok: false,
+          message:
+              'BlueVPNDev1 всё ещё держит адаптер или маршрут после отключения. Закрой приложение, разреши UAC и повтори. См. backend.log.',
+        );
       }
 
       await log('=== DISCONNECT OK ===');
       return const VpnBackendResult(ok: true);
     } catch (e) {
       await log('EXCEPTION: ' + e.toString());
-      return VpnBackendResult(ok: false, message: 'Disconnect error: $e (see backend.log)');
+      return VpnBackendResult(
+        ok: false,
+        message: 'Disconnect error: $e (see backend.log)',
+      );
     }
   }
 
   @override
   Future<bool> isConnected() async {
     try {
-      final res = await _run('sc', ['query', _serviceName]);
-      if (res.exitCode != 0) return false;
-      final out = (res.stdout ?? '').toString();
-      return out.contains('RUNNING');
+      final status = await WireGuardRuntimeStatus.query(
+        tunnelName: tunnelName,
+        configPath:
+            _lastConfigPath ?? r'C:\ProgramData\BlueVPN\BlueVPNDev1.conf',
+        wireguardExePath: _exe,
+      );
+      return status.isReallyConnected;
     } catch (_) {
       return false;
     }

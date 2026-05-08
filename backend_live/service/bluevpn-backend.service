@@ -1,0 +1,22 @@
+# /etc/systemd/system/bluevpn-backend.service
+﻿[Unit]
+Description=BlueVPN Backend
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/bluevpn/backend
+Environment=BLUEVPN_WG_INTERFACE=wg0
+Environment=BLUEVPN_WG_CONFIG_PATH=/etc/wireguard/wg0.conf
+Environment=BLUEVPN_ENDPOINT_HOST=37.220.85.211
+Environment=BLUEVPN_ENDPOINT_PORT=443
+Environment=BLUEVPN_DNS=1.1.1.1
+Environment="BLUEVPN_ALLOWED_IPS=0.0.0.0/1,128.0.0.0/1"
+ExecStart=/opt/bluevpn/backend/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

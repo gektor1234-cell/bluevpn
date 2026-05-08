@@ -53,6 +53,17 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
 
+# Native privileged helper installed as a Windows Service. The Flutter UI talks
+# to it over localhost so the UI itself does not need to run elevated.
+add_executable(greenvpn_service WIN32
+  "green_vpn_service/main.cpp"
+)
+target_compile_features(greenvpn_service PUBLIC cxx_std_17)
+target_compile_options(greenvpn_service PRIVATE /W4 /WX /EHsc)
+target_compile_definitions(greenvpn_service PRIVATE "_HAS_EXCEPTIONS=0")
+target_compile_definitions(greenvpn_service PRIVATE "NOMINMAX")
+target_link_libraries(greenvpn_service PRIVATE advapi32 ws2_32)
+
 
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
@@ -74,6 +85,9 @@ set(INSTALL_BUNDLE_DATA_DIR "${CMAKE_INSTALL_PREFIX}/data")
 set(INSTALL_BUNDLE_LIB_DIR "${CMAKE_INSTALL_PREFIX}")
 
 install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
+  COMPONENT Runtime)
+
+install(TARGETS greenvpn_service RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
   COMPONENT Runtime)
 
 install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"

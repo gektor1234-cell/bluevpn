@@ -116,7 +116,7 @@ try {
 
 $programDataDir = Join-Path $env:ProgramData 'BlueVPN'
 $appDataDir = Join-Path $env:APPDATA 'BlueVPN'
-$serviceName = 'WireGuardTunnel$BlueVPN'
+$serviceName = 'WireGuardTunnel$BlueVPNDev1'
 
 $wireguardExe = Get-FirstExistingPath @(
     (Join-Path $env:ProgramFiles 'WireGuard\wireguard.exe'),
@@ -124,15 +124,15 @@ $wireguardExe = Get-FirstExistingPath @(
 )
 
 $mainPath = Join-Path $projectRoot 'lib\main.dart'
-$confPath = Join-Path $programDataDir 'BlueVPN.conf'
-$baseConfPath = Join-Path $programDataDir 'BlueVPN.base.conf'
+$confPath = Join-Path $programDataDir 'BlueVPNDev1.conf'
+$baseConfPath = Join-Path $programDataDir 'BlueVPNDev1.base.conf'
 $backendLogPath = Join-Path $programDataDir 'backend.log'
 $prefsPath = Join-Path $appDataDir 'prefs.json'
 $sessionPath = Join-Path $appDataDir 'session.json'
 
 $report = New-Object 'System.Collections.Generic.List[string]'
 
-Write-Section 'BLUEVPN DOCTOR'
+Write-Section 'GREEN VPN DOCTOR'
 $headerLines = @(
     "Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
     "Admin: $(Test-Admin)",
@@ -175,16 +175,16 @@ Add-ReportLine $report 'sc queryex:'
 Add-ReportLine $report $queryOutput
 
 Write-Section 'CONFIG SUMMARY'
-Write-Host '[BlueVPN.conf]'
-Add-ReportLine $report '[BlueVPN.conf]'
+Write-Host '[BlueVPNDev1.conf]'
+Add-ReportLine $report '[BlueVPNDev1.conf]'
 foreach ($line in (Get-ConfigSummary -Path $confPath)) {
     Write-Host $line
     Add-ReportLine $report $line
 }
 Write-Host ''
-Write-Host '[BlueVPN.base.conf]'
+Write-Host '[BlueVPNDev1.base.conf]'
 Add-ReportLine $report ''
-Add-ReportLine $report '[BlueVPN.base.conf]'
+Add-ReportLine $report '[BlueVPNDev1.base.conf]'
 foreach ($line in (Get-ConfigSummary -Path $baseConfPath)) {
     Write-Host $line
     Add-ReportLine $report $line
@@ -232,7 +232,7 @@ if ($SaveReport) {
         $desktopPath = $env:TEMP
     }
 
-    $reportName = 'bluevpn_doctor_report_{0}.txt' -f (Get-Date -Format 'yyyyMMdd_HHmmss')
+    $reportName = 'greenvpn_doctor_report_{0}.txt' -f (Get-Date -Format 'yyyyMMdd_HHmmss')
     $reportPath = Join-Path $desktopPath $reportName
 
     try {

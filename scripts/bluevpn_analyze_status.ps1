@@ -6,8 +6,8 @@ BlueVPN статус-репорт (WireGuard Windows) v2
 
 [CmdletBinding()]
 param(
-  [string]$TunnelName = "BlueVPN",
-  [string]$ExpectedConfigPath = "C:\ProgramData\BlueVPN\BlueVPN.conf",
+  [string]$TunnelName = "BlueVPNDev1",
+  [string]$ExpectedConfigPath = "C:\ProgramData\BlueVPN\BlueVPNDev1.conf",
   [switch]$CopyToClipboard,
   [switch]$OpenReport
 )

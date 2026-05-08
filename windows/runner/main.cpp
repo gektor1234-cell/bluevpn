@@ -24,11 +24,17 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
 
-  FlutterWindow window(project);
-  Win32Window::Point origin(10, 10);
-  Win32Window::Size size(420, 860);
+  const std::wstring raw_command_line = command_line ? command_line : L"";
+  const bool start_hidden =
+      raw_command_line.find(L"--background") != std::wstring::npos ||
+      raw_command_line.find(L"--tray") != std::wstring::npos ||
+      show_command == SW_HIDE;
 
-  if (!window.Create(L"BlueVPN", origin, size)) {
+  FlutterWindow window(project, start_hidden);
+  Win32Window::Point origin(10, 10);
+  Win32Window::Size size(980, 720);
+
+  if (!window.Create(L"Green VPN", origin, size)) {
 
     return EXIT_FAILURE;
   }

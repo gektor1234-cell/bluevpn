@@ -3,6 +3,7 @@
 
 #include <flutter/dart_project.h>
 #include <flutter/flutter_view_controller.h>
+#include <shellapi.h>
 
 #include <memory>
 
@@ -12,7 +13,8 @@
 class FlutterWindow : public Win32Window {
  public:
   // Creates a new FlutterWindow hosting a Flutter view running |project|.
-  explicit FlutterWindow(const flutter::DartProject& project);
+  explicit FlutterWindow(const flutter::DartProject& project,
+                         bool start_hidden = false);
   virtual ~FlutterWindow();
 
  protected:
@@ -25,9 +27,20 @@ class FlutterWindow : public Win32Window {
  private:
   // The project to run.
   flutter::DartProject project_;
+  bool start_hidden_ = false;
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+
+  void AddTrayIcon(HWND window);
+  void RemoveTrayIcon();
+  void ShowTrayMenu(HWND window);
+  void RestoreFromTray();
+  void RunVpnTask(const wchar_t* task_name);
+
+  bool tray_icon_added_ = false;
+  bool exit_requested_ = false;
+  NOTIFYICONDATAW tray_icon_data_{};
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

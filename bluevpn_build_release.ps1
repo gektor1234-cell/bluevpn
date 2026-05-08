@@ -54,4 +54,4 @@ $sc.Save()
 
 Write-Host "OK: Release deployed to: $dst" -ForegroundColor Green
 Write-Host "OK: Shortcut updated:   $lnk" -ForegroundColor Green
-Write-Host "Note: If ON/OFF asks for UAC, accept it (WireGuard service needs admin)." -ForegroundColor Yellow
+Write-Host "Note: The app now requests UAC on startup. Accept it so WireGuard service management works." -ForegroundColor Yellow

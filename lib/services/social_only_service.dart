@@ -1,4 +1,4 @@
-import '../models/social_only_state.dart';
+﻿import '../models/social_only_state.dart';
 import 'app_prefs_service.dart';
 import 'managed_config_service.dart';
 import 'vpn_backend_service.dart';
@@ -86,3 +86,4 @@ class SocialOnlyService {
     }
   }
 }
+

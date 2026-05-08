@@ -1,5 +1,6 @@
-﻿import 'package:flutter/material.dart';
-import 'screens/home_screen.dart';
+import 'package:flutter/material.dart';
+
+import 'main.dart' show BlueVPNApp;
 
 void main() {
   runApp(const BlueVPNDesktopApp());
@@ -10,11 +11,6 @@ class BlueVPNDesktopApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'BlueVPN',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(useMaterial3: true),
-      home: const HomeScreen(),
-    );
+    return const BlueVPNApp();
   }
 }

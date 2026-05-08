@@ -1,7 +1,7 @@
-﻿import 'dart:io';
+import 'dart:io';
 
 class ConfigService {
-  static const String configPath = r'C:\ProgramData\BlueVPN\BlueVPN.conf';
+  static const String configPath = r'C:\ProgramData\BlueVPN\BlueVPNDev1.conf';
 
   static Future<bool> exists() async => File(configPath).exists();
 

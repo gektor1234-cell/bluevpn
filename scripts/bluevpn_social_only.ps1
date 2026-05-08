@@ -9,8 +9,8 @@ param(
   # -Apps "telegram,instagram,youtube"
   [string[]]$Apps = @("telegram","instagram","youtube"),
 
-  [string]$TunnelName = "BlueVPN",
-  [string]$ConfigPath = "C:\ProgramData\BlueVPN\BlueVPN.conf",
+  [string]$TunnelName = "BlueVPNDev1",
+  [string]$ConfigPath = "C:\ProgramData\BlueVPN\BlueVPNDev1.conf",
 
   # ограничение чтобы не раздувать AllowedIPs
   [int]$MaxIPsPerDomain = 40
@@ -70,7 +70,8 @@ function Replace-AllowedIPs([string]$cfgText, [string]$allowedValue) {
 
 function Write-ConfigAtomic([string]$path, [string]$text) {
   $tmp = "$path.tmp"
-  Set-Content -LiteralPath $tmp -Value $text -Encoding UTF8
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($tmp, $text, $utf8NoBom)
   Move-Item -LiteralPath $tmp -Destination $path -Force
 }
 

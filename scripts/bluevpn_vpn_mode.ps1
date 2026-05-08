@@ -3,13 +3,13 @@ param(
   [ValidateSet("warp","bluevpn")]
   [string]$Mode,
 
-  [string]$TunnelName = "BlueVPN",
+  [string]$TunnelName = "BlueVPNDev1",
   [string]$WarpAlias  = "warp1234",
 
-  [string]$ConfigPath = "C:\ProgramData\BlueVPN\BlueVPN.conf",
+  [string]$ConfigPath = "C:\ProgramData\BlueVPN\BlueVPNDev1.conf",
   [string]$WireGuardExe = "C:\Program Files\WireGuard\wireguard.exe",
 
-  [string]$EndpointIP = "5.129.237.163",
+  [string]$EndpointIP = "216.57.107.8",
 
   [int]$MetricPrimary = 5,
   [int]$MetricSecondary = 50,
