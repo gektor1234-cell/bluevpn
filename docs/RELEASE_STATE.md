@@ -135,10 +135,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\build_inst
   - staff login smoke succeeded with `authType=staff_session`;
   - one-time access files are root-only on the Timeweb proxy: `/root/greenvpn-admin-basic-auth-onetime.txt` and `/root/greenvpn-admin-owner-login-onetime.txt`.
 - Admin 2FA status:
-  - backend/admin UI already implement email-code 2FA;
+  - backend/admin UI implement email-code 2FA;
   - server-only admin 2FA pepper is configured;
-  - mandatory admin 2FA is temporarily off because Yandex SMTP now connects through the restricted proxy relay but rejects the stored SMTP app password with `535 authentication failed`;
-  - owner must rotate/apply the Yandex 360 app password via the safe backend env flow before enabling mandatory admin 2FA.
+  - new Yandex 360 mail app password was applied only to server env;
+  - SMTP smoke passed through the restricted proxy relay: TCP ok, STARTTLS ok, login ok;
+  - mandatory admin 2FA is enabled;
+  - readiness is production-ready with `required=true`, `enabledStaffCount=1`, `requiredActionsCount=0`;
+  - staff login smoke returns `authType=staff_2fa_pending`, `challengeIssued=true`, `sessionTokenIssued=false`.
 - A restricted SMTP TCP forward is active on `72.56.32.197`:
   - systemd unit `greenvpn-yandex-smtp-relay.service`;
   - source-limited to origin `37.220.85.211`;

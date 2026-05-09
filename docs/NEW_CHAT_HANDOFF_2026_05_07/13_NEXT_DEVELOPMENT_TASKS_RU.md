@@ -248,11 +248,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\check_api_
   - owner staff role is `owner`;
   - server-generated password is not in repo/docs/chat;
   - live login smoke returned `authType=staff_session`.
-- Admin email 2FA is implemented and server-only pepper is configured, but mandatory 2FA is temporarily off:
+- Admin email 2FA is implemented and mandatory 2FA is enabled:
   - `37.220.85.211` could not reach Yandex SMTP directly;
   - `72.56.32.197` now runs restricted `greenvpn-yandex-smtp-relay.service` for Yandex SMTP, source-limited to `37.220.85.211`;
   - origin uses `smtp.yandex.ru:2587` through the relay;
-  - Yandex currently rejects the stored app password with `535 authentication failed`, so owner must rotate/apply the Yandex 360 SMTP app password through safe server env before re-enabling mandatory admin 2FA.
+  - new Yandex 360 mail app password was applied only to server env;
+  - SMTP smoke passed: TCP ok, STARTTLS ok, login ok;
+  - admin 2FA readiness is production-ready with `required=true`, `enabledStaffCount=1`, `requiredActionsCount=0`;
+  - staff login smoke returns `authType=staff_2fa_pending`, `challengeIssued=true`, `sessionTokenIssued=false`.
 - `api.greenvpn.pro` remains separate and continues proxying to origin backend `37.220.85.211`.
 - Capacity on `72.56.32.197` is enough for MVP public site/admin/download/API proxy: load `0.00`, about `344 MiB` RAM used, about `1.6 GiB` available, disk `2.1 GiB / 38 GiB`.
 - Keep VPN endpoint traffic on `37.220.85.211`; do not move VPN to this site/API proxy server.

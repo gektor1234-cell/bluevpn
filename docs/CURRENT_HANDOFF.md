@@ -225,11 +225,14 @@ Follow `DEVELOPMENT_PROTOCOL.md`. The payment-confirmation build is still the st
   - owner staff role is `owner`;
   - password is server-generated and stored only in `/root/greenvpn-admin-owner-login-onetime.txt` on `72.56.32.197` and the origin root account;
   - live login smoke returned `authType=staff_session` and a session token was issued, but the token was not printed.
-- Admin email 2FA is implemented in backend/admin UI and server-only pepper is configured, but it is temporarily not enforced because the existing Yandex 360 SMTP app password is invalid:
+- Admin email 2FA is now enforced for staff login:
   - origin `37.220.85.211` could not reach Yandex SMTP directly over IPv4 SMTP ports;
   - a restricted Timeweb TCP forward `greenvpn-yandex-smtp-relay.service` is active on `72.56.32.197`, source-limited to `37.220.85.211`;
-  - origin now resolves `smtp.yandex.ru` to `72.56.32.197` and uses port `2587`, STARTTLS reaches Yandex, but Yandex returns `535 authentication failed`;
-  - owner must rotate/apply the Yandex SMTP app password through the safe server env flow before re-enabling mandatory admin 2FA.
+  - origin resolves `smtp.yandex.ru` to `72.56.32.197` and uses port `2587`;
+  - new Yandex 360 mail app password was applied only to `/etc/bluevpn/backend.env`;
+  - SMTP smoke passed: TCP ok, STARTTLS ok, login ok;
+  - admin 2FA readiness is production-ready with `required=true`, `enabledStaffCount=1`, `requiredActionsCount=0`;
+  - staff login smoke returns `authType=staff_2fa_pending`, `challengeIssued=true`, `sessionTokenIssued=false`.
 - `api.greenvpn.pro` remains a separate nginx site/server block and still proxies to origin backend `37.220.85.211`.
 - Capacity check on `72.56.32.197` after deployment: load `0.00`, memory about `344 MiB` used / `1.6 GiB` available, disk `2.1 GiB` used of `38 GiB`. This is enough for public site, admin static app, installer download and API reverse proxy. The actual VPN endpoint/traffic remains on `37.220.85.211`.
 
