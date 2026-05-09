@@ -122,13 +122,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\build_inst
 - The Timeweb proxy server `Friendly Cetus` / `72.56.32.197` now hosts:
   - public site at `https://greenvpn.pro/` and `https://www.greenvpn.pro/`;
   - installer download at `https://greenvpn.pro/downloads/GreenVPN_Setup.exe`;
-  - temporary admin path at `https://greenvpn.pro/admin/` and `https://www.greenvpn.pro/admin/`.
-- A separate admin site config is prepared for `admin.greenvpn.pro`; owner still needs DNS:
+  - separate admin site at `https://admin.greenvpn.pro/`.
+- Owner added DNS:
   - `A admin -> 72.56.32.197`.
+- `https://greenvpn.pro/admin/` now redirects to `https://admin.greenvpn.pro/`.
 - Admin UI is no longer openly reachable:
-  - `https://greenvpn.pro/admin/` returns HTTP `401` without nginx Basic Auth;
+  - `https://admin.greenvpn.pro/` returns HTTP `401` without nginx Basic Auth;
   - authenticated Basic Auth smoke returns HTTP `200`;
-  - the same guard is already applied to the staged `admin.greenvpn.pro` vhost.
+  - HTTP `admin.greenvpn.pro` redirects to HTTPS.
 - Admin staff login is usable:
   - a server-generated owner staff password was created without printing it;
   - staff login smoke succeeded with `authType=staff_session`;
@@ -142,7 +143,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\build_inst
   - systemd unit `greenvpn-yandex-smtp-relay.service`;
   - source-limited to origin `37.220.85.211`;
   - origin maps `smtp.yandex.ru` to `72.56.32.197` and uses port `2587` with STARTTLS.
-- Let's Encrypt certificate for `greenvpn.pro` / `www.greenvpn.pro` was issued and expires `2026-08-07`.
+- Let's Encrypt certificates:
+  - `greenvpn.pro` / `www.greenvpn.pro` expires `2026-08-07`;
+  - `admin.greenvpn.pro` expires `2026-08-07`.
 - Existing `api.greenvpn.pro` reverse proxy remains separate and still proxies to origin backend `37.220.85.211`.
 - Server capacity check after deployment:
   - load average `0.00`;

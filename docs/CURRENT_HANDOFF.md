@@ -211,13 +211,14 @@ Follow `DEVELOPMENT_PROTOCOL.md`. The payment-confirmation build is still the st
   - `https://greenvpn.pro/`;
   - `https://www.greenvpn.pro/`;
   - `https://greenvpn.pro/downloads/GreenVPN_Setup.exe`.
-- The same server hosts the current static admin/support app temporarily at:
-  - `https://greenvpn.pro/admin/`;
-  - `https://www.greenvpn.pro/admin/`.
-- A separate nginx site for `admin.greenvpn.pro` is prepared, but HTTPS cannot be issued until owner adds:
+- The same server now hosts the admin/support app as a separate site:
+  - `https://admin.greenvpn.pro/`;
+  - `https://greenvpn.pro/admin/` redirects to `https://admin.greenvpn.pro/`.
+- Owner added DNS:
   - `A admin -> 72.56.32.197`.
+- Let's Encrypt certificate for `admin.greenvpn.pro` was issued and expires `2026-08-07`.
 - Admin static UI is now protected at the nginx layer:
-  - `https://greenvpn.pro/admin/` returns HTTP `401` without Basic Auth;
+  - `https://admin.greenvpn.pro/` returns HTTP `401` without Basic Auth;
   - authenticated Basic Auth smoke returns HTTP `200`;
   - credentials are stored only in root-only files on `72.56.32.197`: `/root/greenvpn-admin-basic-auth-onetime.txt` and `/root/greenvpn-admin-owner-login-onetime.txt`.
 - Backend staff login is usable for the owner account:

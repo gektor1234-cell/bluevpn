@@ -234,11 +234,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\check_api_
   - `https://greenvpn.pro/`;
   - `https://www.greenvpn.pro/`;
   - `https://greenvpn.pro/downloads/GreenVPN_Setup.exe`.
-- The static admin/support app is temporarily available at:
-  - `https://greenvpn.pro/admin/`;
-  - `https://www.greenvpn.pro/admin/`.
+- The static admin/support app is now available as a separate site:
+  - `https://admin.greenvpn.pro/`;
+  - `https://greenvpn.pro/admin/` redirects to `https://admin.greenvpn.pro/`.
+- Owner added DNS:
+  - `A admin -> 72.56.32.197`.
+- Let's Encrypt certificate for `admin.greenvpn.pro` was issued and expires `2026-08-07`.
 - Admin UI is protected by nginx Basic Auth:
-  - unauthenticated `https://greenvpn.pro/admin/` returns HTTP `401`;
+  - unauthenticated `https://admin.greenvpn.pro/` returns HTTP `401`;
   - authenticated smoke returns HTTP `200`;
   - one-time credential files are root-only on `72.56.32.197`: `/root/greenvpn-admin-basic-auth-onetime.txt` and `/root/greenvpn-admin-owner-login-onetime.txt`.
 - Backend staff login is usable for the owner account:
@@ -250,8 +253,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\check_api_
   - `72.56.32.197` now runs restricted `greenvpn-yandex-smtp-relay.service` for Yandex SMTP, source-limited to `37.220.85.211`;
   - origin uses `smtp.yandex.ru:2587` through the relay;
   - Yandex currently rejects the stored app password with `535 authentication failed`, so owner must rotate/apply the Yandex 360 SMTP app password through safe server env before re-enabling mandatory admin 2FA.
-- A separate admin virtual host is prepared for `admin.greenvpn.pro`; owner still needs to add DNS:
-  - `A admin -> 72.56.32.197`.
 - `api.greenvpn.pro` remains separate and continues proxying to origin backend `37.220.85.211`.
 - Capacity on `72.56.32.197` is enough for MVP public site/admin/download/API proxy: load `0.00`, about `344 MiB` RAM used, about `1.6 GiB` available, disk `2.1 GiB / 38 GiB`.
 - Keep VPN endpoint traffic on `37.220.85.211`; do not move VPN to this site/API proxy server.
