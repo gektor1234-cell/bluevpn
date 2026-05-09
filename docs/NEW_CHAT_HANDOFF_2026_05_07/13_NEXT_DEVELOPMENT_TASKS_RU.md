@@ -225,6 +225,24 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\check_api_
   - operational: keep inactive `START20` draft until payment/release/update readiness is green, then activate manually.
 - No public Windows installer was rebuilt.
 
+### 9. Public site/admin hosting from 2026-05-09
+
+- Public root/www DNS was moved to the Timeweb proxy:
+  - `greenvpn.pro -> 72.56.32.197`;
+  - `www.greenvpn.pro -> 72.56.32.197`.
+- The proxy now hosts the public site and current installer download:
+  - `https://greenvpn.pro/`;
+  - `https://www.greenvpn.pro/`;
+  - `https://greenvpn.pro/downloads/GreenVPN_Setup.exe`.
+- The static admin/support app is temporarily available at:
+  - `https://greenvpn.pro/admin/`;
+  - `https://www.greenvpn.pro/admin/`.
+- A separate admin virtual host is prepared for `admin.greenvpn.pro`; owner still needs to add DNS:
+  - `A admin -> 72.56.32.197`.
+- `api.greenvpn.pro` remains separate and continues proxying to origin backend `37.220.85.211`.
+- Capacity on `72.56.32.197` is enough for MVP public site/admin/download/API proxy: load `0.00`, about `344 MiB` RAM used, about `1.6 GiB` available, disk `2.1 GiB / 38 GiB`.
+- Keep VPN endpoint traffic on `37.220.85.211`; do not move VPN to this site/API proxy server.
+
 ## Если пользователь уйдет надолго
 
 Брать задачи сверху вниз. Если ЮKassa, новый IP или secrets требуют владельца, записать blocker и идти дальше по admin tooling/network split docs.

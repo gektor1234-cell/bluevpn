@@ -114,6 +114,27 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\build_inst
   - build/publish final Windows installer/update artifact with SHA256 and rollback.
 - No new public Windows installer was rebuilt for this entry.
 
+## 2026-05-09 Public Site/Admin Hosting On API Proxy
+
+- DNS for root/www was changed:
+  - `greenvpn.pro -> 72.56.32.197`;
+  - `www.greenvpn.pro -> 72.56.32.197`.
+- The Timeweb proxy server `Friendly Cetus` / `72.56.32.197` now hosts:
+  - public site at `https://greenvpn.pro/` and `https://www.greenvpn.pro/`;
+  - installer download at `https://greenvpn.pro/downloads/GreenVPN_Setup.exe`;
+  - temporary admin path at `https://greenvpn.pro/admin/` and `https://www.greenvpn.pro/admin/`.
+- A separate admin site config is prepared for `admin.greenvpn.pro`; owner still needs DNS:
+  - `A admin -> 72.56.32.197`.
+- Let's Encrypt certificate for `greenvpn.pro` / `www.greenvpn.pro` was issued and expires `2026-08-07`.
+- Existing `api.greenvpn.pro` reverse proxy remains separate and still proxies to origin backend `37.220.85.211`.
+- Server capacity check after deployment:
+  - load average `0.00`;
+  - memory `344 MiB` used, about `1.6 GiB` available;
+  - disk `/` about `2.1 GiB` used of `38 GiB`;
+  - public site including installer about `13 MiB`;
+  - admin app about `336 KiB`.
+- Conclusion: current `2 CPU / 2 GB RAM / 40 GB NVMe` proxy is enough for public static site, admin static app, installer downloads for MVP, and API reverse proxy. It must not be treated as the VPN traffic endpoint; VPN endpoint remains `37.220.85.211`.
+
 ## 2026-05-05 Admin Support Alerts/Readiness Candidate
 
 - Backend source and live server are now `0.9.2`.

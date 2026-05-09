@@ -202,6 +202,23 @@ Internal technical names to preserve:
 
 Follow `DEVELOPMENT_PROTOCOL.md`. The payment-confirmation build is still the stable rollback baseline. Current live backend/admin-support/client-source work is `0.9.43`: external endpoint probe readiness plus server-health incident sync are deployed, while phone-first auth UI and filtered auth-event support tooling remain in source. The current public Windows installer aliases still point to the support-report fallback build; do not rebuild another installer until final handoff or explicit user stop/test request.
 
+## 2026-05-09 Site/Admin Hosting Update
+
+- Owner changed DNS for root/www:
+  - `greenvpn.pro -> 72.56.32.197`;
+  - `www.greenvpn.pro -> 72.56.32.197`.
+- `72.56.32.197` now hosts the public static site and download page:
+  - `https://greenvpn.pro/`;
+  - `https://www.greenvpn.pro/`;
+  - `https://greenvpn.pro/downloads/GreenVPN_Setup.exe`.
+- The same server hosts the current static admin/support app temporarily at:
+  - `https://greenvpn.pro/admin/`;
+  - `https://www.greenvpn.pro/admin/`.
+- A separate nginx site for `admin.greenvpn.pro` is prepared, but HTTPS cannot be issued until owner adds:
+  - `A admin -> 72.56.32.197`.
+- `api.greenvpn.pro` remains a separate nginx site/server block and still proxies to origin backend `37.220.85.211`.
+- Capacity check on `72.56.32.197` after deployment: load `0.00`, memory about `344 MiB` used / `1.6 GiB` available, disk `2.1 GiB` used of `38 GiB`. This is enough for public site, admin static app, installer download and API reverse proxy. The actual VPN endpoint/traffic remains on `37.220.85.211`.
+
 Suggested sequence:
 
 1. Preserve `ROLLBACK_20260430_2028_payment_confirmation_ok` as the known-good build.
