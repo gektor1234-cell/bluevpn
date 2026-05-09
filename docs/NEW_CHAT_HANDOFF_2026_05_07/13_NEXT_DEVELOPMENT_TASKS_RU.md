@@ -237,6 +237,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\check_api_
 - The static admin/support app is temporarily available at:
   - `https://greenvpn.pro/admin/`;
   - `https://www.greenvpn.pro/admin/`.
+- Admin UI is protected by nginx Basic Auth:
+  - unauthenticated `https://greenvpn.pro/admin/` returns HTTP `401`;
+  - authenticated smoke returns HTTP `200`;
+  - one-time credential files are root-only on `72.56.32.197`: `/root/greenvpn-admin-basic-auth-onetime.txt` and `/root/greenvpn-admin-owner-login-onetime.txt`.
+- Backend staff login is usable for the owner account:
+  - owner staff role is `owner`;
+  - server-generated password is not in repo/docs/chat;
+  - live login smoke returned `authType=staff_session`.
+- Admin email 2FA is implemented and server-only pepper is configured, but mandatory 2FA is temporarily off:
+  - `37.220.85.211` could not reach Yandex SMTP directly;
+  - `72.56.32.197` now runs restricted `greenvpn-yandex-smtp-relay.service` for Yandex SMTP, source-limited to `37.220.85.211`;
+  - origin uses `smtp.yandex.ru:2587` through the relay;
+  - Yandex currently rejects the stored app password with `535 authentication failed`, so owner must rotate/apply the Yandex 360 SMTP app password through safe server env before re-enabling mandatory admin 2FA.
 - A separate admin virtual host is prepared for `admin.greenvpn.pro`; owner still needs to add DNS:
   - `A admin -> 72.56.32.197`.
 - `api.greenvpn.pro` remains separate and continues proxying to origin backend `37.220.85.211`.

@@ -1,6 +1,6 @@
 ﻿# Green VPN Current Handoff
 
-Последнее обновление: 2026-05-07
+Последнее обновление: 2026-05-09
 
 Этот файл нужен, чтобы новый Codex мог продолжить разработку без чтения старого длинного диалога.
 
@@ -216,6 +216,19 @@ Follow `DEVELOPMENT_PROTOCOL.md`. The payment-confirmation build is still the st
   - `https://www.greenvpn.pro/admin/`.
 - A separate nginx site for `admin.greenvpn.pro` is prepared, but HTTPS cannot be issued until owner adds:
   - `A admin -> 72.56.32.197`.
+- Admin static UI is now protected at the nginx layer:
+  - `https://greenvpn.pro/admin/` returns HTTP `401` without Basic Auth;
+  - authenticated Basic Auth smoke returns HTTP `200`;
+  - credentials are stored only in root-only files on `72.56.32.197`: `/root/greenvpn-admin-basic-auth-onetime.txt` and `/root/greenvpn-admin-owner-login-onetime.txt`.
+- Backend staff login is usable for the owner account:
+  - owner staff role is `owner`;
+  - password is server-generated and stored only in `/root/greenvpn-admin-owner-login-onetime.txt` on `72.56.32.197` and the origin root account;
+  - live login smoke returned `authType=staff_session` and a session token was issued, but the token was not printed.
+- Admin email 2FA is implemented in backend/admin UI and server-only pepper is configured, but it is temporarily not enforced because the existing Yandex 360 SMTP app password is invalid:
+  - origin `37.220.85.211` could not reach Yandex SMTP directly over IPv4 SMTP ports;
+  - a restricted Timeweb TCP forward `greenvpn-yandex-smtp-relay.service` is active on `72.56.32.197`, source-limited to `37.220.85.211`;
+  - origin now resolves `smtp.yandex.ru` to `72.56.32.197` and uses port `2587`, STARTTLS reaches Yandex, but Yandex returns `535 authentication failed`;
+  - owner must rotate/apply the Yandex SMTP app password through the safe server env flow before re-enabling mandatory admin 2FA.
 - `api.greenvpn.pro` remains a separate nginx site/server block and still proxies to origin backend `37.220.85.211`.
 - Capacity check on `72.56.32.197` after deployment: load `0.00`, memory about `344 MiB` used / `1.6 GiB` available, disk `2.1 GiB` used of `38 GiB`. This is enough for public site, admin static app, installer download and API reverse proxy. The actual VPN endpoint/traffic remains on `37.220.85.211`.
 

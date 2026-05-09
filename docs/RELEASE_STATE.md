@@ -1,6 +1,6 @@
 ﻿# Green VPN Release State
 
-Последнее обновление: 2026-05-08
+Последнее обновление: 2026-05-09
 
 ## Latest Known Installer
 
@@ -125,6 +125,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\build_inst
   - temporary admin path at `https://greenvpn.pro/admin/` and `https://www.greenvpn.pro/admin/`.
 - A separate admin site config is prepared for `admin.greenvpn.pro`; owner still needs DNS:
   - `A admin -> 72.56.32.197`.
+- Admin UI is no longer openly reachable:
+  - `https://greenvpn.pro/admin/` returns HTTP `401` without nginx Basic Auth;
+  - authenticated Basic Auth smoke returns HTTP `200`;
+  - the same guard is already applied to the staged `admin.greenvpn.pro` vhost.
+- Admin staff login is usable:
+  - a server-generated owner staff password was created without printing it;
+  - staff login smoke succeeded with `authType=staff_session`;
+  - one-time access files are root-only on the Timeweb proxy: `/root/greenvpn-admin-basic-auth-onetime.txt` and `/root/greenvpn-admin-owner-login-onetime.txt`.
+- Admin 2FA status:
+  - backend/admin UI already implement email-code 2FA;
+  - server-only admin 2FA pepper is configured;
+  - mandatory admin 2FA is temporarily off because Yandex SMTP now connects through the restricted proxy relay but rejects the stored SMTP app password with `535 authentication failed`;
+  - owner must rotate/apply the Yandex 360 app password via the safe backend env flow before enabling mandatory admin 2FA.
+- A restricted SMTP TCP forward is active on `72.56.32.197`:
+  - systemd unit `greenvpn-yandex-smtp-relay.service`;
+  - source-limited to origin `37.220.85.211`;
+  - origin maps `smtp.yandex.ru` to `72.56.32.197` and uses port `2587` with STARTTLS.
 - Let's Encrypt certificate for `greenvpn.pro` / `www.greenvpn.pro` was issued and expires `2026-08-07`.
 - Existing `api.greenvpn.pro` reverse proxy remains separate and still proxies to origin backend `37.220.85.211`.
 - Server capacity check after deployment:
