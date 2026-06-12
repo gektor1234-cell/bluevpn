@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -19,6 +21,8 @@ namespace {
 constexpr wchar_t kServiceName[] = L"GreenVPNService";
 constexpr wchar_t kTunnelServiceName[] = L"WireGuardTunnel$BlueVPNDev1";
 constexpr unsigned short kPort = 48737;
+constexpr char kLocalTokenPath[] = "C:\\ProgramData\\BlueVPN\\service_token";
+constexpr char kLocalTokenHeader[] = "x-greenvpn-local-token";
 
 SERVICE_STATUS_HANDLE g_status_handle = nullptr;
 SERVICE_STATUS g_status = {};
@@ -226,6 +230,135 @@ std::string LowerAscii(std::string text) {
   return text;
 }
 
+std::string TrimAscii(std::string text) {
+  const auto is_space = [](unsigned char ch) {
+    return std::isspace(ch) != 0;
+  };
+  while (!text.empty() && is_space(static_cast<unsigned char>(text.front()))) {
+    text.erase(text.begin());
+  }
+  while (!text.empty() && is_space(static_cast<unsigned char>(text.back()))) {
+    text.pop_back();
+  }
+  return text;
+}
+
+std::string ReadLocalServiceToken() {
+  std::ifstream file(kLocalTokenPath, std::ios::binary);
+  if (!file) {
+    return "";
+  }
+  std::string token((std::istreambuf_iterator<char>(file)),
+                    std::istreambuf_iterator<char>());
+  return TrimAscii(token);
+}
+
+std::string HeaderValue(const std::string& request,
+                        const std::string& wanted_lower_name) {
+  size_t pos = request.find("\r\n");
+  if (pos == std::string::npos) {
+    return "";
+  }
+  pos += 2;
+
+  while (pos < request.size()) {
+    const size_t line_end = request.find("\r\n", pos);
+    const size_t end = line_end == std::string::npos ? request.size() : line_end;
+    const std::string line = request.substr(pos, end - pos);
+    if (line.empty()) {
+      break;
+    }
+
+    const size_t colon = line.find(':');
+    if (colon != std::string::npos) {
+      const std::string name =
+          LowerAscii(TrimAscii(line.substr(0, colon)));
+      if (name == wanted_lower_name) {
+        return TrimAscii(line.substr(colon + 1));
+      }
+    }
+
+    if (line_end == std::string::npos) {
+      break;
+    }
+    pos = line_end + 2;
+  }
+
+  return "";
+}
+
+bool FixedTimeEquals(const std::string& a, const std::string& b) {
+  if (a.empty() || b.empty()) {
+    return false;
+  }
+
+  unsigned char diff = static_cast<unsigned char>(a.size() ^ b.size());
+  const size_t max_len = std::max(a.size(), b.size());
+  for (size_t i = 0; i < max_len; ++i) {
+    const unsigned char ca =
+        i < a.size() ? static_cast<unsigned char>(a[i]) : 0;
+    const unsigned char cb =
+        i < b.size() ? static_cast<unsigned char>(b[i]) : 0;
+    diff |= static_cast<unsigned char>(ca ^ cb);
+  }
+  return diff == 0;
+}
+
+enum class LocalAuthResult { kOk, kTokenMissing, kDenied };
+
+LocalAuthResult AuthorizeLocalRequest(const std::string& request) {
+  const std::string expected = ReadLocalServiceToken();
+  if (expected.empty()) {
+    AppendLog(L"protected request denied: local service token missing");
+    return LocalAuthResult::kTokenMissing;
+  }
+
+  const std::string provided = HeaderValue(request, kLocalTokenHeader);
+  if (!FixedTimeEquals(provided, expected)) {
+    AppendLog(L"protected request denied: local service token mismatch");
+    return LocalAuthResult::kDenied;
+  }
+  return LocalAuthResult::kOk;
+}
+
+bool ParseRequestLine(const std::string& first_line, std::string* method,
+                      std::string* path) {
+  const size_t first_space = first_line.find(' ');
+  if (first_space == std::string::npos) {
+    return false;
+  }
+  const size_t second_space = first_line.find(' ', first_space + 1);
+  if (second_space == std::string::npos) {
+    return false;
+  }
+
+  *method = LowerAscii(first_line.substr(0, first_space));
+  std::string target =
+      first_line.substr(first_space + 1, second_space - first_space - 1);
+  const size_t query = target.find('?');
+  if (query != std::string::npos) {
+    target = target.substr(0, query);
+  }
+  *path = LowerAscii(target);
+  return true;
+}
+
+bool RequireLocalToken(SOCKET client, const std::string& request) {
+  const LocalAuthResult auth = AuthorizeLocalRequest(request);
+  if (auth == LocalAuthResult::kOk) {
+    return true;
+  }
+  if (auth == LocalAuthResult::kTokenMissing) {
+    SendHttp(client, 503, "Service Unavailable",
+             "{\"ok\":false,\"message\":\"local service token missing; "
+             "reinstall Green VPN\"}");
+  } else {
+    SendHttp(client, 401, "Unauthorized",
+             "{\"ok\":false,\"message\":\"unauthorized local request\"}");
+  }
+  return false;
+}
+
 std::wstring GetPowerShellPath() {
   wchar_t windows_dir[MAX_PATH] = {};
   if (GetWindowsDirectoryW(windows_dir, MAX_PATH) > 0) {
@@ -247,8 +380,9 @@ int RunTaskAction(const wchar_t* action, DWORD timeout_ms) {
 
   const std::wstring powershell = GetPowerShellPath();
   std::wstring command = QuoteArg(powershell) +
-                         L" -NoProfile -ExecutionPolicy Bypass -File " +
-                         QuoteArg(g_task_script_path) + L" -Action " + action;
+                         L" -NoProfile -ExecutionPolicy RemoteSigned -File " +
+                         QuoteArg(g_task_script_path) +
+                         L" -Action " + action;
 
   STARTUPINFOW si = {};
   si.cb = sizeof(si);
@@ -335,23 +469,39 @@ void HandleRequest(SOCKET client, const std::string& request) {
   const size_t line_end = request.find("\r\n");
   const std::string first_line =
       line_end == std::string::npos ? request : request.substr(0, line_end);
-  const std::string lower = LowerAscii(first_line);
-
-  if (lower.rfind("get /ping ", 0) == 0 ||
-      lower.rfind("get /ping?", 0) == 0) {
-    SendHttp(client, 200, "OK",
-             "{\"ok\":true,\"service\":\"GreenVPNService\"}");
+  std::string method;
+  std::string path;
+  if (!ParseRequestLine(first_line, &method, &path)) {
+    SendHttp(client, 400, "Bad Request",
+             "{\"ok\":false,\"message\":\"bad request\"}");
     return;
   }
 
-  if (lower.rfind("get /status ", 0) == 0 ||
-      lower.rfind("get /status?", 0) == 0) {
+  if (method == "get" && path == "/ping") {
+    SendHttp(client, 200, "OK",
+             "{\"ok\":true,\"service\":\"GreenVPNService\","
+             "\"authRequired\":true}");
+    return;
+  }
+
+  if (method == "get" && path == "/status") {
+    if (!RequireLocalToken(client, request)) {
+      return;
+    }
     SendHttp(client, 200, "OK", QueryTunnelStatusJson());
     return;
   }
 
-  if (lower.rfind("post /connect ", 0) == 0 ||
-      lower.rfind("get /connect ", 0) == 0) {
+  if (path == "/connect" && method != "post") {
+    SendHttp(client, 405, "Method Not Allowed",
+             "{\"ok\":false,\"message\":\"connect requires POST\"}");
+    return;
+  }
+
+  if (method == "post" && path == "/connect") {
+    if (!RequireLocalToken(client, request)) {
+      return;
+    }
     const int exit_code = RunTaskAction(L"Connect", 120000);
     if (exit_code == 0) {
       SendHttp(client, 200, "OK",
@@ -366,8 +516,16 @@ void HandleRequest(SOCKET client, const std::string& request) {
     return;
   }
 
-  if (lower.rfind("post /disconnect ", 0) == 0 ||
-      lower.rfind("get /disconnect ", 0) == 0) {
+  if (path == "/disconnect" && method != "post") {
+    SendHttp(client, 405, "Method Not Allowed",
+             "{\"ok\":false,\"message\":\"disconnect requires POST\"}");
+    return;
+  }
+
+  if (method == "post" && path == "/disconnect") {
+    if (!RequireLocalToken(client, request)) {
+      return;
+    }
     const int exit_code = RunTaskAction(L"Disconnect", 120000);
     if (exit_code == 0) {
       SendHttp(client, 200, "OK",

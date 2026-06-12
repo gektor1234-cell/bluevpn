@@ -3,6 +3,7 @@
 #include <optional>
 #include <string>
 #include <windows.h>
+#include <winhttp.h>
 
 #include "flutter/generated_plugin_registrant.h"
 #include "resource.h"
@@ -203,18 +204,56 @@ void FlutterWindow::RunVpnTask(const wchar_t* task_name) {
     return;
   }
 
-  std::wstring params = L"/Run /TN ";
-  params += task_name;
-
-  SHELLEXECUTEINFOW exec_info{};
-  exec_info.cbSize = sizeof(exec_info);
-  exec_info.fMask = SEE_MASK_NOCLOSEPROCESS;
-  exec_info.lpVerb = L"open";
-  exec_info.lpFile = L"schtasks.exe";
-  exec_info.lpParameters = params.c_str();
-  exec_info.nShow = SW_HIDE;
-
-  if (ShellExecuteExW(&exec_info) && exec_info.hProcess) {
-    CloseHandle(exec_info.hProcess);
+  const wchar_t* path = nullptr;
+  if (wcscmp(task_name, L"GreenVPNConnect") == 0) {
+    path = L"/connect";
+  } else if (wcscmp(task_name, L"GreenVPNDisconnect") == 0) {
+    path = L"/disconnect";
+  } else {
+    return;
   }
+
+  HINTERNET session = WinHttpOpen(L"Green VPN tray/1.0",
+                                  WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                  WINHTTP_NO_PROXY_NAME,
+                                  WINHTTP_NO_PROXY_BYPASS, 0);
+  if (!session) {
+    return;
+  }
+
+  HINTERNET connect = WinHttpConnect(session, L"127.0.0.1", 48737, 0);
+  if (!connect) {
+    WinHttpCloseHandle(session);
+    return;
+  }
+
+  HINTERNET request =
+      WinHttpOpenRequest(connect, L"POST", path, nullptr, WINHTTP_NO_REFERER,
+                         WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+  if (!request) {
+    WinHttpCloseHandle(connect);
+    WinHttpCloseHandle(session);
+    return;
+  }
+
+  DWORD timeout_ms = 2000;
+  WinHttpSetOption(request, WINHTTP_OPTION_CONNECT_TIMEOUT, &timeout_ms,
+                   sizeof(timeout_ms));
+  WinHttpSetOption(request, WINHTTP_OPTION_SEND_TIMEOUT, &timeout_ms,
+                   sizeof(timeout_ms));
+  WinHttpSetOption(request, WINHTTP_OPTION_RECEIVE_TIMEOUT, &timeout_ms,
+                   sizeof(timeout_ms));
+
+  const char body[] = "{}";
+  const wchar_t headers[] = L"Content-Type: application/json\r\n";
+  if (WinHttpSendRequest(request, headers, static_cast<DWORD>(-1),
+                         const_cast<char*>(body),
+                         static_cast<DWORD>(sizeof(body) - 1),
+                         static_cast<DWORD>(sizeof(body) - 1), 0)) {
+    WinHttpReceiveResponse(request, nullptr);
+  }
+
+  WinHttpCloseHandle(request);
+  WinHttpCloseHandle(connect);
+  WinHttpCloseHandle(session);
 }

@@ -196,7 +196,7 @@ namespace GreenVpn {
 }
 
 if (-not (Get-Command iexpress.exe -ErrorAction SilentlyContinue)) {
-    throw "iexpress.exe not found. It is required for the MVP single-file installer."
+    throw "iexpress.exe not found. It is required for the single-file Windows installer."
 }
 
 if (-not (Test-Path -LiteralPath $ProjectRoot)) {
@@ -221,6 +221,9 @@ if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
         Push-Location $ProjectRoot
         try {
             flutter build windows --release -t .\lib\main.dart
+            if ($LASTEXITCODE -ne 0) {
+                throw "flutter build windows failed with exit code $LASTEXITCODE"
+            }
         }
         finally {
             Pop-Location
@@ -276,6 +279,11 @@ if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
         Copy-Item -LiteralPath $vpnTask -Destination (Join-Path $generatedToolsDir 'greenvpn_vpn_task.ps1') -Force
     }
 
+    $networkProtection = Join-Path $ProjectRoot 'scripts\windows\check_windows_network_protection.ps1'
+    if (Test-Path -LiteralPath $networkProtection) {
+        Copy-Item -LiteralPath $networkProtection -Destination (Join-Path $generatedToolsDir 'check_windows_network_protection.ps1') -Force
+    }
+
 @"
 Green VPN installer payload
 
@@ -300,7 +308,6 @@ Copy-Item -LiteralPath (Join-Path $ProjectRoot 'windows\runner\resources\app_ico
 
 $installPs1 = Join-Path $payloadDir 'install_greenvpn.ps1'
 $installUiPs1 = Join-Path $payloadDir 'install_ui.ps1'
-$installVbs = Join-Path $payloadDir 'install.vbs'
 
 @'
 param(
@@ -349,6 +356,35 @@ function Ensure-GreenVpnProgramDataAcl {
     New-Item -ItemType Directory -Force -Path $root | Out-Null
     attrib -H -S -R $root 2>$null | Out-Null
     icacls $root /inheritance:e /grant '*S-1-5-11:(OI)(CI)M' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+}
+
+function Ensure-GreenVpnServiceToken {
+    $root = Join-Path $env:ProgramData 'BlueVPN'
+    $tokenPath = Join-Path $root 'service_token'
+    New-Item -ItemType Directory -Force -Path $root | Out-Null
+
+    $existing = ''
+    if (Test-Path -LiteralPath $tokenPath) {
+        try {
+            $existing = (Get-Content -LiteralPath $tokenPath -Raw -ErrorAction Stop).Trim()
+        } catch {
+            $existing = ''
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($existing) -or $existing.Length -lt 24) {
+        $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+        try {
+            $bytes = New-Object byte[] 32
+            $rng.GetBytes($bytes)
+            [Convert]::ToBase64String($bytes) | Set-Content -LiteralPath $tokenPath -NoNewline -Encoding ASCII
+        } finally {
+            $rng.Dispose()
+        }
+    }
+
+    attrib +H $tokenPath 2>$null | Out-Null
+    icacls $tokenPath /inheritance:r /grant '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-11:R' | Out-Null
 }
 
 function Unregister-GreenVpnTasks {
@@ -426,77 +462,6 @@ function Install-GreenVpnService {
     throw "Green VPN service was created but did not reach Running state."
 }
 
-function Grant-GreenVpnTaskUserAccess {
-    param([Parameter(Mandatory=$true)][string]$TaskName)
-
-    # The task runs as SYSTEM, but the normal non-admin UI must be able to
-    # query and start it through schtasks.exe. Without this ACL, Windows returns
-    # "Access is denied" and the app thinks the system component is missing.
-    $sddl = 'O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;GRGX;;;BU)(A;;GRGX;;;AU)'
-    try {
-        $scheduler = New-Object -ComObject 'Schedule.Service'
-        $scheduler.Connect()
-        $folder = $scheduler.GetFolder('\')
-        $task = $folder.GetTask($TaskName)
-        $task.SetSecurityDescriptor($sddl, 0)
-    } catch {
-        throw "Failed to grant non-admin access to Green VPN system task ${TaskName}: $($_.Exception.Message)"
-    }
-
-    try {
-        $taskFile = Join-Path $env:windir "System32\Tasks\$TaskName"
-        if (Test-Path -LiteralPath $taskFile) {
-            icacls $taskFile /grant '*S-1-5-11:RX' '*S-1-5-32-545:RX' | Out-Null
-        }
-    } catch {
-        Write-Warning "Could not update task file ACL for ${TaskName}: $($_.Exception.Message)"
-    }
-}
-
-function Register-GreenVpnManualTask {
-    param(
-        [Parameter(Mandatory=$true)][string]$TaskName,
-        [Parameter(Mandatory=$true)][string]$TaskScript,
-        [Parameter(Mandatory=$true)][string]$TaskAction
-    )
-
-    $actionArgs = '-WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File "' + $TaskScript + '" -Action ' + $TaskAction
-    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $actionArgs
-    $trigger = New-ScheduledTaskTrigger -Once -At ([datetime]'2099-01-01T00:00:00')
-    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
-
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-    Grant-GreenVpnTaskUserAccess -TaskName $TaskName
-}
-
-function Register-GreenVpnTasks {
-    param([Parameter(Mandatory=$true)][string]$TaskScript)
-
-    if (-not (Test-Path -LiteralPath $TaskScript)) {
-        throw "Green VPN privileged task script not found: $TaskScript"
-    }
-
-    Unregister-GreenVpnTasks
-    Register-GreenVpnManualTask -TaskName 'GreenVPNConnect' -TaskScript $TaskScript -TaskAction 'Connect'
-    Register-GreenVpnManualTask -TaskName 'GreenVPNDisconnect' -TaskScript $TaskScript -TaskAction 'Disconnect'
-
-    $guardArgs = '-WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File "' + $TaskScript + '" -Action Guard'
-    $guardAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $guardArgs
-    $guardTrigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(1)) -RepetitionInterval (New-TimeSpan -Minutes 1)
-    $guardPrincipal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-    $guardSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
-    Register-ScheduledTask -TaskName 'GreenVPNGuard' -Action $guardAction -Trigger $guardTrigger -Principal $guardPrincipal -Settings $guardSettings -Force | Out-Null
-    Grant-GreenVpnTaskUserAccess -TaskName 'GreenVPNGuard'
-    Start-ScheduledTask -TaskName 'GreenVPNGuard' -ErrorAction SilentlyContinue
-
-    foreach ($taskName in @('GreenVPNConnect', 'GreenVPNDisconnect', 'GreenVPNGuard')) {
-        if (-not (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)) {
-            throw "Green VPN system task was not created: $taskName"
-        }
-    }
-}
-
 if ([string]::IsNullOrWhiteSpace($PayloadZip)) {
     $PayloadZip = Join-Path $PSScriptRoot 'GreenVPN_payload.zip'
 }
@@ -509,8 +474,9 @@ if (-not (Test-IsAdministrator)) {
     Write-Step "Requesting administrator rights for Green VPN installation..."
     $argList = @(
         '-NoProfile',
+        '-NonInteractive',
         '-ExecutionPolicy',
-        'Bypass',
+        'RemoteSigned',
         '-File',
         "`"$PSCommandPath`"",
         '-PayloadZip',
@@ -648,8 +614,9 @@ function Start-FromTemp {
 
     `$argList = @(
         '-NoProfile',
+        '-NonInteractive',
         '-ExecutionPolicy',
-        'Bypass',
+        'RemoteSigned',
         '-File',
         ('"' + `$tempScript + '"'),
         '-InstallRoot',
@@ -663,7 +630,7 @@ function Start-FromTemp {
         ArgumentList = `$argList
         Wait = `$true
         PassThru = `$true
-        WindowStyle = 'Normal'
+        WindowStyle = 'Hidden'
     }
     if (-not (Test-IsAdministrator)) {
         `$startArgs['Verb'] = 'RunAs'
@@ -832,11 +799,11 @@ if (-not `$KeepProgramData) {
 Write-Step "Green VPN removed. WireGuard, Amnezia and WARP themselves were not removed."
 "@ | Set-Content -LiteralPath (Join-Path $installRoot 'uninstall_greenvpn.ps1') -Encoding UTF8
 
-    @"
+@"
 @echo off
 setlocal
 pushd "%TEMP%" >nul 2>nul
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0uninstall_greenvpn.ps1"
+powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy RemoteSigned -File "%~dp0uninstall_greenvpn.ps1"
 popd >nul 2>nul
 exit /b %ERRORLEVEL%
 "@ | Set-Content -LiteralPath (Join-Path $installRoot 'uninstall_greenvpn.cmd') -Encoding ASCII
@@ -848,9 +815,10 @@ exit /b %ERRORLEVEL%
     $shortcut.WorkingDirectory = $installRoot
     $shortcut.Save()
 
-    Write-Step "Preparing Green VPN system tasks..."
+    Write-Step "Removing legacy Green VPN system tasks if present..."
     Ensure-GreenVpnProgramDataAcl
-    Register-GreenVpnTasks -TaskScript $taskScript
+    Ensure-GreenVpnServiceToken
+    Unregister-GreenVpnTasks
 
     Write-Step "Installing Green VPN system service..."
     Install-GreenVpnService -ServiceExe $serviceExe -TaskScript $taskScript
@@ -1078,7 +1046,7 @@ $form.Add_Shown({
         $stageLabel.Text = 'Extracting and installing Green VPN...'
         $psi = [System.Diagnostics.ProcessStartInfo]::new()
         $psi.FileName = 'powershell.exe'
-        $psi.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $installPs1 + '" -PayloadZip "' + $payloadZip + '"'
+        $psi.Arguments = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy RemoteSigned -File "' + $installPs1 + '" -PayloadZip "' + $payloadZip + '"'
         $psi.UseShellExecute = $false
         $psi.CreateNoWindow = $true
         $psi.RedirectStandardOutput = $true
@@ -1129,23 +1097,6 @@ $form.Add_FormClosed({
 exit $script:exitCode
 '@ | Set-Content -LiteralPath $installUiPs1 -Encoding UTF8
 
-@'
-Option Explicit
-
-Dim shell, fso, scriptDir, ui, command, exitCode
-Set shell = CreateObject("WScript.Shell")
-Set fso = CreateObject("Scripting.FileSystemObject")
-
-scriptDir = fso.GetParentFolderName(WScript.ScriptFullName)
-ui = fso.BuildPath(scriptDir, "install_ui.ps1")
-
-command = "powershell.exe -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File " _
-    & Chr(34) & ui & Chr(34)
-
-exitCode = shell.Run(command, 0, True)
-WScript.Quit exitCode
-'@ | Set-Content -LiteralPath $installVbs -Encoding ASCII
-
 Write-Section 'CREATE IEXPRESS SED'
 $sedPath = Join-Path $workRoot 'greenvpn_installer.sed'
 $targetEscaped = $installerPath
@@ -1170,18 +1121,17 @@ DisplayLicense=
 FinishMessage=
 TargetName=$targetEscaped
 FriendlyName=Green VPN Installer
-AppLaunched=wscript.exe //NoLogo install.vbs
+AppLaunched=powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy RemoteSigned -File install_ui.ps1
 PostInstallCmd=<None>
 AdminQuietInstCmd=
 UserQuietInstCmd=
 SourceFiles=SourceFiles
 
 [Strings]
-FILE0="install.vbs"
-FILE1="install_ui.ps1"
-FILE2="install_greenvpn.ps1"
-FILE3="GreenVPN_payload.zip"
-FILE4="app_icon.ico"
+FILE0="install_ui.ps1"
+FILE1="install_greenvpn.ps1"
+FILE2="GreenVPN_payload.zip"
+FILE3="app_icon.ico"
 
 [SourceFiles]
 SourceFiles0=$payloadEscaped
@@ -1191,7 +1141,6 @@ SourceFiles0=$payloadEscaped
 %FILE1%=
 %FILE2%=
 %FILE3%=
-%FILE4%=
 "@ | Set-Content -LiteralPath $sedPath -Encoding ASCII
 
 Write-Section 'BUILD INSTALLER EXE'

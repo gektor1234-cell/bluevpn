@@ -25,8 +25,11 @@ if (-not (Test-IsAdministrator)) {
     Write-Step "Administrator rights are required to remove Green VPN service/tasks. Asking Windows once..."
     $argList = @(
         '-NoProfile',
+        '-NonInteractive',
+        '-WindowStyle',
+        'Hidden',
         '-ExecutionPolicy',
-        'Bypass',
+        'RemoteSigned',
         '-File',
         ('"{0}"' -f $PSCommandPath)
     )

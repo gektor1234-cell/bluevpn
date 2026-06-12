@@ -89,15 +89,18 @@ if (-not (Test-IsAdmin)) {
     Write-Step 'Requesting administrator rights...'
     $argsList = @(
         '-NoProfile',
+        '-NonInteractive',
+        '-WindowStyle',
+        'Hidden',
         '-ExecutionPolicy',
-        'Bypass',
+        'RemoteSigned',
         '-File',
         "`"$PSCommandPath`"",
         '-NoSelfElevate'
     )
     if ($FlushDns) { $argsList += '-FlushDns' }
     if ($ResetWinsock) { $argsList += '-ResetWinsock' }
-    $p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -Wait -PassThru -ArgumentList $argsList
+    $p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList $argsList
     exit $p.ExitCode
 }
 
