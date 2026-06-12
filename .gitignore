@@ -1,4 +1,5 @@
 # build / flutter
+.flutter-plugins-dependencies
 .dart_tool/
 build/
 *.log
@@ -22,4 +23,4 @@ Desktop/BlueVPN_Reports/
 
 # temp / misc
 query
-public_demo_site/downloads/*.exe
+public_demo_site/downloads/

@@ -221,7 +221,7 @@ TXT   @                yandex-verification:5583d6225f64e34e
 
 - До покупки/настройки отдельного API/site IP текущая запись `A api -> 37.220.85.211` допустима для разработки.
 - Перед публичным запуском `api.greenvpn.pro` должен вести на HTTPS reverse proxy/API, который не использует тот же IP, что VPN endpoint.
-- VPN endpoint лучше вынести на отдельное имя, например `nl1.vpn.greenvpn.pro -> 37.220.85.211`, а будущие локации оформлять как `de1.vpn.greenvpn.pro`, `kz1.vpn.greenvpn.pro` и так далее.
+- VPN endpoint лучше вынести на отдельное имя, например `nl1.vpn.greenvpn.pro -> 37.220.85.211`, а будущие локации оформлять как `gb1.vpn.greenvpn.pro`, `kz1.vpn.greenvpn.pro` и так далее. Старый Timeweb Frankfurt не возвращать.
 - `greenvpn.pro` и `www.greenvpn.pro` можно держать как публичный сайт/лендинг; они тоже не должны требовать подключения к тому же IP, через который идёт VPN endpoint.
 - HTTPS на текущем backend уже включён через nginx + Let's Encrypt для `api.greenvpn.pro`; перед production YooKassa/email-required режимом всё равно проверяй `/healthz` по HTTPS.
 - Если Windows-хост открывает сайт без VPN, но не открывает с включённым full-tunnel VPN, это ожидаемый симптом общей IP-точки API и VPN endpoint. Решение: разделить API/site IP и VPN endpoint IP.
