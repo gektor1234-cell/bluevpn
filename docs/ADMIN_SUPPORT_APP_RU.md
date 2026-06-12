@@ -130,6 +130,10 @@ C:\Users\gekto\projects\bluevpn\admin_support_app
 - `GET /api/v1/admin/server-health` показывает `externalProbeReadiness`: нужен ли внешний monitoring VPS, какие config-ready endpoints обязательны, покрыт ли `current_wg0`, свежие ли внешние observations и есть ли degraded/down за 24 часа.
 - Раздел `Серверы -> Наблюдения здоровья` показывает external endpoint probes и покрытие обязательных endpoint; без отдельного VPS это ожидаемо остаётся не production-ready.
 - Раздел `Серверы -> Каталог серверов` теперь может создать безопасный внутренний черновик нового VPS через `POST /api/v1/admin/server-catalog/draft-from-plan`: запись всегда остается `draft`, `isPublic=false`, `isActive=false`, `clientConfigProfile=none` и не попадает в пользовательский каталог.
+- В таблице `Серверы -> Управляемые серверы` у записей с профилем `remote_ssh_wg0` есть кнопка `Peer-smoke`: backend временно добавляет WireGuard peer на удалённый `wg0`, проверяет наличие peer, удаляет его и показывает только безопасный результат.
+- С 2026-05-15 таблица `Серверы -> Управляемые серверы` показывает отдельную колонку нагрузки: текущая/доступная ёмкость, оценка capacity, active clients и assigned users.
+- Там же есть кнопка `Тест конфига`: backend собирает форму клиентского WireGuard-конфига для выбранного remote-узла, проверяет временный peer и удаляет его; сам конфиг и ключи в ответ не возвращаются.
+- Там же есть безопасные действия `Открыть клиентам` и `Скрыть`: перед публикацией backend делает dry-run publication gate и не даст открыть узел, если здоровье, мониторинг или выдача конфига не готовы.
 - Controlled probe runner `scripts/monitoring/service_probe.py --server-health` умеет присылать безопасные endpoint observations вместе с service availability observations; payload не содержит токены, пароли, WireGuard private keys или raw config.
 - Degraded/down server-health observations теперь открывают внутренний incident `server-health:<endpointId>`, а healthy observation закрывает его; инцидент виден в разделе `Инциденты` и получает runbook-подсказки/alert outbox как остальные monitoring incidents.
 - Если managed endpoint был отмечен кандидатом в публичный catalog, но новая health observation стала `down`/`degraded` или score упал ниже порога публикации, backend автоматически снимает public-candidate флаг, пишет причину `auto-paused` и audit event.
@@ -305,6 +309,11 @@ POST /api/v1/admin/incidents/{incident_id}
 GET  /api/v1/admin/server-catalog
 GET  /api/v1/admin/server-catalog/publication-readiness
 GET  /api/v1/admin/server-catalog/provisioning-readiness
+GET  /api/v1/admin/server-catalog/{server_id}/publication-gate
+POST /api/v1/admin/server-catalog/{server_id}/remote-peer-smoke
+POST /api/v1/admin/server-catalog/{server_id}/client-config-smoke
+POST /api/v1/admin/server-catalog/{server_id}/publish
+POST /api/v1/admin/server-catalog/{server_id}/unpublish
 POST /api/v1/admin/server-catalog/draft-from-plan
 POST /api/v1/admin/server-catalog
 POST /api/v1/admin/server-catalog/{entry_id}
