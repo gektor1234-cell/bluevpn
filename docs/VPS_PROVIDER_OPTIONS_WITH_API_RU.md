@@ -1,142 +1,176 @@
-# Green VPN: VPS providers with API and Russia-friendly payment
+# Green VPN: замена VPS-провайдера для VPN-нод
 
-Дата анализа: 2026-06-12.
+Дата обновления: 2026-06-12.
 
-Цель: найти варианты, где можно программно создавать/удалять VPS/VPN nodes через API или Terraform, при этом оплата возможна из России. Основной сайт `greenvpn.pro` не трогать; любые новые узлы сначала подключать только к test/preview.
+Цель: найти провайдера для новых VPN exit-node вместо Timeweb, с API/автоматизацией, оплатой из РФ и зарубежными локациями. Основной сайт и текущий стабильный контур не трогать; новые узлы сначала подключать только к test/preview.
 
-## Короткий вывод
+## Короткое решение
 
-Для VPN-exit за пределами РФ в первую очередь смотреть:
+Рекомендуемый следующий тестовый провайдер: **RUVDS**.
 
-1. **RUVDS** — есть API V2, есть зарубежные локации включая Frankfurt/London/Zurich, оплата из РФ через СБП/российские способы. Лучший кандидат для следующего тестового узла.
-2. **HOSTKEY** — есть InvAPI/API docs, VPS в Netherlands/Europe, заявлены варианты оплаты банковскими картами/переводами/crypto; на отдельных страницах прямо указана оплата в рублях картами российских банков, включая МИР. Хороший кандидат, особенно под NL/Europe.
-3. **Serverspace** — есть API для cloud servers и управление VM/network/storage, но оплата российскими картами по официальным материалам не подтверждена так жестко, как у RUVDS/Selectel/Yandex. Кандидат после ручной проверки платежа.
+Причины:
 
-Для control-plane/мониторинга/админки в РФ, но не как основной внешний VPN-exit:
+- есть API для баланса, списка серверов, дата-центров, тарифов, создания сервера и удаления/команд управления;
+- есть оплата российскими картами, МИР, ЮMoney, СберБанк Онлайн, СБП, счетом;
+- есть зарубежные дата-центры: London, Zurich, Frankfurt, Amsterdam и другие;
+- есть 3-дневный тест для новых пользователей, но создание тестовых серверов через API прямо в старой API-документации отмечено как недоступное, поэтому первый тест может потребовать ручного заказа;
+- дешевле и проще для первого A/B-теста, чем HOSTKEY.
 
-4. **Selectel** — хороший API/Terraform/OpenStack, официально поддерживает оплату для резидентов РФ картой, банковским переводом, QR, ЮMoney. Но как VPN-exit за пределы РФ подходит хуже, если нужна именно иностранная точка выхода.
-5. **Yandex Cloud** — сильный Terraform/API, официальная оплата для резидентов РФ в RUB российскими картами. Скорее для backend/control-plane, не для обходного VPN-exit.
-6. **VK Cloud / Cloud.ru** — есть Terraform/API-история, но для текущей задачи это запасные варианты под РФ-инфру, а не очевидный внешний VPN-exit.
+Практический порядок теста:
 
-## Провайдеры
+1. RUVDS London.
+2. RUVDS Zurich.
+3. RUVDS Amsterdam как альтернативный NL не на Timeweb.
+4. HOSTKEY Netherlands/UK/France как запасной вариант.
 
-### RUVDS
+**Не начинать снова с Frankfurt.** Timeweb Frankfurt уже показал нестабильное поведение именно в нашем VPN-сценарии. Frankfurt можно вернуться проверять позже, но не как первый replacement.
 
-Почему подходит:
+## Оценка кандидатов
 
-- API V2 позволяет управлять серверами через HTTP-запросы.
-- Есть зарубежные локации, включая Frankfurt, London, Zurich.
-- Есть способы оплаты, удобные для РФ, включая СБП.
-- Есть пробный период/тестовый сервер, что удобно для проверки мобильных маршрутов до покупки на долгий срок.
+### 1. RUVDS — основной кандидат
 
-Риски:
+Что подтверждено официально:
 
-- Нужно отдельно проверить UDP/443, WireGuard, NAT и YouTube/Telegram/Discord с мобильного оператора.
-- После Timeweb Frankfurt нельзя считать сам факт Frankfurt достаточным; нужен реальный mobile smoke.
+- API V2 доступен на `https://ruvds.com/api-docs/`.
+- Старый API-обзор описывает логин через API key + username/password, баланс, дата-центры, тарифы, список серверов, создание сервера `https://ruvds.com/api/server/create/`, команды управления и удаление через `server/command`.
+- На странице дата-центров заявлены London, Zurich, Frankfurt, Amsterdam и другие площадки.
+- В справке по оплате указаны Card Russian для российских Visa/Mastercard/МИР, ЮMoney, СберБанк Онлайн, СБП, UnionPay, счет.
 
-Источники:
+Плюсы для Green VPN:
 
-- API docs: https://ruvds.com/api-docs/
-- API overview: https://ruvds.com/en-usd/use_api
-- Locations/pricing page: https://ruvds.com/en-usd
-- Payment help: https://ruvds.com/ru/helpcenter/payment/
-
-### HOSTKEY
-
-Почему подходит:
-
-- Есть InvAPI/API docs и управление серверами через API.
-- Есть Netherlands/Europe VPS.
-- Есть страницы с оплатой банковскими картами, переводом, PayPal/crypto; для части VPS-страниц указана оплата в рублях картами российских банков, включая МИР.
+- можно автоматизировать lifecycle VPS через API;
+- можно оплатить из РФ без обходных схем;
+- есть несколько зарубежных локаций, значит можно быстро проверить маршруты;
+- есть дешевые стартовые тарифы, поэтому A/B-тест не должен быть дорогим.
 
 Риски:
 
-- Нужно проверить конкретно нужный тариф/VPS location: не все страницы одинаково описывают платежные методы.
-- API выглядит мощным, но перед автоматизацией надо получить API key и проверить create/delete на тестовом минимальном VPS.
+- API создает платные серверы, тестовый период через API может быть недоступен;
+- надо отдельно проверить UDP/443, TCP/443, WireGuard/OpenVPN, MTU и YouTube media с реального Android в РФ;
+- RUVDS Frankfurt может вести себя иначе, чем Timeweb Frankfurt, но повторять Frankfurt первым нерационально.
 
-Источники:
+Решение: брать **London** как первый test-node.
 
-- API docs: https://hostkey.com/documentation/apidocs/
-- InvAPI overview: https://hostkey.com/documentation/apidocs/api_index/
-- API key docs: https://hostkey.com/documentation/controlpanel/apikey/
-- Server order docs: https://hostkey.com/documentation/server_order/site_server_order/
-- Payment methods: https://hostkey.com/about-us/payment-terms-and-methods/
-- Netherlands VPS: https://hostkey.com/vps/netherland-vps/
+### 2. HOSTKEY — запасной кандидат
 
-### Serverspace
+Что подтверждено официально:
 
-Почему подходит:
+- есть API/Invapi и документация по API-ключам;
+- в оплате указаны банковский перевод, банковские карты Visa/MasterCard/МИР, ЮMoney, интернет-банк, наличные;
+- на продуктовых страницах заявлены VPS в Netherlands, Germany, France, UK, cloud VPS с API/control panel, root access, 1Gbps/10Gbps, DDoS protection.
 
-- Cloud server API умеет создавать/настраивать VM, network, storage.
-- Панель и API подходят для автономного create/delete.
+Плюсы:
 
-Риски:
+- сильнее выглядит как серверная компания;
+- хорошие зарубежные локации;
+- API и панель зрелые;
+- можно отменять серверы через Invapi/панель.
 
-- Официально найдено только "bank card/PayPal/promo code"; российские карты/МИР не подтверждены.
-- Перед использованием нужна ручная проверка пополнения баланса.
+Минусы:
 
-Источники:
+- обычно дороже RUVDS для маленькой VPN-ноды;
+- часть VPS-страниц выглядит как SEO/маркетинг, конкретный тариф надо проверять в кабинете;
+- для первого дешевого smoke-теста менее удобно.
 
-- API: https://serverspace.us/services/api/
-- Payment methods: https://serverspace.io/support/help/payment-methods-for-serverspace-cloud-services/
+Решение: держать как второй вариант, если RUVDS London/Zurich не пройдет mobile smoke.
 
-### Selectel
+### 3. Serverspace — технически нормальный, но платежный риск
 
-Почему подходит:
+Что подтверждено официально:
 
-- Официальная Terraform/OpenStack-интеграция.
-- Для резидентов РФ официально есть пополнение банковской картой, банковским переводом, QR, ЮMoney.
-- Хороший кандидат для control-plane, monitoring, storage, admin.
+- есть Public API, REST/JSON, GET/DELETE/POST/PUT;
+- API умеет деплоить серверы, менять конфигурации, управлять network/storage/DNS;
+- есть Terraform/CLI;
+- биллинг каждые 10 минут, cloud servers от примерно 4 EUR/month;
+- оплата: bank cards, PayPal, promo code; минимальное пополнение 5 EUR.
 
-Риск для VPN:
+Проблема:
 
-- Если нужен зарубежный VPN-exit, Selectel не первый выбор; это скорее российская инфраструктура.
+- официальная страница не подтверждает российские карты/МИР/СБП;
+- для нас это означает риск зависнуть на оплате.
 
-Источники:
+Решение: не первый выбор. Использовать только если пользователь вручную подтвердит успешное пополнение баланса.
 
-- Terraform providers: https://docs.selectel.ru/en/terraform/providers/
-- Balance top-up: https://docs.selectel.ru/balance-and-payments/manage/top-up-balance/
+### 4. Aéza — не рекомендовать как основной
 
-### Yandex Cloud
+Плюсы:
 
-Почему подходит:
+- есть VPS, почасовая оплата, API/REST заявлены;
+- много локаций, дешевые тарифы.
 
-- Официальный Terraform provider и Compute resources.
-- Резиденты РФ платят в RUB российскими картами.
-- Хорош для backend/control-plane/monitoring.
+Критичный риск:
 
-Риск для VPN:
+- 2025/2026 публично есть санкционный/репутационный риск вокруг Aeza Group по материалам OFAC.
 
-- Не основной кандидат для внешнего VPN-exit.
+Решение: не использовать как основу Green VPN, чтобы не тащить репутационный и платежный риск в продукт.
 
-Источники:
+## Что именно тестировать на новой ноде
 
-- Compute Terraform reference: https://yandex.cloud/en/docs/compute/tf-ref
-- Terraform provider: https://registry.terraform.io/providers/yandex-cloud/yandex/latest/docs
-- Payment methods: https://yandex.cloud/en/docs/billing/payment/payment-methods-card-business
+Минимальный smoke перед добавлением в preview:
 
-### Cloud.ru
+1. SSH доступ, `uname`, distro, kernel.
+2. Firewall: открыты TCP/443 и UDP/443, WireGuard порт, ICMP.
+3. WireGuard:
+   - handshakes;
+   - traffic counters растут;
+   - NAT работает;
+   - DNS внутри туннеля работает.
+4. Android real-device:
+   - подключение через auto;
+   - ручной выбор новой ноды;
+   - переподключение с NL на новую ноду без ручного stop/start;
+   - Telegram;
+   - YouTube page;
+   - YouTube media playback минимум 60 секунд.
+5. Windows:
+   - получение конфига;
+   - connect/disconnect;
+   - отсутствие конфликтов с чужим VPN.
+6. Backend/admin:
+   - node visible only in preview/test;
+   - disabled by default для stable;
+   - healthScore обновляется;
+   - errors видны в admin.
 
-Почему подходит:
+## Рекомендуемая инфраструктурная схема
 
-- Есть Terraform-путь для создания VM.
-- Российский облачный провайдер, удобнее для РФ-инфры.
+На ближайший этап:
 
-Риск для VPN:
+- stable/main: только проверенные NL-ноды, без экспериментов;
+- preview/test: новая RUVDS London node;
+- если London проходит mobile smoke: оставить ее в preview 24 часа;
+- если 24 часа без деградации: добавить как резервный stable candidate, но не включать stable без отдельного решения;
+- если London плохой: удалить и тестировать Zurich;
+- если RUVDS целиком плохой: переходить к HOSTKEY Netherlands/UK/France.
 
-- Не основной кандидат для внешнего VPN-exit.
+## Что нужно для автоматического создания через API
 
-Источники:
+Для RUVDS:
 
-- VM via Terraform: https://cloud.ru/docs/tutorials-evolution/list/topics/vm__vm-terraform
-- Terraform setup: https://cloud.ru/docs/terraform/ug/topics/guides__configuring-terraform-provider
+- аккаунт RUVDS;
+- пополненный баланс;
+- API key из настроек аккаунта;
+- login/email аккаунта;
+- пароль аккаунта или отдельная авторизация, если будет доступна;
+- выбранный datacenter id, os id, tariff id после запроса `datacenter`, `os`, `tariff`.
 
-## Рекомендация
+Секреты хранить только вне repo:
 
-Следующий тестовый VPN node лучше делать не в stable catalog, а как private/test node:
+- переменные окружения локально;
+- защищенный secret storage на сервере;
+- не писать API key/password в docs, scripts, commits.
 
-1. Сначала RUVDS Frankfurt или London на минимальном тарифе.
-2. Если Frankfurt снова плохо работает с мобильной сетью РФ, пробовать London/Zurich.
-3. Второй кандидат — HOSTKEY Netherlands.
-4. Любой новый узел сначала подключать только к preview/test, прогонять WireGuard temp-peer E2E и реальный Android mobile smoke, затем решать вопрос о stable.
+## Источники
 
+- RUVDS API docs: https://ruvds.com/api-docs/
+- RUVDS API overview: https://ruvds.com/en-usd/use_api
+- RUVDS дата-центры: https://ruvds.com/ru/data/
+- RUVDS оплата: https://ruvds.com/ru/helpcenter/payment/
+- HOSTKEY API docs: https://hostkey.ru/documentation/apidocs/
+- HOSTKEY API keys: https://hostkey.ru/documentation/controlpanel/apikey/
+- HOSTKEY оплата: https://hostkey.ru/about-us/payment-terms-and-methods/
+- HOSTKEY cloud VPS: https://hostkey.com/vps/cloud-vps/
+- Serverspace API: https://serverspace.io/services/api/
+- Serverspace payment methods: https://serverspace.io/support/help/payment-methods-for-serverspace-cloud-services/
+- Serverspace pricing: https://serverspace.io/pricing/
+- OFAC Aeza note: https://home.treasury.gov/news/press-releases/sb0185
