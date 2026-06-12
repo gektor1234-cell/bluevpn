@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Green VPN</title>
+  <meta name="description" content="Green VPN — защищённое Trial-подключение для Windows и Android без рекламы и оплаты. Скачайте приложение и проверьте VPN на своём устройстве.">
+  <title>Green VPN — Trial VPN для Windows и Android</title>
   <link rel="stylesheet" href="styles.css">
   <link rel="icon" href="assets/app_icon.ico">
 </head>
@@ -13,78 +14,156 @@
       <img src="assets/app_icon.ico" alt="">
       <span>Green VPN</span>
     </a>
-    <nav>
-      <a href="#pricing">Тарифы</a>
-      <a href="#status">Статус</a>
-      <a href="http://127.0.0.1:8090" target="_blank" rel="noreferrer">Админка</a>
+    <nav aria-label="Основная навигация">
+      <a href="#download">Скачать</a>
+      <a href="#setup">Как начать</a>
+      <a href="#contacts">Контакты</a>
     </nav>
   </header>
 
   <main>
-    <section class="hero">
-      <div class="hero-copy">
-        <p class="eyebrow">Windows MVP • рабочий backend • платежи подключены</p>
-        <h1>Green VPN</h1>
-        <p class="lead">Приложение для защищенного и стабильного сетевого подключения на Windows.</p>
-        <div class="actions">
-          <a class="button primary" href="downloads/GreenVPN_Setup.exe">Скачать установщик</a>
-          <a class="button ghost" href="https://api.greenvpn.pro/healthz" target="_blank" rel="noreferrer">Проверить API</a>
+    <section class="hero" id="download" aria-labelledby="hero-title">
+      <div class="hero-inner">
+        <div class="hero-copy">
+          <p class="eyebrow">VPN для Windows и Android</p>
+          <h1 id="hero-title">Green VPN</h1>
+          <p class="lead">Скачайте Green VPN, войдите в аккаунт и включите защищённое Trial-подключение бесплатно. В этой версии нет рекламы, платёжных экранов и обязательной привязки карты.</p>
+          <div class="actions">
+            <a class="button primary" href="/downloads/GreenVPN_Setup.exe" download>Скачать для Windows</a>
+            <a class="button primary" href="/downloads/GreenVPN_Android.apk" download>Скачать для Android</a>
+          </div>
         </div>
-      </div>
-      <div class="product-panel" aria-label="Green VPN status preview">
-        <div class="window-bar">
-          <span></span>
-          <span></span>
-          <span></span>
-        </div>
-        <div class="status-ring">
-          <img src="assets/app_icon.ico" alt="">
-        </div>
-        <h2>Netherlands #1</h2>
-        <p>WireGuard UDP • Social Only • авторизация и тарифы через backend</p>
-        <div class="metric-grid">
-          <div><strong>0.9.69</strong><span>backend</span></div>
-          <div><strong>200</strong><span>API OK</span></div>
-          <div><strong>149 ₽</strong><span>smoke paid</span></div>
+
+        <div class="hero-proof" aria-label="Что внутри Green VPN">
+          <div class="device-card">
+            <img src="assets/app_icon.ico" alt="">
+            <div>
+              <strong>Green VPN</strong>
+              <span>приложение само получает рабочие настройки</span>
+            </div>
+          </div>
+
+          <ul class="proof-list">
+            <li>
+              <b>Умный выбор сервера</b>
+              <span>приложение получает доступный VPN-узел и переключается на рабочий маршрут.</span>
+            </li>
+            <li>
+              <b>Многоуровневая защита</b>
+              <span>Noise-шифрование, защищённый VPN-туннель, резервные узлы, контроль доступности и автоматический выбор рабочего маршрута.</span>
+            </li>
+            <li>
+              <b>Проверка доступности</b>
+              <span>серверы постоянно проверяются, а перегруженные узлы не выдаются новым подключениям.</span>
+            </li>
+            <li>
+              <b>Аккаунт и поддержка</b>
+              <span>вход через телефон, email или пароль; поддержка не просит приватные ключи.</span>
+            </li>
+          </ul>
         </div>
       </div>
     </section>
 
-    <section class="band" id="pricing">
-      <div>
-        <h2>Тарифы MVP</h2>
-        <p>Линейка уже считается сервером, оплата через ЮKassa подключена и проверена live-платежом.</p>
+    <section class="intro" aria-label="Преимущества">
+      <article>
+        <span>01</span>
+        <h2>Установите приложение</h2>
+        <p>Создайте аккаунт или войдите по телефону, email-коду или паролю.</p>
+      </article>
+      <article>
+        <span>02</span>
+        <h2>Попробуйте бесплатно</h2>
+        <p>Начните без карты и проверьте, как Green VPN открывает нужные сервисы.</p>
+      </article>
+      <article>
+        <span>03</span>
+        <h2>Устойчивое подключение</h2>
+        <p>Noise-шифрование, защищённый VPN-туннель, несколько серверов, проверки доступности и автоматический выбор рабочего маршрута.</p>
+      </article>
+    </section>
+
+    <section class="plans" id="modes">
+      <div class="section-copy">
+        <p class="eyebrow">Trial-режим</p>
+        <h2>Сначала проверяем стабильность подключения</h2>
+        <p>Текущая публичная сборка предназначена для тестирования сервиса: вход в аккаунт, подключение VPN, режим только для соцсетей и Android-плитка быстрых настроек.</p>
       </div>
-      <div class="cards">
+      <div class="plan-builder" aria-label="Trial-режим Green VPN">
+        <div class="plan-head">
+          <div>
+            <strong>Trial после установки</strong>
+            <span>без сложных настроек вручную</span>
+          </div>
+          <b>Green VPN</b>
+        </div>
+        <div class="option-row">
+          <span>Trial</span>
+          <div class="chips">
+            <b>без рекламы</b>
+            <b>без оплаты</b>
+            <b>карта не нужна</b>
+          </div>
+        </div>
+        <div class="option-row">
+          <span>Android</span>
+          <div class="chips">
+            <b>плитка быстрых настроек</b>
+            <b>режим только для соцсетей</b>
+            <b>сохранение сессии</b>
+          </div>
+        </div>
+        <div class="option-row">
+          <span>Защита</span>
+          <p>приложение получает актуальные серверы, проверяет доступность и строит защищённый туннель без ручной настройки.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="setup" id="setup">
+      <div class="section-copy">
+        <p class="eyebrow">Старт</p>
+        <h2>Три шага до подключения</h2>
+      </div>
+      <div class="steps">
         <article>
-          <h3>Старт</h3>
-          <strong>149 ₽</strong>
-          <p>20 ГБ, один пользовательский сценарий, быстрый тест продукта.</p>
-        </article>
-        <article class="featured">
-          <h3>Стандарт</h3>
-          <strong>299 ₽</strong>
-          <p>Основной публичный тариф для стабильного ежемесячного использования.</p>
+          <span>1</span>
+          <h3>Установите приложение</h3>
+          <p>Green VPN работает на Windows и Android, сам берёт нужные настройки с сервера.</p>
         </article>
         <article>
-          <h3>Плюс</h3>
-          <strong>449 ₽</strong>
-          <p>Больше трафика и запас для активного пользователя.</p>
+          <span>2</span>
+          <h3>Начните бесплатно</h3>
+          <p>Проверьте подключение и убедитесь, что нужные сервисы открываются стабильно.</p>
+        </article>
+        <article>
+          <span>3</span>
+          <h3>Подключитесь</h3>
+          <p>Войдите в аккаунт и включите защищённое подключение одной кнопкой.</p>
         </article>
       </div>
     </section>
 
-    <section class="status" id="status">
-      <h2>Что уже можно показать</h2>
-      <div class="status-grid">
-        <div><b>Windows installer</b><span>готовый GreenVPN_Setup.exe</span></div>
-        <div><b>VPN client</b><span>tray, service, autostart, connect/disconnect</span></div>
-        <div><b>Backend</b><span>https://api.greenvpn.pro, версия 0.9.69</span></div>
-        <div><b>ЮKassa</b><span>production smoke payment пройден</span></div>
-        <div><b>Admin console</b><span>локально: http://127.0.0.1:8090</span></div>
-        <div><b>API/VPN split</b><span>API и VPN endpoint разведены по разным IP</span></div>
-      </div>
-    </section>
   </main>
+
+  <footer id="contacts">
+    <div>
+      <strong>Green VPN</strong>
+      <span>Защищённое подключение для Windows и Android</span>
+    </div>
+    <div>
+      <strong>Поддержка</strong>
+      <a href="mailto:support@greenvpn.pro">support@greenvpn.pro</a>
+    </div>
+    <div>
+      <strong>Загрузки</strong>
+      <a href="/downloads/GreenVPN_Setup.exe" download>Windows</a>
+      <a href="/downloads/GreenVPN_Android.apk" download>Android</a>
+    </div>
+    <div>
+      <strong>Документы</strong>
+      <a href="/privacy/">Политика конфиденциальности</a>
+    </div>
+  </footer>
 </body>
 </html>
