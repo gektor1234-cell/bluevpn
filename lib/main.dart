@@ -3,13 +3,12 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
-import 'dart:ui' show PlatformDispatcher;
 
-import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
+import 'package:yandex_mobileads/mobile_ads.dart';
 
 /*
   Green VPN — режим "как пользовательский продукт":
@@ -24,7 +23,27 @@ import 'package:flutter/foundation.dart';
 const String kTunnelName = 'BlueVPNDev1';
 const String kProductName = 'Green VPN';
 const String kIntelligentSmewHost = '37.220.85.211';
-const String kAppVersion = '0.2.2-windows-mvp';
+const String kAppVersion = String.fromEnvironment(
+  'GREENVPN_APP_VERSION',
+  defaultValue: '0.2.23-trial-only-android-vpn-takeover',
+);
+const bool kTrialOnlyNoAdsBuild = bool.fromEnvironment(
+  'GREENVPN_TRIAL_ONLY_NO_ADS_BUILD',
+  defaultValue: true,
+);
+const bool kYandexRewardedAdsEnabled = bool.fromEnvironment(
+  'GREENVPN_YANDEX_REWARDED_ADS_ENABLED',
+  defaultValue: false,
+);
+const bool kYandexRewardedAdsUseDemo = bool.fromEnvironment(
+  'GREENVPN_YANDEX_REWARDED_ADS_DEMO',
+  defaultValue: false,
+);
+const String kYandexRewardedAdUnitId = String.fromEnvironment(
+  'GREENVPN_YANDEX_REWARDED_AD_UNIT_ID',
+  defaultValue: '',
+);
+const String kYandexRewardedDemoAdUnitId = 'demo-rewarded-yandex';
 
 const String kApiBaseUrl = String.fromEnvironment(
   'BLUEVPN_API_BASE_URL',
@@ -32,6 +51,9 @@ const String kApiBaseUrl = String.fromEnvironment(
 );
 
 const String kBuildMarker = 'bluevpn-safety-runtime-20260428-2355';
+const MethodChannel kAndroidPlatformChannel = MethodChannel(
+  'green_vpn/android_vpn',
+);
 
 const Color kBrandPrimary = Color(0xFF12A36F);
 const Color kBrandPrimaryDeep = Color(0xFF08785D);
@@ -45,11 +67,164 @@ const Color kBrandMuted = Color(0xFF667085);
 const Color kBrandWarm = Color(0xFFFACC15);
 const Color kBrandDanger = Color(0xFFE5484D);
 
+String greenVpnClientPlatform() {
+  if (kIsWeb) return 'web';
+  if (Platform.isWindows) return 'windows';
+  if (Platform.isAndroid) return 'android';
+  if (Platform.isIOS) return 'ios';
+  if (Platform.isMacOS) return 'macos';
+  if (Platform.isLinux) return 'linux';
+  return Platform.operatingSystem;
+}
+
+int greenVpnIntValue(Object? value) {
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  return int.tryParse('${value ?? ''}') ?? 0;
+}
+
+Map<String, Object?> greenVpnSafeAndroidVpnStatus(Map<String, dynamic> status) {
+  return <String, Object?>{
+    'ok': status['ok'] == true,
+    'connected': status['connected'] == true,
+    'state': (status['state'] ?? '').toString(),
+    'rxBytes': greenVpnIntValue(status['rxBytes']),
+    'txBytes': greenVpnIntValue(status['txBytes']),
+    'version': (status['version'] ?? '').toString(),
+    'runningTunnels': greenVpnIntValue(status['runningTunnels']),
+  };
+}
+
+String greenVpnClientDeviceName() {
+  if (kIsWeb) return 'Web';
+  try {
+    final host = Platform.localHostname.trim();
+    if (host.isNotEmpty) return host;
+  } catch (_) {}
+  if (Platform.isAndroid) return 'Android';
+  if (Platform.isIOS) return 'iPhone';
+  return greenVpnClientPlatform();
+}
+
+bool get greenVpnHasNativeVpnBackend {
+  if (kIsWeb) return false;
+  return Platform.isWindows || Platform.isAndroid;
+}
+
+bool greenVpnIsAdRewardRequiredMessage(String? message) {
+  if (kTrialOnlyNoAdsBuild) return false;
+  final raw = (message ?? '').toLowerCase();
+  return raw.contains('ad_reward_required') ||
+      raw.contains('нужно посмотреть рекламу') ||
+      raw.contains('реклама перед подключением');
+}
+
+String greenVpnAdChallengeTokenFromRewardUrl(String rewardUrl) {
+  try {
+    return Uri.parse(rewardUrl).queryParameters['t']?.trim() ?? '';
+  } catch (_) {
+    return '';
+  }
+}
+
+String greenVpnAndroidYandexRewardedAdUnitId(Map<String, dynamic> bootMap) {
+  if (kTrialOnlyNoAdsBuild) return '';
+  if (kIsWeb || !Platform.isAndroid || !kYandexRewardedAdsEnabled) return '';
+  if (kYandexRewardedAdsUseDemo) return kYandexRewardedDemoAdUnitId;
+
+  final adGateRaw = bootMap['adGate'];
+  if (adGateRaw is Map) {
+    final adGate = Map<String, dynamic>.from(adGateRaw);
+    final androidRewardedRaw = adGate['androidRewarded'];
+    if (androidRewardedRaw is Map) {
+      final androidRewarded = Map<String, dynamic>.from(androidRewardedRaw);
+      if (androidRewarded['enabled'] == true) {
+        final serverAdUnitId = (androidRewarded['adUnitId'] ?? '')
+            .toString()
+            .trim();
+        if (serverAdUnitId.isNotEmpty) return serverAdUnitId;
+      }
+    }
+  }
+
+  return kYandexRewardedAdUnitId.trim();
+}
+
+bool get greenVpnNeedsExternalWireGuardInstall {
+  if (kIsWeb) return false;
+  return Platform.isWindows;
+}
+
 class _LocalConfigCandidate {
   final String path;
   final String content;
 
   const _LocalConfigCandidate({required this.path, required this.content});
+}
+
+class GreenVpnYandexRewardedAds {
+  const GreenVpnYandexRewardedAds._();
+
+  static Future<bool> showRewardedAd({
+    required String adUnitId,
+    required Future<void> Function(String message) log,
+  }) async {
+    final unit = adUnitId.trim();
+    if (kTrialOnlyNoAdsBuild || unit.isEmpty) {
+      await log('rewarded ads are disabled for this build');
+      return false;
+    }
+    if (kIsWeb || !Platform.isAndroid) {
+      await log('rewarded ads are available only on Android');
+      return false;
+    }
+
+    RewardedAd? ad;
+    try {
+      YandexAds.initialize();
+      final loader = RewardedAdLoader();
+      await log('loading Yandex rewarded ad');
+      ad = await loader.loadAd(adRequest: AdRequest(adUnitId: unit));
+      ad.setAdEventListener(
+        eventListener: RewardedAdEventListener(
+          onAdShown: () {
+            unawaited(log('Yandex rewarded ad shown'));
+          },
+          onAdFailedToShow: (error) {
+            unawaited(log('Yandex rewarded ad failed to show: $error'));
+          },
+          onAdClicked: () {
+            unawaited(log('Yandex rewarded ad clicked'));
+          },
+          onAdDismissed: () {
+            unawaited(log('Yandex rewarded ad dismissed'));
+          },
+          onAdImpression: (impressionData) {
+            unawaited(log('Yandex rewarded ad impression'));
+          },
+          onRewarded: (reward) {
+            unawaited(log('Yandex rewarded ad reward earned'));
+          },
+        ),
+      );
+      await ad.show();
+      final reward = await ad.waitForDismiss();
+      if (reward == null) {
+        await log('Yandex rewarded ad closed without reward');
+        return false;
+      }
+      await log('Yandex rewarded ad completed');
+      return true;
+    } on AdRequestError catch (error) {
+      await log('Yandex rewarded ad failed to load: $error');
+      return false;
+    } catch (error) {
+      await log('Yandex rewarded ad error: $error');
+      return false;
+    } finally {
+      ad?.destroy();
+    }
+  }
 }
 
 void main() {
@@ -258,7 +433,11 @@ class _AppBootstrapState extends State<AppBootstrap> {
     final startedAt = DateTime.now();
     await appendBlueVpnClientLog('bootstrap load start');
     if (mounted) {
-      setState(() => _loadingStage = 'Проверяем системный компонент...');
+      setState(
+        () => _loadingStage = Platform.isAndroid
+            ? 'Проверяем мобильный VPN-слой...'
+            : 'Проверяем системный компонент...',
+      );
     }
     await _resumeStartupDisconnectIfNeeded();
     if (mounted) {
@@ -286,12 +465,40 @@ class _AppBootstrapState extends State<AppBootstrap> {
     setState(() {
       _loadingStage = 'Открываем приложение...';
       _session = s;
+      _openSessionDirectly = s != null && !kIsWeb && Platform.isAndroid;
       _loading = false;
     });
   }
 
   Future<void> _resumeStartupDisconnectIfNeeded() async {
-    if (kIsWeb || !Platform.isWindows) return;
+    if (kIsWeb) return;
+    if (Platform.isAndroid) {
+      try {
+        final status = await WireGuardAndroidBackend.statusSnapshot(
+          tunnelName: kTunnelName,
+        );
+        final connected =
+            status['connected'] == true ||
+            (status['state'] ?? '').toString().toLowerCase() == 'up';
+        await appendBlueVpnClientLog(
+          "android startup vpn status connected=$connected state=${status['state'] ?? ""}",
+        );
+        if (!connected) {
+          final backend = VpnBackend.createDefault(tunnelName: kTunnelName);
+          final res = await backend.disconnect();
+          await appendBlueVpnClientLog(
+            'android startup stale vpn disconnect ok=${res.ok} message=${res.message ?? ""}',
+          );
+          await Future<void>.delayed(const Duration(milliseconds: 700));
+        }
+      } catch (e) {
+        await appendBlueVpnClientLog(
+          'android startup stale vpn cleanup failed=$e',
+        );
+      }
+      return;
+    }
+    if (!Platform.isWindows) return;
     try {
       final pendingStore = PendingVpnActionStore();
       final action = await pendingStore.read();
@@ -464,7 +671,7 @@ class _CenteredLoading extends StatelessWidget {
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'Обычно это занимает пару секунд. Если Windows готовит сетевой компонент, приложение само продолжит загрузку.',
+                      'Обычно это занимает пару секунд. Если система готовит VPN-компонент, приложение само продолжит загрузку.',
                       style: TextStyle(
                         color: mutedColor,
                         fontWeight: FontWeight.w600,
@@ -800,7 +1007,7 @@ class WindowsLocalSecurity {
       '-NoProfile',
       '-NonInteractive',
       '-ExecutionPolicy',
-      'Bypass',
+      'RemoteSigned',
       '-Command',
       script,
     ], runInShell: false);
@@ -1011,6 +1218,10 @@ class BlueVpnLocalPaths {
   const BlueVpnLocalPaths._();
 
   static String sharedStateDirSync() {
+    if (kIsWeb) return '';
+    if (!Platform.isWindows) {
+      return '${Directory.systemTemp.path}/greenvpn_state';
+    }
     final base = Platform.environment['ProgramData'];
     if (base != null && base.trim().isNotEmpty) {
       return '$base\\BlueVPN\\state';
@@ -1019,6 +1230,15 @@ class BlueVpnLocalPaths {
   }
 
   static Future<String> sharedStateDir() async {
+    if (kIsWeb) return '';
+    if (!Platform.isWindows) {
+      final dir = Directory(sharedStateDirSync());
+      if (!dir.existsSync()) {
+        dir.createSync(recursive: true);
+      }
+      return dir.path;
+    }
+
     final dir = Directory(sharedStateDirSync());
     if (!dir.existsSync()) {
       dir.createSync(recursive: true);
@@ -1028,6 +1248,7 @@ class BlueVpnLocalPaths {
   }
 
   static Future<List<Directory>> legacyStateDirs() async {
+    if (kIsWeb || !Platform.isWindows) return const <Directory>[];
     final out = <Directory>[];
     final seen = <String>{};
 
@@ -1066,8 +1287,11 @@ class BlueVpnLocalPaths {
 
   static bool isSharedStatePath(String path) {
     final shared = sharedStateDirSync().toLowerCase();
+    if (shared.isEmpty) return false;
     final candidate = path.toLowerCase();
-    return candidate == shared || candidate.startsWith('$shared\\');
+    return candidate == shared ||
+        candidate.startsWith('$shared\\') ||
+        candidate.startsWith('$shared/');
   }
 }
 
@@ -1134,6 +1358,13 @@ class SecureLocalFile {
 }
 
 class SessionStore {
+  static const String _mobileSessionKey = 'greenvpn_mobile_session_v1';
+
+  bool get _usesMobileSecureStore {
+    if (kIsWeb) return false;
+    return Platform.isAndroid;
+  }
+
   Future<String> _appDirPath() async {
     return BlueVpnLocalPaths.sharedStateDir();
   }
@@ -1148,11 +1379,47 @@ class SessionStore {
     return SecureLocalFile('$dir\\session.dat', encrypted: true);
   }
 
+  Future<String?> _readMobileSession() async {
+    if (!_usesMobileSecureStore) return null;
+    try {
+      return await kAndroidPlatformChannel.invokeMethod<String>('secureRead', {
+        'key': _mobileSessionKey,
+      });
+    } catch (e) {
+      await appendBlueVpnClientLog('mobile session secure read failed: $e');
+      return null;
+    }
+  }
+
+  Future<void> _writeMobileSession(String raw) async {
+    if (!_usesMobileSecureStore) return;
+    try {
+      await kAndroidPlatformChannel.invokeMethod<void>('secureWrite', {
+        'key': _mobileSessionKey,
+        'value': raw,
+      });
+    } catch (e) {
+      await appendBlueVpnClientLog('mobile session secure write failed: $e');
+    }
+  }
+
+  Future<void> _deleteMobileSession() async {
+    if (!_usesMobileSecureStore) return;
+    try {
+      await kAndroidPlatformChannel.invokeMethod<void>('secureDelete', {
+        'key': _mobileSessionKey,
+      });
+    } catch (e) {
+      await appendBlueVpnClientLog('mobile session secure delete failed: $e');
+    }
+  }
+
   Future<Session?> read() async {
     if (kIsWeb) return null;
     try {
+      var raw = await _readMobileSession();
       final secure = await _secureFile();
-      var raw = await secure.readString();
+      raw ??= await secure.readString();
       if (raw == null || raw.trim().isEmpty) {
         final f = await _file();
         if (f.existsSync()) {
@@ -1192,6 +1459,10 @@ class SessionStore {
   Future<void> write(Session session) async {
     if (kIsWeb) return;
     final raw = jsonEncode(session.toJson());
+    if (_usesMobileSecureStore) {
+      await _writeMobileSession(raw);
+      return;
+    }
     try {
       final f = await _secureFile();
       await f.writeString(raw);
@@ -1209,6 +1480,7 @@ class SessionStore {
   Future<void> clear() async {
     if (kIsWeb) return;
     try {
+      await _deleteMobileSession();
       final f = await _file();
       if (f.existsSync()) f.deleteSync();
       await (await _secureFile()).delete();
@@ -1217,6 +1489,13 @@ class SessionStore {
 }
 
 class DeviceIdStore {
+  static const String _mobileDeviceIdKey = 'greenvpn_mobile_device_id_v1';
+
+  bool get _usesMobileSecureStore {
+    if (kIsWeb) return false;
+    return Platform.isAndroid;
+  }
+
   Future<String> _appDirPath() async {
     return BlueVpnLocalPaths.sharedStateDir();
   }
@@ -1234,9 +1513,51 @@ class DeviceIdStore {
     return 'dev_$hex';
   }
 
+  Future<String?> _readMobileDeviceId() async {
+    if (!_usesMobileSecureStore) return null;
+    try {
+      final raw = await kAndroidPlatformChannel.invokeMethod<String>(
+        'secureRead',
+        {'key': _mobileDeviceIdKey},
+      );
+      final id = raw?.trim();
+      if (id == null || id.length < 8) return null;
+      return id;
+    } catch (e) {
+      await appendBlueVpnClientLog('mobile device id secure read failed: $e');
+      return null;
+    }
+  }
+
+  Future<void> _writeMobileDeviceId(String id) async {
+    if (!_usesMobileSecureStore) return;
+    try {
+      await kAndroidPlatformChannel.invokeMethod<void>('secureWrite', {
+        'key': _mobileDeviceIdKey,
+        'value': id,
+      });
+    } catch (e) {
+      await appendBlueVpnClientLog('mobile device id secure write failed: $e');
+    }
+  }
+
+  Future<void> _deleteMobileDeviceId() async {
+    if (!_usesMobileSecureStore) return;
+    try {
+      await kAndroidPlatformChannel.invokeMethod<void>('secureDelete', {
+        'key': _mobileDeviceIdKey,
+      });
+    } catch (e) {
+      await appendBlueVpnClientLog('mobile device id secure delete failed: $e');
+    }
+  }
+
   Future<String?> read() async {
     if (kIsWeb) return null;
     try {
+      final mobileId = await _readMobileDeviceId();
+      if (mobileId != null) return mobileId;
+
       final f = await _file();
       String? raw;
       if (f.existsSync()) {
@@ -1249,6 +1570,7 @@ class DeviceIdStore {
       if (raw == null) return null;
       final s = raw.trim();
       if (s.length < 8) return null;
+      await _writeMobileDeviceId(s);
       return s;
     } on FileSystemException {
       await WindowsLocalSecurity.prepareSharedStateDirectory(
@@ -1259,6 +1581,7 @@ class DeviceIdStore {
         if (!f.existsSync()) return null;
         final s = (await f.readAsString()).trim();
         if (s.length < 8) return null;
+        await _writeMobileDeviceId(s);
         return s;
       } catch (_) {
         return null;
@@ -1274,6 +1597,10 @@ class DeviceIdStore {
     if (existing != null) return existing;
 
     final id = _gen();
+    if (_usesMobileSecureStore) {
+      await _writeMobileDeviceId(id);
+      return id;
+    }
     final f = await _file();
     try {
       await f.writeAsString(id);
@@ -1289,6 +1616,10 @@ class DeviceIdStore {
   Future<String> rotate() async {
     if (kIsWeb) return 'web';
     final id = _gen();
+    if (_usesMobileSecureStore) {
+      await _writeMobileDeviceId(id);
+      return id;
+    }
     final f = await _file();
     try {
       await f.writeAsString(id);
@@ -1303,6 +1634,7 @@ class DeviceIdStore {
 
   Future<void> clear() async {
     if (kIsWeb) return;
+    await _deleteMobileDeviceId();
     final f = await _file();
     if (f.existsSync()) {
       await f.delete();
@@ -1600,6 +1932,9 @@ class WireGuardInstallState {
 
   String get subtitle {
     if (installed) return 'WireGuard найден: $exePath';
+    if (!kIsWeb && Platform.isIOS) {
+      return 'iOS-версия требует Apple Network Extension. Интерфейс готов, реальное подключение включим после Apple Developer.';
+    }
     if (wingetAvailable) {
       return 'WireGuard не установлен. Green VPN может поставить его автоматически.';
     }
@@ -1615,6 +1950,8 @@ class WireGuardInstallResult {
 }
 
 String resolveWireGuardExePathShared() {
+  if (!kIsWeb && Platform.isAndroid) return 'Встроенный WireGuard для Android';
+  if (!kIsWeb && Platform.isIOS) return 'iOS Network Extension не настроен';
   if (kIsWeb || !Platform.isWindows) return 'wireguard.exe';
 
   final candidates = <String>[];
@@ -1649,6 +1986,20 @@ Future<bool> isWingetAvailable() async {
 }
 
 Future<WireGuardInstallState> probeWireGuardInstall() async {
+  if (!kIsWeb && Platform.isAndroid) {
+    return const WireGuardInstallState(
+      installed: true,
+      wingetAvailable: false,
+      exePath: 'Встроенный WireGuard для Android',
+    );
+  }
+  if (!kIsWeb && Platform.isIOS) {
+    return const WireGuardInstallState(
+      installed: false,
+      wingetAvailable: false,
+      exePath: 'iOS Network Extension не настроен',
+    );
+  }
   final exePath = resolveWireGuardExePathShared();
   final installed =
       exePath.toLowerCase() != 'wireguard.exe' && File(exePath).existsSync();
@@ -1673,15 +2024,37 @@ Future<void> openWireGuardInstallPage() async {
 }
 
 Future<void> openExternalUrl(String url) async {
-  if (kIsWeb || !Platform.isWindows) return;
+  if (kIsWeb) return;
   final trimmed = url.trim();
   if (trimmed.isEmpty) return;
+  if (Platform.isAndroid) {
+    try {
+      await kAndroidPlatformChannel.invokeMethod<Object?>('openUrl', {
+        'url': trimmed,
+      });
+    } catch (_) {}
+    return;
+  }
+  if (!Platform.isWindows) return;
   try {
     await Process.start('cmd', ['/c', 'start', '', trimmed], runInShell: true);
   } catch (_) {}
 }
 
 Future<WireGuardInstallResult> installWireGuardForWindows() async {
+  if (!kIsWeb && Platform.isAndroid) {
+    return const WireGuardInstallResult(
+      ok: true,
+      message: 'На Android WireGuard уже встроен в Green VPN.',
+    );
+  }
+  if (!kIsWeb && Platform.isIOS) {
+    return const WireGuardInstallResult(
+      ok: false,
+      message:
+          'iOS VPN требует Apple Developer и Network Extension entitlement. Интерфейс уже подготовлен.',
+    );
+  }
   if (kIsWeb || !Platform.isWindows) {
     return const WireGuardInstallResult(
       ok: false,
@@ -1712,7 +2085,7 @@ Future<WireGuardInstallResult> installWireGuardForWindows() async {
     final res = await Process.run('powershell', [
       '-NoProfile',
       '-ExecutionPolicy',
-      'Bypass',
+      'RemoteSigned',
       '-Command',
       script,
     ], runInShell: true);
@@ -1909,7 +2282,7 @@ class Prefs {
       socialOnlyApps: _ls('socialOnlyApps', d.socialOnlyApps),
       selectedApps: _ls('selectedApps', d.selectedApps),
       trafficPack: _s('trafficPack', d.trafficPack),
-      trafficGb: _d('trafficGb', d.trafficGb).clamp(1.0, 500.0),
+      trafficGb: _d('trafficGb', d.trafficGb).clamp(1.0, 800.0),
       devices: _i('devices', d.devices).clamp(1, 5),
       optNoAds: _b('optNoAds', d.optNoAds),
       optSmartRouting: _b('optSmartRouting', d.optSmartRouting),
@@ -1987,7 +2360,46 @@ class ApiResult<T> {
   const ApiResult.err(this.message) : ok = false, data = null;
 }
 
+class WireGuardConfigResponse {
+  final String configText;
+  final String serverId;
+  final String serverName;
+  final Map<String, dynamic> endpointAssignment;
+
+  const WireGuardConfigResponse({
+    required this.configText,
+    required this.serverId,
+    required this.serverName,
+    required this.endpointAssignment,
+  });
+
+  static WireGuardConfigResponse fromJson(Map<String, dynamic> json) {
+    final assignment = json['endpointAssignment'];
+    final server = json['server'];
+    final serverMap = server is Map
+        ? Map<String, dynamic>.from(server)
+        : const <String, dynamic>{};
+    final assignmentMap = assignment is Map
+        ? Map<String, dynamic>.from(assignment)
+        : const <String, dynamic>{};
+    final id =
+        (json['serverId'] ?? serverMap['id'] ?? assignmentMap['serverId'] ?? '')
+            .toString()
+            .trim();
+    final name = (serverMap['name'] ?? serverMap['title'] ?? id)
+        .toString()
+        .trim();
+    return WireGuardConfigResponse(
+      configText: (json['configText'] ?? json['config'] ?? '').toString(),
+      serverId: id,
+      serverName: name,
+      endpointAssignment: assignmentMap,
+    );
+  }
+}
+
 class GreenVpnUpdateManifest {
+  final String platform;
   final String currentVersion;
   final String latestVersion;
   final String downloadUrl;
@@ -2002,6 +2414,7 @@ class GreenVpnUpdateManifest {
   final String releasedAt;
 
   const GreenVpnUpdateManifest({
+    required this.platform,
     required this.currentVersion,
     required this.latestVersion,
     required this.downloadUrl,
@@ -2056,6 +2469,7 @@ class GreenVpnUpdateManifest {
         ? asBool(json['updateAvailable'])
         : fallbackUpdateAvailable;
     return GreenVpnUpdateManifest(
+      platform: (json['platform'] ?? greenVpnClientPlatform()).toString(),
       currentVersion: current,
       latestVersion: latest,
       downloadUrl: (json['downloadUrl'] ?? '').toString(),
@@ -2170,6 +2584,39 @@ String replaceAllowedIpsInConfig(String configText, List<String> allowedIps) {
   return lines.join('\n');
 }
 
+List<String> readAllowedIpsFromConfig(String configText) {
+  final match = RegExp(
+    r'^\s*AllowedIPs\s*=\s*(.+?)\s*$',
+    multiLine: true,
+    caseSensitive: false,
+  ).firstMatch(configText);
+  final raw = match?.group(1)?.trim();
+  if (raw == null || raw.isEmpty) return const [];
+  return raw
+      .split(',')
+      .map((item) => item.trim())
+      .where((item) => item.isNotEmpty)
+      .toList(growable: false);
+}
+
+String? readWireGuardConfigField(String configText, String fieldName) {
+  final escapedField = RegExp.escape(fieldName);
+  final match = RegExp(
+    '^\\s*$escapedField\\s*=\\s*(.+?)\\s*\$',
+    multiLine: true,
+    caseSensitive: false,
+  ).firstMatch(configText);
+  return match?.group(1)?.trim();
+}
+
+String preserveFullTunnelAllowedIps(String baseConfig) {
+  final allowedIps = readAllowedIpsFromConfig(baseConfig);
+  return replaceAllowedIpsInConfig(
+    baseConfig,
+    allowedIps.isEmpty ? const ['0.0.0.0/1', '128.0.0.0/1'] : allowedIps,
+  );
+}
+
 class ProvisioningWarmupResult {
   final bool ok;
   final String? planName;
@@ -2202,7 +2649,7 @@ class AuthProvisioningService {
   }
 
   String _buildManagedConfig(String baseConfig) {
-    return replaceAllowedIpsInConfig(baseConfig, const ['0.0.0.0/0', '::/0']);
+    return preserveFullTunnelAllowedIps(baseConfig);
   }
 
   Future<void> _writeProvisionedConfig(String rawConfig) async {
@@ -2233,7 +2680,7 @@ class AuthProvisioningService {
   }
 
   Future<ProvisioningWarmupResult> warmup(Session session) async {
-    if (kIsWeb || !Platform.isWindows) {
+    if (kIsWeb || !greenVpnHasNativeVpnBackend) {
       return const ProvisioningWarmupResult(ok: true);
     }
     if (session.accessToken == 'dev-token') {
@@ -2244,8 +2691,8 @@ class AuthProvisioningService {
     var boot = await api.bootstrapClient(
       accessToken: session.accessToken,
       deviceId: deviceId,
-      deviceName: Platform.localHostname,
-      platform: 'windows',
+      deviceName: greenVpnClientDeviceName(),
+      platform: greenVpnClientPlatform(),
       appVersion: kAppVersion,
     );
 
@@ -2254,8 +2701,8 @@ class AuthProvisioningService {
       boot = await api.bootstrapClient(
         accessToken: session.accessToken,
         deviceId: deviceId,
-        deviceName: Platform.localHostname,
-        platform: 'windows',
+        deviceName: greenVpnClientDeviceName(),
+        platform: greenVpnClientPlatform(),
         appVersion: kAppVersion,
       );
     }
@@ -2279,7 +2726,15 @@ class AuthProvisioningService {
       deviceId: deviceId,
     );
 
-    if (!cfgRes.ok || cfgRes.data == null || cfgRes.data!.trim().isEmpty) {
+    if (!cfgRes.ok ||
+        cfgRes.data == null ||
+        cfgRes.data!.configText.trim().isEmpty) {
+      if (greenVpnIsAdRewardRequiredMessage(cfgRes.message)) {
+        await appendBlueVpnClientLog(
+          'auth warmup config fetch blocked by ad gate',
+        );
+        return ProvisioningWarmupResult(ok: true, planName: planName);
+      }
       final reused = await _reuseLocalConfigIfPresent(cfgRes.message ?? '');
       if (reused) {
         return ProvisioningWarmupResult(ok: true, planName: planName);
@@ -2290,7 +2745,9 @@ class AuthProvisioningService {
       );
     }
 
-    await _writeProvisionedConfig(normalizeProvisionedEndpoint(cfgRes.data!));
+    await _writeProvisionedConfig(
+      normalizeProvisionedEndpoint(cfgRes.data!.configText),
+    );
     return ProvisioningWarmupResult(ok: true, planName: planName);
   }
 }
@@ -2318,7 +2775,9 @@ class BlueVpnApi {
   }
 
   bool _isRetriableNetworkError(Object error) {
-    return error is SocketException || error is HttpException;
+    return error is SocketException ||
+        error is HttpException ||
+        error is TimeoutException;
   }
 
   bool _isWindowsDevBackend() {
@@ -2732,8 +3191,10 @@ while True:
         final uri = _uFor(resolvedBaseUrl, '/api/v1/subscription/me');
         final req = await client.getUrl(uri);
         req.headers.set('Authorization', 'Bearer $accessToken');
-        final res = await req.close();
-        final body = await utf8.decodeStream(res);
+        final res = await req.close().timeout(const Duration(seconds: 20));
+        final body = await utf8
+            .decodeStream(res)
+            .timeout(const Duration(seconds: 10));
 
         if (res.statusCode < 200 || res.statusCode >= 300) {
           throw HttpException(
@@ -2930,18 +3391,33 @@ while True:
     required String currentVersion,
     String? clientId,
   }) async {
+    return fetchUpdateManifest(
+      platform: 'windows',
+      currentVersion: currentVersion,
+      clientId: clientId,
+    );
+  }
+
+  Future<ApiResult<GreenVpnUpdateManifest>> fetchUpdateManifest({
+    required String platform,
+    required String currentVersion,
+    String channel = 'stable',
+    String? clientId,
+  }) async {
     final query = <String, String>{
+      'platform': platform,
+      'channel': channel,
       'currentVersion': currentVersion,
       if ((clientId ?? '').trim().isNotEmpty) 'clientId': clientId!.trim(),
     };
     final path = Uri(
-      path: '/api/v1/updates/windows',
+      path: '/api/v1/updates/manifest',
       queryParameters: query,
     ).toString();
     final res = await _jsonRequest(method: 'GET', path: path);
     if (!res.ok) return ApiResult.err(res.message);
     if (res.data is! Map) {
-      return const ApiResult.err('Некорректный ответ updates/windows.');
+      return const ApiResult.err('Некорректный ответ updates/manifest.');
     }
     final map = Map<String, dynamic>.from(res.data as Map);
     final rawManifest = map['manifest'];
@@ -3036,6 +3512,67 @@ while True:
     return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
   }
 
+  Future<ApiResult<Map<String, dynamic>>> startAdChallenge({
+    required String accessToken,
+    required String deviceId,
+    required String platform,
+    String provider = 'test_web',
+    String appVersion = kAppVersion,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'POST',
+      path: '/api/v1/ads/challenges/start',
+      bearerToken: accessToken,
+      payload: {
+        'deviceUid': deviceId,
+        'platform': platform,
+        'provider': provider,
+        'appVersion': appVersion,
+      },
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ ads/challenges/start.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> completeAdChallenge({
+    required String challengeId,
+    required String token,
+  }) async {
+    final encoded = Uri.encodeComponent(challengeId.trim());
+    final res = await _jsonRequest(
+      method: 'POST',
+      path: '/api/v1/ads/challenges/$encoded/complete',
+      payload: {'token': token},
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err(
+        'РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ РѕС‚РІРµС‚ ads/challenge complete.',
+      );
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> fetchAdChallenge({
+    required String accessToken,
+    required String challengeId,
+  }) async {
+    final encoded = Uri.encodeComponent(challengeId.trim());
+    final res = await _jsonRequest(
+      method: 'GET',
+      path: '/api/v1/ads/challenges/$encoded',
+      bearerToken: accessToken,
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ ads/challenge.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
   Future<ApiResult<Map<String, dynamic>>> bootstrapClient({
     required String accessToken,
     required String deviceId,
@@ -3062,8 +3599,10 @@ while True:
           }),
         );
 
-        final res = await req.close();
-        final body = await utf8.decodeStream(res);
+        final res = await req.close().timeout(const Duration(seconds: 20));
+        final body = await utf8
+            .decodeStream(res)
+            .timeout(const Duration(seconds: 10));
         if (res.statusCode < 200 || res.statusCode >= 300) {
           throw HttpException(
             'Ошибка bootstrap (${res.statusCode}): $body',
@@ -3082,7 +3621,7 @@ while True:
     }
   }
 
-  Future<ApiResult<String>> fetchWireGuardConfig({
+  Future<ApiResult<WireGuardConfigResponse>> fetchWireGuardConfig({
     required String accessToken,
     String? deviceId,
     String? serverId,
@@ -3110,8 +3649,10 @@ while True:
         }
         req.write(jsonEncode(payload));
 
-        final res = await req.close();
-        final body = await utf8.decodeStream(res);
+        final res = await req.close().timeout(const Duration(seconds: 20));
+        final body = await utf8
+            .decodeStream(res)
+            .timeout(const Duration(seconds: 10));
         if (res.statusCode < 200 || res.statusCode >= 300) {
           throw HttpException(
             'Ошибка сервера (${res.statusCode}): $body',
@@ -3128,16 +3669,58 @@ while True:
         }
 
         final jsonMap = Map<String, dynamic>.from(jsonDecode(trimmed) as Map);
-        final cfg = (jsonMap['configText'] ?? jsonMap['config'] ?? '')
-            .toString();
-        if (cfg.trim().isEmpty) {
+        final config = WireGuardConfigResponse.fromJson(jsonMap);
+        if (config.configText.trim().isEmpty) {
           return const ApiResult.err('Сервер вернул пустой configText.');
         }
-        return ApiResult.ok(cfg);
+        return ApiResult.ok(config);
       }
     } catch (e) {
       return ApiResult.err('Не удалось получить конфиг: $e');
     }
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> postClientRouteEvent({
+    required String accessToken,
+    required String deviceId,
+    required String serverId,
+    required String protocol,
+    String transport = 'udp',
+    required String stage,
+    required bool ok,
+    int? latencyMs,
+    String? errorCode,
+    String? message,
+    Map<String, dynamic>? details,
+  }) async {
+    final cleanDeviceId = deviceId.trim();
+    if (cleanDeviceId.isEmpty) {
+      return const ApiResult.err('Отсутствует device id.');
+    }
+    final payload = <String, dynamic>{
+      'deviceUid': cleanDeviceId,
+      'serverId': serverId.trim().isEmpty ? 'auto' : serverId.trim(),
+      'protocol': protocol.trim().isEmpty ? 'wireguard_udp' : protocol.trim(),
+      'transport': transport.trim().isEmpty ? 'udp' : transport.trim(),
+      'stage': stage,
+      'ok': ok,
+      'appVersion': kAppVersion,
+      if (latencyMs != null) 'latencyMs': latencyMs,
+      if ((errorCode ?? '').trim().isNotEmpty) 'errorCode': errorCode!.trim(),
+      if ((message ?? '').trim().isNotEmpty) 'message': message!.trim(),
+      if (details != null && details.isNotEmpty) 'details': details,
+    };
+    final res = await _jsonRequest(
+      method: 'POST',
+      path: '/api/v1/client/route-events',
+      bearerToken: accessToken,
+      payload: payload,
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ client/route-events.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
   }
 
   Future<ApiResult<Session>> _postSession(
@@ -3159,8 +3742,10 @@ while True:
         req.headers.contentType = ContentType.json;
         req.write(jsonEncode(payload));
 
-        final res = await req.close();
-        final body = await utf8.decodeStream(res);
+        final res = await req.close().timeout(const Duration(seconds: 20));
+        final body = await utf8
+            .decodeStream(res)
+            .timeout(const Duration(seconds: 10));
         await _authLog(
           'HTTP ' +
               path +
@@ -3270,15 +3855,21 @@ while True:
             ? await client.getUrl(uri)
             : await client.postUrl(uri);
 
-        if (payload != null) {
-          req.headers.contentType = ContentType.json;
-          req.write(jsonEncode(payload));
-        }
+        req.headers.set(
+          HttpHeaders.userAgentHeader,
+          'GreenVPN/$kAppVersion (${greenVpnClientPlatform()}; flutter)',
+        );
+        req.headers.set('X-GreenVPN-Platform', greenVpnClientPlatform());
+        req.headers.set('X-GreenVPN-Version', kAppVersion);
         if (bearerToken != null && bearerToken.trim().isNotEmpty) {
           req.headers.set('Authorization', 'Bearer $bearerToken');
         }
         if (adminToken != null && adminToken.trim().isNotEmpty) {
           req.headers.set('X-Admin-Token', adminToken.trim());
+        }
+        if (payload != null) {
+          req.headers.contentType = ContentType.json;
+          req.write(jsonEncode(payload));
         }
 
         final res = await req.close();
@@ -3512,6 +4103,72 @@ while True:
 
 class ConfigStore {
   static Future<void> _configIoBarrier = Future<void>.value();
+  static const _mobileManagedConfigKey = 'greenvpn_mobile_managed_config_v1';
+  static const _mobileBaseConfigKey = 'greenvpn_mobile_base_config_v1';
+  static const _mobileConfigChannel = MethodChannel('green_vpn/android_vpn');
+  static String? _mobileManagedConfig;
+  static String? _mobileBaseConfig;
+
+  bool get _usesMobileSecureConfig =>
+      !kIsWeb && !Platform.isWindows && (Platform.isAndroid || Platform.isIOS);
+
+  Future<String?> _readMobileConfig(String key) async {
+    if (!Platform.isAndroid) {
+      return key == _mobileManagedConfigKey
+          ? _mobileManagedConfig
+          : _mobileBaseConfig;
+    }
+    try {
+      final value = await _mobileConfigChannel.invokeMethod<String>(
+        'secureRead',
+        {'key': key},
+      );
+      if (key == _mobileManagedConfigKey) {
+        _mobileManagedConfig = value;
+      } else if (key == _mobileBaseConfigKey) {
+        _mobileBaseConfig = value;
+      }
+      return value;
+    } catch (e) {
+      await appendBlueVpnClientLog('mobile config secure read failed: $e');
+      return key == _mobileManagedConfigKey
+          ? _mobileManagedConfig
+          : _mobileBaseConfig;
+    }
+  }
+
+  Future<void> _writeMobileConfig(String key, String content) async {
+    if (key == _mobileManagedConfigKey) {
+      _mobileManagedConfig = content;
+    } else if (key == _mobileBaseConfigKey) {
+      _mobileBaseConfig = content;
+    }
+    if (!Platform.isAndroid) return;
+    try {
+      await _mobileConfigChannel.invokeMethod<void>('secureWrite', {
+        'key': key,
+        'value': content,
+      });
+    } catch (e) {
+      await appendBlueVpnClientLog('mobile config secure write failed: $e');
+    }
+  }
+
+  Future<void> _deleteMobileConfig(String key) async {
+    if (key == _mobileManagedConfigKey) {
+      _mobileManagedConfig = null;
+    } else if (key == _mobileBaseConfigKey) {
+      _mobileBaseConfig = null;
+    }
+    if (!Platform.isAndroid) return;
+    try {
+      await _mobileConfigChannel.invokeMethod<void>('secureDelete', {
+        'key': key,
+      });
+    } catch (e) {
+      await appendBlueVpnClientLog('mobile config secure delete failed: $e');
+    }
+  }
 
   Future<T> _runConfigIo<T>(Future<T> Function() action) {
     final completer = Completer<T>();
@@ -3528,6 +4185,7 @@ class ConfigStore {
   // Active managed config path. Stored in ProgramData so the WireGuard service (LocalSystem) can read it.
   String get managedConfigPath {
     if (kIsWeb) return '';
+    if (_usesMobileSecureConfig) return 'greenvpn://mobile/managed.conf';
     if (!Platform.isWindows) return '';
     return r'C:\ProgramData\BlueVPN\BlueVPNDev1.conf';
   }
@@ -3535,6 +4193,7 @@ class ConfigStore {
   // Hidden base config received from server/dev seed. We never apply it directly.
   String get baseConfigPath {
     if (kIsWeb) return '';
+    if (_usesMobileSecureConfig) return 'greenvpn://mobile/base.conf';
     if (!Platform.isWindows) return '';
     return r'C:\ProgramData\BlueVPN\BlueVPNDev1.base.conf';
   }
@@ -3542,6 +4201,10 @@ class ConfigStore {
   Future<bool> hasManagedConfig() async {
     return _runConfigIo(() async {
       if (kIsWeb) return false;
+      if (_usesMobileSecureConfig) {
+        final config = await _readMobileConfig(_mobileManagedConfigKey);
+        return (config ?? '').trim().isNotEmpty;
+      }
       final p = managedConfigPath;
       if (p.isEmpty) return false;
       return File(p).existsSync();
@@ -3551,6 +4214,10 @@ class ConfigStore {
   Future<bool> hasBaseConfig() async {
     return _runConfigIo(() async {
       if (kIsWeb) return false;
+      if (_usesMobileSecureConfig) {
+        final config = await _readMobileConfig(_mobileBaseConfigKey);
+        return (config ?? '').trim().isNotEmpty;
+      }
       final p = baseConfigPath;
       if (p.isEmpty) return false;
       return File(p).existsSync();
@@ -3560,6 +4227,9 @@ class ConfigStore {
   Future<String?> readManagedConfig() async {
     return _runConfigIo(() async {
       if (kIsWeb) return null;
+      if (_usesMobileSecureConfig) {
+        return _readMobileConfig(_mobileManagedConfigKey);
+      }
       final p = managedConfigPath;
       if (p.isEmpty) return null;
       final f = File(p);
@@ -3582,6 +4252,9 @@ class ConfigStore {
 
   Future<String?> _readManagedConfigUnlocked() async {
     if (kIsWeb) return null;
+    if (_usesMobileSecureConfig) {
+      return _readMobileConfig(_mobileManagedConfigKey);
+    }
     final p = managedConfigPath;
     if (p.isEmpty) return null;
     final f = File(p);
@@ -3604,6 +4277,10 @@ class ConfigStore {
   Future<void> writeManagedConfig(String content) async {
     await _runConfigIo(() async {
       if (kIsWeb) return;
+      if (_usesMobileSecureConfig) {
+        await _writeMobileConfig(_mobileManagedConfigKey, content);
+        return;
+      }
       final p = managedConfigPath;
       if (p.isEmpty) return;
       final f = File(p);
@@ -3635,6 +4312,10 @@ class ConfigStore {
   Future<void> writeBaseConfig(String content) async {
     await _runConfigIo(() async {
       if (kIsWeb) return;
+      if (_usesMobileSecureConfig) {
+        await _writeMobileConfig(_mobileBaseConfigKey, content);
+        return;
+      }
       final p = baseConfigPath;
       if (p.isEmpty) return;
       final f = File(p);
@@ -3666,6 +4347,11 @@ class ConfigStore {
   Future<String?> readBaseConfig() async {
     return _runConfigIo(() async {
       if (kIsWeb) return null;
+      if (_usesMobileSecureConfig) {
+        final base = await _readMobileConfig(_mobileBaseConfigKey);
+        if ((base ?? '').trim().isNotEmpty) return base;
+        return _readMobileConfig(_mobileManagedConfigKey);
+      }
       final p = baseConfigPath;
       if (p.isEmpty) return null;
       final f = File(p);
@@ -3694,6 +4380,14 @@ class ConfigStore {
   Future<void> ensureBaseSeededFromManagedIfMissing() async {
     await _runConfigIo(() async {
       if (kIsWeb) return;
+      if (_usesMobileSecureConfig) {
+        final base = await _readMobileConfig(_mobileBaseConfigKey);
+        final managed = await _readMobileConfig(_mobileManagedConfigKey);
+        if ((base ?? '').trim().isEmpty && (managed ?? '').trim().isNotEmpty) {
+          await _writeMobileConfig(_mobileBaseConfigKey, managed!);
+        }
+        return;
+      }
       final base = baseConfigPath;
       if (base.isNotEmpty && File(base).existsSync()) return;
 
@@ -3755,6 +4449,11 @@ class ConfigStore {
   Future<void> deleteManagedConfig() async {
     await _runConfigIo(() async {
       if (kIsWeb) return;
+      if (_usesMobileSecureConfig) {
+        await _deleteMobileConfig(_mobileManagedConfigKey);
+        await _deleteMobileConfig(_mobileBaseConfigKey);
+        return;
+      }
 
       final managed = managedConfigPath;
       if (managed.isNotEmpty) {
@@ -3833,7 +4532,6 @@ class _AuthPageState extends State<AuthPage>
   String? _authStatus;
   String? _activePhone;
   String? _activeEmailCodeAddress;
-  bool _phoneCodeRequested = false;
   bool _emailCodeRequested = false;
   WireGuardInstallState? _wireGuardState;
   bool _wireGuardBusy = false;
@@ -3841,7 +4539,7 @@ class _AuthPageState extends State<AuthPage>
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 3, vsync: this);
+    _tabs = TabController(length: 2, vsync: this);
     _tabs.addListener(() {
       if (mounted) setState(() {});
     });
@@ -3934,9 +4632,9 @@ class _AuthPageState extends State<AuthPage>
     }
   }
 
-  String get _deviceNameForAuth => kIsWeb ? 'Web' : Platform.localHostname;
+  String get _deviceNameForAuth => greenVpnClientDeviceName();
 
-  String get _platformForAuth => kIsWeb ? 'web' : Platform.operatingSystem;
+  String get _platformForAuth => greenVpnClientPlatform();
 
   String _challengeDeliveryMessage({
     required bool phone,
@@ -4020,7 +4718,6 @@ class _AuthPageState extends State<AuthPage>
           _activePhone = normalized;
           _phone.text = normalized;
           _phoneCode.clear();
-          _phoneCodeRequested = canEnterCode;
         } else {
           _activeEmailCodeAddress = normalized;
           _emailCodeEmail.text = normalized;
@@ -4250,65 +4947,6 @@ class _AuthPageState extends State<AuthPage>
     );
   }
 
-  Widget _buildPhoneAuthForm() {
-    return Column(
-      children: [
-        TextField(
-          controller: _phone,
-          enabled: !_busy,
-          keyboardType: TextInputType.phone,
-          textInputAction: _phoneCodeRequested
-              ? TextInputAction.next
-              : TextInputAction.done,
-          decoration: const InputDecoration(
-            labelText: 'Телефон',
-            hintText: '+7 900 000-00-00',
-            border: OutlineInputBorder(),
-          ),
-          onSubmitted: (_) {
-            if (!_busy && !_phoneCodeRequested) {
-              unawaited(_startChallenge(phone: true));
-            }
-          },
-        ),
-        if (_phoneCodeRequested) ...[
-          const SizedBox(height: 10),
-          TextField(
-            controller: _phoneCode,
-            enabled: !_busy,
-            keyboardType: TextInputType.number,
-            textInputAction: TextInputAction.done,
-            decoration: const InputDecoration(
-              labelText: 'Код из SMS',
-              hintText: '000000',
-              border: OutlineInputBorder(),
-            ),
-            onSubmitted: (_) {
-              if (!_busy) unawaited(_verifyChallenge(phone: true));
-            },
-          ),
-        ],
-        const SizedBox(height: 14),
-        _buildPrimaryButton(
-          icon: _phoneCodeRequested ? Icons.login_rounded : Icons.sms_rounded,
-          label: _phoneCodeRequested ? 'Войти по коду' : 'Получить код',
-          onPressed: _busy
-              ? null
-              : () => _phoneCodeRequested
-                    ? _verifyChallenge(phone: true)
-                    : _startChallenge(phone: true),
-        ),
-        if (_phoneCodeRequested) ...[
-          const SizedBox(height: 8),
-          _buildResendButton(
-            label: 'Получить новый код',
-            onPressed: _busy ? null : () => _startChallenge(phone: true),
-          ),
-        ],
-      ],
-    );
-  }
-
   Widget _buildEmailCodeAuthForm() {
     return Column(
       children: [
@@ -4336,9 +4974,13 @@ class _AuthPageState extends State<AuthPage>
             enabled: !_busy,
             keyboardType: TextInputType.number,
             textInputAction: TextInputAction.done,
+            inputFormatters: [
+              FilteringTextInputFormatter.digitsOnly,
+              LengthLimitingTextInputFormatter(4),
+            ],
             decoration: const InputDecoration(
               labelText: 'Код из письма',
-              hintText: '000000',
+              hintText: '0000',
               border: OutlineInputBorder(),
             ),
             onSubmitted: (_) {
@@ -4413,13 +5055,12 @@ class _AuthPageState extends State<AuthPage>
 
   Widget _buildActiveAuthForm() {
     switch (_tabs.index) {
-      case 1:
-        return _buildEmailCodeAuthForm();
-      case 2:
-        return _buildLegacyPasswordForm();
       case 0:
+        return _buildEmailCodeAuthForm();
+      case 1:
+        return _buildLegacyPasswordForm();
       default:
-        return _buildPhoneAuthForm();
+        return _buildEmailCodeAuthForm();
     }
   }
 
@@ -4504,7 +5145,6 @@ class _AuthPageState extends State<AuthPage>
                                 fontWeight: FontWeight.w900,
                               ),
                               tabs: const [
-                                Tab(text: 'Телефон'),
                                 Tab(text: 'Email-код'),
                                 Tab(text: 'Пароль'),
                               ],
@@ -4569,6 +5209,8 @@ class ServerLocation {
   final bool available;
   final int? healthScore;
   final String protocolLabel;
+  final String protocolCode;
+  final bool clientConfigReady;
 
   const ServerLocation({
     required this.id,
@@ -4583,7 +5225,12 @@ class ServerLocation {
     this.available = true,
     this.healthScore,
     this.protocolLabel = 'WireGuard',
+    this.protocolCode = 'wireguard_udp',
+    this.clientConfigReady = true,
   });
+
+  bool get isCurrentClientReady =>
+      available && clientConfigReady && protocolCode == 'wireguard_udp';
 
   static ServerLocation fromCatalogJson(Map<String, dynamic> json) {
     final endpoint = json['endpoint'];
@@ -4592,10 +5239,12 @@ class ServerLocation {
         : <String, dynamic>{};
     final protocols = json['protocols'];
     String protocolLabel = 'WireGuard';
+    String protocolCode = 'wireguard_udp';
     if (protocols is List && protocols.isNotEmpty && protocols.first is Map) {
       final first = Map<String, dynamic>.from(protocols.first as Map);
       protocolLabel = (first['title'] ?? first['code'] ?? protocolLabel)
           .toString();
+      protocolCode = (first['code'] ?? protocolCode).toString();
     }
     final latencyRaw = json['latencyMs'];
     final scoreRaw = json['healthScore'];
@@ -4609,7 +5258,7 @@ class ServerLocation {
     ].join(' • ');
     return ServerLocation(
       id: (json['id'] ?? '').toString(),
-      title: (json['title'] ?? json['name'] ?? 'Green VPN endpoint').toString(),
+      title: (json['title'] ?? json['name'] ?? 'VPN-узел Green VPN').toString(),
       subtitle: (json['subtitle'] ?? defaultSubtitle).toString(),
       endpointHost: (endpointMap['host'] ?? json['endpointHost'] ?? '')
           .toString(),
@@ -4623,8 +5272,20 @@ class ServerLocation {
           (json['status'] ?? 'unknown').toString() != 'disabled',
       healthScore: scoreRaw is num ? scoreRaw.toInt() : null,
       protocolLabel: protocolLabel,
+      protocolCode: protocolCode,
+      clientConfigReady: json['clientConfigReady'] != false,
     );
   }
+}
+
+class ProvisionedConfigResult {
+  final bool ok;
+  final String? message;
+  final ServerLocation? server;
+
+  const ProvisionedConfigResult.ok(this.server) : ok = true, message = null;
+
+  const ProvisionedConfigResult.err(this.message) : ok = false, server = null;
 }
 
 enum SocialApp {
@@ -4658,7 +5319,7 @@ class RootShell extends StatefulWidget {
   State<RootShell> createState() => _RootShellState();
 }
 
-class _RootShellState extends State<RootShell> {
+class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   final _api = const BlueVpnApi(baseUrl: kApiBaseUrl);
   final _cfg = ConfigStore();
   final _pendingBillingOrderStore = PendingBillingOrderStore();
@@ -4729,8 +5390,10 @@ class _RootShellState extends State<RootShell> {
       pingMs: 44,
       country: 'NL',
       city: 'Amsterdam',
-      status: 'healthy',
-      healthScore: 95,
+      status: 'unavailable',
+      available: false,
+      healthScore: 0,
+      clientConfigReady: false,
     ),
   ];
 
@@ -4771,6 +5434,10 @@ class _RootShellState extends State<RootShell> {
   Map<String, dynamic>? _tariffQuote;
   String? _tariffStatus;
   String? _serverCatalogStatus;
+  String? _adaptiveRouteServerId;
+  String? _adaptiveRouteProtocol;
+  int? _adaptiveRouteScore;
+  String? _adaptiveRouteConfidence;
   bool _subscriptionActive = false;
   bool _subscriptionAutoRenew = false;
   bool _paymentMethodSaved = false;
@@ -4798,6 +5465,7 @@ class _RootShellState extends State<RootShell> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _vpnBackend = VpnBackend.createDefault(tunnelName: kTunnelName);
     _emailVerified = widget.session.emailVerified;
     _emailConfirmationRequired = widget.session.emailConfirmationRequired;
@@ -4816,6 +5484,43 @@ class _RootShellState extends State<RootShell> {
     _refreshEmailStatus(showToast: false);
     _refreshPhoneStatus(showToast: false);
     unawaited(_refreshWireGuardState());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_handleAppResumed());
+    }
+  }
+
+  Future<void> _handleAppResumed() async {
+    await _syncVpnStatus();
+    if (kIsWeb || !Platform.isAndroid || vpnBusy) return;
+    try {
+      final status = await WireGuardAndroidBackend.statusSnapshot(
+        tunnelName: kTunnelName,
+      );
+      final connected =
+          status['connected'] == true ||
+          (status['state'] ?? '').toString().toLowerCase() == 'up';
+      await appendBlueVpnClientLog(
+        "android resume vpn status connected=$connected state=${status['state'] ?? ""}",
+      );
+      if (connected) {
+        if (mounted) setState(() => vpnEnabled = true);
+        return;
+      }
+      final off = await _vpnBackend.disconnect();
+      await appendBlueVpnClientLog(
+        'android resume stale vpn disconnect ok=${off.ok} message=${off.message ?? ""}',
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 700));
+      await _syncVpnStatus();
+    } catch (e) {
+      await appendBlueVpnClientLog(
+        'android resume stale vpn cleanup failed=$e',
+      );
+    }
   }
 
   void _toast(BuildContext context, String text) {
@@ -5057,9 +5762,13 @@ class _RootShellState extends State<RootShell> {
                       TextField(
                         controller: codeController,
                         keyboardType: TextInputType.number,
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                          LengthLimitingTextInputFormatter(4),
+                        ],
                         decoration: const InputDecoration(
                           labelText: 'Код из SMS',
-                          hintText: '000000',
+                          hintText: '0000',
                         ),
                       ),
                     ],
@@ -5181,12 +5890,12 @@ class _RootShellState extends State<RootShell> {
         (e) => e.name == p.trafficPack,
         orElse: () => TrafficPack.gb20,
       );
-      trafficGb = p.trafficGb.clamp(1.0, 500.0);
+      trafficGb = p.trafficGb.clamp(1.0, 800.0);
       devices = p.devices.clamp(1, 5);
 
       optNoAds = true;
       optSmartRouting =
-          true; // временно всегда разрешаем Social Only в Windows-клиенте
+          true; // временно всегда разрешаем режим соцсетей в Windows-клиенте
       optDedicatedIp = p.optDedicatedIp;
       optAutoRenew = p.optAutoRenew;
 
@@ -5290,7 +5999,7 @@ class _RootShellState extends State<RootShell> {
 
     setState(() {
       trafficPack = nextPack;
-      trafficGb = nextGb.clamp(1.0, 500.0);
+      trafficGb = nextGb.clamp(1.0, 800.0);
       devices = nextDevices.clamp(1, 5);
       optNoAds = true;
       optSmartRouting = true;
@@ -5502,6 +6211,15 @@ class _RootShellState extends State<RootShell> {
 
   Future<void> _createTariffOrderOnServer() async {
     if (kIsWeb) return;
+    if (kTrialOnlyNoAdsBuild) {
+      setState(() {
+        _tariffStatus =
+            'В этой версии Green VPN работает Trial без оплаты и рекламы.';
+        _pendingBillingOrder = null;
+      });
+      _toast(context, 'Trial-версия работает без оплаты и рекламы.');
+      return;
+    }
     if (widget.session.accessToken == 'dev-token') {
       _toast(context, 'Сначала войди в аккаунт, чтобы подключить тариф.');
       return;
@@ -5707,18 +6425,24 @@ class _RootShellState extends State<RootShell> {
     return _configLooksLikeDedicatedDev1(rawConfig);
   }
 
-  String? _expectedEndpointHostForSelection() {
-    if (selectedServer.isAuto) return null;
-    return selectedServer.endpointHost;
+  String? _expectedEndpointHostForServer(ServerLocation server) {
+    if (server.isAuto) return null;
+    return server.endpointHost;
   }
 
-  bool _configMatchesSelectedServer(String rawConfig) {
+  bool _configMatchesServer(ServerLocation server, String rawConfig) {
     final endpointHost = _endpointHostFromConfig(rawConfig);
     if (endpointHost == null || endpointHost.isEmpty) return false;
 
-    final expectedHost = _expectedEndpointHostForSelection();
+    final expectedHost = _expectedEndpointHostForServer(server);
     if (expectedHost == null) {
-      return endpointHost == kIntelligentSmewHost;
+      final knownHosts = servers
+          .where((s) => !s.isAuto && s.endpointHost != null)
+          .map((s) => s.endpointHost!.trim().toLowerCase())
+          .where((host) => host.isNotEmpty)
+          .toSet();
+      knownHosts.add(kIntelligentSmewHost);
+      return knownHosts.contains(endpointHost);
     }
 
     return endpointHost == expectedHost;
@@ -5808,7 +6532,10 @@ class _RootShellState extends State<RootShell> {
     return out;
   }
 
-  Future<_LocalConfigCandidate?> _findPreferredLocalConfig() async {
+  Future<_LocalConfigCandidate?> _findPreferredLocalConfig({
+    ServerLocation? serverOverride,
+  }) async {
+    final effectiveServer = serverOverride ?? selectedServer;
     for (final p in _preferredLocalConfigCandidates()) {
       final f = File(p);
       if (!f.existsSync()) continue;
@@ -5816,7 +6543,7 @@ class _RootShellState extends State<RootShell> {
         final raw = _normalizeDevEndpoint(await f.readAsString());
         if (raw.trim().isEmpty) continue;
         if (!_configLooksLikeSupportedLocalServer(raw)) continue;
-        if (!_configMatchesSelectedServer(raw)) continue;
+        if (!_configMatchesServer(effectiveServer, raw)) continue;
         return _LocalConfigCandidate(path: p, content: raw);
       } catch (_) {
         // ignore and try next
@@ -5827,8 +6554,10 @@ class _RootShellState extends State<RootShell> {
 
   Future<bool> _repairProvisionedConfigFromPreferredDevSource({
     required bool showToast,
+    ServerLocation? serverOverride,
   }) async {
     if (kIsWeb || !Platform.isWindows) return false;
+    final effectiveServer = serverOverride ?? selectedServer;
 
     await _cfg.ensureBaseSeededFromManagedIfMissing();
 
@@ -5843,14 +6572,16 @@ class _RootShellState extends State<RootShell> {
     if (normalizedBase != null &&
         normalizedBase.trim().isNotEmpty &&
         _configLooksLikeSupportedLocalServer(normalizedBase) &&
-        _configMatchesSelectedServer(normalizedBase)) {
+        _configMatchesServer(effectiveServer, normalizedBase)) {
       if (normalizedBase != base) {
         await _writeProvisionedConfig(normalizedBase);
       }
       return true;
     }
 
-    final preferred = await _findPreferredLocalConfig();
+    final preferred = await _findPreferredLocalConfig(
+      serverOverride: effectiveServer,
+    );
     if (preferred == null || preferred.content.trim().isEmpty) return false;
 
     await _writeProvisionedConfig(preferred.content);
@@ -5886,7 +6617,7 @@ class _RootShellState extends State<RootShell> {
 
   String _buildManagedConfigFromBase(String baseConfig) {
     if (!socialOnlyEnabled) {
-      return _replaceAllowedIps(baseConfig, const ['0.0.0.0/0', '::/0']);
+      return preserveFullTunnelAllowedIps(baseConfig);
     }
 
     final allowedIps = _resolveSocialAllowedIps(socialOnlyApps);
@@ -5907,15 +6638,29 @@ class _RootShellState extends State<RootShell> {
   Future<bool> _reuseExistingProvisionedConfig({
     required String reason,
     required bool showToast,
+    ServerLocation? serverOverride,
   }) async {
+    if (greenVpnIsAdRewardRequiredMessage(reason)) {
+      await appendBlueVpnClientLog(
+        'local config fallback blocked by ad gate: $reason',
+      );
+      if (showToast && mounted) {
+        _toast(
+          context,
+          'Для бесплатного подключения сначала посмотри рекламу.',
+        );
+      }
+      return false;
+    }
     try {
+      final effectiveServer = serverOverride ?? selectedServer;
       await _cfg.ensureBaseSeededFromManagedIfMissing();
       final base = await _cfg.readBaseConfig();
       if (base == null || base.trim().isEmpty) return false;
 
       final normalizedBase = _normalizeDevEndpoint(base);
       if (!_configLooksLikeSupportedLocalServer(normalizedBase) ||
-          !_configMatchesSelectedServer(normalizedBase)) {
+          !_configMatchesServer(effectiveServer, normalizedBase)) {
         return false;
       }
 
@@ -5978,7 +6723,7 @@ class _RootShellState extends State<RootShell> {
       _toast(
         context,
         socialOnlyEnabled
-            ? 'Social Only применён.'
+            ? 'Режим соцсетей применён.'
             : 'Обычный режим восстановлен.',
       );
     }
@@ -6001,12 +6746,137 @@ class _RootShellState extends State<RootShell> {
     if (mounted) setState(() => vpnEnabled = on);
   }
 
+  bool _androidStatusLooksLikeOwnTunnel(Map<String, dynamic> status) {
+    final state = (status['state'] ?? '').toString().toLowerCase();
+    if (status['connected'] == true || state == 'up') return true;
+    final running = status['runningTunnels'];
+    if (running is Iterable) {
+      return running.any((item) => item.toString() == kTunnelName);
+    }
+    return false;
+  }
+
+  Future<void> _prepareAndroidControlPlaneAccess(String reason) async {
+    if (kIsWeb || !Platform.isAndroid || vpnEnabled) return;
+    try {
+      final status = await WireGuardAndroidBackend.statusSnapshot(
+        tunnelName: kTunnelName,
+      );
+      final ownTunnel = _androidStatusLooksLikeOwnTunnel(status);
+      final systemVpnActive = status['systemVpnActive'] == true;
+      await appendBlueVpnClientLog(
+        'android control-plane preflight reason=$reason ownTunnel=$ownTunnel systemVpnActive=$systemVpnActive status=$status',
+      );
+      if (!ownTunnel) return;
+      await _recoverAndroidStaleVpnForNetwork('preflight_$reason');
+      return;
+    } catch (e) {
+      await appendBlueVpnClientLog(
+        'android control-plane preflight failed reason=$reason error=$e',
+      );
+      return;
+    }
+  }
+
+  Future<void> _prepareAndroidConnectControlPlane(String reason) async {
+    if (kIsWeb || !Platform.isAndroid || vpnEnabled) return;
+    try {
+      final status = await WireGuardAndroidBackend.statusSnapshot(
+        tunnelName: kTunnelName,
+      );
+      final ownTunnel = _androidStatusLooksLikeOwnTunnel(status);
+      final systemVpnActive = status['systemVpnActive'] == true;
+      await appendBlueVpnClientLog(
+        'android connect preflight reason=$reason ownTunnel=$ownTunnel systemVpnActive=$systemVpnActive status=$status',
+      );
+      if (ownTunnel) {
+        await _recoverAndroidStaleVpnForNetwork('connect_preflight_$reason');
+        return;
+      }
+      if (!systemVpnActive) return;
+
+      final cached = await _cfg.readManagedConfig();
+      if (cached == null || cached.trim().isEmpty) {
+        await appendBlueVpnClientLog(
+          'android connect preflight foreign vpn active but no cached config',
+        );
+        return;
+      }
+
+      await appendBlueVpnClientLog(
+        'android connect preflight taking over foreign vpn with cached config',
+      );
+      final on = await _vpnBackend.connect(configPath: _cfg.managedConfigPath);
+      await appendBlueVpnClientLog(
+        'android connect preflight takeover ok=${on.ok} message=${on.message ?? ""}',
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 900));
+      await _syncVpnStatus();
+    } catch (e) {
+      await appendBlueVpnClientLog(
+        'android connect preflight failed reason=$reason error=$e',
+      );
+    }
+  }
+
   bool _isDeviceAttachedConflict(String? message) {
     final raw = (message ?? '').toLowerCase();
     return raw.contains('409') &&
         raw.contains('device') &&
         raw.contains('attached') &&
         raw.contains('another user');
+  }
+
+  bool _isAndroidNetworkFailureMessage(String? message) {
+    if (kIsWeb || !Platform.isAndroid) return false;
+    final raw = (message ?? '').toLowerCase();
+    if (raw.isEmpty) return false;
+    return raw.contains('socketexception') ||
+        raw.contains('timed out') ||
+        raw.contains('timeout') ||
+        raw.contains('timeoutexception') ||
+        raw.contains('future not completed') ||
+        raw.contains('failed host lookup') ||
+        raw.contains('connection reset') ||
+        raw.contains('connection refused') ||
+        raw.contains('network is unreachable') ||
+        raw.contains('api.greenvpn.pro');
+  }
+
+  Future<bool> _recoverAndroidStaleVpnForNetwork(String reason) async {
+    if (kIsWeb || !Platform.isAndroid) return false;
+    await appendBlueVpnClientLog(
+      'android stale vpn recovery start reason=$reason',
+    );
+    try {
+      final before = await WireGuardAndroidBackend.statusSnapshot(
+        tunnelName: kTunnelName,
+      );
+      await appendBlueVpnClientLog('android stale vpn recovery before=$before');
+    } catch (e) {
+      await appendBlueVpnClientLog(
+        'android stale vpn recovery before failed=$e',
+      );
+    }
+
+    final off = await _vpnBackend.disconnect();
+    await appendBlueVpnClientLog(
+      'android stale vpn recovery disconnect ok=${off.ok} message=${off.message ?? ""}',
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 900));
+
+    try {
+      final after = await WireGuardAndroidBackend.statusSnapshot(
+        tunnelName: kTunnelName,
+      );
+      await appendBlueVpnClientLog('android stale vpn recovery after=$after');
+    } catch (e) {
+      await appendBlueVpnClientLog(
+        'android stale vpn recovery after failed=$e',
+      );
+    }
+    await _syncVpnStatus();
+    return off.ok;
   }
 
   Future<String?> _rotateDeviceId() async {
@@ -6027,10 +6897,23 @@ class _RootShellState extends State<RootShell> {
     var boot = await _api.bootstrapClient(
       accessToken: widget.session.accessToken,
       deviceId: did,
-      deviceName: Platform.localHostname,
-      platform: 'windows',
+      deviceName: greenVpnClientDeviceName(),
+      platform: greenVpnClientPlatform(),
       appVersion: kAppVersion,
     );
+
+    if (!boot.ok && _isAndroidNetworkFailureMessage(boot.message)) {
+      await _recoverAndroidStaleVpnForNetwork(
+        boot.message ?? 'bootstrap_network_failure',
+      );
+      boot = await _api.bootstrapClient(
+        accessToken: widget.session.accessToken,
+        deviceId: did,
+        deviceName: greenVpnClientDeviceName(),
+        platform: greenVpnClientPlatform(),
+        appVersion: kAppVersion,
+      );
+    }
 
     if (!_isDeviceAttachedConflict(boot.message)) {
       return boot;
@@ -6048,13 +6931,26 @@ class _RootShellState extends State<RootShell> {
       );
     }
 
-    return _api.bootstrapClient(
+    boot = await _api.bootstrapClient(
       accessToken: widget.session.accessToken,
       deviceId: did,
-      deviceName: Platform.localHostname,
-      platform: 'windows',
+      deviceName: greenVpnClientDeviceName(),
+      platform: greenVpnClientPlatform(),
       appVersion: kAppVersion,
     );
+    if (!boot.ok && _isAndroidNetworkFailureMessage(boot.message)) {
+      await _recoverAndroidStaleVpnForNetwork(
+        boot.message ?? 'bootstrap_rotated_network_failure',
+      );
+      boot = await _api.bootstrapClient(
+        accessToken: widget.session.accessToken,
+        deviceId: did,
+        deviceName: greenVpnClientDeviceName(),
+        platform: greenVpnClientPlatform(),
+        appVersion: kAppVersion,
+      );
+    }
+    return boot;
   }
 
   Future<String?> _ensureDeviceId() async {
@@ -6080,8 +6976,14 @@ class _RootShellState extends State<RootShell> {
     } catch (_) {}
   }
 
-  Future<bool> _trySeedDevConfig({required bool showToast}) async {
-    return _repairProvisionedConfigFromPreferredDevSource(showToast: showToast);
+  Future<bool> _trySeedDevConfig({
+    required bool showToast,
+    ServerLocation? serverOverride,
+  }) async {
+    return _repairProvisionedConfigFromPreferredDevSource(
+      showToast: showToast,
+      serverOverride: serverOverride,
+    );
   }
 
   Future<void> _ensureProvisionedConfigSilently() async {
@@ -6127,13 +7029,25 @@ class _RootShellState extends State<RootShell> {
         }
       }
 
-      final res = await _api.fetchWireGuardConfig(
+      var res = await _api.fetchWireGuardConfig(
         accessToken: widget.session.accessToken,
         deviceId: did,
         serverId: selectedServer.id == 'auto' ? null : selectedServer.id,
       );
+      if (!res.ok && _isAndroidNetworkFailureMessage(res.message)) {
+        await _recoverAndroidStaleVpnForNetwork(
+          res.message ?? 'silent_config_network_failure',
+        );
+        res = await _api.fetchWireGuardConfig(
+          accessToken: widget.session.accessToken,
+          deviceId: did,
+          serverId: selectedServer.id == 'auto' ? null : selectedServer.id,
+        );
+      }
       if (res.ok && res.data != null) {
-        await _writeProvisionedConfig(_normalizeDevEndpoint(res.data!));
+        await _writeProvisionedConfig(
+          _normalizeDevEndpoint(res.data!.configText),
+        );
       } else {
         await _reuseExistingProvisionedConfig(
           reason: res.message ?? '',
@@ -6143,21 +7057,189 @@ class _RootShellState extends State<RootShell> {
     } catch (_) {}
   }
 
-  Future<bool> _ensureProvisionedConfigInteractive() async {
-    if (kIsWeb) return false;
-    await appendBlueVpnClientLog(
-      'ensure config interactive start token=${widget.session.accessToken == "dev-token" ? "dev" : "real"} server=${selectedServer.id}',
+  bool _bootAdGateRequiresReward(Map<String, dynamic> bootMap) {
+    if (kTrialOnlyNoAdsBuild) return false;
+    final adGateRaw = bootMap['adGate'];
+    if (adGateRaw is! Map) return false;
+    final adGate = Map<String, dynamic>.from(adGateRaw);
+    return adGate['enabled'] == true && adGate['required'] == true;
+  }
+
+  Future<bool> _waitForAdChallengeCompletion(String challengeId) async {
+    for (var attempt = 0; attempt < 45; attempt++) {
+      if (!mounted) return false;
+      await Future.delayed(const Duration(seconds: 2));
+      final res = await _api.fetchAdChallenge(
+        accessToken: widget.session.accessToken,
+        challengeId: challengeId,
+      );
+      if (!res.ok || res.data == null) continue;
+      final challengeRaw = res.data!['challenge'];
+      if (challengeRaw is! Map) continue;
+      final challenge = Map<String, dynamic>.from(challengeRaw);
+      final status = (challenge['status'] ?? '').toString().toLowerCase();
+      if (status == 'completed') return true;
+      if (status == 'expired') return false;
+    }
+    return false;
+  }
+
+  Future<bool> _completeAndroidYandexRewardedChallenge({
+    required String adUnitId,
+    required String challengeId,
+    required String rewardUrl,
+  }) async {
+    final token = greenVpnAdChallengeTokenFromRewardUrl(rewardUrl);
+    if (token.isEmpty) {
+      _toast(context, 'Сервер не вернул подтверждающий код рекламы.');
+      return false;
+    }
+
+    _setVpnBusyUi(
+      stage: 'Показываем рекламу...',
+      hint:
+          'Досмотри видео до зачёта награды. После этого Green VPN продолжит подключение.',
     );
 
+    final rewarded = await GreenVpnYandexRewardedAds.showRewardedAd(
+      adUnitId: adUnitId,
+      log: appendBlueVpnClientLog,
+    );
+    if (!mounted) return false;
+    if (!rewarded) {
+      _toast(
+        context,
+        'Реклама не была засчитана. Попробуй подключиться ещё раз.',
+      );
+      return false;
+    }
+
+    final complete = await _api.completeAdChallenge(
+      challengeId: challengeId,
+      token: token,
+    );
+    if (!mounted) return false;
+    if (!complete.ok) {
+      _toast(
+        context,
+        complete.message ?? 'Реклама показана, но сервер не засчитал доступ.',
+      );
+      return false;
+    }
+
+    _toast(context, 'Просмотр засчитан. Подключаем Green VPN...');
+    return true;
+  }
+
+  Future<bool> _ensureAdRewardForConnect(
+    Map<String, dynamic> bootMap,
+    String deviceId,
+  ) async {
+    if (kTrialOnlyNoAdsBuild) return true;
+    if (!_bootAdGateRequiresReward(bootMap)) return true;
+    final yandexRewardedAdUnitId = greenVpnAndroidYandexRewardedAdUnitId(
+      bootMap,
+    );
+
+    _setVpnBusyUi(
+      stage: 'Нужно посмотреть рекламу...',
+      hint:
+          'Бесплатный режим требует рекламный просмотр перед подключением. Платный тариф подключается без рекламы.',
+    );
+
+    final start = await _api.startAdChallenge(
+      accessToken: widget.session.accessToken,
+      deviceId: deviceId,
+      platform: greenVpnClientPlatform(),
+      provider: yandexRewardedAdUnitId.isNotEmpty
+          ? 'yandex_mobile_ads'
+          : 'test_web',
+      appVersion: kAppVersion,
+    );
+
+    if (!start.ok || start.data == null) {
+      _toast(
+        context,
+        start.message ?? 'Не удалось подготовить рекламный просмотр.',
+      );
+      return false;
+    }
+
+    final challengeRaw = start.data!['challenge'];
+    if (challengeRaw == null) {
+      return true;
+    }
+    if (challengeRaw is! Map) {
+      _toast(context, 'Сервер вернул некорректный рекламный challenge.');
+      return false;
+    }
+
+    final challenge = Map<String, dynamic>.from(challengeRaw);
+    final challengeId = (challenge['challengeId'] ?? '').toString().trim();
+    final rewardUrl = (challenge['rewardUrl'] ?? '').toString().trim();
+    if (challengeId.isEmpty || rewardUrl.isEmpty) {
+      _toast(context, 'Сервер не вернул ссылку на рекламный просмотр.');
+      return false;
+    }
+
+    if (yandexRewardedAdUnitId.isNotEmpty) {
+      return _completeAndroidYandexRewardedChallenge(
+        adUnitId: yandexRewardedAdUnitId,
+        challengeId: challengeId,
+        rewardUrl: rewardUrl,
+      );
+    }
+
+    await openExternalUrl(rewardUrl);
+    if (!mounted) return false;
+    _toast(
+      context,
+      Platform.isAndroid
+          ? 'Открыл рекламный экран. После зачёта вернись в Green VPN.'
+          : 'Открыл рекламный экран в браузере.',
+    );
+
+    _setVpnBusyUi(
+      stage: 'Ждём зачёт рекламы...',
+      hint:
+          'Когда рекламный экран засчитает просмотр, Green VPN продолжит подключение автоматически.',
+    );
+
+    final completed = await _waitForAdChallengeCompletion(challengeId);
+    if (!completed) {
+      _toast(
+        context,
+        'Реклама не засчиталась. Нажми подключение ещё раз и повтори просмотр.',
+      );
+      return false;
+    }
+
+    _toast(context, 'Просмотр засчитан. Подключаем Green VPN...');
+    return true;
+  }
+
+  Future<ProvisionedConfigResult> _ensureProvisionedConfigInteractive({
+    ServerLocation? serverOverride,
+  }) async {
+    if (kIsWeb) return const ProvisionedConfigResult.err('web_unavailable');
+    final effectiveServer = serverOverride ?? selectedServer;
+    await appendBlueVpnClientLog(
+      'ensure config interactive start token=${widget.session.accessToken == "dev-token" ? "dev" : "real"} server=${effectiveServer.id}',
+    );
+    await _prepareAndroidConnectControlPlane('interactive_config');
+
     if (widget.session.accessToken == 'dev-token') {
-      final ok = await _trySeedDevConfig(showToast: true);
+      final ok = await _trySeedDevConfig(
+        showToast: true,
+        serverOverride: effectiveServer,
+      );
       await appendBlueVpnClientLog('ensure config interactive dev result=$ok');
-      if (ok) return true;
+      if (ok) return ProvisionedConfigResult.ok(effectiveServer);
       _toast(
         context,
         'Тестовый локальный режим недоступен. Войди в аккаунт, чтобы получить VPN-конфигурацию с сервера.',
       );
-      return false;
+      return const ProvisionedConfigResult.err('dev_config_unavailable');
     }
 
     final boot = await _bootstrapWithDeviceRetry(showToastOnRotate: true);
@@ -6167,14 +7249,14 @@ class _RootShellState extends State<RootShell> {
 
     if (!boot.ok || boot.data == null) {
       _toast(context, boot.message ?? 'Не удалось пройти bootstrap.');
-      return false;
+      return ProvisionedConfigResult.err(boot.message);
     }
 
     final did = await _ensureDeviceId();
     await appendBlueVpnClientLog('ensure config deviceId=${did ?? "null"}');
     if (did == null || did.isEmpty) {
       _toast(context, 'Не удалось получить device id.');
-      return false;
+      return const ProvisionedConfigResult.err('device_id_missing');
     }
 
     final bootMap = boot.data!;
@@ -6186,26 +7268,200 @@ class _RootShellState extends State<RootShell> {
       }
     }
 
-    final res = await _api.fetchWireGuardConfig(
+    final adReady = await _ensureAdRewardForConnect(bootMap, did);
+    if (!adReady)
+      return const ProvisionedConfigResult.err('ad_reward_required');
+
+    var res = await _api.fetchWireGuardConfig(
       accessToken: widget.session.accessToken,
       deviceId: did,
-      serverId: selectedServer.id == 'auto' ? null : selectedServer.id,
+      serverId: effectiveServer.isAuto ? null : effectiveServer.id,
     );
+    if (!res.ok && _isAndroidNetworkFailureMessage(res.message)) {
+      await _recoverAndroidStaleVpnForNetwork(
+        res.message ?? 'interactive_config_network_failure',
+      );
+      res = await _api.fetchWireGuardConfig(
+        accessToken: widget.session.accessToken,
+        deviceId: did,
+        serverId: effectiveServer.isAuto ? null : effectiveServer.id,
+      );
+    }
     await appendBlueVpnClientLog(
-      'ensure config fetch ok=${res.ok} message=${res.message ?? ""} bytes=${res.data?.length ?? 0}',
+      'ensure config fetch ok=${res.ok} message=${res.message ?? ""} bytes=${res.data?.configText.length ?? 0} server=${res.data?.serverId ?? ""}',
     );
-    if (!res.ok || res.data == null || res.data!.trim().isEmpty) {
+    if (!res.ok || res.data == null || res.data!.configText.trim().isEmpty) {
+      if (greenVpnIsAdRewardRequiredMessage(res.message)) {
+        _toast(
+          context,
+          'Для бесплатного подключения сначала посмотри рекламу.',
+        );
+        return ProvisionedConfigResult.err(res.message);
+      }
       final reused = await _reuseExistingProvisionedConfig(
         reason: res.message ?? '',
         showToast: true,
+        serverOverride: effectiveServer,
       );
-      if (reused) return true;
+      if (reused) return ProvisionedConfigResult.ok(effectiveServer);
       _toast(context, res.message ?? 'Не удалось получить конфиг с сервера.');
-      return false;
+      return ProvisionedConfigResult.err(res.message);
     }
 
-    await _writeProvisionedConfig(_normalizeDevEndpoint(res.data!));
-    return true;
+    final provisionedServer = _serverFromConfigResponse(
+      res.data!,
+      fallback: effectiveServer,
+    );
+    await _writeProvisionedConfig(_normalizeDevEndpoint(res.data!.configText));
+    return ProvisionedConfigResult.ok(provisionedServer);
+  }
+
+  ServerLocation _serverFromConfigResponse(
+    WireGuardConfigResponse config, {
+    required ServerLocation fallback,
+  }) {
+    final actualId = config.serverId.trim();
+    if (actualId.isEmpty || actualId == 'auto') return fallback;
+    for (final server in servers) {
+      if (server.id == actualId) return server;
+    }
+    if (fallback.id == actualId) return fallback;
+    final title = config.serverName.trim().isNotEmpty
+        ? config.serverName.trim()
+        : actualId;
+    return ServerLocation(
+      id: actualId,
+      title: title,
+      subtitle: 'Выдан backend как рабочий VPN-узел',
+      isAuto: false,
+      status: 'healthy',
+      available: true,
+      clientConfigReady: true,
+      protocolCode: fallback.protocolCode,
+      protocolLabel: fallback.protocolLabel,
+    );
+  }
+
+  ServerLocation _backendAutoCandidate() {
+    final routeId = (_adaptiveRouteServerId ?? '').trim();
+    if (routeId.isNotEmpty) {
+      for (final server in servers) {
+        if (server.id == routeId && server.isCurrentClientReady) {
+          return server;
+        }
+      }
+    }
+    return const ServerLocation(
+      id: 'auto',
+      title: 'Авто-подбор',
+      subtitle: 'Backend выберет рабочий VPN-узел',
+      isAuto: true,
+      status: 'healthy',
+      available: true,
+      clientConfigReady: true,
+    );
+  }
+
+  int _serverConnectScore(ServerLocation server) {
+    final health = server.healthScore ?? 50;
+    final latencyPenalty = server.pingMs == null
+        ? 0
+        : (server.pingMs! / 25).round().clamp(0, 40);
+    final readinessBonus = server.isCurrentClientReady ? 20 : 0;
+    final routeScoreBonus = ((_adaptiveRouteScore ?? 0) / 10).round().clamp(
+      0,
+      10,
+    );
+    final routeBonus =
+        _adaptiveRouteServerId != null &&
+            _adaptiveRouteServerId == server.id &&
+            (_adaptiveRouteProtocol == null ||
+                _adaptiveRouteProtocol == server.protocolCode)
+        ? 30 + routeScoreBonus
+        : 0;
+    return health + readinessBonus + routeBonus - latencyPenalty;
+  }
+
+  List<ServerLocation> _connectCandidatesForCurrentSelection() {
+    final usable =
+        servers
+            .where((server) => !server.isAuto && server.isCurrentClientReady)
+            .toList()
+          ..sort((a, b) {
+            final byScore = _serverConnectScore(
+              b,
+            ).compareTo(_serverConnectScore(a));
+            if (byScore != 0) return byScore;
+            final ap = a.pingMs ?? 999999;
+            final bp = b.pingMs ?? 999999;
+            final byPing = ap.compareTo(bp);
+            if (byPing != 0) return byPing;
+            return a.title.compareTo(b.title);
+          });
+
+    if (selectedServer.isAuto) {
+      return usable.isNotEmpty ? usable : [_backendAutoCandidate()];
+    }
+
+    if (selectedServer.isCurrentClientReady) {
+      return [selectedServer];
+    }
+
+    final selectedFromCatalog = usable.where((s) => s.id == selectedServer.id);
+    if (selectedFromCatalog.isNotEmpty) {
+      return [selectedFromCatalog.first];
+    }
+
+    return const [];
+  }
+
+  String _serverUnsupportedReason(ServerLocation server) {
+    if (!server.available) return 'сервер сейчас выключен или недоступен';
+    if (!server.clientConfigReady) {
+      return 'для него ещё не готов безопасный клиентский конфиг';
+    }
+    if (server.protocolCode != 'wireguard_udp') {
+      return 'этот протокол уже есть в плане, но текущий клиент его пока не запускает';
+    }
+    return 'сервер пока нельзя использовать текущим клиентом';
+  }
+
+  Future<void> _reportRouteEvent(
+    ServerLocation server, {
+    required String stage,
+    required bool ok,
+    int? latencyMs,
+    String? errorCode,
+    String? message,
+    Map<String, dynamic>? details,
+  }) async {
+    if (widget.session.accessToken == 'dev-token') return;
+    try {
+      final did = await _ensureDeviceId();
+      if (did == null || did.isEmpty) return;
+      final res = await _api.postClientRouteEvent(
+        accessToken: widget.session.accessToken,
+        deviceId: did,
+        serverId: server.isAuto ? 'auto' : server.id,
+        protocol: server.protocolCode,
+        transport: server.protocolCode == 'wireguard_udp' ? 'udp' : 'auto',
+        stage: stage,
+        ok: ok,
+        latencyMs: latencyMs,
+        errorCode: errorCode,
+        message: message,
+        details: details,
+      );
+      if (!res.ok) {
+        await appendBlueVpnClientLog(
+          'route event failed stage=$stage server=${server.id} message=${res.message ?? ""}',
+        );
+      }
+    } catch (e) {
+      await appendBlueVpnClientLog(
+        'route event exception stage=$stage server=${server.id} error=$e',
+      );
+    }
   }
 
   Future<void> _toggleVpnReal() async {
@@ -6240,18 +7496,31 @@ class _RootShellState extends State<RootShell> {
     if (kIsWeb) {
       _toast(
         context,
-        'Web-режим: реальный VPN недоступен. Запусти приложение как Windows.',
+        'Web-режим: реальный VPN недоступен. Установи приложение на Windows или Android.',
+      );
+      _clearVpnBusyUi();
+      return;
+    }
+    if (!greenVpnHasNativeVpnBackend) {
+      _toast(
+        context,
+        'На этой платформе реальный VPN пока не включён. Следующий шаг для iOS — Apple Developer и Network Extension.',
       );
       _clearVpnBusyUi();
       return;
     }
 
     _setVpnBusyUi(
-      stage: 'Проверяем системный компонент...',
-      hint:
-          'Green VPN использует права, выданные один раз при установке. Дополнительный UAC при запуске не нужен.',
+      stage: Platform.isAndroid
+          ? 'Проверяем разрешение Android...'
+          : 'Проверяем системный компонент...',
+      hint: Platform.isAndroid
+          ? 'Android может один раз показать системное окно с разрешением VPN.'
+          : 'Green VPN использует права, выданные один раз при установке. Дополнительный UAC при запуске не нужен.',
     );
-    final elevated = await isWindowsProcessElevated();
+    final elevated = Platform.isWindows
+        ? await isWindowsProcessElevated()
+        : false;
     await appendBlueVpnClientLog(
       'toggle elevated=$elevated vpnEnabled=$vpnEnabled',
     );
@@ -6259,50 +7528,170 @@ class _RootShellState extends State<RootShell> {
     try {
       if (!vpnEnabled) {
         await appendBlueVpnClientLog('toggle connect branch start');
-        _setVpnBusyUi(
-          stage: 'Получаем конфиг...',
-          hint:
-              'Регистрируем устройство на сервере и забираем конфиг именно для этого ПК.',
-        );
-        final ok = await _ensureProvisionedConfigInteractive();
-        await appendBlueVpnClientLog('toggle connect ensureConfig=$ok');
-        if (!ok) return;
-
-        _setVpnBusyUi(
-          stage: socialOnlyEnabled
-              ? 'Подключаем Social Only...'
-              : 'Запускаем VPN...',
-          hint: socialOnlyEnabled
-              ? 'Поднимаем туннель WireGuard в режиме только для выбранных приложений.'
-              : 'Поднимаем туннель WireGuard и ждём честный handshake.',
-        );
-        final configPath = _cfg.managedConfigPath;
-        await appendBlueVpnClientLog(
-          'toggle connect backend start cfg=$configPath',
-        );
-        final res = await _vpnBackend.connect(configPath: configPath);
-        await appendBlueVpnClientLog(
-          'toggle connect backend ok=${res.ok} message=${res.message ?? ""}',
-        );
-        if (!res.ok) {
-          _toast(context, res.message ?? 'Не удалось подключить VPN.');
-          await _syncVpnStatus();
+        await _prepareAndroidConnectControlPlane('toggle_connect');
+        await _refreshServerCatalog(showToast: false);
+        final candidates = _connectCandidatesForCurrentSelection();
+        if (candidates.isEmpty) {
+          final reason = _serverUnsupportedReason(selectedServer);
+          _toast(context, 'Этот VPN-узел пока нельзя подключить: $reason.');
           return;
         }
 
-        _setVpnBusyUi(
-          stage: 'Проверяем статус...',
-          hint: 'Сверяем handshake, трафик и реальное состояние туннеля.',
+        String? lastError;
+        for (var i = 0; i < candidates.length; i++) {
+          var candidate = candidates[i];
+          final canTryNext = selectedServer.isAuto && i < candidates.length - 1;
+          await appendBlueVpnClientLog(
+            'toggle connect candidate ${i + 1}/${candidates.length} id=${candidate.id} protocol=${candidate.protocolCode} score=${_serverConnectScore(candidate)}',
+          );
+
+          _setVpnBusyUi(
+            stage: 'Получаем конфиг...',
+            hint:
+                'Пробуем ${candidate.title}: регистрируем устройство и забираем конфиг именно для этого ПК.',
+          );
+          final configFetchWatch = Stopwatch()..start();
+          final provisioned = await _ensureProvisionedConfigInteractive(
+            serverOverride: candidate,
+          );
+          configFetchWatch.stop();
+          final ok = provisioned.ok;
+          if (ok &&
+              provisioned.server != null &&
+              provisioned.server!.id != candidate.id) {
+            await appendBlueVpnClientLog(
+              'toggle connect backend reassigned server ${candidate.id} -> ${provisioned.server!.id}',
+            );
+            candidate = provisioned.server!;
+          }
+          await appendBlueVpnClientLog(
+            'toggle connect ensureConfig server=${candidate.id} ok=$ok',
+          );
+          unawaited(
+            _reportRouteEvent(
+              candidate,
+              stage: 'config_fetch',
+              ok: ok,
+              latencyMs: configFetchWatch.elapsedMilliseconds,
+              errorCode: ok ? null : 'config_fetch_failed',
+              message: ok ? null : 'Не удалось получить конфиг для VPN-узла.',
+              details: {
+                'attempt': i + 1,
+                'candidates': candidates.length,
+                'autoMode': selectedServer.isAuto,
+              },
+            ),
+          );
+          if (!ok) {
+            lastError = 'не удалось получить конфиг для ${candidate.title}';
+            if (canTryNext) continue;
+            _toast(context, 'Не удалось получить VPN-конфиг.');
+            return;
+          }
+
+          _setVpnBusyUi(
+            stage: socialOnlyEnabled
+                ? 'Подключаем режим соцсетей...'
+                : 'Запускаем VPN...',
+            hint: socialOnlyEnabled
+                ? 'Поднимаем ${candidate.protocolLabel} в режиме только для выбранных приложений.'
+                : 'Поднимаем ${candidate.protocolLabel} и ждём честный handshake.',
+          );
+          final configPath = _cfg.managedConfigPath;
+          await appendBlueVpnClientLog(
+            'toggle connect backend start server=${candidate.id} cfg=$configPath',
+          );
+          final connectWatch = Stopwatch()..start();
+          final res = await _vpnBackend.connect(configPath: configPath);
+          connectWatch.stop();
+          await appendBlueVpnClientLog(
+            'toggle connect backend server=${candidate.id} ok=${res.ok} message=${res.message ?? ""}',
+          );
+          unawaited(
+            _reportRouteEvent(
+              candidate,
+              stage: 'connect',
+              ok: res.ok,
+              latencyMs: connectWatch.elapsedMilliseconds,
+              errorCode: res.ok ? null : 'connect_failed',
+              message: res.message,
+              details: {
+                'attempt': i + 1,
+                'candidates': candidates.length,
+                'autoMode': selectedServer.isAuto,
+              },
+            ),
+          );
+          if (!res.ok) {
+            lastError =
+                res.message ?? 'не удалось подключить ${candidate.title}';
+            await _syncVpnStatus();
+            if (canTryNext) {
+              _setVpnBusyUi(
+                stage: 'Пробуем запасной узел...',
+                hint:
+                    '${candidate.title} не ответил. Green VPN автоматически пробует следующий доступный вариант.',
+              );
+              continue;
+            }
+            _toast(context, res.message ?? 'Не удалось подключить VPN.');
+            return;
+          }
+
+          _setVpnBusyUi(
+            stage: 'Проверяем статус...',
+            hint: 'Сверяем handshake, трафик и реальное состояние туннеля.',
+          );
+          await _syncVpnStatus();
+          await appendBlueVpnClientLog(
+            'toggle connect sync done server=${candidate.id} vpnEnabled=$vpnEnabled',
+          );
+          unawaited(
+            _reportRouteEvent(
+              candidate,
+              stage: vpnEnabled ? 'connected' : 'handshake',
+              ok: vpnEnabled,
+              errorCode: vpnEnabled ? null : 'handshake_not_confirmed',
+              message: vpnEnabled
+                  ? 'VPN подключён и подтверждён клиентом.'
+                  : 'Туннель не закрепился после запуска.',
+              details: {
+                'attempt': i + 1,
+                'candidates': candidates.length,
+                'autoMode': selectedServer.isAuto,
+              },
+            ),
+          );
+          if (!vpnEnabled) {
+            lastError =
+                'туннель не закрепился после запуска ${candidate.title}';
+            if (canTryNext) continue;
+            _toast(context, 'VPN запустился, но статус не подтвердился.');
+            return;
+          }
+
+          await appendBlueVpnClientLog(
+            'client route probe removed; accepting connected tunnel server=${candidate.id}',
+          );
+          _startVpnTapCooldown(
+            hint:
+                'VPN только что включился. Кнопка разблокируется через секунду, чтобы избежать случайного двойного нажатия.',
+          );
+          _toast(
+            context,
+            selectedServer.isAuto
+                ? 'VPN включён через ${candidate.title}.'
+                : 'VPN включён.',
+          );
+          return;
+        }
+
+        _toast(
+          context,
+          lastError == null
+              ? 'Не удалось подобрать рабочий VPN-узел.'
+              : 'Не удалось подобрать рабочий VPN-узел: $lastError.',
         );
-        await _syncVpnStatus();
-        await appendBlueVpnClientLog(
-          'toggle connect sync done vpnEnabled=$vpnEnabled',
-        );
-        _startVpnTapCooldown(
-          hint:
-              'VPN только что включился. Кнопка разблокируется через секунду, чтобы избежать случайного двойного нажатия.',
-        );
-        _toast(context, 'VPN включён.');
       } else {
         await appendBlueVpnClientLog('toggle disconnect branch start');
         _setVpnBusyUi(
@@ -6356,7 +7745,13 @@ class _RootShellState extends State<RootShell> {
       });
     }
     try {
-      final res = await _api.fetchServerCatalog();
+      var res = await _api.fetchServerCatalog();
+      if (!res.ok && _isAndroidNetworkFailureMessage(res.message)) {
+        await _recoverAndroidStaleVpnForNetwork(
+          res.message ?? 'server_catalog_network_failure',
+        );
+        res = await _api.fetchServerCatalog();
+      }
       if (!mounted) return;
       if (!res.ok || res.data == null) {
         setState(() {
@@ -6368,11 +7763,33 @@ class _RootShellState extends State<RootShell> {
       }
 
       final rawServers = res.data!['servers'];
+      final resilience = res.data!['resilience'];
+      final resilienceMap = resilience is Map
+          ? Map<String, dynamic>.from(resilience)
+          : <String, dynamic>{};
+      final routeDecision = resilienceMap['routeDecision'];
+      final routeDecisionMap = routeDecision is Map
+          ? Map<String, dynamic>.from(routeDecision)
+          : <String, dynamic>{};
+      final selectedRoute = routeDecisionMap['selected'];
+      final selectedRouteMap = selectedRoute is Map
+          ? Map<String, dynamic>.from(selectedRoute)
+          : <String, dynamic>{};
+      final selectedRouteServerId = (selectedRouteMap['serverId'] ?? '')
+          .toString()
+          .trim();
+      final selectedRouteProtocol = (selectedRouteMap['protocol'] ?? '')
+          .toString()
+          .trim();
+      final selectedRouteScoreRaw = selectedRouteMap['score'];
+      final selectedRouteConfidence = (selectedRouteMap['confidence'] ?? '')
+          .toString()
+          .trim();
       final nextServers = <ServerLocation>[
         const ServerLocation(
           id: 'auto',
           title: 'Авто',
-          subtitle: 'Самый здоровый endpoint из каталога',
+          subtitle: 'Самый здоровый VPN-узел из каталога',
           pingMs: null,
           isAuto: true,
           status: 'healthy',
@@ -6398,16 +7815,33 @@ class _RootShellState extends State<RootShell> {
       final stillSelected = nextServers.any((s) => s.id == selectedServer.id);
       setState(() {
         servers = nextServers;
-        if (!stillSelected) {
-          selectedServer = nextServers.first;
-        } else {
-          selectedServer = nextServers.firstWhere(
-            (s) => s.id == selectedServer.id,
-            orElse: () => nextServers.first,
-          );
-        }
+        _adaptiveRouteServerId = selectedRouteServerId.isEmpty
+            ? null
+            : selectedRouteServerId;
+        _adaptiveRouteProtocol = selectedRouteProtocol.isEmpty
+            ? null
+            : selectedRouteProtocol;
+        _adaptiveRouteScore = selectedRouteScoreRaw is num
+            ? selectedRouteScoreRaw.toInt()
+            : null;
+        _adaptiveRouteConfidence = selectedRouteConfidence.isEmpty
+            ? null
+            : selectedRouteConfidence;
+        final nextSelected = stillSelected
+            ? nextServers.firstWhere(
+                (s) => s.id == selectedServer.id,
+                orElse: () => nextServers.first,
+              )
+            : nextServers.first;
+        selectedServer =
+            nextSelected.isAuto || nextSelected.isCurrentClientReady
+            ? nextSelected
+            : nextServers.first;
+        final routeHint = _adaptiveRouteServerId == null
+            ? ''
+            : ' Авто-маршрут: $_adaptiveRouteServerId${_adaptiveRouteConfidence == null ? '' : ' (${_adaptiveRouteConfidence!})'}.';
         _serverCatalogStatus =
-            'Каталог серверов обновлён: ${nextServers.length - 1} endpoint.';
+            'Каталог серверов обновлён: VPN-узлов ${nextServers.length - 1}.$routeHint';
       });
       if (showToast) _toast(context, _serverCatalogStatus!);
     } finally {
@@ -6416,6 +7850,7 @@ class _RootShellState extends State<RootShell> {
   }
 
   Future<void> _openServerPicker(BuildContext context) async {
+    await _prepareAndroidControlPlaneAccess('server_picker');
     await _refreshServerCatalog(showToast: false);
     final picked = await showDialog<ServerLocation>(
       context: context,
@@ -6435,31 +7870,36 @@ class _RootShellState extends State<RootShell> {
                           s.subtitle,
                           if (s.protocolLabel.isNotEmpty) s.protocolLabel,
                           if (s.pingMs != null) '${s.pingMs} ms',
-                          if (s.healthScore != null) 'health ${s.healthScore}%',
+                          if (s.healthScore != null)
+                            'здоровье ${s.healthScore}%',
+                          if (!s.isCurrentClientReady)
+                            _serverUnsupportedReason(s),
                         ].where((e) => e.isNotEmpty).join(' • ');
                   return ListTile(
                     contentPadding: EdgeInsets.zero,
                     leading: Icon(
                       s.isAuto
                           ? Icons.auto_awesome_rounded
-                          : (s.available
+                          : (s.isCurrentClientReady
                                 ? Icons.public_rounded
                                 : Icons.warning_amber_rounded),
-                      color: s.available ? kBrandPrimary : kBrandWarm,
+                      color: s.isAuto || s.isCurrentClientReady
+                          ? kBrandPrimary
+                          : kBrandWarm,
                     ),
                     title: Text(
                       s.title,
                       style: const TextStyle(fontWeight: FontWeight.w900),
                     ),
                     subtitle: Text(subtitle),
-                    enabled: s.isAuto || s.available,
+                    enabled: s.isAuto || s.isCurrentClientReady,
                     trailing: selected
                         ? const Icon(
                             Icons.check_circle_rounded,
                             color: kBrandPrimary,
                           )
                         : const Icon(Icons.chevron_right_rounded),
-                    onTap: (s.isAuto || s.available)
+                    onTap: (s.isAuto || s.isCurrentClientReady)
                         ? () => Navigator.of(ctx).pop(s)
                         : null,
                   );
@@ -6478,14 +7918,149 @@ class _RootShellState extends State<RootShell> {
     );
 
     if (picked != null) {
-      setState(() => selectedServer = picked);
-      _schedulePrefsSave();
+      await _selectServerAndReconnectIfNeeded(picked);
+    }
+  }
 
-      if (!vpnEnabled) {
-        unawaited(_cfg.deleteManagedConfig());
-      } else {
-        _toast(context, 'Сервер изменён. Переподключись, чтобы применить.');
+  Future<void> _selectServerAndReconnectIfNeeded(ServerLocation picked) async {
+    if (vpnBusy) {
+      _toast(
+        context,
+        'Green VPN уже переключает туннель. Подожди пару секунд.',
+      );
+      return;
+    }
+
+    setState(() => selectedServer = picked);
+    _schedulePrefsSave();
+
+    await _syncVpnStatus();
+    if (!vpnEnabled) {
+      unawaited(_cfg.deleteManagedConfig());
+      return;
+    }
+
+    _setVpnBusyUi(
+      stage: 'Переключаем сервер...',
+      hint:
+          'Останавливаем текущий туннель, получаем новый конфиг и запускаем VPN заново.',
+    );
+
+    try {
+      await appendBlueVpnClientLog(
+        'server switch start requested=${picked.id} title=${picked.title}',
+      );
+
+      final disconnectWatch = Stopwatch()..start();
+      final off = await _vpnBackend.disconnect();
+      disconnectWatch.stop();
+      await appendBlueVpnClientLog(
+        'server switch disconnect ok=${off.ok} message=${off.message ?? ""}',
+      );
+      unawaited(
+        _reportRouteEvent(
+          picked,
+          stage: 'switch_disconnect',
+          ok: off.ok,
+          latencyMs: disconnectWatch.elapsedMilliseconds,
+          errorCode: off.ok ? null : 'disconnect_failed',
+          message: off.message,
+        ),
+      );
+      if (!off.ok) {
+        await _syncVpnStatus();
+        _toast(context, off.message ?? 'Не удалось остановить текущий VPN.');
+        return;
       }
+
+      await _syncVpnStatus();
+      _setVpnBusyUi(
+        stage: 'Получаем конфиг...',
+        hint: picked.isAuto
+            ? 'Backend выбирает рабочий VPN-узел и выдаёт свежий WireGuard-конфиг.'
+            : 'Запрашиваем свежий WireGuard-конфиг именно для ${picked.title}.',
+      );
+
+      final configWatch = Stopwatch()..start();
+      final provisioned = await _ensureProvisionedConfigInteractive(
+        serverOverride: picked,
+      );
+      configWatch.stop();
+      final effectiveServer = provisioned.server ?? picked;
+      await appendBlueVpnClientLog(
+        'server switch config ok=${provisioned.ok} requested=${picked.id} effective=${effectiveServer.id}',
+      );
+      unawaited(
+        _reportRouteEvent(
+          effectiveServer,
+          stage: 'switch_config_fetch',
+          ok: provisioned.ok,
+          latencyMs: configWatch.elapsedMilliseconds,
+          errorCode: provisioned.ok ? null : 'config_fetch_failed',
+          message: provisioned.message,
+          details: {'requestedServerId': picked.id},
+        ),
+      );
+      if (!provisioned.ok) {
+        await _syncVpnStatus();
+        _toast(
+          context,
+          'Не удалось получить VPN-конфиг для выбранного сервера.',
+        );
+        return;
+      }
+
+      if (effectiveServer.id != selectedServer.id) {
+        setState(() => selectedServer = effectiveServer);
+        _schedulePrefsSave();
+      }
+
+      _setVpnBusyUi(
+        stage: 'Запускаем VPN...',
+        hint:
+            'Поднимаем ${effectiveServer.protocolLabel} через ${effectiveServer.title}.',
+      );
+      final connectWatch = Stopwatch()..start();
+      final on = await _vpnBackend.connect(configPath: _cfg.managedConfigPath);
+      connectWatch.stop();
+      await appendBlueVpnClientLog(
+        'server switch connect ok=${on.ok} server=${effectiveServer.id} message=${on.message ?? ""}',
+      );
+      unawaited(
+        _reportRouteEvent(
+          effectiveServer,
+          stage: 'switch_connect',
+          ok: on.ok,
+          latencyMs: connectWatch.elapsedMilliseconds,
+          errorCode: on.ok ? null : 'connect_failed',
+          message: on.message,
+          details: {'requestedServerId': picked.id},
+        ),
+      );
+      await _syncVpnStatus();
+      if (!on.ok) {
+        _toast(
+          context,
+          on.message ?? 'Не удалось подключить выбранный сервер.',
+        );
+        return;
+      }
+      if (!vpnEnabled) {
+        _toast(context, 'VPN запустился, но статус туннеля не подтвердился.');
+        return;
+      }
+
+      _startVpnTapCooldown(
+        hint:
+            'VPN только что переключился. Кнопка разблокируется через секунду.',
+      );
+      _toast(context, 'VPN переключён на ${effectiveServer.title}.');
+    } catch (e, st) {
+      await appendBlueVpnClientLog('server switch exception=$e stack=$st');
+      await _syncVpnStatus();
+      if (mounted) _toast(context, 'Ошибка переключения сервера: $e');
+    } finally {
+      _clearVpnBusyUi();
     }
   }
 
@@ -6566,6 +8141,7 @@ class _RootShellState extends State<RootShell> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _prefsDebounce?.cancel();
     _tariffDebounce?.cancel();
     _vpnTapCooldownTimer?.cancel();
@@ -6758,8 +8334,6 @@ class _RootShellState extends State<RootShell> {
         },
       ),
 
-      const TasksPage(),
-
       SettingsPage(
         themeMode: widget.themeMode,
         onThemeModeChanged: widget.onThemeModeChanged,
@@ -6784,6 +8358,13 @@ class _RootShellState extends State<RootShell> {
         phoneStatusMessage: _phoneStatusMessage,
         onRefreshPhoneStatus: () => _refreshPhoneStatus(showToast: true),
         onBindPhone: _showPhoneBindingDialog,
+        subscriptionActive: _subscriptionActive,
+        subscriptionAutoRenew: _subscriptionAutoRenew,
+        paymentMethodSaved: _paymentMethodSaved,
+        subscriptionExpiresAt: _subscriptionExpiresAt,
+        subscriptionMonthlyPriceRub: _subscriptionMonthlyPriceRub,
+        onOpenTariff: () => setState(() => _index = 1),
+        onCancelAutoRenew: _cancelAutoRenew,
         onLogout: widget.onLogout,
         onOpenUpdates: () {
           Navigator.of(
@@ -6802,11 +8383,12 @@ class _RootShellState extends State<RootShell> {
         },
       ),
     ];
+    final currentIndex = _index.clamp(0, pages.length - 1).toInt();
 
     return Scaffold(
-      body: _DesktopShellBody(child: pages[_index]),
+      body: _DesktopShellBody(child: pages[currentIndex]),
       bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _index,
+        currentIndex: currentIndex,
         type: BottomNavigationBarType.fixed,
         onTap: (i) => setState(() => _index = i),
         selectedItemColor: kBrandPrimary,
@@ -6818,11 +8400,7 @@ class _RootShellState extends State<RootShell> {
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.star_rounded),
-            label: 'Тариф',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.checklist_rounded),
-            label: 'Задания',
+            label: kTrialOnlyNoAdsBuild ? 'Trial' : 'Тариф',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.settings_rounded),
@@ -7295,90 +8873,6 @@ class _WireGuardSetupCard extends StatelessWidget {
   }
 }
 
-class _TariffBanner extends StatelessWidget {
-  final VoidCallback onTap;
-  final String planName;
-  const _TariffBanner({required this.onTap, required this.planName});
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(14),
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: kBrandPrimaryDeep,
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: const [
-            BoxShadow(
-              blurRadius: 12,
-              offset: Offset(0, 6),
-              color: Color(0x22000000),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            Icon(Icons.star_rounded, color: kBrandWarm),
-            SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Тариф',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 14,
-                    ),
-                  ),
-                  SizedBox(height: 2),
-                  Text(
-                    'Текущий: $planName • настрой подписку',
-                    style: TextStyle(
-                      color: kBrandPrimarySoft,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Icon(Icons.chevron_right_rounded, color: kBrandPrimarySoft),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _BigToggle extends StatelessWidget {
-  final bool enabled;
-  final VoidCallback onTap;
-
-  const _BigToggle({required this.enabled, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: double.infinity,
-      child: ElevatedButton.icon(
-        onPressed: onTap,
-        icon: Icon(enabled ? Icons.pause_rounded : Icons.play_arrow_rounded),
-        label: Text(enabled ? 'Отключить VPN' : 'Подключить VPN'),
-        style: ElevatedButton.styleFrom(
-          padding: const EdgeInsets.symmetric(vertical: 18),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /* =========================
    TARIFF PAGE
    ========================= */
@@ -7398,11 +8892,12 @@ enum TariffApp {
 }
 
 enum TrafficPack {
-  gb5('5 ГБ', 79),
-  gb20('20 ГБ', 149),
-  gb50('50 ГБ', 229),
-  gb100('100 ГБ', 329),
-  unlimited('Безлимит', 549);
+  gb5('5 ГБ', 99),
+  gb20('20 ГБ', 119),
+  gb50('50 ГБ', 149),
+  gb150('150 ГБ', 199),
+  gb350('350 ГБ', 259),
+  unlimited('Безлимит', 299);
 
   const TrafficPack(this.title, this.basePriceRub);
   final String title;
@@ -7481,16 +8976,16 @@ class TariffPage extends StatelessWidget {
   });
 
   int _basePriceForGb(double gb) {
-    final g = gb.clamp(1.0, 500.0);
+    final g = gb.clamp(1.0, 800.0);
 
     const points = <_GbPricePoint>[
-      _GbPricePoint(1, 59),
-      _GbPricePoint(5, 79),
-      _GbPricePoint(20, 149),
-      _GbPricePoint(50, 229),
-      _GbPricePoint(100, 329),
-      _GbPricePoint(200, 429),
-      _GbPricePoint(500, 599),
+      _GbPricePoint(1, 99),
+      _GbPricePoint(5, 99),
+      _GbPricePoint(20, 119),
+      _GbPricePoint(50, 149),
+      _GbPricePoint(150, 199),
+      _GbPricePoint(350, 259),
+      _GbPricePoint(800, 299),
     ];
 
     for (var i = 0; i < points.length - 1; i++) {
@@ -7507,21 +9002,22 @@ class TariffPage extends StatelessWidget {
 
   int _appsPriceRub() {
     if (trafficPack == TrafficPack.unlimited) return 0;
-    switch (selectedApps.length) {
-      case 0:
-        return 0;
-      case 1:
-        return 15;
-      case 2:
-        return 25;
-      case 3:
-        return 35;
-      case 4:
-        return 45;
-      case 5:
-        return 55;
-      default:
-        return 65;
+    return selectedApps.fold<int>(0, (sum, app) => sum + _appPriceRub(app));
+  }
+
+  int _appPriceRub(TariffApp app) {
+    switch (app) {
+      case TariffApp.youtube:
+      case TariffApp.netflix:
+        return 29;
+      case TariffApp.telegram:
+      case TariffApp.tiktok:
+      case TariffApp.instagram:
+        return 29;
+      case TariffApp.discord:
+        return 19;
+      case TariffApp.steam:
+        return 10;
     }
   }
 
@@ -7608,6 +9104,99 @@ class TariffPage extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     final textColor = theme.colorScheme.onSurface;
     final mutedColor = textColor.withOpacity(isDark ? 0.72 : 0.62);
+
+    if (kTrialOnlyNoAdsBuild) {
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          const _PageTitle(
+            title: 'Trial',
+            subtitle: 'Тестовый доступ Green VPN без рекламы и оплаты',
+            icon: Icons.star_rounded,
+          ),
+          const SizedBox(height: 12),
+          _Card(
+            tint: isDark ? kBrandDarkSurface : kBrandPrimarySoft,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Сейчас',
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  subscriptionActive ? 'Trial активен' : 'Trial не активен',
+                  style: TextStyle(
+                    color: textColor,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 18,
+                  ),
+                ),
+                if (subscriptionExpiresAt != null &&
+                    subscriptionExpiresAt!.trim().isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'Доступ до ${_formatCompactDate(subscriptionExpiresAt!)}',
+                    style: TextStyle(
+                      color: mutedColor,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 14),
+                const Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _IncludedBadge(
+                      icon: Icons.vpn_key_rounded,
+                      text: 'VPN-доступ',
+                    ),
+                    _IncludedBadge(
+                      icon: Icons.alt_route_rounded,
+                      text: 'Соцсети',
+                    ),
+                    _IncludedBadge(
+                      icon: Icons.dashboard_customize_rounded,
+                      text: 'Плитка Android',
+                    ),
+                    _IncludedBadge(
+                      icon: Icons.block_rounded,
+                      text: 'Без рекламы',
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          _Card(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const _SectionTitle('Режим'),
+                const SizedBox(height: 8),
+                Text(
+                  'Эта сборка использует обычный Trial-контур: подключение работает без рекламного просмотра, без заказов и без платёжных экранов.',
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 110),
+        ],
+      );
+    }
+
     final localPrice = _calcPriceRub();
     final appsPrice = _appsPriceRub();
     final devicesPrice = _devicesPriceRub();
@@ -7625,7 +9214,7 @@ class TariffPage extends StatelessWidget {
 
     final appsDisabled = trafficPack == TrafficPack.unlimited;
 
-    final gbInt = trafficGb.round().clamp(1, 100);
+    final gbInt = trafficGb.round().clamp(1, 350);
     final baseForGb = appsDisabled
         ? trafficPack.basePriceRub
         : _basePriceForGb(trafficGb);
@@ -7638,7 +9227,7 @@ class TariffPage extends StatelessWidget {
         const _PageTitle(
           title: 'Тариф',
           subtitle:
-              'Собери подписку из трафика, безлимитных приложений и устройств',
+              'Настрой подписку под свои сценарии, приложения и устройства',
           icon: Icons.star_rounded,
         ),
         const SizedBox(height: 12),
@@ -7704,9 +9293,15 @@ class TariffPage extends StatelessWidget {
                           ),
                           _ChipButton(
                             icon: Icons.storage_rounded,
-                            text: '100 ГБ',
-                            selected: gbInt == 100,
-                            onTap: () => onTrafficGbChanged(100.0),
+                            text: '150 ГБ',
+                            selected: gbInt == 150,
+                            onTap: () => onTrafficGbChanged(150.0),
+                          ),
+                          _ChipButton(
+                            icon: Icons.storage_rounded,
+                            text: '350 ГБ',
+                            selected: gbInt == 350,
+                            onTap: () => onTrafficGbChanged(350.0),
                           ),
                         ],
                       ),
@@ -7714,11 +9309,24 @@ class TariffPage extends StatelessWidget {
                       Container(
                         padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
                         decoration: BoxDecoration(
-                          color: kBrandPrimarySoft.withOpacity(0.55),
+                          color: isDark
+                              ? const Color(0xFF091F18)
+                              : kBrandPrimarySoft.withOpacity(0.55),
                           borderRadius: BorderRadius.circular(18),
                           border: Border.all(
-                            color: kBrandPrimary.withOpacity(0.14),
+                            color: isDark
+                                ? kBrandPrimary.withOpacity(0.38)
+                                : kBrandPrimary.withOpacity(0.14),
                           ),
+                          boxShadow: isDark
+                              ? [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.18),
+                                    blurRadius: 18,
+                                    offset: const Offset(0, 10),
+                                  ),
+                                ]
+                              : null,
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -7742,21 +9350,40 @@ class TariffPage extends StatelessWidget {
                                 ),
                                 Text(
                                   '$gbInt ГБ',
-                                  style: const TextStyle(
-                                    color: kBrandPrimaryDeep,
+                                  style: TextStyle(
+                                    color: isDark
+                                        ? kBrandPrimary
+                                        : kBrandPrimaryDeep,
                                     fontWeight: FontWeight.w900,
                                   ),
                                 ),
                               ],
                             ),
-                            Slider(
-                              value: gbInt.clamp(1, 100).toDouble(),
-                              min: 1,
-                              max: 100,
-                              divisions: 99,
-                              label: '$gbInt ГБ',
-                              onChanged: (value) =>
-                                  onTrafficGbChanged(value.roundToDouble()),
+                            SliderTheme(
+                              data: SliderTheme.of(context).copyWith(
+                                activeTrackColor: kBrandPrimary,
+                                inactiveTrackColor: isDark
+                                    ? Colors.white.withOpacity(0.12)
+                                    : kBrandPrimary.withOpacity(0.18),
+                                thumbColor: kBrandPrimary,
+                                overlayColor: kBrandPrimary.withOpacity(0.14),
+                                valueIndicatorColor: isDark
+                                    ? const Color(0xFF123528)
+                                    : kBrandPrimary,
+                                valueIndicatorTextStyle: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                              child: Slider(
+                                value: gbInt.clamp(1, 350).toDouble(),
+                                min: 1,
+                                max: 350,
+                                divisions: 349,
+                                label: '$gbInt ГБ',
+                                onChanged: (value) =>
+                                    onTrafficGbChanged(value.roundToDouble()),
+                              ),
                             ),
                           ],
                         ),
@@ -7989,7 +9616,11 @@ class TariffPage extends StatelessWidget {
                   ),
                   _IncludedBadge(
                     icon: Icons.alt_route_rounded,
-                    text: 'Social Only',
+                    text: 'Соцсети',
+                  ),
+                  _IncludedBadge(
+                    icon: Icons.dashboard_customize_rounded,
+                    text: 'Плитка в шторке',
                   ),
                 ],
               ),
@@ -8206,23 +9837,6 @@ class _GbPricePoint {
   const _GbPricePoint(this.gb, this.price);
 }
 
-/* =========================
-   TASKS PAGE (placeholder)
-   ========================= */
-
-class TasksPage extends StatelessWidget {
-  const TasksPage({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return const _PlaceholderPage(
-      title: 'Задания',
-      subtitle: 'Позже добавим: бонусы, рефы, промо, ежедневные задания.',
-      icon: Icons.checklist_rounded,
-    );
-  }
-}
-
 class SettingsPage extends StatelessWidget {
   final ThemeMode themeMode;
   final void Function(ThemeMode mode) onThemeModeChanged;
@@ -8243,6 +9857,13 @@ class SettingsPage extends StatelessWidget {
   final String? phoneStatusMessage;
   final Future<void> Function() onRefreshPhoneStatus;
   final Future<void> Function() onBindPhone;
+  final bool subscriptionActive;
+  final bool subscriptionAutoRenew;
+  final bool paymentMethodSaved;
+  final String? subscriptionExpiresAt;
+  final int? subscriptionMonthlyPriceRub;
+  final VoidCallback onOpenTariff;
+  final Future<void> Function() onCancelAutoRenew;
   final Future<void> Function() onLogout;
   final VoidCallback onOpenUpdates;
   final VoidCallback onOpenDiagnostics;
@@ -8266,6 +9887,13 @@ class SettingsPage extends StatelessWidget {
     required this.phoneStatusMessage,
     required this.onRefreshPhoneStatus,
     required this.onBindPhone,
+    required this.subscriptionActive,
+    required this.subscriptionAutoRenew,
+    required this.paymentMethodSaved,
+    required this.subscriptionExpiresAt,
+    required this.subscriptionMonthlyPriceRub,
+    required this.onOpenTariff,
+    required this.onCancelAutoRenew,
     required this.onLogout,
     required this.onOpenUpdates,
     required this.onOpenDiagnostics,
@@ -8279,9 +9907,11 @@ class SettingsPage extends StatelessWidget {
       padding: const EdgeInsets.all(16),
       child: ListView(
         children: [
-          const _PageTitle(
+          _PageTitle(
             title: 'Настройки',
-            subtitle: 'Только косметика и аккаунт',
+            subtitle: kTrialOnlyNoAdsBuild
+                ? 'Аккаунт и параметры приложения'
+                : 'Аккаунт, оплата и параметры приложения',
             icon: Icons.settings_rounded,
           ),
           const SizedBox(height: 12),
@@ -8309,6 +9939,79 @@ class SettingsPage extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
+          if (!kTrialOnlyNoAdsBuild) ...[
+            _Card(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const _SectionTitle('Оплата и автопродление'),
+                  const SizedBox(height: 8),
+                  _SettingsNavRow(
+                    title: 'Основная карта для подписки',
+                    subtitle: paymentMethodSaved
+                        ? 'Способ оплаты сохранён в ЮKassa'
+                        : 'Карта не добавлена',
+                    icon: Icons.credit_card_rounded,
+                    onTap: onOpenTariff,
+                  ),
+                  const Divider(height: 18),
+                  _SettingsNavRow(
+                    title: 'Автопродление',
+                    subtitle: subscriptionAutoRenew
+                        ? 'Включено${subscriptionExpiresAt?.isNotEmpty == true ? '. Следующий период: $subscriptionExpiresAt' : ''}'
+                        : 'Отключено',
+                    icon: Icons.autorenew_rounded,
+                    onTap: onOpenTariff,
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    paymentMethodSaved
+                        ? 'Полные данные карты хранит ЮKassa. Green VPN видит только статус подписки и основной способ оплаты. Добавить или сменить карту можно через оплату тарифа.'
+                        : 'Карта добавляется во время оплаты тарифа. После этого подписка сможет продлеваться автоматически без ручного продления каждый месяц.',
+                    style: TextStyle(
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.onSurface.withOpacity(0.62),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
+                  ),
+                  if (subscriptionMonthlyPriceRub != null) ...[
+                    const SizedBox(height: 10),
+                    Text(
+                      'Текущая сумма: $subscriptionMonthlyPriceRub ₽ в месяц',
+                      style: const TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      ElevatedButton.icon(
+                        onPressed: onOpenTariff,
+                        icon: const Icon(Icons.add_card_rounded),
+                        label: Text(
+                          paymentMethodSaved
+                              ? 'Сменить карту'
+                              : 'Добавить карту',
+                        ),
+                      ),
+                      if (subscriptionAutoRenew)
+                        OutlinedButton.icon(
+                          onPressed: () {
+                            unawaited(onCancelAutoRenew());
+                          },
+                          icon: const Icon(Icons.pause_circle_outline_rounded),
+                          label: const Text('Отключить автопродление'),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           _Card(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -8366,7 +10069,8 @@ class SettingsPage extends StatelessWidget {
                 const Divider(height: 18),
                 _SettingsActionRow(
                   title: 'О Green VPN',
-                  subtitle: 'Версия $kAppVersion, Windows MVP',
+                  subtitle:
+                      'Версия $kAppVersion, ${greenVpnClientPlatform().toUpperCase()}',
                   icon: Icons.info_outline_rounded,
                   onTap: () => _showAbout(context),
                 ),
@@ -8385,10 +10089,10 @@ class SettingsPage extends StatelessWidget {
       builder: (_) {
         return AlertDialog(
           title: const Text(kProductName),
-          content: const Text(
-            'Green VPN для Windows.\n\n'
+          content: Text(
+            'Green VPN для Windows и Android.\n\n'
             'Версия: $kAppVersion\n'
-            'Системный компонент управляет VPN-действиями, а приложение остаётся обычным пользовательским интерфейсом.\n\n'
+            'На Windows системный компонент управляет VPN-действиями. На Android приложение использует системное разрешение VPN.\n\n'
             'Если что-то не работает, раздел “Поддержка” отправит закодированный отчёт без паролей, токенов и приватных ключей.',
           ),
           actions: [
@@ -8415,6 +10119,10 @@ class _UpdatesPageState extends State<UpdatesPage> {
   final _deviceStore = DeviceIdStore();
 
   bool _loading = true;
+  bool _downloading = false;
+  double? _downloadProgress;
+  String? _downloadStatus;
+  String? _downloadError;
   GreenVpnUpdateManifest? _manifest;
   String? _error;
 
@@ -8428,6 +10136,8 @@ class _UpdatesPageState extends State<UpdatesPage> {
     setState(() {
       _loading = true;
       _error = null;
+      _downloadStatus = null;
+      _downloadError = null;
     });
 
     String? clientId;
@@ -8437,7 +10147,8 @@ class _UpdatesPageState extends State<UpdatesPage> {
       clientId = null;
     }
 
-    final res = await _api.fetchWindowsUpdateManifest(
+    final res = await _api.fetchUpdateManifest(
+      platform: greenVpnClientPlatform(),
       currentVersion: kAppVersion,
       clientId: clientId,
     );
@@ -8457,6 +10168,203 @@ class _UpdatesPageState extends State<UpdatesPage> {
     final url = _manifest?.downloadUrl.trim() ?? '';
     if (url.isEmpty) return;
     await openExternalUrl(url);
+  }
+
+  String get _platform => greenVpnClientPlatform();
+
+  String get _platformTitle {
+    if (_platform == 'android') return 'Android';
+    if (_platform == 'windows') return 'Windows';
+    return _platform.toUpperCase();
+  }
+
+  String get _expectedUpdateExtension {
+    if (!kIsWeb && Platform.isAndroid) return '.apk';
+    if (!kIsWeb && Platform.isWindows) return '.exe';
+    return '';
+  }
+
+  String get _installHint {
+    if (!kIsWeb && Platform.isAndroid) {
+      return 'APK скачается внутри Green VPN, затем Android откроет системную установку.';
+    }
+    if (!kIsWeb && Platform.isWindows) {
+      return 'Установщик скачается внутри Green VPN и запустится автоматически.';
+    }
+    return 'Green VPN скачает файл обновления для этой платформы.';
+  }
+
+  bool _downloadLooksPlatformSpecific(String url) {
+    final expected = _expectedUpdateExtension;
+    if (expected.isEmpty) return true;
+    final uri = Uri.tryParse(url);
+    final path = (uri?.path ?? url).toLowerCase();
+    return path.endsWith(expected);
+  }
+
+  String _safeUpdateFileName(Uri uri) {
+    final expected = _expectedUpdateExtension;
+    var name = uri.pathSegments.isNotEmpty ? uri.pathSegments.last : '';
+    name = Uri.decodeComponent(name).trim();
+    name = name.replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_');
+    if (name.isEmpty ||
+        (expected.isNotEmpty && !name.toLowerCase().endsWith(expected))) {
+      name = 'GreenVPN_Update$expected';
+    }
+    return name;
+  }
+
+  Future<File> _downloadUpdateFile(GreenVpnUpdateManifest manifest) async {
+    final url = manifest.downloadUrl.trim();
+    if (url.isEmpty) {
+      throw Exception('Ссылка на обновление не настроена.');
+    }
+    if (!_downloadLooksPlatformSpecific(url)) {
+      throw Exception(
+        'Сервер отдал файл не для $_platformTitle. Ожидался $_expectedUpdateExtension.',
+      );
+    }
+
+    final uri = Uri.parse(url);
+    if (uri.scheme != 'https' && uri.scheme != 'http') {
+      throw Exception('Некорректная ссылка обновления.');
+    }
+
+    final dir = Directory(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}GreenVPNUpdates',
+    );
+    await dir.create(recursive: true);
+    final file = File(
+      '${dir.path}${Platform.pathSeparator}${_safeUpdateFileName(uri)}',
+    );
+    final temp = File('${file.path}.download');
+    if (await temp.exists()) {
+      await temp.delete();
+    }
+
+    final client = HttpClient();
+    IOSink? sink;
+    try {
+      final request = await client.getUrl(uri);
+      request.headers.set(
+        HttpHeaders.userAgentHeader,
+        'GreenVPN/$kAppVersion ($_platform; updater)',
+      );
+      final response = await request.close();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw Exception(
+          'Сервер обновлений вернул HTTP ${response.statusCode}.',
+        );
+      }
+
+      sink = temp.openWrite();
+      var downloaded = 0;
+      final total = response.contentLength;
+      await for (final chunk in response) {
+        downloaded += chunk.length;
+        sink.add(chunk);
+        if (mounted && total > 0) {
+          setState(() {
+            _downloadProgress = downloaded / total;
+            _downloadStatus =
+                'Скачивание: ${(downloaded / 1024 / 1024).toStringAsFixed(1)} из ${(total / 1024 / 1024).toStringAsFixed(1)} МБ';
+          });
+        }
+      }
+      await sink.close();
+      sink = null;
+    } finally {
+      client.close(force: true);
+      await sink?.close();
+    }
+
+    final expectedSha = manifest.sha256.trim().toUpperCase();
+    if (expectedSha.isNotEmpty) {
+      if (mounted) {
+        setState(() => _downloadStatus = 'Проверка файла обновления...');
+      }
+      final actualSha = (await crypto.sha256.bind(temp.openRead()).first)
+          .toString()
+          .toUpperCase();
+      if (actualSha != expectedSha) {
+        await temp.delete();
+        throw Exception('SHA256 обновления не совпал. Установка остановлена.');
+      }
+    }
+
+    if (await file.exists()) {
+      await file.delete();
+    }
+    return temp.rename(file.path);
+  }
+
+  Future<void> _installDownloadedUpdate(File file) async {
+    if (!kIsWeb && Platform.isAndroid) {
+      final result = await kAndroidPlatformChannel.invokeMethod('installApk', {
+        'path': file.path,
+      });
+      final map = result is Map ? Map<String, dynamic>.from(result) : {};
+      final ok = map['ok'] == true;
+      if (!ok) {
+        throw Exception(
+          (map['message'] ?? 'Android не открыл установку APK.').toString(),
+        );
+      }
+      return;
+    }
+
+    if (!kIsWeb && Platform.isWindows) {
+      await Process.start('cmd', [
+        '/c',
+        'start',
+        '',
+        file.path,
+      ], mode: ProcessStartMode.detached);
+      return;
+    }
+
+    await openExternalUrl(file.uri.toString());
+  }
+
+  Future<void> _downloadAndInstall() async {
+    final manifest = _manifest;
+    if (manifest == null || _downloading) return;
+
+    setState(() {
+      _downloading = true;
+      _downloadProgress = null;
+      _downloadStatus = 'Подготовка обновления для $_platformTitle...';
+      _downloadError = null;
+    });
+
+    try {
+      final file = await _downloadUpdateFile(manifest);
+      if (mounted) {
+        setState(() => _downloadStatus = 'Файл скачан. Запускаю установку...');
+      }
+      await _installDownloadedUpdate(file);
+      if (!mounted) return;
+      setState(() {
+        _downloadStatus = !kIsWeb && Platform.isAndroid
+            ? 'Открыта системная установка APK.'
+            : 'Установщик запущен.';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _downloadError = authUserMessage(
+          error,
+          fallback: 'Не удалось установить обновление.',
+        );
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _downloading = false;
+          _downloadProgress = null;
+        });
+      }
+    }
   }
 
   @override
@@ -8489,7 +10397,7 @@ class _UpdatesPageState extends State<UpdatesPage> {
                             : 'Есть новая версия')
                       : 'Версия актуальна',
                   subtitle: hasUpdate
-                      ? 'Скачай свежий установщик Green VPN и поставь его поверх текущей версии.'
+                      ? 'Новая версия будет установлена для $_platformTitle.'
                       : heldByRollout
                       ? 'Сервер обновлений работает. Новая версия будет предложена, когда дойдёт очередь этого устройства.'
                       : 'Green VPN проверил сервер обновлений.',
@@ -8517,6 +10425,12 @@ class _UpdatesPageState extends State<UpdatesPage> {
                           title: 'Текущая версия',
                           ok: true,
                           value: kAppVersion,
+                        ),
+                        const SizedBox(height: 10),
+                        _SupportStatusLine(
+                          title: 'Платформа',
+                          ok: true,
+                          value: _platformTitle,
                         ),
                         const SizedBox(height: 10),
                         _SupportStatusLine(
@@ -8591,7 +10505,7 @@ class _UpdatesPageState extends State<UpdatesPage> {
                           const SizedBox(height: 8),
                           Text(
                             manifest.canDownload
-                                ? 'После скачивания Windows попросит подтвердить установку.'
+                                ? _installHint
                                 : 'Ссылка на скачивание пока не настроена на сервере.',
                             style: TextStyle(
                               color: Theme.of(
@@ -8600,6 +10514,41 @@ class _UpdatesPageState extends State<UpdatesPage> {
                               fontWeight: FontWeight.w600,
                             ),
                           ),
+                          if (!_downloadLooksPlatformSpecific(
+                            manifest.downloadUrl,
+                          )) ...[
+                            const SizedBox(height: 10),
+                            const Text(
+                              'Сервер обновлений вернул файл не для этой платформы. Установка заблокирована.',
+                              style: TextStyle(
+                                color: kBrandDanger,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ],
+                          if (_downloadProgress != null) ...[
+                            const SizedBox(height: 12),
+                            LinearProgressIndicator(value: _downloadProgress),
+                          ],
+                          if (_downloadStatus != null) ...[
+                            const SizedBox(height: 10),
+                            Text(
+                              _downloadStatus!,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                          if (_downloadError != null) ...[
+                            const SizedBox(height: 10),
+                            Text(
+                              _downloadError!,
+                              style: const TextStyle(
+                                color: kBrandDanger,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: 14),
                           ElevatedButton(
                             style: ElevatedButton.styleFrom(
@@ -8610,11 +10559,27 @@ class _UpdatesPageState extends State<UpdatesPage> {
                                 borderRadius: BorderRadius.circular(14),
                               ),
                             ),
-                            onPressed: manifest.canDownload
-                                ? _openDownload
+                            onPressed:
+                                manifest.canDownload &&
+                                    _downloadLooksPlatformSpecific(
+                                      manifest.downloadUrl,
+                                    ) &&
+                                    !_downloading
+                                ? _downloadAndInstall
                                 : null,
-                            child: const Text('Скачать обновление'),
+                            child: Text(
+                              _downloading
+                                  ? 'Обновление загружается...'
+                                  : 'Обновить Green VPN',
+                            ),
                           ),
+                          if (manifest.canDownload) ...[
+                            const SizedBox(height: 8),
+                            TextButton(
+                              onPressed: _downloading ? null : _openDownload,
+                              child: const Text('Открыть ссылку вручную'),
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -9511,9 +11476,14 @@ class _BackendAdminUserPageState extends State<BackendAdminUserPage> {
                                   {'code': 'gb20', 'title': '20 ГБ', 'gb': 20},
                                   {'code': 'gb50', 'title': '50 ГБ', 'gb': 50},
                                   {
-                                    'code': 'gb100',
-                                    'title': '100 ГБ',
-                                    'gb': 100,
+                                    'code': 'gb150',
+                                    'title': '150 ГБ',
+                                    'gb': 150,
+                                  },
+                                  {
+                                    'code': 'gb350',
+                                    'title': '350 ГБ',
+                                    'gb': 350,
                                   },
                                   {
                                     'code': 'unlimited',
@@ -9535,10 +11505,10 @@ class _BackendAdminUserPageState extends State<BackendAdminUserPage> {
                                       setState(() {
                                         _trafficPackCode = code;
                                         if (code == 'unlimited') {
-                                          _trafficGb = 500;
+                                          _trafficGb = 800;
                                           _unlimitedAppCodes.clear();
                                         } else {
-                                          _trafficGb = gb.clamp(1, 500);
+                                          _trafficGb = gb.clamp(1, 800);
                                         }
                                       });
                                       unawaited(_refreshQuote());
@@ -9554,10 +11524,10 @@ class _BackendAdminUserPageState extends State<BackendAdminUserPage> {
                     style: const TextStyle(fontWeight: FontWeight.w800),
                   ),
                   Slider(
-                    value: _trafficGb.clamp(1, 500).toDouble(),
+                    value: _trafficGb.clamp(1, 800).toDouble(),
                     min: 1,
-                    max: 500,
-                    divisions: 499,
+                    max: 800,
+                    divisions: 799,
                     onChanged: _busy
                         ? null
                         : (v) {
@@ -9572,7 +11542,7 @@ class _BackendAdminUserPageState extends State<BackendAdminUserPage> {
                   Wrap(
                     spacing: 10,
                     runSpacing: 10,
-                    children: [5, 20, 50, 100]
+                    children: [5, 50, 150, 350]
                         .map(
                           (gb) => _ChipButton(
                             icon: Icons.speed_rounded,
@@ -9757,10 +11727,10 @@ class _BackendAdminUserPageState extends State<BackendAdminUserPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const _SectionTitle('Ручной режим доступа'),
+                const _SectionTitle('Ручное управление доступом'),
                 const SizedBox(height: 10),
                 const Text(
-                  'Оставляем как аварийный инструмент. Основной способ теперь — серверный тариф по каталогу выше.',
+                  'Служебный режим для поддержки. Основной способ — серверный тариф по каталогу выше.',
                   style: TextStyle(
                     color: kBrandMuted,
                     fontWeight: FontWeight.w700,
@@ -9773,7 +11743,7 @@ class _BackendAdminUserPageState extends State<BackendAdminUserPage> {
                     Expanded(
                       child: _ChipButton(
                         icon: Icons.flash_on_rounded,
-                        text: 'Trial',
+                        text: 'Пробный',
                         selected: _planCode == 'trial',
                         onTap: () {
                           setState(() {
@@ -9787,7 +11757,7 @@ class _BackendAdminUserPageState extends State<BackendAdminUserPage> {
                     Expanded(
                       child: _ChipButton(
                         icon: Icons.workspace_premium_rounded,
-                        text: 'Base',
+                        text: 'Базовый',
                         selected: _planCode == 'base',
                         onTap: () {
                           setState(() {
@@ -10449,70 +12419,6 @@ class _IncludedBadge extends StatelessWidget {
   }
 }
 
-class _PlaceholderPage extends StatelessWidget {
-  final String title;
-  final String subtitle;
-  final IconData icon;
-
-  const _PlaceholderPage({
-    required this.title,
-    required this.subtitle,
-    required this.icon,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Center(
-        child: _Card(
-          child: Row(
-            children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: isDark ? kBrandDarkSurface : kBrandPrimarySoft,
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Icon(icon, color: kBrandPrimary),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w900,
-                        color: theme.colorScheme.onSurface,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      subtitle,
-                      style: TextStyle(
-                        color: theme.colorScheme.onSurface.withOpacity(0.62),
-                        fontWeight: FontWeight.w700,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _Card extends StatelessWidget {
   final Widget child;
   final Color? tint;
@@ -11050,6 +12956,7 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
   bool _wgFound = false;
 
   WireGuardRuntimeStatus? _runtimeStatus;
+  Map<String, dynamic> _androidVpnStatus = const <String, dynamic>{};
   String? _fallbackReportCode;
 
   @override
@@ -11060,6 +12967,25 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
 
   Future<void> _refresh() async {
     setState(() => _loading = true);
+
+    final cfg = ConfigStore();
+    _runtimeStatus = null;
+    _androidVpnStatus = const <String, dynamic>{};
+
+    if (!kIsWeb && Platform.isAndroid) {
+      _statePath = 'Android secure storage';
+      _deviceUid = (await DeviceIdStore().read()) ?? '';
+      _configPath = cfg.managedConfigPath;
+      _configExists = await cfg.hasManagedConfig();
+      _wgExe = 'Android WireGuard GoBackend';
+      _wgFound = true;
+      _isAdmin = false;
+      _androidVpnStatus = await WireGuardAndroidBackend.statusSnapshot();
+
+      if (!mounted) return;
+      setState(() => _loading = false);
+      return;
+    }
 
     _statePath = BlueVpnLocalPaths.sharedStateDirSync();
     _deviceUid = '';
@@ -11072,7 +12998,6 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
       _deviceUid = '';
     }
 
-    final cfg = ConfigStore();
     _configPath = cfg.managedConfigPath;
     _configExists = File(_configPath).existsSync();
 
@@ -11121,8 +13046,36 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
     }
   }
 
-  String _buildSupportReportCode() {
+  bool get _isAndroidDiagnostics => !kIsWeb && Platform.isAndroid;
+
+  Map<String, Object?>? _androidSupportFields() {
+    if (!_isAndroidDiagnostics) return null;
+    final safe = greenVpnSafeAndroidVpnStatus(_androidVpnStatus);
+    final connected = safe['connected'] == true || safe['state'] == 'up';
+    final rxBytes = greenVpnIntValue(safe['rxBytes']);
+    final txBytes = greenVpnIntValue(safe['txBytes']);
+    final hasTraffic = rxBytes > 0 || txBytes > 0;
+    return <String, Object?>{
+      'service': 'android_vpn_service',
+      'mode': connected ? 'android_wireguard' : 'android_down',
+      'hasHandshake': connected && hasTraffic,
+      'hasTraffic': hasTraffic,
+      'traffic':
+          'rx ${WireGuardRuntimeStatus._formatBytes(rxBytes)} / tx ${WireGuardRuntimeStatus._formatBytes(txBytes)}',
+      'realTunnel': connected,
+      'competingVpn': 'unknown',
+      'routeOwner': connected ? 'android_vpn_service' : 'unknown',
+      'routeHint': connected
+          ? 'Android VpnService is active. Use route events for YouTube reachability.'
+          : 'Android VpnService is not active.',
+      'endpoint': 'android-native',
+      'androidStatus': safe,
+    };
+  }
+
+  Future<String> _buildSupportReportCode() async {
     final runtime = _runtimeStatus;
+    final android = _androidSupportFields();
     final payload = <String, Object?>{
       'schema': 1,
       'product': kProductName,
@@ -11135,16 +13088,23 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
       'configExists': _configExists,
       'wireGuardFound': _wgFound,
       'admin': _isAdmin,
-      'service': runtime?.serviceState ?? 'unknown',
-      'mode': runtime?.modeLabel ?? 'unknown',
-      'hasHandshake': runtime?.hasRecentHandshake ?? false,
-      'hasTraffic': runtime?.hasTraffic ?? false,
-      'traffic': runtime?.trafficLabel ?? 'rx 0 B / tx 0 B',
-      'realTunnel': runtime?.isReallyConnected ?? false,
-      'competingVpn': runtime?.competingTunnelsLabel ?? 'none',
-      'routeOwner': runtime?.routeOwnerLabel ?? 'unknown',
-      'routeHint': runtime?.routeConflictHint ?? '',
-      'endpoint': runtime?.bestEndpoint ?? '',
+      'service': android?['service'] ?? runtime?.serviceState ?? 'unknown',
+      'mode': android?['mode'] ?? runtime?.modeLabel ?? 'unknown',
+      'hasHandshake':
+          android?['hasHandshake'] ?? runtime?.hasRecentHandshake ?? false,
+      'hasTraffic': android?['hasTraffic'] ?? runtime?.hasTraffic ?? false,
+      'traffic':
+          android?['traffic'] ?? runtime?.trafficLabel ?? 'rx 0 B / tx 0 B',
+      'realTunnel':
+          android?['realTunnel'] ?? runtime?.isReallyConnected ?? false,
+      'competingVpn':
+          android?['competingVpn'] ?? runtime?.competingTunnelsLabel ?? 'none',
+      'routeOwner':
+          android?['routeOwner'] ?? runtime?.routeOwnerLabel ?? 'unknown',
+      'routeHint': android?['routeHint'] ?? runtime?.routeConflictHint ?? '',
+      'endpoint': android?['endpoint'] ?? runtime?.bestEndpoint ?? '',
+      if (android?['androidStatus'] != null)
+        'androidStatus': android?['androidStatus'],
     };
     final jsonBytes = utf8.encode(jsonEncode(payload));
     final packed = gzip.encode(jsonBytes);
@@ -11153,13 +13113,14 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
 
   String _supportSummary() {
     final runtime = _runtimeStatus;
+    final android = _androidSupportFields();
     final parts = <String>[
-      'service=${runtime?.serviceState ?? 'unknown'}',
-      'mode=${runtime?.modeLabel ?? 'unknown'}',
-      'handshake=${runtime?.hasRecentHandshake == true ? 'yes' : 'no'}',
-      'traffic=${runtime?.trafficLabel ?? 'rx 0 B / tx 0 B'}',
-      'competing=${runtime?.competingTunnelsLabel ?? 'none'}',
-      'route=${runtime?.routeOwnerLabel ?? 'unknown'}',
+      'service=${android?['service'] ?? runtime?.serviceState ?? 'unknown'}',
+      'mode=${android?['mode'] ?? runtime?.modeLabel ?? 'unknown'}',
+      'handshake=${(android?['hasHandshake'] ?? runtime?.hasRecentHandshake ?? false) == true ? 'yes' : 'no'}',
+      'traffic=${android?['traffic'] ?? runtime?.trafficLabel ?? 'rx 0 B / tx 0 B'}',
+      'competing=${android?['competingVpn'] ?? runtime?.competingTunnelsLabel ?? 'none'}',
+      'route=${android?['routeOwner'] ?? runtime?.routeOwnerLabel ?? 'unknown'}',
     ];
     return parts.join(', ');
   }
@@ -11171,7 +13132,7 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
       _lastSendMessage = null;
     });
 
-    final reportCode = _buildSupportReportCode();
+    final reportCode = await _buildSupportReportCode();
     final result = await _api.sendSupportReport(
       accessToken: widget.accessToken,
       report: reportCode,
@@ -11207,12 +13168,22 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
   @override
   Widget build(BuildContext context) {
     final runtime = _runtimeStatus;
-    final serviceState = runtime?.serviceState ?? 'unknown';
-    final handshakeOk = runtime?.hasRecentHandshake ?? false;
-    final trafficOk = runtime?.hasTraffic ?? false;
-    final realTunnelOk = runtime?.isReallyConnected ?? false;
-    final competingTunnels = runtime?.competingTunnelsLabel ?? 'none';
-    final serviceOk = serviceState == 'running' || serviceState == 'stopped';
+    final android = _androidSupportFields();
+    final serviceState =
+        (android?['service'] ?? runtime?.serviceState ?? 'unknown').toString();
+    final handshakeOk =
+        (android?['hasHandshake'] ?? runtime?.hasRecentHandshake ?? false) ==
+        true;
+    final trafficOk =
+        (android?['hasTraffic'] ?? runtime?.hasTraffic ?? false) == true;
+    final realTunnelOk =
+        (android?['realTunnel'] ?? runtime?.isReallyConnected ?? false) == true;
+    final competingTunnels =
+        (android?['competingVpn'] ?? runtime?.competingTunnelsLabel ?? 'none')
+            .toString();
+    final serviceOk = _isAndroidDiagnostics
+        ? _wgFound
+        : serviceState == 'running' || serviceState == 'stopped';
 
     return Scaffold(
       appBar: AppBar(
@@ -11404,8 +13375,12 @@ abstract class VpnBackend {
     if (Platform.isWindows) {
       return WireGuardWindowsBackend(tunnelName: tunnelName);
     }
+    if (Platform.isAndroid) {
+      return WireGuardAndroidBackend(tunnelName: tunnelName);
+    }
     return const UnsupportedVpnBackend(
-      reason: 'Unsupported platform (Windows-only backend).',
+      reason:
+          'На этой платформе реальное VPN-подключение пока не включено. Android уже поддерживается, iOS требует Apple Network Extension.',
     );
   }
 }
@@ -11424,6 +13399,97 @@ class UnsupportedVpnBackend extends VpnBackend {
 
   @override
   Future<bool> isConnected() async => false;
+}
+
+class WireGuardAndroidBackend extends VpnBackend {
+  static const MethodChannel _channel = MethodChannel('green_vpn/android_vpn');
+
+  final String tunnelName;
+
+  const WireGuardAndroidBackend({required this.tunnelName});
+
+  @override
+  Future<VpnBackendResult> connect({required String configPath}) async {
+    try {
+      final config = await ConfigStore().readManagedConfig();
+      if (config == null || config.trim().isEmpty) {
+        return const VpnBackendResult(
+          ok: false,
+          message:
+              'VPN-конфиг ещё не получен. Войди в аккаунт и попробуй подключиться снова.',
+        );
+      }
+
+      final response = await _invokeMap('connect', {
+        'name': tunnelName,
+        'config': config,
+      });
+      return VpnBackendResult(
+        ok: response['ok'] == true,
+        message: _messageFromNative(response),
+      );
+    } catch (e) {
+      return VpnBackendResult(ok: false, message: 'Android VPN не ответил: $e');
+    }
+  }
+
+  @override
+  Future<VpnBackendResult> disconnect() async {
+    try {
+      final response = await _invokeMap('disconnect', {'name': tunnelName});
+      return VpnBackendResult(
+        ok: response['ok'] == true,
+        message: _messageFromNative(response),
+      );
+    } catch (e) {
+      return VpnBackendResult(
+        ok: false,
+        message: 'Android VPN не выключился: $e',
+      );
+    }
+  }
+
+  @override
+  Future<bool> isConnected() async {
+    try {
+      final response = await _invokeMap('status', {'name': tunnelName});
+      return response['connected'] == true || response['state'] == 'up';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<Map<String, dynamic>> statusSnapshot({
+    String tunnelName = kTunnelName,
+  }) async {
+    try {
+      return await _invokeMap('status', {'name': tunnelName});
+    } catch (e) {
+      return <String, dynamic>{
+        'ok': false,
+        'connected': false,
+        'state': 'unknown',
+        'error': e.toString(),
+      };
+    }
+  }
+
+  static Future<Map<String, dynamic>> _invokeMap(
+    String method,
+    Map<String, Object?> args,
+  ) async {
+    final raw = await _channel.invokeMethod<Object?>(method, args);
+    if (raw is Map<String, dynamic>) return raw;
+    if (raw is Map) {
+      return raw.map((key, value) => MapEntry('$key', value));
+    }
+    return const <String, dynamic>{};
+  }
+
+  static String? _messageFromNative(Map<String, dynamic> response) {
+    final message = (response['message'] ?? '').toString().trim();
+    return message.isEmpty ? null : message;
+  }
 }
 
 class _GreenVpnSystemServiceResponse {
@@ -11446,6 +13512,8 @@ class _GreenVpnSystemServiceClient {
   const _GreenVpnSystemServiceClient();
 
   static final Uri _baseUri = Uri.parse('http://127.0.0.1:48737');
+  static const String _localTokenPath = r'C:\ProgramData\BlueVPN\service_token';
+  static const String _localTokenHeader = 'X-GreenVPN-Local-Token';
 
   Future<_GreenVpnSystemServiceResponse> ping() => _request(
     'GET',
@@ -11476,11 +13544,24 @@ class _GreenVpnSystemServiceClient {
   }) async {
     final client = HttpClient()..connectionTimeout = connectTimeout;
     try {
+      final token = await _readLocalToken();
+      if (_requiresLocalToken(path) && token == null) {
+        return const _GreenVpnSystemServiceResponse(
+          ok: false,
+          statusCode: 0,
+          message:
+              'Локальный системный компонент Green VPN установлен без защитного токена. Переустанови последнюю версию GreenVPN_Setup.exe один раз с правами администратора.',
+        );
+      }
+
       final uri = _baseUri.resolve(path);
       final request = method == 'POST'
           ? await client.postUrl(uri).timeout(connectTimeout)
           : await client.getUrl(uri).timeout(connectTimeout);
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      if (token != null) {
+        request.headers.set(_localTokenHeader, token);
+      }
       if (method == 'POST') {
         request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
         request.add(utf8.encode('{}'));
@@ -11528,6 +13609,24 @@ class _GreenVpnSystemServiceClient {
     if (value == null) return null;
     return int.tryParse(value.toString());
   }
+
+  static bool _requiresLocalToken(String path) {
+    final lower = path.toLowerCase();
+    return lower == '/connect' || lower == '/disconnect' || lower == '/status';
+  }
+
+  static Future<String?> _readLocalToken() async {
+    if (kIsWeb || !Platform.isWindows) return null;
+    try {
+      final file = File(_localTokenPath);
+      if (!file.existsSync()) return null;
+      final token = (await file.readAsString()).trim();
+      if (token.length < 24) return null;
+      return token;
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 class WireGuardWindowsBackend extends VpnBackend {
@@ -11566,20 +13665,8 @@ class WireGuardWindowsBackend extends VpnBackend {
   // Use raw string + concat.
   String get _serviceName => r'WireGuardTunnel$' + tunnelName;
 
-  static const String _connectTaskName = 'GreenVPNConnect';
-  static const String _disconnectTaskName = 'GreenVPNDisconnect';
-
   Future<ProcessResult> _run(String exe, List<String> args) async {
     return Process.run(exe, args, runInShell: true);
-  }
-
-  Future<bool> _scheduledVpnTaskExists(String taskName) async {
-    final res = await _run('schtasks', ['/Query', '/TN', taskName]);
-    return res.exitCode == 0;
-  }
-
-  Future<ProcessResult> _runScheduledVpnTask(String taskName) {
-    return _run('schtasks', ['/Run', '/TN', taskName]);
   }
 
   Future<ProcessResult> _setTunnelServiceManualStart() {
@@ -11620,7 +13707,7 @@ if ($null -eq $ip) { "ip=missing" } else { "ip=present" }
     final res = await _run('powershell', [
       '-NoProfile',
       '-ExecutionPolicy',
-      'Bypass',
+      'RemoteSigned',
       '-Command',
       _adapterStateScript(),
     ]);
@@ -11642,7 +13729,7 @@ if ($null -eq $svc) { exit 0 }
     final res = await _run('powershell', [
       '-NoProfile',
       '-ExecutionPolicy',
-      'Bypass',
+      'RemoteSigned',
       '-Command',
       script,
     ]);
@@ -11898,28 +13985,14 @@ if ($null -eq $svc) { exit 0 }
         }
 
         if (!elevatedStarted) {
-          await log('native service unavailable/failed; using scheduled task');
-          if (!await _scheduledVpnTaskExists(_connectTaskName)) {
-            await log('scheduled task missing: $_connectTaskName');
-            return const VpnBackendResult(
-              ok: false,
-              message:
-                  'Системный компонент Green VPN не установлен. Переустанови последнюю версию GreenVPN_Setup.exe один раз с правами администратора.',
-            );
-          }
-
-          final elevated = await _runScheduledVpnTask(_connectTaskName);
           await log(
-            'scheduled connect ec=${elevated.exitCode} :: ' +
-                outOf(elevated).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+            'native service unavailable/failed; scheduled task fallback is disabled',
           );
-          if (elevated.exitCode != 0) {
-            return VpnBackendResult(
-              ok: false,
-              message:
-                  'Не удалось запустить системный компонент Green VPN. Переустанови GreenVPN_Setup.exe. ${outOf(elevated)}',
-            );
-          }
+          return const VpnBackendResult(
+            ok: false,
+            message:
+                'Системный компонент Green VPN не отвечает. Переустанови последнюю версию GreenVPN_Setup.exe один раз с правами администратора.',
+          );
         }
       }
 
@@ -11939,10 +14012,8 @@ if ($null -eq $svc) { exit 0 }
             'native service uninstall after failed start ok=${serviceDisconnect.ok} http=${serviceDisconnect.statusCode} exit=${serviceDisconnect.exitCode} msg=${serviceDisconnect.message ?? ''}',
           );
           if (!serviceDisconnect.ok) {
-            final elevated = await _runScheduledVpnTask(_disconnectTaskName);
             await log(
-              'scheduled uninstall after failed start ec=${elevated.exitCode} :: ' +
-                  outOf(elevated).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+              'native service uninstall after failed start did not complete',
             );
           }
         }
@@ -11969,7 +14040,7 @@ if ($null -eq $svc) { exit 0 }
       return VpnBackendResult(
         ok: false,
         message:
-            'BlueVPNDev1 поднял сервис, но не подтвердил реальный handshake/traffic. ${status.describe()}. Открой Diagnostics и пришли endpoint, handshake и traffic.',
+            'BlueVPNDev1 поднял сервис, но не подтвердил реальный handshake/traffic. ${status.describe()}. Открой диагностику и пришли VPN-узел, handshake и traffic.',
       );
     } catch (e) {
       await log('EXCEPTION(connect): ' + e.toString());
@@ -12068,29 +14139,13 @@ if ($null -eq $svc) { exit 0 }
 
         if (!elevatedStopped) {
           await log(
-            'native service unavailable/failed for disconnect; using scheduled task',
+            'native service unavailable/failed for disconnect; scheduled task fallback is disabled',
           );
-          if (!await _scheduledVpnTaskExists(_disconnectTaskName)) {
-            await log('scheduled task missing: $_disconnectTaskName');
-            return const VpnBackendResult(
-              ok: false,
-              message:
-                  'Системный компонент Green VPN не установлен. Переустанови последнюю версию GreenVPN_Setup.exe один раз с правами администратора.',
-            );
-          }
-
-          final elevated = await _runScheduledVpnTask(_disconnectTaskName);
-          await log(
-            'scheduled disconnect ec=${elevated.exitCode} :: ' +
-                outOf(elevated).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+          return const VpnBackendResult(
+            ok: false,
+            message:
+                'Системный компонент Green VPN не отвечает. Переустанови последнюю версию GreenVPN_Setup.exe один раз с правами администратора.',
           );
-          if (elevated.exitCode != 0) {
-            return VpnBackendResult(
-              ok: false,
-              message:
-                  'Не удалось запустить системное отключение Green VPN. ${outOf(elevated)}',
-            );
-          }
         }
         final cleanup = await _cleanupLingeringAdapter(elevated: false);
         await log(

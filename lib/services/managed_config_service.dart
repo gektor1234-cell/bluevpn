@@ -1,4 +1,4 @@
-﻿import 'dart:io';
+import 'dart:io';
 
 class ManagedConfigBuildResult {
   final String managedConfigPath;
@@ -50,11 +50,7 @@ class ManagedConfigService {
       '69.63.176.0/20',
       '157.240.0.0/16',
     ],
-    'x': [
-      '104.244.42.0/24',
-      '185.45.5.0/24',
-      '192.133.76.0/22',
-    ],
+    'x': ['104.244.42.0/24', '185.45.5.0/24', '192.133.76.0/22'],
   };
 
   Future<ManagedConfigBuildResult> buildManagedConfig({
@@ -75,19 +71,16 @@ class ManagedConfigService {
 
     if (!socialOnlyEnabled) {
       mode = 'full_tunnel';
-      allowedIps = const ['0.0.0.0/0', '::/0'];
-      updatedConfig = _replaceAllowedIps(
-        original,
-        allowedIps.join(', '),
-      );
+      final baseAllowedIps = _readAllowedIps(original);
+      allowedIps = baseAllowedIps.isEmpty
+          ? const ['0.0.0.0/1', '128.0.0.0/1']
+          : baseAllowedIps;
+      updatedConfig = _replaceAllowedIps(original, allowedIps.join(', '));
     } else {
       final resolvedIps = _resolveAllowedIpsForApps(selectedApps);
       mode = 'social_only';
       allowedIps = resolvedIps;
-      updatedConfig = _replaceAllowedIps(
-        original,
-        resolvedIps.join(', '),
-      );
+      updatedConfig = _replaceAllowedIps(original, resolvedIps.join(', '));
     }
 
     final outFile = File(managedConfigPath);
@@ -113,8 +106,8 @@ class ManagedConfigService {
     }
 
     if (result.isEmpty) {
-      // С‡С‚РѕР±С‹ СЂРµР¶РёРј РЅРµ Р»РѕРјР°Р»СЃСЏ РїСЂРё РїСѓСЃС‚РѕРј РІС‹Р±РѕСЂРµ
-      return ['149.154.160.0/20']; // fallback РЅР° telegram range
+      // Не ломаем режим при пустом выборе: оставляем безопасный минимальный набор.
+      return ['149.154.160.0/20'];
     }
 
     return result.toList()..sort();
@@ -128,10 +121,7 @@ class ManagedConfigService {
     );
 
     if (regExp.hasMatch(configText)) {
-      return configText.replaceFirst(
-        regExp,
-        'AllowedIPs = $allowedIpsValue',
-      );
+      return configText.replaceFirst(regExp, 'AllowedIPs = $allowedIpsValue');
     }
 
     final lines = configText.split('\n');
@@ -146,5 +136,19 @@ class ManagedConfigService {
     lines.insert(peerIndex + 1, 'AllowedIPs = $allowedIpsValue');
     return lines.join('\n');
   }
-}
 
+  List<String> _readAllowedIps(String configText) {
+    final match = RegExp(
+      r'^\s*AllowedIPs\s*=\s*(.+?)\s*$',
+      multiLine: true,
+      caseSensitive: false,
+    ).firstMatch(configText);
+    final raw = match?.group(1)?.trim();
+    if (raw == null || raw.isEmpty) return const [];
+    return raw
+        .split(',')
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList(growable: false);
+  }
+}
