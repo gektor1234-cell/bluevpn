@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Green VPN Admin</title>
+  <title>Админка Green VPN</title>
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-  <div class="shell">
+  <div class="shell auth-locked">
     <aside class="sidebar">
       <div class="brand">
         <div class="brand-mark">G</div>
         <div>
           <strong>Green VPN</strong>
-          <span>Admin Console</span>
+          <span>Панель управления</span>
         </div>
       </div>
 
@@ -28,16 +28,14 @@
         <button class="nav-link" data-section="staff" data-permission="staff.manage">Команда</button>
         <button class="nav-link" data-section="audit" data-permission="audit.read">Аудит</button>
         <button class="nav-link" data-section="updates" data-permission="updates.read">Обновления</button>
-        <button class="nav-link" data-section="flags" data-permission="flags.read">Флаги</button>
-        <button class="nav-link" data-section="runbooks" data-permission="runbooks.read">Инструкции</button>
         <button class="nav-link" data-section="monitoring" data-permission="monitoring.read">Мониторинг</button>
         <button class="nav-link" data-section="servers" data-permission="servers.read">Серверы</button>
         <button class="nav-link" data-section="readiness" data-permission="readiness.read">Готовность</button>
       </nav>
 
       <div class="connection-card">
-        <span class="eyebrow">API</span>
-        <strong id="sidebarApiBase">https://api.greenvpn.pro</strong>
+        <span class="eyebrow">Сервис</span>
+        <strong id="sidebarApiBase">Green VPN</strong>
         <span id="sidebarStatus" class="status-pill muted">не подключено</span>
       </div>
     </aside>
@@ -45,33 +43,31 @@
     <main class="main">
       <header class="topbar">
         <div>
-          <p class="eyebrow">Внутренний инструмент</p>
+          <p class="eyebrow">Панель управления</p>
           <h1 id="pageTitle">Обзор</h1>
         </div>
         <div class="topbar-actions">
           <button id="refreshButton" class="ghost-button">Обновить</button>
           <button id="logoutButton" class="ghost-button hidden">Выйти</button>
-          <button id="openLoginButton" class="primary-button">Вход / API</button>
+          <button id="openLoginButton" class="primary-button">Вход</button>
         </div>
       </header>
 
       <section id="loginPanel" class="login-panel">
         <div class="login-copy">
           <p class="eyebrow">Безопасный вход</p>
-          <h2>Подключи админский API</h2>
+          <h2>Вход в админку</h2>
           <p>
-            Основной режим — вход сотрудника по email и паролю. Bootstrap admin token
-            остаётся аварийным способом на время разработки и не хранится в репозитории.
+            Войдите по почте сотрудника и паролю. Роль, доступные разделы и
+            ограничения подтянутся автоматически. До подтверждённого входа
+            рабочие разделы и чувствительные кнопки не показываются.
           </p>
         </div>
         <form id="loginForm" class="login-form">
-          <label>
-            API base URL
-            <input id="apiBaseInput" type="url" value="https://api.greenvpn.pro" autocomplete="off">
-          </label>
+          <input id="apiBaseInput" type="hidden" value="https://api.greenvpn.pro">
           <div class="form-row stretch">
             <label>
-              Email сотрудника
+              Почта сотрудника
               <input id="adminEmailInput" type="email" autocomplete="username" placeholder="support@greenvpn.pro">
             </label>
             <label>
@@ -79,9 +75,6 @@
               <input id="adminPasswordInput" type="password" autocomplete="current-password" placeholder="Пароль сотрудника">
             </label>
           </div>
-          <p class="muted compact-note">
-            Если сотрудник ещё не создан, войди bootstrap-токеном и задай временный пароль в разделе «Команда».
-          </p>
           <div id="admin2faPanel" class="secondary-login-panel hidden">
             <div>
               <strong>Код подтверждения</strong>
@@ -96,14 +89,8 @@
               <button id="admin2faCancelButton" class="small-button" type="button">Отмена</button>
             </div>
           </div>
-          <label>
-            Bootstrap admin token
-            <input id="adminTokenInput" type="password" autocomplete="off" placeholder="Вставь токен администратора">
-          </label>
-          <label>
-            Кто работает
-            <input id="adminActorInput" type="text" autocomplete="off" placeholder="Например: Валентин / support">
-          </label>
+          <input id="adminActorInput" type="hidden" value="">
+          <input id="adminTokenInput" type="hidden" value="">
           <div class="form-row">
             <label class="checkbox-line">
               <input id="rememberTokenInput" type="checkbox">
@@ -122,9 +109,13 @@
           <div class="panel-head">
             <div>
               <p class="eyebrow">Безопасность</p>
-              <h2>Текущий вход</h2>
+              <h2>Безопасность входа</h2>
             </div>
           </div>
+          <p class="muted compact-note">
+            Здесь видно, под кем открыта админка. Смена пароля нужна сотрудникам после временного пароля,
+            а сброс сессий помогает закрыть лишние входы на других устройствах.
+          </p>
           <div id="accountSecuritySummary" class="status-list"></div>
           <form id="passwordChangeForm" class="card-form compact-form hidden">
             <div class="form-row stretch">
@@ -156,9 +147,10 @@
             <div class="panel-head">
               <div>
                 <p class="eyebrow">Релиз</p>
-                <h2>Готовность production</h2>
-              </div>
+                <h2>Готовность к боевому запуску</h2>
             </div>
+          </div>
+            <div id="advertisingReadinessSummary" class="status-list compact-list"></div>
             <div id="launchReadinessSummary" class="readiness-summary"></div>
             <div id="launchClosurePlanSummary" class="status-list compact-list"></div>
             <div id="readinessSummary" class="readiness-summary"></div>
@@ -194,7 +186,7 @@
           <article class="panel">
             <div class="panel-head">
               <div>
-                <p class="eyebrow">Support</p>
+                <p class="eyebrow">Поддержка</p>
                 <h2>SLA и обращения</h2>
               </div>
             </div>
@@ -203,7 +195,7 @@
           <article class="panel">
             <div class="panel-head">
               <div>
-                <p class="eyebrow">Ops</p>
+                <p class="eyebrow">Операции</p>
                 <h2>Инциденты, обновления, серверы</h2>
               </div>
             </div>
@@ -245,14 +237,14 @@
             <table>
               <thead>
                 <tr>
-                  <th>ID</th>
+                  <th>Идентификатор</th>
                   <th>Важность</th>
                   <th>Статус</th>
                   <th>Что сломалось</th>
                   <th>Сводка</th>
                   <th>Исполнитель</th>
                   <th>Последний сигнал</th>
-                  <th>Алерт</th>
+                  <th>Оповещение</th>
                   <th></th>
                 </tr>
               </thead>
@@ -270,7 +262,7 @@
               <h2>Отчёты пользователей</h2>
             </div>
             <div class="filter-row">
-              <input id="supportSearchInput" type="search" placeholder="email, user id или device id">
+              <input id="supportSearchInput" type="search" placeholder="почта, ID пользователя или ID устройства">
               <select id="supportStatusFilter">
                 <option value="all">Все статусы</option>
                 <option value="new">Новые</option>
@@ -293,7 +285,7 @@
             <table>
               <thead>
                 <tr>
-                  <th>ID</th>
+                  <th>Идентификатор</th>
                   <th>Пользователь</th>
                   <th>Сводка</th>
                   <th>Категория</th>
@@ -322,7 +314,7 @@
               <select id="supportActionStatusFilter">
                 <option value="all">Все статусы</option>
               </select>
-              <input id="supportActionUserFilter" type="search" placeholder="user id">
+              <input id="supportActionUserFilter" type="search" placeholder="ID пользователя">
             </div>
           </div>
           <div id="supportActionsList"></div>
@@ -337,7 +329,7 @@
               <h2>Пользователи</h2>
             </div>
             <div class="filter-row">
-              <input id="userSearchInput" type="search" placeholder="email, телефон или device id">
+              <input id="userSearchInput" type="search" placeholder="почта, телефон или id устройства">
             </div>
           </div>
           <div id="subscriptionExpirySummary" class="check-list"></div>
@@ -345,11 +337,11 @@
             <table>
               <thead>
                 <tr>
-                  <th>ID</th>
-                  <th>Email</th>
+                  <th>Идентификатор</th>
+                  <th>Почта</th>
                   <th>Телефон</th>
-                  <th>Email verified</th>
-                  <th>Phone verified</th>
+                  <th>Почта подтверждена</th>
+                  <th>Телефон подтверждён</th>
                   <th>Создан</th>
                   <th></th>
                 </tr>
@@ -436,8 +428,8 @@
             <table>
               <thead>
                 <tr>
-                  <th>Order</th>
-                  <th>User</th>
+                  <th>Заказ</th>
+                  <th>Пользователь</th>
                   <th>Сумма</th>
                   <th>Статус</th>
                   <th>Тариф</th>
@@ -458,13 +450,13 @@
               <h2>События входа</h2>
             </div>
             <div class="row-actions">
-              <input id="authSearchInput" type="search" placeholder="email, телефон или user id">
+              <input id="authSearchInput" type="search" placeholder="почта, телефон или ID пользователя">
               <select id="authTypeFilter">
                 <option value="all">Все типы</option>
                 <option value="phone_code_start">SMS старт</option>
                 <option value="phone_code_verify">SMS проверка</option>
-                <option value="email_code_start">Email старт</option>
-                <option value="email_code_verify">Email проверка</option>
+                <option value="email_code_start">Почта: отправка кода</option>
+                <option value="email_code_verify">Почта: проверка кода</option>
               </select>
               <select id="authStatusFilter">
                 <option value="all">Все статусы</option>
@@ -481,10 +473,10 @@
             <table>
               <thead>
                 <tr>
-                  <th>ID</th>
+                  <th>Идентификатор</th>
                   <th>Тип</th>
                   <th>Статус</th>
-                  <th>Email/Телефон</th>
+                  <th>Почта/телефон</th>
                   <th>IP</th>
                   <th>Время</th>
                 </tr>
@@ -506,7 +498,7 @@
           <div class="split-grid compact-split">
             <form id="staffForm" class="card-form">
               <label>
-                Email сотрудника
+                Почта сотрудника
                 <input id="staffEmailInput" type="email" autocomplete="off" placeholder="support@greenvpn.pro">
               </label>
               <label>
@@ -527,12 +519,11 @@
               </label>
               <label class="checkbox-line">
                 <input id="staffTwoFactorInput" type="checkbox">
-                2FA по email для входа
+                Код по почте для входа
               </label>
               <button class="primary-button" type="submit">Добавить / обновить</button>
               <p class="muted">
-                Bootstrap token нужен только для первичной настройки. Дальше сотрудники входят
-                по email и паролю, а роли уже хранятся на backend.
+                Сотрудники входят по почте и паролю. Роли и доступы хранятся на сервере.
               </p>
             </form>
             <div id="roleList" class="check-list"></div>
@@ -541,11 +532,11 @@
             <table>
               <thead>
                 <tr>
-                  <th>ID</th>
+                  <th>Идентификатор</th>
                   <th>Сотрудник</th>
                   <th>Роль</th>
                   <th>Статус</th>
-                  <th>2FA</th>
+                  <th>Код по почте</th>
                   <th>Пароль</th>
                   <th>Сессии</th>
                   <th>Обновлён</th>
@@ -564,20 +555,20 @@
           <div class="panel-head">
             <div>
               <p class="eyebrow">Контроль действий</p>
-              <h2>Audit log</h2>
+              <h2>Журнал действий</h2>
             </div>
           </div>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>ID</th>
-                  <th>Actor</th>
-                  <th>Action</th>
-                  <th>Target</th>
+                  <th>Идентификатор</th>
+                  <th>Кто</th>
+                  <th>Действие</th>
+                  <th>Цель</th>
                   <th>IP</th>
                   <th>Время</th>
-                  <th>Details</th>
+                  <th>Детали</th>
                 </tr>
               </thead>
               <tbody id="auditTable"></tbody>
@@ -591,8 +582,8 @@
           <article class="panel">
             <div class="panel-head">
               <div>
-                <p class="eyebrow">Updater</p>
-                <h2>Manifest для клиента</h2>
+                <p class="eyebrow">Обновления</p>
+                <h2>Манифест для клиента</h2>
               </div>
             </div>
             <div id="updateReadinessSummary" class="check-list"></div>
@@ -605,7 +596,7 @@
                   <input id="releaseVersionInput" type="text" autocomplete="off" placeholder="0.9.0">
                 </label>
                 <label>
-                  Build
+                  Номер сборки
                   <input id="releaseBuildInput" type="text" autocomplete="off" placeholder="20260504.1">
                 </label>
               </div>
@@ -620,7 +611,7 @@
                 </label>
               </div>
               <label>
-                Download URL
+                Ссылка на файл
                 <input id="releaseDownloadUrlInput" type="url" autocomplete="off" placeholder="https://updates.greenvpn.pro/GreenVPN_Setup.exe">
               </label>
               <label>
@@ -629,7 +620,7 @@
               </label>
               <div class="form-row stretch">
                 <label>
-                  Rollout %
+                  Процент раскатки
                   <input id="releaseRolloutInput" type="number" min="0" max="100" value="100">
                 </label>
                 <label>
@@ -642,13 +633,13 @@
                 Обязательное обновление
               </label>
               <label>
-                Changelog
-                <textarea id="releaseChangelogInput" placeholder="Одна строка = один пункт changelog"></textarea>
+                Что изменилось
+                <textarea id="releaseChangelogInput" placeholder="Одна строка = один пункт списка изменений"></textarea>
               </label>
-              <button class="primary-button" type="submit">Сохранить release</button>
+              <button class="primary-button" type="submit">Сохранить версию</button>
               <p class="muted">
-                Публикуем stable только когда есть настоящий download URL, SHA256 и готовый rollback.
-                Пока можно готовить draft/internal без влияния на пользователей.
+                Публикуем стабильную версию только когда есть настоящая ссылка на файл, SHA256 и готовый откат.
+                Пока можно готовить черновик без влияния на пользователей.
               </p>
             </form>
           </article>
@@ -656,8 +647,8 @@
           <article class="panel">
             <div class="panel-head">
               <div>
-                <p class="eyebrow">Release control</p>
-                <h2>Версии и rollout</h2>
+                <p class="eyebrow">Управление версиями</p>
+                <h2>Версии и раскатка</h2>
               </div>
               <div class="filter-row compact-filter">
                 <select id="releaseChannelFilter">
@@ -672,11 +663,11 @@
               <table>
                 <thead>
                   <tr>
-                    <th>ID</th>
+                    <th>Идентификатор</th>
                     <th>Версия</th>
                     <th>Канал</th>
                     <th>Статус</th>
-                    <th>Rollout</th>
+                    <th>Раскатка</th>
                     <th>Файл</th>
                     <th>Обновлён</th>
                     <th></th>
@@ -695,10 +686,10 @@
             <div class="panel-head">
               <div>
                 <p class="eyebrow">Внутренний контроль</p>
-                <h2>Feature flags</h2>
+                <h2>Переключатели функций</h2>
                 <p class="muted">
                   Готовим рискованные функции без пересборки клиента: платежи, SMS,
-                  поддержку, обновления, мониторинг и будущий fallback-layer.
+                  поддержку, обновления, мониторинг и будущий запасной слой.
                 </p>
               </div>
             </div>
@@ -707,21 +698,21 @@
               <input id="featureFlagIdInput" type="hidden">
               <div class="form-row stretch">
                 <label>
-                  Key
+                  Ключ
                   <input id="featureFlagKeyInput" type="text" autocomplete="off" placeholder="payments.production_enabled">
                 </label>
                 <label>
                   Название
-                  <input id="featureFlagTitleInput" type="text" autocomplete="off" placeholder="Production платежи">
+                  <input id="featureFlagTitleInput" type="text" autocomplete="off" placeholder="Боевые платежи">
                 </label>
               </div>
               <div class="form-row stretch">
                 <label>
-                  Scope
+                  Область
                   <select id="featureFlagScopeSelect"></select>
                 </label>
                 <label>
-                  Rollout %
+                  Процент раскатки
                   <input id="featureFlagRolloutInput" type="number" min="0" max="100" value="0">
                 </label>
               </div>
@@ -730,7 +721,7 @@
                 Включён
               </label>
               <label>
-                Value JSON
+                Значение JSON
                 <input id="featureFlagValueInput" type="text" autocomplete="off" placeholder='true или {"mode":"manual_mvp"}'>
               </label>
               <label>
@@ -739,7 +730,7 @@
               </label>
               <label>
                 Заметки
-                <textarea id="featureFlagNotesInput" placeholder="Риски, rollout, что проверить перед включением"></textarea>
+                <textarea id="featureFlagNotesInput" placeholder="Риски, раскатка, что проверить перед включением"></textarea>
               </label>
               <div class="row-actions left">
                 <button class="primary-button" type="submit">Сохранить флаг</button>
@@ -751,7 +742,7 @@
           <article class="panel">
             <div class="panel-head">
               <div>
-                <p class="eyebrow">Control plane</p>
+                <p class="eyebrow">Управление</p>
                 <h2>Флаги продукта</h2>
               </div>
             </div>
@@ -759,11 +750,11 @@
               <table>
                 <thead>
                   <tr>
-                    <th>Key</th>
-                    <th>Scope</th>
+                    <th>Ключ</th>
+                    <th>Область</th>
                     <th>Состояние</th>
-                    <th>Rollout</th>
-                    <th>Value</th>
+                    <th>Раскатка</th>
+                    <th>Значение</th>
                     <th>Обновлён</th>
                     <th></th>
                   </tr>
@@ -780,8 +771,8 @@
           <article class="panel">
             <div class="panel-head">
               <div>
-                <p class="eyebrow">Техподдержка и ops</p>
-                <h2>Runbooks</h2>
+                <p class="eyebrow">Техподдержка и операции</p>
+                <h2>Инструкции</h2>
                 <p class="muted">
                   Инструкции для повторяемых проблем: VPN не поднялся, платеж не активировался,
                   сервис недоступен, релиз сломан, новый сервер вводится в сетку.
@@ -793,7 +784,7 @@
               <input id="runbookIdInput" type="hidden">
               <div class="form-row stretch">
                 <label>
-                  Key
+                  Ключ
                   <input id="runbookKeyInput" type="text" autocomplete="off" placeholder="vpn_connect_failed">
                 </label>
                 <label>
@@ -814,7 +805,7 @@
               <div class="form-row stretch">
                 <label>
                   Роль-владелец
-                  <input id="runbookOwnerRoleInput" type="text" autocomplete="off" placeholder="support / admin / ops">
+                  <input id="runbookOwnerRoleInput" type="text" autocomplete="off" placeholder="поддержка / админ / операции">
                 </label>
                 <label class="checkbox-line">
                   <input id="runbookActiveInput" type="checkbox" checked>
@@ -839,7 +830,7 @@
           <article class="panel">
             <div class="panel-head">
               <div>
-                <p class="eyebrow">Support knowledge base</p>
+                <p class="eyebrow">База знаний поддержки</p>
                 <h2>Инструкции</h2>
               </div>
             </div>
@@ -847,7 +838,7 @@
               <table>
                 <thead>
                   <tr>
-                    <th>Key</th>
+                    <th>Ключ</th>
                     <th>Категория</th>
                     <th>Важность</th>
                     <th>Владелец</th>
@@ -869,17 +860,17 @@
             <div class="panel-head">
               <div>
                 <p class="eyebrow">Каталог серверов</p>
-                <h2>Будущая сетка VPN endpoint</h2>
+                <h2>Будущая сетка VPN-узлов</h2>
               </div>
               <div class="row-actions">
                 <button id="createPlannedServerDraftButton" class="ghost-button" type="button">
-                  Черновик нового VPS
+                  Черновик нового сервера
                 </button>
                 <button id="seedCurrentServerButton" class="ghost-button" type="button">
-                  Добавить текущий endpoint
+                  Добавить текущий VPN-узел
                 </button>
                 <button id="probeCurrentServerButton" class="ghost-button" type="button">
-                  Проверить текущий endpoint
+                  Проверить текущий VPN-узел
                 </button>
               </div>
             </div>
@@ -888,17 +879,17 @@
             <form id="serverForm" class="card-form server-form">
               <div class="form-row stretch">
                 <label>
-                  Server ID
+                  Идентификатор сервера
                   <input id="serverIdInput" type="text" autocomplete="off" placeholder="germany_frankfurt_01">
                 </label>
                 <label>
                   Название
-                  <input id="serverTitleInput" type="text" autocomplete="off" placeholder="Germany #1">
+                  <input id="serverTitleInput" type="text" autocomplete="off" placeholder="Германия #1">
                 </label>
               </div>
               <label>
                 Подпись
-                <input id="serverSubtitleInput" type="text" autocomplete="off" placeholder="Резервный endpoint Green VPN">
+                <input id="serverSubtitleInput" type="text" autocomplete="off" placeholder="Резервный VPN-узел Green VPN">
               </label>
               <div class="form-row stretch">
                 <label>
@@ -907,7 +898,7 @@
                 </label>
                 <label>
                   Город
-                  <input id="serverCityInput" type="text" autocomplete="off" placeholder="Frankfurt">
+                  <input id="serverCityInput" type="text" autocomplete="off" placeholder="Франкфурт">
                 </label>
                 <label>
                   Провайдер
@@ -916,11 +907,11 @@
               </div>
               <div class="form-row stretch">
                 <label>
-                  Host
+                  Хост
                   <input id="serverHostInput" type="text" autocomplete="off" placeholder="1.2.3.4 или de1.greenvpn.pro">
                 </label>
                 <label>
-                  Port
+                  Порт
                   <input id="serverPortInput" type="number" min="1" max="65535" value="443">
                 </label>
               </div>
@@ -963,17 +954,17 @@
                 </label>
                 <label class="checkbox-line">
                   <input id="serverPublicInput" type="checkbox">
-                  Кандидат в публичный catalog
+                  Кандидат в публичный каталог
                 </label>
               </div>
               <label>
                 Заметки
                 <textarea id="serverNotesInput" placeholder="ASN, цена, доступы у провайдера, что проверить перед публикацией"></textarea>
               </label>
-              <button class="primary-button" type="submit">Сохранить endpoint</button>
+              <button class="primary-button" type="submit">Сохранить VPN-узел</button>
               <p class="muted">
                 Безопасный режим: эти записи пока не выдаются клиенту. Они нужны, чтобы подготовить серверную сетку
-                до реализации выбора нескольких серверов и перевыдачи WireGuard peer.
+                до реализации выбора нескольких серверов и перевыдачи WireGuard-ключа.
               </p>
             </form>
           </article>
@@ -981,7 +972,7 @@
           <article class="panel">
             <div class="panel-head">
               <div>
-                <p class="eyebrow">Список endpoint</p>
+                <p class="eyebrow">Список VPN-узлов</p>
                 <h2>Управляемые серверы</h2>
               </div>
               <div class="filter-row compact-filter">
@@ -1004,12 +995,13 @@
               <table>
                 <thead>
                   <tr>
-                    <th>ID</th>
+                    <th>Идентификатор</th>
                     <th>Локация</th>
-                    <th>Endpoint</th>
+                    <th>VPN-узел</th>
                     <th>Протокол</th>
                     <th>Статус</th>
                     <th>Оценка здоровья</th>
+                    <th>Нагрузка</th>
                     <th>Публичность</th>
                     <th></th>
                   </tr>
@@ -1026,7 +1018,7 @@
               <p class="eyebrow">Агенты проверки</p>
               <h2>Агенты мониторинга</h2>
               <p class="muted">
-                Управляемые probes, которые регулярно проверяют важные сервисы через Green VPN.
+                Управляемые проверки, которые регулярно проверяют важные сервисы через Green VPN.
                 Если агент молчит или видит деградацию, проблема появится здесь раньше обращений пользователей.
               </p>
             </div>
@@ -1037,7 +1029,7 @@
             <table>
               <thead>
                 <tr>
-                  <th>Probe</th>
+                  <th>Проверяющий сервер</th>
                   <th>Состояние</th>
                   <th>Наблюдения</th>
                   <th>Проблемы</th>
@@ -1054,14 +1046,14 @@
           <div class="panel-head">
             <div>
               <p class="eyebrow">Наблюдения здоровья</p>
-              <h2>Мониторинг endpoint</h2>
+              <h2>Мониторинг VPN-узлов</h2>
               <p class="muted">
-                Внутренний слой для будущих probes: кто проверил endpoint, что увидел,
+                Внутренний слой для будущих проверок: кто проверил VPN-узел, что увидел,
                 какая задержка и где началась деградация.
               </p>
             </div>
             <div class="filter-row compact-filter">
-              <input id="serverHealthEndpointFilter" type="search" autocomplete="off" placeholder="endpoint id">
+              <input id="serverHealthEndpointFilter" type="search" autocomplete="off" placeholder="ID VPN-узла">
               <select id="serverHealthStatusFilter">
                 <option value="all">Все статусы</option>
                 <option value="healthy">Здоровые</option>
@@ -1077,8 +1069,8 @@
             <table>
               <thead>
                 <tr>
-                  <th>Endpoint</th>
-                  <th>Probe</th>
+                  <th>VPN-узел</th>
+                  <th>Проверяющий сервер</th>
                   <th>Статус</th>
                   <th>Цель</th>
                   <th>Задержка</th>
@@ -1097,11 +1089,11 @@
           <article class="panel">
             <div class="panel-head">
             <div>
-              <p class="eyebrow">Service probes</p>
+              <p class="eyebrow">Проверки сервисов</p>
               <h2>Цели мониторинга</h2>
                 <p class="muted">
-                  Внутренний список сервисов, которые probes должны проверять через Green VPN:
-                  YouTube, Discord, Telegram, API, платежи, обновления и bootstrap.
+                  Внутренний список сервисов, которые проверяющие серверы должны проверять через Green VPN:
+                  YouTube, Discord, Telegram, API, платежи, обновления и первичный вход.
                 </p>
               </div>
               <div class="row-actions right">
@@ -1115,7 +1107,7 @@
             <form id="monitoringTargetForm" class="card-form server-form">
               <div class="form-row stretch">
                 <label>
-                  Target ID
+                  Идентификатор цели
                   <input id="monitoringTargetIdInput" type="text" autocomplete="off" placeholder="youtube_web">
                 </label>
                 <label>
@@ -1138,55 +1130,55 @@
                 </label>
               </div>
               <label>
-                URL
+                Ссылка
                 <input id="monitoringTargetUrlInput" type="url" autocomplete="off" placeholder="https://www.youtube.com">
               </label>
               <div class="form-row stretch">
                 <label>
-                  Host
+                  Хост
                   <input id="monitoringTargetHostInput" type="text" autocomplete="off" placeholder="www.youtube.com">
                 </label>
                 <label>
-                  Port
+                  Порт
                   <input id="monitoringTargetPortInput" type="number" min="1" max="65535" placeholder="443">
                 </label>
                 <label>
-                  Expected HTTP
+                  Ожидаемый HTTP-ответ
                   <input id="monitoringTargetExpectedInput" type="number" min="100" max="599" placeholder="200">
                 </label>
               </div>
               <div class="form-row stretch">
                 <label>
-                  Timeout sec
+                  Таймаут, сек
                   <input id="monitoringTargetTimeoutInput" type="number" min="1" max="120" value="8">
                 </label>
                 <label>
-                  Interval sec
+                  Интервал, сек
                   <input id="monitoringTargetIntervalInput" type="number" min="30" max="86400" value="300">
                 </label>
               </div>
               <label>
-                Path
+                Путь
                 <input id="monitoringTargetPathInput" type="text" autocomplete="off" placeholder="/healthz или /">
               </label>
               <label>
-                Tags
-                <input id="monitoringTargetTagsInput" type="text" autocomplete="off" placeholder="russia, social, critical">
+                Теги
+                <input id="monitoringTargetTagsInput" type="text" autocomplete="off" placeholder="ru, social, important">
               </label>
               <label class="checkbox-line">
                 <input id="monitoringTargetPublicImpactInput" type="checkbox" checked>
-                Влияет на пользователей и должен поднимать incident
+                Влияет на пользователей и должен создавать инцидент
               </label>
               <label>
                 Заметки
-                <textarea id="monitoringTargetNotesInput" placeholder="Что именно проверять, какой expected result, что делать при деградации"></textarea>
+                <textarea id="monitoringTargetNotesInput" placeholder="Что именно проверять, какой ожидаемый результат, что делать при деградации"></textarea>
               </label>
               <div class="row-actions left">
                 <button class="primary-button" type="submit">Сохранить цель</button>
                 <button id="resetMonitoringTargetForm" class="ghost-button" type="button">Очистить</button>
               </div>
               <p class="muted">
-                Safety: этот раздел только для админки/техподдержки. Обычный клиент Green VPN
+                Безопасность: этот раздел только для админки/техподдержки. Обычный клиент Green VPN
                 не увидит эти проверки и технические данные.
               </p>
             </form>
@@ -1195,14 +1187,14 @@
           <article class="panel">
             <div class="panel-head">
               <div>
-                <p class="eyebrow">Target inventory</p>
+                <p class="eyebrow">Список целей</p>
                 <h2>Управляемые проверки</h2>
               </div>
               <div class="filter-row compact-filter">
                 <select id="monitoringTargetStatusFilter">
                   <option value="all">Все статусы</option>
                 </select>
-                <input id="monitoringTargetServiceFilter" type="text" autocomplete="off" placeholder="service filter">
+                <input id="monitoringTargetServiceFilter" type="text" autocomplete="off" placeholder="фильтр по сервису">
               </div>
             </div>
             <div class="table-wrap">
@@ -1211,7 +1203,7 @@
                   <tr>
                     <th>Цель</th>
                     <th>Сервис</th>
-                    <th>Endpoint</th>
+                    <th>VPN-узел</th>
                     <th>Расписание</th>
                     <th>Статус</th>
                     <th></th>
@@ -1226,15 +1218,15 @@
         <article class="panel">
           <div class="panel-head">
             <div>
-              <p class="eyebrow">Service observations</p>
+              <p class="eyebrow">Наблюдения сервисов</p>
               <h2>Последние проверки сервисов</h2>
               <p class="muted">
-                Сюда monitoring agents будут писать реальные результаты: доступен ли сервис,
-                какая задержка, какой probe проверял и где началась деградация.
+                Сюда проверяющие серверы будут писать реальные результаты: доступен ли сервис,
+                какая задержка, какой сервер проверял и где началась деградация.
               </p>
             </div>
             <div class="filter-row compact-filter">
-              <input id="serviceObservationTargetFilter" type="search" autocomplete="off" placeholder="target id">
+              <input id="serviceObservationTargetFilter" type="search" autocomplete="off" placeholder="ID цели">
               <select id="serviceObservationStatusFilter">
                 <option value="all">Все статусы</option>
                 <option value="green">Работает</option>
@@ -1250,14 +1242,62 @@
               <thead>
                 <tr>
                   <th>Цель</th>
-                  <th>Probe</th>
+                  <th>Проверяющий сервер</th>
                   <th>Статус</th>
-                  <th>Latency</th>
+                  <th>Задержка</th>
+                  <th>Качество</th>
                   <th>Сообщение</th>
                   <th>Когда</th>
                 </tr>
               </thead>
               <tbody id="serviceObservationsTable"></tbody>
+            </table>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Клиентские проверки маршрута</p>
+              <h2>Windows/Android route-events</h2>
+              <p class="muted">
+                Здесь видны проверки, которые свежие клиенты отправляют после подключения: работает ли YouTube/media,
+                нужно ли переключать сервер и какой маршрут реально видел пользователь.
+              </p>
+            </div>
+            <div class="filter-row compact-filter">
+              <input id="clientRouteServerFilter" type="search" autocomplete="off" placeholder="ID сервера">
+              <select id="clientRouteStageFilter">
+                <option value="all">Все этапы</option>
+                <option value="bootstrap">Bootstrap</option>
+                <option value="config_fetch">Получение конфига</option>
+                <option value="connect">Подключение</option>
+                <option value="handshake">Handshake/traffic</option>
+                <option value="connected">Подключено</option>
+                <option value="network_probe">Проверка маршрута</option>
+                <option value="disconnect">Отключение</option>
+              </select>
+              <select id="clientRouteOkFilter">
+                <option value="all">Любой результат</option>
+                <option value="true">Только OK</option>
+                <option value="false">Только проблемы</option>
+              </select>
+            </div>
+          </div>
+          <div id="clientRouteEventsSummary" class="metric-grid compact-grid"></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Сервер</th>
+                  <th>Этап</th>
+                  <th>Результат</th>
+                  <th>Качество</th>
+                  <th>Сообщение</th>
+                  <th>Когда</th>
+                </tr>
+              </thead>
+              <tbody id="clientRouteEventsTable"></tbody>
             </table>
           </div>
         </article>
@@ -1267,16 +1307,17 @@
         <article class="panel">
           <div class="panel-head">
             <div>
-              <p class="eyebrow">Production checklist</p>
+              <p class="eyebrow">Список перед запуском</p>
               <h2>Что ещё нужно подключить</h2>
             </div>
           </div>
           <div class="panel-head nested-head">
             <div>
               <p class="eyebrow">Сеть</p>
-              <h2>Сайт и VPN endpoint</h2>
+              <h2>Сайт и VPN-узел</h2>
             </div>
           </div>
+          <div id="readinessAdvertisingReadiness" class="status-list compact-list"></div>
           <div id="readinessLaunchReadiness" class="status-list compact-list"></div>
           <div id="readinessClosurePlan" class="status-list compact-list"></div>
           <div id="ownerLaunchPacketSummary" class="check-list"></div>
@@ -1285,16 +1326,16 @@
           <div id="readinessList" class="check-list"></div>
           <div class="panel-head nested-head">
             <div>
-              <p class="eyebrow">Owner actions</p>
+              <p class="eyebrow">Действия владельца</p>
               <h2>Что нужно будет дать мне одним заходом</h2>
             </div>
-            <button id="testAlertsButton" class="ghost-button" type="button">Проверить Telegram alert</button>
+            <button id="testAlertsButton" class="ghost-button" type="button">Проверить оповещение Telegram</button>
           </div>
           <div id="externalActionsList" class="check-list"></div>
           <div class="panel-head nested-head">
             <div>
-              <p class="eyebrow">Alert history</p>
-              <h2>Последние incident alerts</h2>
+              <p class="eyebrow">История оповещений</p>
+              <h2>Последние оповещения об инцидентах</h2>
             </div>
           </div>
           <div id="alertEventsList" class="status-list compact-list"></div>
@@ -1306,7 +1347,7 @@
   <dialog id="reportDialog" class="report-dialog">
     <div class="dialog-head">
       <div>
-        <p class="eyebrow">Support report</p>
+        <p class="eyebrow">Обращение в поддержку</p>
         <h2 id="reportDialogTitle">Отчёт</h2>
       </div>
       <button id="closeReportDialog" class="icon-button" aria-label="Закрыть">×</button>

@@ -264,6 +264,7 @@ token = token_path.read_text(encoding="utf-8").strip()
 paths = [
     "/api/v1/admin/readiness",
     "/api/v1/admin/launch/readiness",
+    "/api/v1/admin/launch/advertising-readiness",
     "/api/v1/admin/launch/closure-plan",
     "/api/v1/admin/launch/owner-packet",
     "/api/v1/admin/site/readiness",
@@ -284,6 +285,7 @@ paths = [
     "/api/v1/admin/subscriptions/expiry-readiness",
     "/api/v1/admin/support/sla",
     "/api/v1/admin/updates/readiness",
+    "/api/v1/admin/windows/trust-readiness",
     "/api/v1/admin/server-catalog/publication-readiness",
     "/api/v1/admin/server-catalog/provisioning-readiness",
     "/api/v1/admin/server-health",
@@ -320,6 +322,21 @@ for path in paths:
                 "criticalBlockers": len(data.get("criticalBlockers") or []),
                 "warningItems": len(data.get("warnings") or []),
                 "summary": launch_summary.get("message"),
+            })
+        elif path.endswith("/launch/advertising-readiness"):
+            advertising_summary = data.get("summary") or {}
+            item.update({
+                "state": data.get("state"),
+                "mode": data.get("mode"),
+                "publicAdvertisingReady": data.get("publicAdvertisingReady"),
+                "paidTrafficReady": data.get("paidTrafficReady"),
+                "privateDemoReady": data.get("privateDemoReady"),
+                "cashCollectionReady": data.get("cashCollectionReady"),
+                "publicAdBlockers": advertising_summary.get("publicAdBlockers"),
+                "paidTrafficBlockers": advertising_summary.get("paidTrafficBlockers"),
+                "privateDemoBlockers": advertising_summary.get("privateDemoBlockers"),
+                "summary": advertising_summary.get("message"),
+                "nextAction": advertising_summary.get("nextAction"),
             })
         elif path.endswith("/launch/closure-plan"):
             closure_summary = data.get("summary") or {}
@@ -515,6 +532,7 @@ for path in paths:
                 "hasInstallBundle": bool(install_bundle),
                 "installCommandUsesTokenStdin": "--token-stdin" in str(install_bundle.get("installCommand") or ""),
                 "installCommandUsesServerHealth": "--server-health" in str(install_bundle.get("installCommand") or ""),
+                "installCommandUsesRouteHealth": "--route-health" in str(install_bundle.get("installCommand") or ""),
                 "installBundleRequiredTargets": len(install_bundle.get("requiredTargetIds") or []),
                 "summary": (readiness.get("summary") or {}).get("message"),
             })
@@ -522,6 +540,7 @@ for path in paths:
                 not install_bundle
                 or "--token-stdin" not in str(install_bundle.get("installCommand") or "")
                 or "--server-health" not in str(install_bundle.get("installCommand") or "")
+                or "--route-health" not in str(install_bundle.get("installCommand") or "")
             ):
                 summary["ok"] = False
         elif path.endswith("/updates/readiness"):
@@ -541,6 +560,20 @@ for path in paths:
             })
             if "rollbackReadiness" not in data:
                 summary["ok"] = False
+        elif path.endswith("/windows/trust-readiness"):
+            trust_summary = data.get("summary") or {}
+            policy = data.get("policy") or {}
+            item.update({
+                "productionReady": data.get("productionReady"),
+                "green": trust_summary.get("green"),
+                "yellow": trust_summary.get("yellow"),
+                "warnings": trust_summary.get("warnings"),
+                "checks": len(data.get("checks") or []),
+                "requiredActions": len(data.get("requiredActions") or []),
+                "currentUnsignedBuildIsTemporary": policy.get("currentUnsignedBuildIsTemporary"),
+                "sslCertificatesDoNotSignExe": policy.get("sslCertificatesDoNotSignExe"),
+                "summary": trust_summary.get("message"),
+            })
         elif path.endswith("/billing/reconciliation"):
             reconciliation_summary = data.get("summary") or {}
             item.update({
@@ -686,11 +719,12 @@ for path in paths:
                 "hasOperatorPlan": bool(operator_plan),
                 "runOnceCommands": len(run_once_commands),
                 "runOnceUsesServerHealth": "--server-health" in run_once_text or "-ServerHealth" in run_once_text,
+                "runOnceUsesRouteHealth": "--route-health" in run_once_text or "-RouteHealth" in run_once_text,
                 "runOnceUsesStdin": "--admin-token-stdin" in run_once_text or "-AdminTokenFromStdin" in run_once_text,
                 "missingCoverageActions": len(external.get("missingCoverageActions") or []),
                 "externalProbeSummary": (external.get("summary") or {}).get("message"),
             })
-            if external and (not operator_plan or not item.get("runOnceUsesServerHealth") or not item.get("runOnceUsesStdin")):
+            if external and (not operator_plan or not item.get("runOnceUsesServerHealth") or not item.get("runOnceUsesRouteHealth") or not item.get("runOnceUsesStdin")):
                 summary["ok"] = False
         elif path.endswith("/support/actions/workflow"):
             actions = data.get("actions") or []
@@ -765,6 +799,7 @@ try:
         "/api/v1/admin/incidents/assignees",
         "/api/v1/admin/alerts/events",
         "/api/v1/admin/launch/readiness",
+        "/api/v1/admin/launch/advertising-readiness",
         "/api/v1/admin/launch/closure-plan",
         "/api/v1/admin/launch/owner-packet",
         "/api/v1/admin/site/readiness",
@@ -868,6 +903,7 @@ if ($AdminToken) {
   $adminPaths = @(
     "/api/v1/admin/readiness",
     "/api/v1/admin/launch/readiness",
+    "/api/v1/admin/launch/advertising-readiness",
     "/api/v1/admin/launch/closure-plan",
     "/api/v1/admin/launch/owner-packet",
     "/api/v1/admin/site/readiness",

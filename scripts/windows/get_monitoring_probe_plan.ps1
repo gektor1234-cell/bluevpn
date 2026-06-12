@@ -132,6 +132,10 @@ function Convert-MonitoringPlanPayload {
       $commandText.Contains("--server-health") -or
       $commandText.Contains("-ServerHealth")
     )
+    installCommandUsesRouteHealth = (
+      $commandText.Contains("--route-health") -or
+      $commandText.Contains("-RouteHealth")
+    )
     hasOperatorPlan = [bool]$operatorPlan
     runOnceCommands = $runOnceCommands
     installCommand = $(if ($operatorInstallCommand) { $operatorInstallCommand } else { $installCommand })
@@ -165,7 +169,7 @@ function Write-MonitoringPlanSummary {
   Write-Output "requiredTargetIds=$(@($Payload.requiredTargetIds) -join ', ')"
   Write-Output "requiredEndpointIds=$(@($Payload.requiredEndpointIds) -join ', ')"
   Write-Output "missingEndpointIds=$(@($Payload.missingEndpointIds) -join ', ')"
-  Write-Output "installCommandUsesTokenStdin=$($Payload.installCommandUsesTokenStdin); installCommandUsesServerHealth=$($Payload.installCommandUsesServerHealth)"
+  Write-Output "installCommandUsesTokenStdin=$($Payload.installCommandUsesTokenStdin); installCommandUsesServerHealth=$($Payload.installCommandUsesServerHealth); installCommandUsesRouteHealth=$($Payload.installCommandUsesRouteHealth)"
   Write-Output "safeToProceed=$($Payload.safeToProceed)"
   Write-Output ""
   Write-Output "Run once commands:"

@@ -14,10 +14,15 @@ const state = {
   roleTitle: '',
   section: 'dashboard',
   activeUserId: null,
+  activeUserDetail: null,
+  remotePeerSmokeBusyServerIds: new Set(),
+  clientConfigSmokeBusyServerIds: new Set(),
+  publicationGateBusyServerIds: new Set(),
   loaded: {
     overview: null,
     analytics: null,
     launchReadiness: null,
+    advertisingReadiness: null,
     launchClosurePlan: null,
     launchOwnerPacket: null,
     readiness: null,
@@ -61,8 +66,11 @@ const state = {
     serverPublicationReadiness: null,
     serverProvisioningReadiness: null,
     serverHealth: null,
+    resilienceRoutes: null,
+    resilienceTransportRollout: null,
     monitoringTargets: null,
     serviceObservations: null,
+    clientRouteEvents: null,
     monitoringProbes: null,
     monitoringReadiness: null,
     adminSessions: [],
@@ -168,7 +176,7 @@ function formatApiErrorDetail(data, text, fallback) {
   if (formatted) return formatted;
   const body = formatApiErrorValue(data);
   if (body && body !== '{}') return body;
-  return text || fallback || 'Request failed.';
+  return text || fallback || 'Запрос не выполнен.';
 }
 
 function money(value) {
@@ -182,6 +190,459 @@ function boolLabel(value) {
 
 function boolPill(value, yes = 'да', no = 'нет') {
   return `<span class="status-pill ${value ? '' : 'muted'}">${value ? yes : no}</span>`;
+}
+
+function safeNumber(value, fallback = 0) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
+}
+
+function serverEndpointHost(server) {
+  const endpoint = server?.endpoint;
+  if (endpoint && typeof endpoint === 'object') {
+    return endpoint.host || endpoint.hostname || server?.host || server?.endpointHost || '';
+  }
+  if (typeof endpoint === 'string' && endpoint.includes(':')) return endpoint.split(':')[0];
+  return server?.host || server?.endpointHost || (typeof endpoint === 'string' ? endpoint : '');
+}
+
+function serverEndpointPort(server) {
+  const endpoint = server?.endpoint;
+  if (endpoint && typeof endpoint === 'object') return endpoint.port || 443;
+  if (typeof endpoint === 'string' && endpoint.includes(':')) {
+    const port = endpoint.split(':').pop();
+    return Number(port) || server?.port || server?.endpointPort || 443;
+  }
+  return server?.port || server?.endpointPort || 443;
+}
+
+function serverIdentityValues(server) {
+  return [server?.id, server?.serverId, server?.name, server?.host, server?.endpointHost]
+    .map((value) => safeText(value, '').trim())
+    .filter(Boolean);
+}
+
+function serverCapacityStatusTitle(status) {
+  const normalized = safeText(status, 'green').toLowerCase();
+  if (normalized === 'red') return 'перегрузка';
+  if (normalized === 'yellow') return 'нагрузка растёт';
+  return 'запас есть';
+}
+
+function serverCapacityPillClass(status) {
+  const normalized = safeText(status, 'green').toLowerCase();
+  if (normalized === 'red') return 'red';
+  if (normalized === 'yellow') return 'yellow';
+  return '';
+}
+
+function renderServerCapacity(server) {
+  const capacity = server.capacity || {};
+  const load = safeNumber(capacity.currentLoadMbps ?? server.currentLoadMbps, 0);
+  const usable = safeNumber(capacity.usableBandwidthMbps ?? server.usableBandwidthMbps, 0);
+  const planned = safeNumber(capacity.plannedBandwidthMbps ?? server.plannedBandwidthMbps, 0);
+  const utilization = safeNumber(
+    capacity.utilizationPercent ?? server.utilizationPercent,
+    usable > 0 ? Math.round((load / usable) * 100) : 0,
+  );
+  const activeClients = safeNumber(capacity.activeClients ?? server.activeClients, 0);
+  const assignedUsers = safeNumber(capacity.assignedUsers ?? server.assignedUsers, 0);
+  const capacityStatus = capacity.capacityStatus || server.capacityStatus || 'green';
+  const capacityScore = safeNumber(capacity.capacityScore ?? server.capacityScore, 100);
+  const loadLabel = usable > 0
+    ? `${load}/${usable} Мбит/с · ${utilization}%`
+    : (planned > 0 ? `0/${planned} Мбит/с` : 'нагрузка —');
+
+  return `
+    <span class="status-pill ${serverCapacityPillClass(capacityStatus)}">
+      ${escapeHtml(serverCapacityStatusTitle(capacityStatus))}
+    </span><br>
+    <strong>${escapeHtml(loadLabel)}</strong><br>
+    <span class="muted">оценка ёмкости: ${escapeHtml(capacityScore)}%</span><br>
+    <span class="muted">активные клиенты: ${escapeHtml(activeClients)}</span><br>
+    <span class="muted">назначенные пользователи: ${escapeHtml(assignedUsers)}</span>
+    ${capacity.loadUpdatedAt ? `<br><span class="muted">обновлено: ${escapeHtml(shortDate(capacity.loadUpdatedAt))}</span>` : ''}
+  `;
+}
+
+const ADMIN_TEXT_TRANSLATIONS = new Map(Object.entries({
+  'Request failed.': 'Запрос не выполнен.',
+  'Critical Incidents': 'Критичные инциденты',
+  'Critical incidents': 'Критичные инциденты',
+  'production alerts': 'боевые оповещения',
+  'Published releases': 'Опубликованные версии',
+  'Endpoint failures 24h': 'Проблемы VPN-узлов за 24ч',
+  'Auth events 24h': 'События входа за 24ч',
+  'Admin alerts': 'Оповещения админки',
+  'Product readiness': 'Готовность продукта',
+  'Support Reports': 'Обращения в поддержку',
+  'Support reports': 'Обращения в поддержку',
+  'Support Actions 24h': 'Действия поддержки за 24ч',
+  'Support actions 24h': 'Действия поддержки за 24ч',
+  'Configure Telegram bot token and chat id for automatic incident alerts.': 'Настрой Telegram-бота и ID чата для автоматических оповещений об инцидентах.',
+  'open=0, reviewPending=0, firstResponseMissing=0': 'открыто=0, ждут разбора=0, без первого ответа=0',
+  'overdue=0, dueSoon=0, missingSla=0': 'просрочено=0, скоро срок=0, без SLA=0',
+  'manual_mvp': 'ручной MVP',
+  'service_alerts_enabled': 'оповещения по сервисам',
+  'server_health_score': 'оценка здоровья серверов',
+  'monitoring_probes': 'внешний мониторинг',
+  'admin_alerts': 'оповещения админов',
+  'updates': 'обновления',
+  'owner_actions': 'действия владельца',
+  'code_signing': 'подпись Windows',
+  'windows_distribution_trust': 'доверенный Windows-релиз',
+  'update_artifact': 'файл обновления',
+  'rollback_artifact': 'файл отката',
+  'Backend API': 'Сервер API',
+  'Green VPN Backend': 'Сервер API Green VPN',
+  'Database': 'База данных',
+  'Server Catalog': 'Каталог серверов',
+  'Updates': 'Обновления',
+  'Payments': 'Платежи',
+  'SLA queue': 'Очередь SLA',
+  'Overdue / due soon': 'Просрочено / скоро срок',
+  'Runbook: не найден': 'Инструкция: не найдена',
+  'Runbook: not found': 'Инструкция: не найдена',
+  'External probe install bundle': 'Пакет установки внешней проверки',
+  'Auto-renewal readiness': 'Готовность автопродления',
+  'Auto-renewal readiness not loaded yet.': 'Готовность автопродления пока не загружена.',
+  'Auth flow gate зелёный.': 'Проверка входа зелёная.',
+  'Methods:': 'Способы входа:',
+  'Smoke steps:': 'Шаги тестового платежа:',
+  'Blocks:': 'Блокеры:',
+  'Expiry issues:': 'Проблемы окончания подписок:',
+  'Renewal issues:': 'Проблемы автопродления:',
+  'Candidates:': 'Кандидаты:',
+  'Issues:': 'Проблемы:',
+  'Required:': 'Требуется:',
+  'Verify:': 'Проверка:',
+  'Apply:': 'Применение:',
+  'After apply:': 'После применения:',
+  'Launch blockers:': 'Блокеры запуска:',
+  'Recent problems:': 'Последние проблемы:',
+  'Review': 'Проверка',
+  'Decoded report для техподдержки': 'Расшифрованный отчёт для техподдержки',
+  'Encoded report': 'Закодированный отчёт',
+  'Endpoint': 'VPN-узел',
+  'endpoint': 'VPN-узел',
+  'endpoints': 'VPN-узлы',
+  'Managed endpoints': 'Управляемые VPN-узлы',
+  'Managed catalog': 'Управляемый каталог',
+  'Provisioning gate': 'Проверка выдачи конфигов',
+  'serverId contract': 'Правила выбора служебного ID сервера',
+  'Bootstrap': 'Стартовая конфигурация',
+  'Почему не public': 'Почему не опубликовано',
+  'Summary пока не загружен.': 'Сводка пока не загружена.',
+  'Readiness endpoint пока не загружен.': 'Проверка готовности пока не загружена.',
+  'Provisioning readiness пока не загружен.': 'Проверка выдачи конфигов пока не загружена.',
+  'No bootstrap URLs': 'Нет стартовых URL',
+  'controlled agent readiness': 'готовность управляемого агента',
+  'Отдельный monitoring VPS ещё не подключён': 'Отдельный VPS мониторинга ещё не подключён',
+  'Покрытие endpoint': 'Покрытие VPN-узлов',
+  'Внешние endpoint probes': 'Внешние проверки VPN-узлов',
+  'Покрытие внешним probe': 'Покрытие внешней проверкой',
+  'Наблюдений пока нет. Агент мониторинга позже начнёт присылать проверки endpoint-ов.': 'Наблюдений пока нет. Агент мониторинга позже начнёт присылать проверки VPN-узлов.',
+  'Endpoint probes': 'Проверки VPN-узлов',
+  'production готов': 'готов к запуску',
+  'production-оповещения': 'боевые оповещения',
+  'Production-платежи готовы.': 'Боевые платежи готовы.',
+  'Update manifest настроен.': 'Манифест обновлений настроен.',
+  'Доступно endpoint': 'Доступно VPN-узлов',
+  'ok': 'ок',
+  'fail': 'ошибка',
+  'failed': 'ошибка',
+  'warning': 'внимание',
+  'todo': 'сделать',
+  'clean': 'чисто',
+  'attention': 'внимание',
+  'overdue': 'просрочено',
+  'soon': 'скоро срок',
+  'needs setup': 'настроить',
+  'setup': 'настроить',
+  'blocked': 'заблокировано',
+  'review': 'проверить',
+  'guard off': 'защита выключена',
+  'available': 'доступно',
+  'created': 'создано',
+  'verified': 'подтверждено',
+  'cancelled': 'отменено',
+  'succeeded': 'успешно',
+  'waiting_user': 'ждём пользователя',
+  'in_progress': 'в работе',
+  'resolved': 'решено',
+  'closed': 'закрыто',
+  'legacy': 'старый режим',
+  'draft': 'черновик',
+  'published': 'опубликовано',
+  'paused': 'пауза',
+  'retired': 'выведено',
+  'open': 'открыто',
+  'done': 'готово',
+  'noop': 'без изменений',
+  'queued': 'в очереди',
+  'pending': 'ожидает',
+  'healthy': 'здоров',
+  'degraded': 'деградация',
+  'maintenance': 'обслуживание',
+  'disabled': 'выключен',
+  'active': 'активен',
+  'inactive': 'неактивен',
+  'public': 'публичный',
+  'internal': 'внутренний',
+  'client-safe': 'безопасно для клиента',
+  'safe-gate': 'защитная проверка',
+  'preparation': 'подготовка',
+  'internal-only': 'только внутри',
+  'not_public_candidate': 'не выбран для публикации',
+  'not_public': 'не опубликован',
+  'not_ready': 'не готов',
+  'public_candidate': 'кандидат на публикацию',
+  'client_config_ready': 'конфиг для клиента готов',
+  'client_config_not_ready': 'конфиг для клиента не готов',
+  'public_catalog_only': 'только опубликованные серверы',
+  'capacity_aware_best_public_endpoint': 'автовыбор по нагрузке и здоровью',
+  'client_selection_is_public_catalog_only': 'клиент видит только опубликованные серверы',
+  'lightest_healthy_client_ready_layer': 'самый лёгкий рабочий способ подключения',
+  'fresh_health_observation': 'есть свежая проверка здоровья',
+  'missing_health_observation': 'нет свежей проверки здоровья',
+  'overloaded': 'перегружен',
+  'server_health_green': 'сервер здоров',
+  'server_health_yellow': 'сервер требует внимания',
+  'server_health_red': 'сервер недоступен',
+  'non-secret': 'без секретов',
+  'owner': 'владелец',
+  'blockers': 'блокеры',
+  'selection': 'выбор',
+  'none': 'нет',
+  'none in window': 'нет в окне проверки',
+  'dry-run eligible': 'можно проверить без списания',
+  'dry-run only': 'только проверка без списания',
+  'safe dry-run': 'безопасная проверка',
+  'smoke ok': 'тестовый платеж пройден',
+  'run smoke': 'запустить тестовый платеж',
+  'Requires clean payment smoke.': 'Нужен чистый тестовый платеж.',
+  'expiry readiness only': 'только проверка окончания подписок',
+  'not enforced': 'не включено',
+  'enforced': 'включено',
+  'expiring': 'скоро закончится',
+  'reviewed': 'проверено',
+  'Review support report': 'Проверка обращения',
+  'Subscription expiry review': 'Проверка окончания подписки',
+  'Expiry review reason': 'Причина проверки окончания подписки',
+  'Expiry review saved for subscription': 'Проверка окончания подписки сохранена для подписки',
+  'Could not save expiry review': 'Не удалось сохранить проверку окончания подписки',
+  'bootstrap token': 'токен владельца',
+  'Bootstrap token': 'Токен владельца',
+  'bootstrap_token': 'владелец',
+  'staff_session': 'сотрудник',
+  'offline': 'не подключено',
+  'staff': 'сотрудник',
+  'status': 'статус',
+  'empty': 'пусто',
+  'email_code_start': 'отправка кода на почту',
+  'email_code_verify': 'проверка кода с почты',
+  'phone_code_start': 'отправка кода на телефон',
+  'phone_code_verify': 'проверка кода с телефона',
+  'password_login': 'вход по паролю',
+  'staff_login': 'вход сотрудника',
+  'staff_2fa_start': 'код сотрудника отправлен',
+  'staff_2fa_verify': 'код сотрудника проверен',
+  'legacy': 'старый режим',
+  'available': 'доступно',
+  'blocked': 'заблокировано',
+  'sent': 'отправлено',
+  'skipped': 'пропущено',
+  'waiting_owner': 'ждём владельца',
+  'waiting_provider': 'ждём провайдера',
+  'ready_to_apply': 'готово к применению',
+  'not_needed': 'не требуется',
+  'new': 'новое',
+  'triage': 'разбор',
+  'urgent': 'срочно',
+  'high': 'высокая',
+  'medium': 'средняя',
+  'normal': 'обычная',
+  'low': 'низкая',
+  'critical': 'критично',
+  'investigating': 'разбираем',
+  'mitigated': 'сдержан',
+  'health gate': 'проверка здоровья',
+  'red': 'красный',
+  'yellow': 'жёлтый',
+  'green': 'зелёный',
+  'gray': 'серый',
+  'user-agent не записан': 'данные браузера не записаны',
+}));
+
+const ADMIN_TEXT_REPLACEMENTS = [
+  [/\bproduction alerts\b/gi, 'боевые оповещения'],
+  [/\bmanual_mvp\b/g, 'ручной MVP'],
+  [/\bservice_alerts_enabled\b/g, 'оповещения по сервисам'],
+  [/\bserver_health_score\b/g, 'оценка здоровья серверов'],
+  [/\bmonitoring_probes\b/g, 'внешний мониторинг'],
+  [/\badmin_alerts\b/g, 'оповещения админов'],
+  [/\bowner_actions\b/g, 'действия владельца'],
+  [/\bcode_signing\b/g, 'подпись Windows'],
+  [/\bwindows_distribution_trust\b/g, 'доверенный Windows-релиз'],
+  [/\bupdate_artifact\b/g, 'файл обновления'],
+  [/\brollback_artifact\b/g, 'файл отката'],
+  [/\bProduction-payments\b/g, 'Боевые платежи'],
+  [/\bproduction-платежи\b/gi, 'боевые платежи'],
+  [/\bproduction\b/gi, 'боевой режим'],
+  [/\bBackend API\b/g, 'Сервер API'],
+  [/\bGreen VPN Backend\b/g, 'Сервер API Green VPN'],
+  [/\bDatabase\b/g, 'База данных'],
+  [/\bServer Catalog\b/g, 'Каталог серверов'],
+  [/\bUpdates\b/g, 'Обновления'],
+  [/\bUpdate manifest\b/g, 'Манифест обновлений'],
+  [/\bPayments\b/g, 'Платежи'],
+  [/\bPublished releases\b/g, 'Опубликованные версии'],
+  [/\bCritical Incidents\b/g, 'Критичные инциденты'],
+  [/\bCritical incidents\b/g, 'Критичные инциденты'],
+  [/\bEndpoint failures 24h\b/g, 'Проблемы VPN-узлов за 24ч'],
+  [/\bAuth events 24h\b/g, 'События входа за 24ч'],
+  [/\bAdmin alerts\b/g, 'Оповещения админки'],
+  [/\bProduct readiness\b/g, 'Готовность продукта'],
+  [/\bSupport Reports\b/g, 'Обращения в поддержку'],
+  [/\bSupport reports\b/g, 'Обращения в поддержку'],
+  [/\bSupport Actions 24h\b/g, 'Действия поддержки за 24ч'],
+  [/\bSupport actions 24h\b/g, 'Действия поддержки за 24ч'],
+  [/Configure Telegram bot token and chat id for automatic incident alerts\./g, 'Настрой Telegram-бота и ID чата для автоматических оповещений об инцидентах.'],
+  [/\bnot_public_candidate\b/g, 'не выбран для публикации'],
+  [/\bnot_public\b/g, 'не опубликован'],
+  [/\bnot_ready\b/g, 'не готов'],
+  [/\bpublic_candidate\b/g, 'кандидат на публикацию'],
+  [/\bclient_config_ready\b/g, 'конфиг для клиента готов'],
+  [/\bclient_config_not_ready\b/g, 'конфиг для клиента не готов'],
+  [/\bpublic_catalog_only\b/g, 'только опубликованные серверы'],
+  [/\bcapacity_aware_best_public_endpoint\b/g, 'автовыбор по нагрузке и здоровью'],
+  [/\bclient_selection_is_public_catalog_only\b/g, 'клиент видит только опубликованные серверы'],
+  [/\blightest_healthy_client_ready_layer\b/g, 'самый лёгкий рабочий способ подключения'],
+  [/\bfresh_health_observation\b/g, 'есть свежая проверка здоровья'],
+  [/\bmissing_health_observation\b/g, 'нет свежей проверки здоровья'],
+  [/\boverloaded\b/g, 'перегружен'],
+  [/\bserver_health_green\b/g, 'сервер здоров'],
+  [/\bserver_health_yellow\b/g, 'сервер требует внимания'],
+  [/\bserver_health_red\b/g, 'сервер недоступен'],
+  [/\bmanaged ready\b/g, 'управляемых готово'],
+  [/\bobserved\b/g, 'наблюдений'],
+  [/\bdraft\b/g, 'черновиков'],
+  [/\breviewPending\b/g, 'ждут разбора'],
+  [/\bfirstResponseMissing\b/g, 'без первого ответа'],
+  [/\bdueSoon\b/g, 'скоро срок'],
+  [/\bmissingSla\b/g, 'без SLA'],
+  [/\bfailed\b/g, 'неудачных'],
+  [/\bfail\b/g, 'ошибка'],
+  [/\bwarning\b/g, 'внимание'],
+  [/\bneeds setup\b/g, 'настроить'],
+  [/\bavailable\b/g, 'доступно'],
+  [/\bblocked\b/g, 'заблокировано'],
+  [/\bclean\b/g, 'чисто'],
+  [/\breviewPending\b/g, 'ждут разбора'],
+  [/\bfirstResponseMissing\b/g, 'без первого ответа'],
+  [/\bdueSoon\b/g, 'скоро срок'],
+  [/\bmissingSla\b/g, 'без SLA'],
+  [/\boverdue\b/g, 'просрочено'],
+  [/\bEndpoint\b/g, 'VPN-узел'],
+  [/\bendpoint\b/g, 'VPN-узел'],
+  [/\bendpoints\b/g, 'VPN-узлы'],
+  [/\bopen=/g, 'открыто='],
+  [/\btotal=/g, 'всего='],
+  [/\battention=/g, 'требуют внимания='],
+  [/\bhigh=/g, 'высокая важность='],
+  [/\bmedium=/g, 'средняя важность='],
+  [/\bprovider=/g, 'провайдер='],
+  [/\bsafeToRun=/g, 'можно запускать='],
+  [/\bcompleted=/g, 'завершено='],
+  [/\bpendingUrl=/g, 'ждут ссылки='],
+  [/\bsuccessful=/g, 'успешно='],
+  [/\bautoRenew=/g, 'автопродление='],
+  [/\bdue=/g, 'срок='],
+  [/\beligible=/g, 'подходит='],
+  [/\bmissingMethod=/g, 'нет способа оплаты='],
+  [/\bsmoke=/g, 'тестовый платёж='],
+  [/\bactive=/g, 'активно='],
+  [/\bexpiring=/g, 'скоро закончится='],
+  [/\bexpired=/g, 'закончилось='],
+  [/\bmanual=/g, 'вручную='],
+  [/\breviewed=/g, 'проверено='],
+  [/\bowner=/g, 'владелец='],
+  [/\bcode=/g, 'код='],
+  [/\bops=/g, 'операции='],
+  [/\bfinal=/g, 'финал='],
+  [/\blaunchReady=/g, 'готово к запуску='],
+  [/\brisky=/g, 'риск='],
+  [/\byookassaOrders=/g, 'заказы ЮKassa='],
+  [/\bgreen=/g, 'зелёные='],
+  [/\byellow=/g, 'жёлтые='],
+  [/\bsite=/g, 'сайт='],
+  [/\bdownloads:/g, 'загрузки:'],
+  [/\bwindows=/g, 'Windows='],
+  [/\bandroid=/g, 'Android='],
+  [/\bios=/g, 'iOS='],
+  [/\bprimary=/g, 'основной способ='],
+  [/\bfallback=/g, 'запасной способ='],
+  [/\busers=/g, 'пользователи='],
+  [/\bverified24h=/g, 'подтверждений за 24ч='],
+  [/\bproblems24h=/g, 'проблем за 24ч='],
+  [/\bverified\b/g, 'подтверждено'],
+  [/\blegacy\b/g, 'старый режим'],
+  [/\boff\b/g, 'выключено'],
+  [/\blogin:/g, 'последний вход:'],
+  [/\blast:/g, 'последняя активность:'],
+  [/\btotal\b/g, 'всего'],
+  [/\bactive\b/g, 'активно'],
+  [/\bnew\b/g, 'новое'],
+  [/\btriage\b/g, 'разбор'],
+  [/\binvestigating\b/g, 'разбираем'],
+  [/\bmitigated\b/g, 'сдержан'],
+  [/\bhealth gate\b/g, 'проверка здоровья'],
+];
+
+function translateAdminText(value, fallback = '') {
+  const raw = safeText(value, fallback);
+  if (!raw) return raw;
+  if (/^(https?:\/\/|\/api\/|[A-Z0-9_]+$)/.test(raw)) return raw;
+  const exact = ADMIN_TEXT_TRANSLATIONS.get(raw);
+  if (exact) return exact;
+  let translated = raw;
+  for (const [pattern, replacement] of ADMIN_TEXT_REPLACEMENTS) {
+    translated = translated.replace(pattern, replacement);
+  }
+  return ADMIN_TEXT_TRANSLATIONS.get(translated) || translated;
+}
+
+function escapeUi(value, fallback = '') {
+  return escapeHtml(translateAdminText(value, fallback));
+}
+
+function translateAdminDom(root = document.body) {
+  if (!root || typeof document === 'undefined' || typeof NodeFilter === 'undefined') return;
+  const walker = document.createTreeWalker(
+    root,
+    NodeFilter.SHOW_TEXT,
+    {
+      acceptNode(node) {
+        const text = node.nodeValue || '';
+        if (!text.trim()) return NodeFilter.FILTER_REJECT;
+        const parent = node.parentElement;
+        if (!parent || parent.closest('script, style, code, pre, textarea')) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    },
+  );
+  const nodes = [];
+  while (walker.nextNode()) {
+    nodes.push(walker.currentNode);
+  }
+  nodes.forEach((node) => {
+    const translated = translateAdminText(node.nodeValue);
+    if (translated !== node.nodeValue) {
+      node.nodeValue = translated;
+    }
+  });
 }
 
 function supportWorkflow() {
@@ -219,7 +680,7 @@ function workflowOptionsHtml(items, selected, allLabel = '') {
   for (const item of items || []) {
     options.push(`
       <option value="${escapeHtml(item.code)}" ${item.code === selected ? 'selected' : ''}>
-        ${escapeHtml(item.title || item.code)}
+        ${escapeUi(item.title || item.code)}
       </option>
     `);
   }
@@ -431,9 +892,9 @@ function releaseWorkflow() {
 
 function releaseChannelTitle(channel) {
   return {
-    stable: 'Stable',
-    beta: 'Beta',
-    internal: 'Internal',
+    stable: 'Стабильный',
+    beta: 'Тестовый',
+    internal: 'Внутренний',
   }[channel] || channel || '—';
 }
 
@@ -511,7 +972,7 @@ function renderUpdateReadiness() {
   const container = $('updateReadinessSummary');
   if (!container) return;
   if (!readiness) {
-    container.innerHTML = '<p class="muted">Release readiness пока не загружен.</p>';
+    container.innerHTML = '<p class="muted">Готовность обновления пока не загружена.</p>';
     return;
   }
 
@@ -522,12 +983,12 @@ function renderUpdateReadiness() {
   const summary = readiness.summary || {};
   const header = {
     title: readiness.productionReady
-      ? 'Updater готов к публичному rollout'
-      : 'Updater ждёт финальный артефакт',
-    message: `${summary.message || ''} latest=${manifest.latestVersion || '—'}, fileReady=${boolLabel(manifest.fileReady)}, publicHttps=${boolLabel(manifest.publicHttpsReady)}, rollback=${boolLabel(rollbackGate.rollbackReady)}`,
+      ? 'Обновление готово к публичной раскатке'
+      : 'Обновление ждёт финальный файл',
+    message: `${summary.message || ''} версия=${manifest.latestVersion || '—'}, файл готов=${boolLabel(manifest.fileReady)}, HTTPS доступен=${boolLabel(manifest.publicHttpsReady)}, откат готов=${boolLabel(rollbackGate.rollbackReady)}`,
     ok: Boolean(readiness.productionReady),
     warning: !readiness.productionReady,
-    pill: readiness.productionReady ? 'ready' : 'draft',
+    pill: readiness.productionReady ? 'готово' : 'черновик',
   };
   container.innerHTML = [header, ...checks]
     .map(
@@ -535,10 +996,10 @@ function renderUpdateReadiness() {
         <div class="check-row">
           ${statusDot(Boolean(item.ok), !item.ok || item.warning)}
           <div>
-            <strong>${escapeHtml(item.title || item.code)}</strong>
-            <span>${escapeHtml(item.message || '')}</span>
+            <strong>${escapeUi(item.title || item.code)}</strong>
+            <span>${escapeUi(item.message || '')}</span>
           </div>
-          <span class="status-pill ${item.ok ? '' : 'yellow'}">${escapeHtml(item.pill || (item.ok ? 'ok' : 'todo'))}</span>
+          <span class="status-pill ${item.ok ? '' : 'yellow'}">${escapeUi(item.pill || (item.ok ? 'ok' : 'todo'))}</span>
         </div>
       `,
     )
@@ -550,7 +1011,7 @@ function renderUpdateManifest() {
   const container = $('updateManifestSummary');
   if (!container) return;
   if (!manifest) {
-    container.innerHTML = '<p class="muted">Manifest пока не загружен.</p>';
+    container.innerHTML = '<p class="muted">Манифест пока не загружен.</p>';
     return;
   }
 
@@ -566,35 +1027,35 @@ function renderUpdateManifest() {
       message: `источник=${manifest.source || '—'}, канал=${manifest.channel || 'stable'}, платформа=${manifest.platform || 'windows'}`,
       ok: true,
       warning: false,
-      pill: manifest.updateAvailable ? 'update' : 'current',
+      pill: manifest.updateAvailable ? 'обновление' : 'текущая',
     },
     {
       title: 'Файл обновления',
       message: manifest.downloadUrl || 'Ссылка на загрузку ещё не опубликована',
       ok: fileReady,
       warning: !fileReady,
-      pill: fileReady ? 'ready' : 'draft',
+      pill: fileReady ? 'готово' : 'черновик',
     },
     {
-      title: 'Publication gate',
-      message: `${releaseGate.summary || 'Нет опубликованного release для проверки'} ${releaseGate.blockers?.length ? `blockers=${releaseGate.blockers.join(', ')}` : ''}`,
+      title: 'Проверка перед публикацией',
+      message: `${releaseGate.summary || 'Нет опубликованной версии для проверки'} ${releaseGate.blockers?.length ? `блокеры=${releaseGate.blockers.join(', ')}` : ''}`,
       ok: Boolean(releaseGate.canPublish),
       warning: !releaseGate.canPublish,
-      pill: releaseGate.canPublish ? 'ready' : 'blocked',
+      pill: releaseGate.canPublish ? 'готово' : 'заблокировано',
     },
     {
-      title: 'Rollback plan',
-      message: `${rollbackGate.summary || 'No rollback artifact is configured yet.'} ${rollbackGate.blockers?.length ? `blockers=${rollbackGate.blockers.join(', ')}` : ''}`,
+      title: 'План отката',
+      message: `${rollbackGate.summary || 'Файл для отката ещё не настроен.'} ${rollbackGate.blockers?.length ? `блокеры=${rollbackGate.blockers.join(', ')}` : ''}`,
       ok: Boolean(rollbackGate.rollbackReady),
       warning: !rollbackGate.rollbackReady,
-      pill: rollbackGate.rollbackReady ? 'ready' : 'staged',
+      pill: rollbackGate.rollbackReady ? 'готово' : 'подготовка',
     },
     {
       title: 'Обязательность и rollout',
-      message: `обязательное=${manifest.required ? 'да' : 'нет'}, rollout=${manifest.rolloutPercent ?? 100}%, подходит=${manifest.rolloutEligible ? 'да' : 'нет'}, причина=${manifest.rolloutReason || '—'}`,
+      message: `обязательное=${manifest.required ? 'да' : 'нет'}, раскатка=${manifest.rolloutPercent ?? 100}%, подходит=${manifest.rolloutEligible ? 'да' : 'нет'}, причина=${manifest.rolloutReason || '—'}`,
       ok: !manifest.releaseBlocked,
       warning: Boolean(manifest.releaseBlocked),
-      pill: manifest.required ? 'required' : (manifest.releaseBlocked ? 'blocked' : 'optional'),
+      pill: manifest.required ? 'обязательно' : (manifest.releaseBlocked ? 'заблокировано' : 'необязательно'),
     },
   ];
   container.innerHTML = items
@@ -603,10 +1064,10 @@ function renderUpdateManifest() {
         <div class="check-row">
           ${statusDot(item.ok, item.warning)}
           <div>
-            <strong>${escapeHtml(item.title)}</strong>
-            <span>${escapeHtml(item.message)}</span>
+            <strong>${escapeUi(item.title)}</strong>
+            <span>${escapeUi(item.message)}</span>
           </div>
-          <span class="status-pill ${item.ok ? '' : 'yellow'}">${escapeHtml(item.pill)}</span>
+          <span class="status-pill ${item.ok ? '' : 'yellow'}">${escapeUi(item.pill)}</span>
         </div>
       `,
     )
@@ -642,8 +1103,8 @@ function renderReleasesTable() {
             <td>
               <span class="muted">${release.downloadUrl ? 'URL готов' : 'без URL'}</span><br>
               <span class="muted">${release.sha256 ? 'SHA256 готов' : 'без SHA256'}</span><br>
-              <span class="status-pill ${readiness.canPublish ? '' : 'yellow'}">${readiness.canPublish ? 'gate ready' : 'blocked'}</span>
-              <span class="status-pill ${rollbackGate.rollbackReady ? '' : 'yellow'}">${rollbackGate.rollbackReady ? 'rollback ready' : 'rollback staged'}</span>
+              <span class="status-pill ${readiness.canPublish ? '' : 'yellow'}">${readiness.canPublish ? 'публикация готова' : 'заблокировано'}</span>
+              <span class="status-pill ${rollbackGate.rollbackReady ? '' : 'yellow'}">${rollbackGate.rollbackReady ? 'откат готов' : 'откат готовится'}</span>
               ${
                 blockers.length || warnings.length
                   ? `<br><span class="muted">${escapeHtml([...blockers, ...warnings].slice(0, 2).join(', '))}</span>`
@@ -678,7 +1139,7 @@ function renderReleasesTable() {
           </tr>
         `;
       })
-      .join('') || '<tr><td colspan="8">Release-версий пока нет.</td></tr>';
+      .join('') || '<tr><td colspan="8">Версий пока нет.</td></tr>';
 }
 
 function findRelease(releaseId) {
@@ -730,7 +1191,7 @@ function releaseFormPayload(statusOverride = null) {
 }
 
 async function saveRelease(statusOverride = null) {
-  if (!requirePermission('updates.manage', 'Сохранение release')) return;
+  if (!requirePermission('updates.manage', 'Сохранение версии')) return;
   try {
     const form = $('releaseForm');
     const releaseId = form.dataset.releaseId;
@@ -741,17 +1202,17 @@ async function saveRelease(statusOverride = null) {
     await apiPost(path, payload);
     resetReleaseForm();
     await loadDashboardData();
-    setNotice('Release сохранён.');
+    setNotice('Версия сохранена.');
   } catch (error) {
-    setNotice(`Не удалось сохранить release: ${error.message}`, true);
+    setNotice(`Не удалось сохранить версию: ${error.message}`, true);
   }
 }
 
 async function updateReleaseStatus(releaseId, status) {
-  if (!requirePermission('updates.manage', 'Изменение статуса release')) return;
+  if (!requirePermission('updates.manage', 'Изменение статуса версии')) return;
   const release = findRelease(releaseId);
   if (!release) {
-    setNotice('Release не найден в текущем списке.', true);
+    setNotice('Версия не найдена в текущем списке.', true);
     return;
   }
   fillReleaseForm(release);
@@ -763,7 +1224,7 @@ function featureFlagWorkflow() {
     scopes: [
       'global',
       'client',
-      'backend',
+      'сервер API',
       'payments',
       'auth',
       'support',
@@ -881,7 +1342,7 @@ function featureFlagFormPayload(enabledOverride = null) {
 }
 
 async function saveFeatureFlag(enabledOverride = null) {
-  if (!requirePermission('flags.manage', 'Сохранение feature flag')) return;
+  if (!requirePermission('flags.manage', 'Сохранение переключателя функции')) return;
   try {
     const flagId = $('featureFlagIdInput').value;
     const path = flagId
@@ -890,16 +1351,16 @@ async function saveFeatureFlag(enabledOverride = null) {
     await apiPost(path, featureFlagFormPayload(enabledOverride));
     resetFeatureFlagForm();
     await loadDashboardData();
-    setNotice('Feature flag сохранён.');
+    setNotice('Переключатель функции сохранён.');
   } catch (error) {
-    setNotice(`Не удалось сохранить feature flag: ${error.message}`, true);
+    setNotice(`Не удалось сохранить переключатель функции: ${error.message}`, true);
   }
 }
 
 async function updateFeatureFlagEnabled(flagId, isEnabled) {
   const flag = findFeatureFlag(flagId);
   if (!flag) {
-    setNotice('Feature flag не найден в текущем списке.', true);
+    setNotice('Переключатель функции не найден в текущем списке.', true);
     return;
   }
   fillFeatureFlagForm(flag);
@@ -921,7 +1382,7 @@ function renderFeatureFlags() {
             <span class="muted">${escapeHtml(flag.title)}</span>
           </td>
           <td><span class="status-pill muted">${escapeHtml(flag.scope)}</span></td>
-          <td>${boolPill(flag.isEnabled, 'enabled', 'disabled')}</td>
+          <td>${boolPill(flag.isEnabled, 'включён', 'выключен')}</td>
           <td>${escapeHtml(flag.rolloutPercent ?? 0)}%</td>
           <td><pre class="inline-code">${escapeHtml(prettyJson(flag.value))}</pre></td>
           <td>${escapeHtml(shortDate(flag.updatedAt))}</td>
@@ -941,7 +1402,7 @@ function renderFeatureFlags() {
           </td>
         </tr>
       `)
-      .join('') || '<tr><td colspan="7">Feature flags ещё не загружены. Backend создаст базовый набор на старте.</td></tr>';
+      .join('') || '<tr><td colspan="7">Переключатели функций ещё не загружены. Сервер создаст базовый набор на старте.</td></tr>';
 }
 
 function renderRunbookControls() {
@@ -1039,14 +1500,14 @@ function renderRunbooks() {
         <tr>
           <td>
             <strong>${escapeHtml(runbook.key)}</strong><br>
-            <span class="muted">${escapeHtml(runbook.title)}</span>
+            <span class="muted">${escapeUi(runbook.title)}</span>
           </td>
-          <td><span class="status-pill muted">${escapeHtml(runbook.category)}</span></td>
-          <td><span class="status-pill ${runbookSeverityPillClass(runbook.severity)}">${escapeHtml(runbook.severity)}</span></td>
+          <td><span class="status-pill muted">${escapeUi(runbook.category)}</span></td>
+          <td><span class="status-pill ${runbookSeverityPillClass(runbook.severity)}">${escapeUi(runbook.severity)}</span></td>
           <td>${escapeHtml(runbook.ownerRole || '—')}</td>
           <td>
             <strong>${escapeHtml((runbook.steps || []).length)} шагов</strong><br>
-            <span class="muted">${escapeHtml(runbook.summary || 'Без краткого описания')}</span>
+            <span class="muted">${escapeUi(runbook.summary || 'Без краткого описания')}</span>
           </td>
           <td>${escapeHtml(shortDate(runbook.updatedAt))}</td>
           <td>
@@ -1065,7 +1526,7 @@ function renderRunbooks() {
           </td>
         </tr>
       `)
-      .join('') || '<tr><td colspan="7">Runbooks ещё не загружены. Backend создаст базовые инструкции на старте.</td></tr>';
+      .join('') || '<tr><td colspan="7">Инструкции ещё не загружены. Сервер создаст базовый набор на старте.</td></tr>';
 }
 
 function serverWorkflow() {
@@ -1074,15 +1535,19 @@ function serverWorkflow() {
     protocols: [
       'wireguard_udp',
       'wireguard_tcp',
+      'amneziawg',
       'openvpn_tcp',
       'shadowsocks',
       'hysteria2',
-      'stealth',
+      'trojan_tls',
+      'vless_reality',
+      'masque_udp',
     ],
-    transports: ['udp', 'tcp', 'tls', 'quic', 'http3'],
+    transports: ['udp', 'tcp', 'tls', 'quic', 'http3', 'reality', 'masque'],
     clientConfigProfiles: [
       { code: 'none', title: 'Не выдавать клиентам' },
-      { code: 'builtin_wg0', title: 'Текущий backend wg0' },
+      { code: 'builtin_wg0', title: 'Текущий сервер API wg0' },
+      { code: 'remote_ssh_wg0', title: 'Удалённый WireGuard wg0' },
     ],
     publicMode: 'admin_preparation',
   };
@@ -1124,11 +1589,14 @@ function serverHealthStatusPillClass(status) {
 function serverProtocolTitle(protocol) {
   return {
     wireguard_udp: 'WireGuard UDP',
-    wireguard_tcp: 'WireGuard TCP',
-    openvpn_tcp: 'OpenVPN TCP',
-    shadowsocks: 'Shadowsocks',
-    hysteria2: 'Hysteria2',
-    stealth: 'Stealth',
+    wireguard_tcp: 'WireGuard поверх TCP',
+    amneziawg: 'AmneziaWG',
+    openvpn_tcp: 'OpenVPN TCP/443',
+    shadowsocks: 'Shadowsocks AEAD',
+    hysteria2: 'Hysteria2 QUIC',
+    trojan_tls: 'Trojan TLS',
+    vless_reality: 'VLESS REALITY',
+    masque_udp: 'MASQUE CONNECT-UDP',
   }[protocol] || protocol || '—';
 }
 
@@ -1139,13 +1607,16 @@ function serverTransportTitle(transport) {
     tls: 'TLS',
     quic: 'QUIC',
     http3: 'HTTP/3',
+    reality: 'REALITY',
+    masque: 'MASQUE',
   }[transport] || transport || '—';
 }
 
 function serverClientConfigProfileTitle(profile) {
   return {
     none: 'Не выдавать клиентам',
-    builtin_wg0: 'Текущий backend wg0',
+    builtin_wg0: 'Текущий сервер API wg0',
+    remote_ssh_wg0: 'Удалённый WireGuard wg0',
   }[profile] || profile || '—';
 }
 
@@ -1239,22 +1710,22 @@ function renderServerEligibility(server) {
   const blockerHtml = visibleBlockers.length
     ? visibleBlockers
         .map((blocker) => `
-          <span class="muted">${escapeHtml(blocker.code)}: ${escapeHtml(blocker.message)}</span>
+          <span class="muted">${escapeHtml(blocker.code)}: ${escapeUi(blocker.message)}</span>
         `)
         .join('<br>')
-    : '<span class="muted">Готов к публикации после следующего release gate.</span>';
+    : '<span class="muted">Готов к публикации после следующей релизной проверки.</span>';
   const more = blockers.length > visibleBlockers.length
     ? `<br><span class="muted">ещё ${blockers.length - visibleBlockers.length}</span>`
     : '';
 
   return `
     <span class="status-pill ${eligibility.eligible ? '' : 'yellow'}">
-      ${eligibility.eligible ? 'eligible' : 'blocked'}
+      ${eligibility.eligible ? 'можно' : 'нельзя'}
     </span><br>
     ${blockerHtml}${more}<br>
     <span class="muted">
-      health24=${escapeHtml(eligibility.healthyObservations24h || 0)} /
-      fail24=${escapeHtml(eligibility.failedObservations24h || 0)}
+      здоровых проверок за 24ч: ${escapeHtml(eligibility.healthyObservations24h || 0)} /
+      сбоев за 24ч: ${escapeHtml(eligibility.failedObservations24h || 0)}
     </span>
   `;
 }
@@ -1265,10 +1736,17 @@ function renderServerCatalogSummary() {
   const publication = state.loaded.serverPublicationReadiness;
   const provisioning = state.loaded.serverProvisioningReadiness;
   const workflow = serverWorkflow();
+  const routePayload = state.loaded.resilienceRoutes || {};
+  const transportRollout = state.loaded.resilienceTransportRollout?.rollout || {};
+  const resilience = routePayload.resilience || catalog.resilience || {};
+  const routeDecision = routePayload.routeDecision || resilience.routeDecision || {};
+  const selectedRoute = routeDecision.selected || {};
+  const routeChain = routeDecision.fallbackChain || [];
+  const targetRouteMatrix = routePayload.targetRouteMatrix || {};
   const container = $('serverCatalogSummary');
   if (!container) return;
   if (!catalog) {
-    container.innerHTML = '<p class="muted">Catalog пока не загружен.</p>';
+    container.innerHTML = '<p class="muted">Каталог серверов пока не загружен.</p>';
     return;
   }
 
@@ -1276,54 +1754,125 @@ function renderServerCatalogSummary() {
   const servers = catalog.servers || [];
   const items = [
     {
-      title: `Публичный catalog v${catalog.version || '—'}`,
-      message: `${servers.length} клиентских endpoint, default=${catalog.defaultServerId || '—'}`,
+      title: `Публичный каталог v${catalog.version || '—'}`,
+      message: `${servers.length} клиентских VPN-узлов, по умолчанию=${catalog.defaultServerId || '—'}`,
       ok: true,
       warning: false,
       pill: 'client-safe',
     },
     {
-      title: 'Managed endpoints',
+      title: 'Управляемые VPN-узлы',
       message: summary
-        ? `${summary.managedTotal || 0} всего, ${summary.managedClientConfigReady || 0} config-ready, ${summary.managedPublicEligible || 0} eligible`
-        : 'Summary пока не загружен.',
+        ? `${summary.managedTotal || 0} всего, ${summary.managedClientConfigReady || 0} с готовым конфигом, ${summary.managedPublicEligible || 0} можно публиковать`
+        : 'Сводка пока не загружена.',
       ok: !summary || Number(summary.managedPublicEligible || 0) === 0,
       warning: Boolean(summary && Number(summary.managedPublicCandidates || 0) > 0),
       pill: summary?.mode || 'safe-gate',
     },
     {
-      title: 'Managed catalog',
+      title: 'Управляемый каталог',
       message: managed.message || workflow.publicSafety || 'Готовим внутренний список серверов.',
       ok: true,
       warning: true,
       pill: managed.mode || workflow.publicMode || 'preparation',
     },
     {
-      title: 'Publication gate',
+      title: 'Проверка перед публикацией',
       message: publication
-        ? publication.clientImpact || `${publication.blockedManagedEntries?.length || 0} endpoint blocked`
-        : 'Readiness endpoint пока не загружен.',
+        ? publication.clientImpact || `${publication.blockedManagedEntries?.length || 0} VPN-узлов заблокировано`
+        : 'Проверка готовности пока не загружена.',
       ok: Boolean(publication?.publicCatalogUnchanged),
       warning: !publication?.canPublishManagedEndpoints,
-      pill: publication?.canPublishManagedEndpoints ? 'review' : 'safe-block',
+      pill: publication?.canPublishManagedEndpoints ? 'проверить' : 'безопасный блок',
     },
     {
-      title: 'Provisioning gate',
+      title: 'Проверка выдачи конфигов',
       message: provisioning
-        ? provisioning.summary?.message || `accepted=${(provisioning.clientConfigContract?.acceptedServerIds || []).join(', ')}`
-        : 'Provisioning readiness пока не загружен.',
+        ? provisioning.summary?.message || `принятые серверы=${(provisioning.clientConfigContract?.acceptedServerIds || []).join(', ')}`
+        : 'Проверка выдачи конфигов пока не загружена.',
       ok: Boolean(provisioning?.safeForCurrentClient),
       warning: !provisioning?.currentEndpointConfigReady || !provisioning?.multiEndpointProvisioningReady,
-      pill: provisioning?.multiEndpointProvisioningReady ? 'multi-endpoint' : 'public-only',
+      pill: provisioning?.multiEndpointProvisioningReady ? 'несколько узлов' : 'только публичный',
     },
     {
-      title: 'Bootstrap',
-      message: (catalog.bootstrap?.apiBaseUrls || []).join(', ') || 'Нет bootstrap URLs',
+      title: 'Стартовая конфигурация',
+      message: (catalog.bootstrap?.apiBaseUrls || []).join(', ') || 'Нет стартовых URL API',
       ok: Boolean(catalog.bootstrap?.apiBaseUrls?.length),
       warning: !catalog.bootstrap?.apiBaseUrls?.length,
       pill: 'api',
     },
   ];
+  if (selectedRoute.protocol) {
+    const selectedLayer = routeChain.find((item) => item.code === selectedRoute.protocol) || {};
+    const routeReady = Boolean(selectedLayer.autoEligible);
+    const selectedClientFeedback = selectedLayer.clientFeedback || {};
+    const chainPreview = routeChain
+      .slice(0, 5)
+      .map((item) => {
+        const status = item.autoEligible
+          ? 'готов'
+          : (item.clientReady && item.publicEndpointReady ? `оценка ${item.score || 0}` : 'ждёт подготовки');
+        return `${serverProtocolTitle(item.code)}: ${status}`;
+      })
+      .join(' | ');
+    items.splice(1, 0, {
+      title: 'Автовыбор маршрута',
+      message: `${serverProtocolTitle(selectedRoute.protocol)}; оценка ${selectedRoute.score || 0}/100; источник=${selectedRoute.signalSource || '—'}. Клиентских сигналов: ${selectedClientFeedback.observed || 0}, успешных: ${selectedClientFeedback.ok || 0}, сбоев: ${selectedClientFeedback.failed || 0}. ${selectedRoute.reason || ''}`,
+      ok: routeReady || selectedRoute.protocol === 'wireguard_udp',
+      warning: !routeReady,
+      pill: routeDecision.selectionPolicy || 'авто',
+    });
+    items.splice(2, 0, {
+      title: 'Цепочка обхода',
+      message: chainPreview || 'Слои маршрутизации пока не загружены.',
+      ok: Boolean(routeChain.length),
+      warning: routeChain.some((item) => !item.clientReady || !item.publicEndpointReady),
+      pill: `${routeChain.length || 0} слоёв`,
+    });
+    if (targetRouteMatrix.rows?.length) {
+      const missing = Number(targetRouteMatrix.targetsMissingSignal || 0);
+      const covered = Number(targetRouteMatrix.targetsCovered || 0);
+      const total = Number(targetRouteMatrix.targetsTotal || targetRouteMatrix.rows.length || 0);
+      const preview = targetRouteMatrix.rows
+        .slice(0, 4)
+        .map((row) => `${row.title || row.targetId}: ${serverProtocolTitle(row.selectedProtocol)} / ${row.selectedStatus || 'нет сигнала'}`)
+        .join(' | ');
+      items.splice(3, 0, {
+        title: 'Проверка сервисов по маршрутам',
+        message: `${covered}/${total} обязательных сервисов имеют живой маршрут. ${preview}`,
+        ok: missing === 0,
+        warning: missing > 0,
+        pill: targetRouteMatrix.mode || 'target-aware',
+      });
+    }
+  }
+  if (transportRollout.profiles?.length) {
+    const summaryText = transportRollout.summary?.message || 'План выдачи транспортов загружен.';
+    const readyCount = Number(transportRollout.summary?.ready || 0);
+    const totalCount = Number(transportRollout.summary?.total || transportRollout.profiles.length || 0);
+    const next = transportRollout.nextCandidate || {};
+    const firstBlocker = (next.blockers || [])[0] || {};
+    const nextDetail = firstBlocker.detail || next.nextAction || 'нужна подготовка';
+    const nextDetailSuffix = /[.!?]$/.test(nextDetail.trim()) ? '' : '.';
+    const canaryCommand = next.canaryScript ? ` Подготовка canary: ${next.canaryScript}.` : '';
+    const validationCommand = next.validationScript ? ` Проверка canary: ${next.validationScript}.` : '';
+    items.splice(3, 0, {
+      title: 'Готовность протоколов',
+      message: `${summaryText} Сейчас готовы: ${readyCount}/${totalCount}.`,
+      ok: true,
+      warning: true,
+      pill: transportRollout.mode || 'guarded',
+    });
+    items.splice(4, 0, {
+      title: 'Следующий слой обхода',
+      message: next.code
+        ? `${serverProtocolTitle(next.code)}: ${nextDetail}${nextDetailSuffix}${canaryCommand}${validationCommand}`
+        : 'Все заведённые слои прошли rollout gate.',
+      ok: !next.code,
+      warning: Boolean(next.code),
+      pill: next.risk || 'план',
+    });
+  }
   const blockerSummary = summary?.blockersByCode
     ? Object.entries(summary.blockersByCode)
         .sort((a, b) => Number(b[1]) - Number(a[1]))
@@ -1333,7 +1882,7 @@ function renderServerCatalogSummary() {
     : '';
   if (blockerSummary) {
     items.push({
-      title: 'Почему не public',
+      title: 'Почему не опубликовано',
       message: blockerSummary,
       ok: true,
       warning: true,
@@ -1347,7 +1896,7 @@ function renderServerCatalogSummary() {
       message: `${firstAction.title || firstAction.code}: ${firstAction.detail || ''}`,
       ok: true,
       warning: true,
-      pill: firstAction.owner || 'owner',
+      pill: firstAction.owner || 'владелец',
     });
   }
   if (provisioning?.newServerOnboardingPlan) {
@@ -1365,8 +1914,8 @@ function renderServerCatalogSummary() {
     items.push({
       title: 'Новый VPS',
       message: firstExample.hostname
-        ? `Черновик: ${firstExample.serverId} -> ${firstExample.hostname}; создание через ${plan.draftCreationEndpoint || 'safe draft endpoint'}`
-        : plan.clientImpact || 'Новый VPS готовим только как внутренний draft.',
+        ? `Черновик: ${firstExample.serverId} -> ${firstExample.hostname}; создание через ${plan.draftCreationEndpoint || 'безопасную ручку черновика'}`
+        : plan.clientImpact || 'Новый сервер готовим только как внутренний черновик.',
       ok: Boolean(plan.safeToCreateInternalDraft),
       warning: !plan.productionReady,
       pill: plan.mode || 'internal-only',
@@ -1376,7 +1925,7 @@ function renderServerCatalogSummary() {
       message: phaseSummary || 'План ещё не загружен.',
       ok: Boolean(plan.safeToCreateInternalDraft),
       warning: true,
-      pill: `${(plan.phases || []).length} phases`,
+      pill: `${(plan.phases || []).length} фаз`,
     });
     if (ownerInputSummary) {
       items.push({
@@ -1384,7 +1933,7 @@ function renderServerCatalogSummary() {
         message: ownerInputSummary,
         ok: true,
         warning: true,
-        pill: 'non-secret',
+      pill: 'без секретов',
       });
     }
   }
@@ -1394,11 +1943,11 @@ function renderServerCatalogSummary() {
       .map((item) => `${item.requestServerId}: ${item.reason}`)
       .join(', ');
     items.push({
-      title: 'serverId contract',
-      message: blocked || 'Все selection cases разрешены.',
+      title: 'Правила выбора серверов',
+      message: blocked || 'Все сценарии выбора разрешены.',
       ok: Boolean(provisioning.safeForCurrentClient),
       warning: Boolean(blocked),
-      pill: provisioning.clientConfigContract?.selectionPolicy || 'selection',
+      pill: provisioning.clientConfigContract?.selectionPolicy || 'выбор',
     });
   }
   container.innerHTML = items
@@ -1407,10 +1956,10 @@ function renderServerCatalogSummary() {
         <div class="check-row">
           ${statusDot(item.ok, item.warning)}
           <div>
-            <strong>${escapeHtml(item.title)}</strong>
-            <span>${escapeHtml(item.message)}</span>
+            <strong>${escapeUi(item.title)}</strong>
+            <span>${escapeUi(item.message)}</span>
           </div>
-          <span class="status-pill ${item.warning ? 'yellow' : ''}">${escapeHtml(item.pill)}</span>
+          <span class="status-pill ${item.warning ? 'yellow' : ''}">${escapeUi(item.pill)}</span>
         </div>
       `,
     )
@@ -1424,7 +1973,9 @@ function renderServersTable() {
   const canManageServers = can('servers.manage');
   table.innerHTML =
     rows
-      .map((server) => `
+      .map((server) => {
+        const canManageThisServer = canManageServers && !server.publicCatalogOnly;
+        return `
         <tr>
           <td>
             #${escapeHtml(server.id)}<br>
@@ -1436,7 +1987,7 @@ function renderServersTable() {
           </td>
           <td>
             <strong>${escapeHtml(server.host)}:${escapeHtml(server.port)}</strong><br>
-            <span class="muted">${escapeHtml(server.provider)}</span>
+            <span class="muted">${escapeUi(server.provider)}</span>
           </td>
           <td>
             ${escapeHtml(serverProtocolTitle(server.protocol))}<br>
@@ -1448,14 +1999,15 @@ function renderServersTable() {
             <strong>${escapeHtml(server.healthScore, '0')}%</strong><br>
             <span class="muted">${server.latencyMs === null || server.latencyMs === undefined ? 'задержка —' : `${escapeHtml(server.latencyMs)} мс`}</span>
           </td>
+          <td>${renderServerCapacity(server)}</td>
           <td>
             ${boolPill(server.isActive, 'активен', 'выключен')}
             ${boolPill(server.isPublic, 'кандидат', 'внутренний')}
             ${boolPill(server.clientConfigReady, 'конфиг готов', 'конфиг не готов')}
             ${
               server.publicationPausedAt
-                ? `<br><span class="status-pill yellow">auto-paused</span><br>
-                   <span class="muted">${escapeHtml(server.publicationPausedReason || 'health gate')}</span>`
+                ? `<br><span class="status-pill yellow">автопауза</span><br>
+                   <span class="muted">${escapeUi(server.publicationPausedReason || 'проверка здоровья')}</span>`
                 : ''
             }
             <br>
@@ -1463,18 +2015,58 @@ function renderServersTable() {
           </td>
           <td>
             ${
-              canManageServers
+              server.publicCatalogOnly
+                ? '<span class="muted">из клиентского каталога</span>'
+                : canManageThisServer
                 ? `<div class="row-actions">
                     <button class="small-button" data-server-edit="${escapeHtml(server.id)}">В форму</button>
                     <button class="small-button" data-server-healthy="${escapeHtml(server.id)}">Здоров</button>
+                    ${
+                      server.clientConfigProfile === 'remote_ssh_wg0'
+                        ? `<button
+                            class="small-button"
+                            data-server-remote-smoke="${escapeHtml(server.id)}"
+                            ${state.remotePeerSmokeBusyServerIds.has(server.serverId) ? 'disabled' : ''}
+                            title="Проверить, что сервер API может добавить и удалить временный WireGuard peer на этом удалённом узле"
+                          >Проверка peer</button>`
+                        : ''
+                    }
+                    ${
+                      server.clientConfigProfile === 'remote_ssh_wg0'
+                        ? `<button
+                            class="small-button"
+                            data-server-client-config-smoke="${escapeHtml(server.id)}"
+                            ${state.clientConfigSmokeBusyServerIds.has(server.serverId) ? 'disabled' : ''}
+                            title="Проверить, что сервер API собирает клиентский конфиг для этого удалённого узла и удаляет временный peer"
+                          >Тест конфига</button>`
+                        : ''
+                    }
+                    ${
+                      server.serverId !== 'current_wg0'
+                        ? server.isPublic
+                          ? `<button
+                              class="small-button danger"
+                              data-server-unpublish="${escapeHtml(server.id)}"
+                              ${state.publicationGateBusyServerIds.has(server.serverId) ? 'disabled' : ''}
+                              title="Скрыть VPN-узел из клиентского каталога без удаления записи"
+                            >Скрыть</button>`
+                          : `<button
+                              class="small-button"
+                              data-server-publish="${escapeHtml(server.id)}"
+                              ${state.publicationGateBusyServerIds.has(server.serverId) ? 'disabled' : ''}
+                              title="Проверить допуск к публикации и открыть VPN-узел клиентам только если все проверки зелёные"
+                            >Открыть клиентам</button>`
+                        : ''
+                    }
                     <button class="small-button danger" data-server-disable="${escapeHtml(server.id)}">Отключить</button>
                   </div>`
                 : readonlyActionsHtml('servers.manage')
             }
           </td>
         </tr>
-      `)
-      .join('') || '<tr><td colspan="8">Управляемых серверов пока нет. Можно добавить первый draft.</td></tr>';
+      `;
+      })
+      .join('') || '<tr><td colspan="9">Серверы не загрузились. Нажмите «Обновить»; если строка останется пустой, проверьте доступ к API и каталог серверов.</td></tr>';
 }
 
 function renderServerHealth() {
@@ -1487,7 +2079,7 @@ function renderServerHealth() {
   if (!summaryContainer || !table) return;
 
   const cards = [
-    ['Endpoint под наблюдением', summary.endpointsObserved || 0, `${summary.totalObservations || 0} наблюдений`],
+    ['VPN-узлов под наблюдением', summary.endpointsObserved || 0, `${summary.totalObservations || 0} наблюдений`],
     ['Здоровые', summary.healthyEndpoints || 0, 'последний статус: здоров'],
     ['Проблемные', summary.problemEndpoints || 0, `${summary.failed24h || 0} проблем за 24ч`],
     [
@@ -1498,25 +2090,25 @@ function renderServerHealth() {
       'по последним здоровым наблюдениям',
     ],
     [
-      'Внешние endpoint probes',
+      'Внешние проверки VPN-узлов',
       `${external.activeExternalProbeAgents || 0}/${external.externalProbeAgentsTotal || 0}`,
       external.summary?.message || 'Отдельный monitoring VPS ещё не подключён',
     ],
     [
-      'Покрытие endpoint',
+      'Покрытие VPN-узлов',
       `${(external.coveredEndpointIds || []).length}/${(external.requiredEndpointIds || []).length}`,
       (external.missingEndpointIds || []).length
         ? `нет: ${(external.missingEndpointIds || []).join(', ')}`
-        : 'config-ready endpoint покрыты',
+        : 'VPN-узлы с готовым конфигом покрыты',
     ],
   ];
 
   summaryContainer.innerHTML = cards
     .map(([label, value, hint]) => `
       <div class="metric-card">
-        <span>${escapeHtml(label)}</span>
+        <span>${escapeUi(label)}</span>
         <strong>${escapeHtml(value)}</strong>
-        <p>${escapeHtml(hint)}</p>
+        <p>${escapeUi(hint)}</p>
       </div>
     `)
     .join('');
@@ -1533,8 +2125,8 @@ function renderServerHealth() {
           <div class="external-action-head">
             ${statusDot(Boolean(external.productionReady), !external.productionReady)}
             <div>
-              <strong>Покрытие внешним probe</strong>
-              <span>${escapeHtml(operatorPlan.tokenPolicy || external.tokenPolicy || 'Admin token только через stdin или token file вне репозитория.')}</span>
+              <strong>Покрытие внешней проверкой</strong>
+              <span>${escapeUi(operatorPlan.tokenPolicy || external.tokenPolicy || 'Админский ключ только через stdin или файл токена вне репозитория.')}</span>
             </div>
             <span class="status-pill ${external.productionReady ? '' : 'yellow'}">${external.productionReady ? 'готово' : 'нужно наблюдение'}</span>
           </div>
@@ -1553,7 +2145,7 @@ function renderServerHealth() {
           <div class="external-action-meta">
             <span>Проверить:</span>
             <div class="pill-list">
-              ${verifySteps.map((step) => `<span class="muted">${escapeHtml(step)}</span>`).join('')}
+              ${verifySteps.map((step) => `<span class="muted">${escapeUi(step)}</span>`).join('')}
             </div>
           </div>
           ${
@@ -1594,14 +2186,14 @@ function renderServerHealth() {
               <span class="muted">потери ${item.packetLossPercent === null || item.packetLossPercent === undefined ? '—' : `${escapeHtml(item.packetLossPercent)}%`}</span>
             </td>
             <td>
-              ${escapeHtml(item.message || item.errorCode || '—')}<br>
-              <span class="muted">${escapeHtml(scoreText || item.errorCode || '')}</span>
+              ${escapeUi(item.message || item.errorCode || '—')}<br>
+              <span class="muted">${escapeUi(scoreText || item.errorCode || '')}</span>
             </td>
             <td>${escapeHtml(shortDate(item.observedAt))}</td>
           </tr>
         `;
       })
-      .join('') || '<tr><td colspan="7">Наблюдений пока нет. Агент мониторинга позже начнёт присылать проверки endpoint-ов.</td></tr>';
+      .join('') || '<tr><td colspan="7">Наблюдений пока нет. Агент мониторинга позже начнёт присылать проверки VPN-узлов.</td></tr>';
 }
 
 function findServerEntry(serverId) {
@@ -1693,7 +2285,7 @@ async function createPlannedServerDraft() {
   if (!requirePermission('servers.manage', 'Создание черновика нового VPS')) return;
   const plan = state.loaded.serverProvisioningReadiness?.newServerOnboardingPlan || {};
   if (!plan.safeToCreateInternalDraft) {
-    setNotice('Черновик нового VPS пока заблокирован: нужно сначала вернуть server catalog в безопасное состояние.', true);
+    setNotice('Черновик нового VPS пока заблокирован: нужно сначала вернуть каталог серверов в безопасное состояние.', true);
     return;
   }
   const payload = plannedServerDraftPayload();
@@ -1714,7 +2306,7 @@ async function createPlannedServerDraft() {
 }
 
 async function saveServerEntry(statusOverride = null) {
-  if (!requirePermission('servers.manage', 'Сохранение endpoint')) return;
+  if (!requirePermission('servers.manage', 'Сохранение VPN-узла')) return;
   try {
     const form = $('serverForm');
     const entryId = form.dataset.serverEntryId;
@@ -1725,17 +2317,17 @@ async function saveServerEntry(statusOverride = null) {
     await apiPost(path, payload);
     resetServerForm();
     await loadDashboardData();
-    setNotice('Endpoint сохранён. Он пока не выдаётся клиентам.');
+    setNotice('VPN-узел сохранён. Он пока не выдаётся клиентам.');
   } catch (error) {
-    setNotice(`Не удалось сохранить endpoint: ${error.message}`, true);
+    setNotice(`Не удалось сохранить VPN-узел: ${error.message}`, true);
   }
 }
 
 async function updateServerEntryStatus(entryId, status) {
-  if (!requirePermission('servers.manage', 'Изменение endpoint')) return;
+  if (!requirePermission('servers.manage', 'Изменение VPN-узла')) return;
   const server = findServerEntry(entryId);
   if (!server) {
-    setNotice('Endpoint не найден в текущем списке.', true);
+    setNotice('VPN-узел не найден в текущем списке.', true);
     return;
   }
   fillServerForm(server);
@@ -1750,25 +2342,200 @@ async function updateServerEntryStatus(entryId, status) {
   await saveServerEntry(status);
 }
 
+async function runRemotePeerSmoke(entryId) {
+  if (!requirePermission('servers.manage', 'Проверка удалённого VPN-узла')) return;
+  const server = findServerEntry(entryId);
+  if (!server) {
+    setNotice('VPN-узел не найден в текущем списке.', true);
+    return;
+  }
+  if (server.clientConfigProfile !== 'remote_ssh_wg0') {
+    setNotice('Проверка peer доступна только для удалённых WireGuard-узлов с профилем remote_ssh_wg0.', true);
+    return;
+  }
+  const serverId = server.serverId;
+  if (!serverId) {
+    setNotice('У VPN-узла нет служебного ID, проверку запускать нельзя.', true);
+    return;
+  }
+  if (state.remotePeerSmokeBusyServerIds.has(serverId)) return;
+
+  state.remotePeerSmokeBusyServerIds.add(serverId);
+  renderServersTable();
+  setNotice(`Запускаю проверку peer для ${serverId}: сервер API добавит временный WireGuard peer и сразу удалит его.`);
+  try {
+    const result = await apiPost(`/api/v1/admin/server-catalog/${encodeURIComponent(serverId)}/remote-peer-smoke`, {});
+    let noticeMessage = '';
+    let noticeIsError = false;
+    if (result.ok) {
+      noticeMessage = `Проверка peer ${serverId} прошла: временный peer добавлен, найден и удалён. Узел ${result.endpoint || server.host} готов к выдаче клиентских конфигов.`;
+    } else {
+      const firstBlocker = (result.blockers || [])[0] || {};
+      const detail = result.message || firstBlocker.message || result.errorCode || 'подробности не вернулись';
+      noticeMessage = `Проверка peer ${serverId} не прошла: ${detail}`;
+      noticeIsError = true;
+    }
+    try {
+      await loadDashboardData();
+    } catch (refreshError) {
+      noticeMessage = `${noticeMessage} Данные админки не обновились автоматически: ${refreshError.message}`;
+      noticeIsError = true;
+    }
+    setNotice(noticeMessage, noticeIsError);
+  } catch (error) {
+    setNotice(`Не удалось выполнить проверку peer для ${serverId}: ${error.message}`, true);
+  } finally {
+    state.remotePeerSmokeBusyServerIds.delete(serverId);
+    renderServersTable();
+  }
+}
+
+async function runClientConfigSmoke(entryId) {
+  if (!requirePermission('servers.manage', 'Проверка клиентского конфига')) return;
+  const server = findServerEntry(entryId);
+  if (!server) {
+    setNotice('VPN-узел не найден в текущем списке.', true);
+    return;
+  }
+  if (server.clientConfigProfile !== 'remote_ssh_wg0') {
+    setNotice('Тест конфига доступен только для удалённых WireGuard-узлов с профилем remote_ssh_wg0.', true);
+    return;
+  }
+  const serverId = server.serverId;
+  if (!serverId) {
+    setNotice('У VPN-узла нет serverId, тест конфига запускать нельзя.', true);
+    return;
+  }
+  if (state.clientConfigSmokeBusyServerIds.has(serverId)) return;
+
+  state.clientConfigSmokeBusyServerIds.add(serverId);
+  renderServersTable();
+  setNotice(`Запускаю тест конфига для ${serverId}: сервер API соберёт WireGuard-конфиг без возврата ключей и удалит временный peer.`);
+  try {
+    const result = await apiPost(`/api/v1/admin/server-catalog/${encodeURIComponent(serverId)}/client-config-smoke`, {});
+    let noticeMessage = '';
+    let noticeIsError = false;
+    if (result.ok) {
+      noticeMessage = `Тест конфига ${serverId} прошёл: endpoint ${result.endpoint || server.host}, форма конфига собрана (${result.configTextBytes || 0} байт), временный peer удалён.`;
+    } else {
+      const firstBlocker = (result.blockers || [])[0] || {};
+      const detail = result.message || firstBlocker.message || result.errorCode || 'подробности не вернулись';
+      noticeMessage = `Тест конфига ${serverId} не прошёл: ${detail}`;
+      noticeIsError = true;
+    }
+    try {
+      await loadDashboardData();
+    } catch (refreshError) {
+      noticeMessage = `${noticeMessage} Данные админки не обновились автоматически: ${refreshError.message}`;
+      noticeIsError = true;
+    }
+    setNotice(noticeMessage, noticeIsError);
+  } catch (error) {
+    setNotice(`Не удалось выполнить тест конфига для ${serverId}: ${error.message}`, true);
+  } finally {
+    state.clientConfigSmokeBusyServerIds.delete(serverId);
+    renderServersTable();
+  }
+}
+
+function publicationBlockerSummary(blockers) {
+  const list = Array.isArray(blockers) ? blockers : [];
+  if (!list.length) return 'блокеров нет';
+  return list
+    .slice(0, 5)
+    .map((item) => item.message || item.code || 'проверка не пройдена')
+    .join('; ');
+}
+
+async function publishServerEntry(entryId) {
+  if (!requirePermission('servers.manage', 'Открытие VPN-узла клиентам')) return;
+  const server = findServerEntry(entryId);
+  if (!server) {
+    setNotice('VPN-узел не найден в текущем списке.', true);
+    return;
+  }
+  const serverId = server.serverId;
+  if (!serverId) {
+    setNotice('У VPN-узла нет служебного ID, допуск к публикации запустить нельзя.', true);
+    return;
+  }
+  if (state.publicationGateBusyServerIds.has(serverId)) return;
+
+  state.publicationGateBusyServerIds.add(serverId);
+  renderServersTable();
+  setNotice(`Проверяю допуск к публикации для ${serverId}: здоровье, мониторинг, профиль конфига и готовность к выдаче клиентам.`);
+  try {
+    const preview = await apiGet(`/api/v1/admin/server-catalog/${encodeURIComponent(serverId)}/publication-gate`);
+    if (!preview.canPublish) {
+      setNotice(`Открывать ${serverId} клиентам пока нельзя: ${publicationBlockerSummary(preview.blockers)}`, true);
+      return;
+    }
+    const confirmed = confirm(`Открыть VPN-узел ${serverId} клиентам? Он появится в клиентском каталоге Green VPN.`);
+    if (!confirmed) {
+      setNotice(`Публикация ${serverId} отменена. Узел остался скрытым от клиентов.`);
+      return;
+    }
+    const result = await apiPost(`/api/v1/admin/server-catalog/${encodeURIComponent(serverId)}/publish`, {});
+    await loadDashboardData();
+    setNotice(result.message || `VPN-узел ${serverId} открыт клиентам.`);
+  } catch (error) {
+    setNotice(`Не удалось открыть VPN-узел ${serverId} клиентам: ${error.message}`, true);
+  } finally {
+    state.publicationGateBusyServerIds.delete(serverId);
+    renderServersTable();
+  }
+}
+
+async function unpublishServerEntry(entryId) {
+  if (!requirePermission('servers.manage', 'Скрытие VPN-узла из клиентского каталога')) return;
+  const server = findServerEntry(entryId);
+  if (!server) {
+    setNotice('VPN-узел не найден в текущем списке.', true);
+    return;
+  }
+  const serverId = server.serverId;
+  if (!serverId) {
+    setNotice('У VPN-узла нет служебного ID, скрыть его через допуск к публикации нельзя.', true);
+    return;
+  }
+  if (state.publicationGateBusyServerIds.has(serverId)) return;
+  const confirmed = confirm(`Скрыть VPN-узел ${serverId} из клиентского каталога? Уже подключённые клиенты не удаляются, но новые выдачи перестанут выбирать этот узел.`);
+  if (!confirmed) return;
+
+  state.publicationGateBusyServerIds.add(serverId);
+  renderServersTable();
+  setNotice(`Скрываю ${serverId} из клиентского каталога.`);
+  try {
+    const result = await apiPost(`/api/v1/admin/server-catalog/${encodeURIComponent(serverId)}/unpublish`, {});
+    await loadDashboardData();
+    setNotice(result.message || `VPN-узел ${serverId} скрыт из клиентского каталога.`);
+  } catch (error) {
+    setNotice(`Не удалось скрыть VPN-узел ${serverId}: ${error.message}`, true);
+  } finally {
+    state.publicationGateBusyServerIds.delete(serverId);
+    renderServersTable();
+  }
+}
+
 async function seedCurrentServerEndpoint() {
-  if (!requirePermission('servers.manage', 'Добавление текущего endpoint')) return;
+  if (!requirePermission('servers.manage', 'Добавление текущего VPN-узла')) return;
   try {
     const result = await apiPost('/api/v1/admin/server-catalog/seed-current', {});
     await loadDashboardData();
-    setNotice(result.message || 'Текущий endpoint добавлен во внутренний catalog.');
+    setNotice(result.message || 'Текущий VPN-узел добавлен во внутренний каталог.');
   } catch (error) {
-    setNotice(`Не удалось добавить текущий endpoint: ${error.message}`, true);
+    setNotice(`Не удалось добавить текущий VPN-узел: ${error.message}`, true);
   }
 }
 
 async function probeCurrentServerEndpoint() {
-  if (!requirePermission('monitoring.manage', 'Проверка текущего endpoint')) return;
+  if (!requirePermission('monitoring.manage', 'Проверка текущего VPN-узла')) return;
   try {
     const result = await apiPost('/api/v1/admin/server-health/probe-current', {});
     await loadDashboardData();
-    setNotice(result.message || 'Проверка текущего endpoint завершена.');
+    setNotice(result.message || 'Проверка текущего VPN-узла завершена.');
   } catch (error) {
-    setNotice(`Не удалось проверить текущий endpoint: ${error.message}`, true);
+    setNotice(`Не удалось проверить текущий VPN-узел: ${error.message}`, true);
   }
 }
 
@@ -1783,6 +2550,9 @@ function monitoringTargetWorkflow() {
         'dns',
         'tcp',
         'tls',
+        'media',
+        'throughput',
+        'youtube_media',
         'telegram',
         'discord',
         'youtube',
@@ -1818,12 +2588,15 @@ function monitoringTargetTypeTitle(type) {
     dns: 'DNS',
     tcp: 'TCP',
     tls: 'TLS',
+    media: 'Media throughput',
+    throughput: 'Throughput',
+    youtube_media: 'YouTube video',
     telegram: 'Telegram',
     discord: 'Discord',
     youtube: 'YouTube',
     payment: 'Payment',
-    update: 'Update',
-    bootstrap: 'Bootstrap',
+    update: 'Обновление',
+    bootstrap: 'Стартовая настройка',
     social: 'Social',
   }[type] || type || '—';
 }
@@ -1844,6 +2617,43 @@ function serviceObservationStatusPillClass(status) {
   return 'muted';
 }
 
+function decimalText(value, digits = 1) {
+  if (value === null || value === undefined || value === '') return '—';
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '—';
+  return number.toLocaleString('ru-RU', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: digits,
+  });
+}
+
+function serviceObservationQualityHtml(item) {
+  const details = item?.details || {};
+  const hasThroughput = details.throughputMbps !== undefined && details.throughputMbps !== null;
+  const failureMode = details.failureMode || '';
+  const severity = details.severity || '';
+  const mediaHost = details.mediaHost || details.media?.mediaHost || '';
+  if (!hasThroughput && !failureMode && !mediaHost) {
+    return '<span class="muted">—</span>';
+  }
+  const throughput = hasThroughput
+    ? `<strong>${escapeHtml(decimalText(details.throughputMbps, 2))} Мбит/с</strong>`
+    : '';
+  const threshold = details.minGreenMbps
+    ? `<span class="muted">зелёный порог ${escapeHtml(decimalText(details.minGreenMbps, 1))} Мбит/с</span>`
+    : '';
+  const mode = failureMode
+    ? `<span class="status-pill ${failureMode === 'blocked_or_unreachable' ? 'red' : 'yellow'}">${escapeHtml(failureMode)}</span>`
+    : '';
+  const severityText = severity && severity !== 'normal'
+    ? `<span class="muted">${escapeHtml(severity)}</span>`
+    : '';
+  const hostText = mediaHost
+    ? `<span class="muted">${escapeHtml(mediaHost)}</span>`
+    : '';
+  return [throughput, mode, threshold, severityText, hostText].filter(Boolean).join('<br>');
+}
+
 function monitoringTargetFilterParams() {
   return {
     status: $('monitoringTargetStatusFilter')?.value || 'all',
@@ -1858,6 +2668,72 @@ function serviceObservationFilterParams() {
     status: $('serviceObservationStatusFilter')?.value || 'all',
     limit: 100,
   };
+}
+
+function clientRouteEventFilterParams() {
+  const stage = $('clientRouteStageFilter')?.value || 'all';
+  const ok = $('clientRouteOkFilter')?.value || 'all';
+  const params = {
+    serverId: $('clientRouteServerFilter')?.value?.trim() || '',
+    limit: 100,
+  };
+  if (stage !== 'all') params.stage = stage;
+  if (ok === 'true' || ok === 'false') params.ok = ok;
+  return params;
+}
+
+function clientRouteStageTitle(stage) {
+  return {
+    bootstrap: 'Bootstrap',
+    config_fetch: 'Получение конфига',
+    connect: 'Подключение',
+    handshake: 'Handshake/traffic',
+    connected: 'Подключено',
+    network_probe: 'Проверка маршрута',
+    disconnect: 'Отключение',
+    unknown: 'Неизвестно',
+  }[stage] || stage || '—';
+}
+
+function clientRouteEventPillClass(event) {
+  const details = event?.details || {};
+  if (!event?.ok) return 'red';
+  if (details.status === 'yellow' || details.failoverRecommended) return 'yellow';
+  return '';
+}
+
+function clientRouteEventQualityHtml(event) {
+  const details = event?.details || {};
+  const parts = [];
+  if (details.targetId) {
+    parts.push(`<strong>${escapeHtml(details.targetId)}</strong>`);
+  }
+  if (details.status) {
+    parts.push(`<span class="status-pill ${serviceObservationStatusPillClass(details.status)}">${escapeHtml(serviceObservationStatusTitle(details.status))}</span>`);
+  }
+  if (details.throughputMbps !== undefined && details.throughputMbps !== null) {
+    const thresholds = [
+      details.greenMbps ? `green ${decimalText(details.greenMbps, 1)}` : '',
+      details.yellowMbps ? `yellow ${decimalText(details.yellowMbps, 1)}` : '',
+    ].filter(Boolean).join(' / ');
+    parts.push(`<span>${escapeHtml(decimalText(details.throughputMbps, 2))} Mbps${thresholds ? ` <span class="muted">(${escapeHtml(thresholds)})</span>` : ''}</span>`);
+  }
+  if (details.sampleHost) {
+    parts.push(`<span class="muted">${escapeHtml(details.sampleHost)}</span>`);
+  }
+  if (details.httpStatus !== undefined && details.httpStatus !== null) {
+    parts.push(`<span class="muted">HTTP ${escapeHtml(details.httpStatus)}</span>`);
+  }
+  if (details.failoverRecommended) {
+    parts.push('<span class="status-pill yellow">failover</span>');
+  }
+  if (details.attempt !== undefined || details.candidates !== undefined) {
+    parts.push(`<span class="muted">attempt ${escapeHtml(details.attempt ?? '—')} / ${escapeHtml(details.candidates ?? '—')}</span>`);
+  }
+  if (Array.isArray(details.selectedSocialApps) && details.selectedSocialApps.length) {
+    parts.push(`<span class="muted">${escapeHtml(details.selectedSocialApps.join(', '))}</span>`);
+  }
+  return parts.length ? parts.join('<br>') : '<span class="muted">—</span>';
 }
 
 function renderMonitoringTargetFilters() {
@@ -1895,8 +2771,15 @@ function renderManagedMonitoring() {
 
   const targetsPayload = state.loaded.monitoringTargets || {};
   const observationsPayload = state.loaded.serviceObservations || {};
+  const clientRoutePayload = state.loaded.clientRouteEvents || {};
   const probesPayload = state.loaded.monitoringProbes || {};
   const readinessPayload = state.loaded.monitoringReadiness || {};
+  const routePayload = state.loaded.resilienceRoutes || {};
+  const routeDecision = routePayload.routeDecision || {};
+  const selectedRoute = routeDecision.selected || {};
+  const selectedLayer = (routeDecision.fallbackChain || []).find((item) => item.code === selectedRoute.protocol) || {};
+  const selectedClientFeedback = selectedLayer.clientFeedback || {};
+  const routeSignal = routeDecision.routeObservationSignal || {};
   const summary = observationsPayload.summary || targetsPayload.summary || {};
   const probeSummary = probesPayload.summary || summary;
   const probeReadiness = readinessPayload.readiness || probeSummary.probeReadiness || summary.probeReadiness || {};
@@ -1904,10 +2787,12 @@ function renderManagedMonitoring() {
   const staleAfterMinutes = Math.round((probeReadiness.staleAfterSeconds || probeSummary.workflow?.probeStaleAfterSeconds || 900) / 60);
   const targetSummaryContainer = $('monitoringTargetsSummary');
   const observationSummaryContainer = $('serviceObservationSummary');
+  const clientRouteSummaryContainer = $('clientRouteEventsSummary');
   const probeSummaryContainer = $('monitoringProbeAgentsSummary');
   const probeInstallBundleContainer = $('monitoringProbeInstallBundle');
   const targetTable = $('monitoringTargetsTable');
   const observationTable = $('serviceObservationsTable');
+  const clientRouteTable = $('clientRouteEventsTable');
   const probeTable = $('monitoringProbeAgentsTable');
   if (!targetSummaryContainer || !observationSummaryContainer || !targetTable || !observationTable) {
     return;
@@ -1924,12 +2809,25 @@ function renderManagedMonitoring() {
   targetSummaryContainer.innerHTML = targetCards
     .map(([label, value, hint]) => `
       <div class="metric-card">
-        <span>${escapeHtml(label)}</span>
+        <span>${escapeUi(label)}</span>
         <strong>${escapeHtml(value)}</strong>
-        <p>${escapeHtml(hint)}</p>
+        <p>${escapeUi(hint)}</p>
       </div>
     `)
     .join('');
+
+  const qualitySignals = summary.serviceQuality?.signals || [];
+  const qualityCards = qualitySignals.slice(0, 3).map((signal) => {
+    const throughput = signal.throughputMbps === null || signal.throughputMbps === undefined
+      ? serviceObservationStatusTitle(signal.status)
+      : `${decimalText(signal.throughputMbps, 2)} Мбит/с`;
+    const hint = [
+      signal.failureMode || serviceObservationStatusTitle(signal.status),
+      signal.minGreenMbps ? `зелёный от ${decimalText(signal.minGreenMbps, 1)} Мбит/с` : '',
+      signal.probeRegion || signal.probeId || '',
+    ].filter(Boolean).join(' · ');
+    return [`Качество: ${signal.targetId}`, throughput, hint || signal.message || 'последний media-сигнал'];
+  });
 
   observationSummaryContainer.innerHTML = [
     [
@@ -1942,6 +2840,7 @@ function renderManagedMonitoring() {
     ['Зелёные сейчас', summary.greenTargets || 0, 'работает штатно'],
     ['Проблемные сейчас', summary.problemTargets || 0, 'нужна реакция'],
     ['Сбои за 24ч', summary.failed24h || 0, 'жёлтые/красные события'],
+    ...qualityCards,
   ]
     .map(([label, value, hint]) => `
       <div class="metric-card">
@@ -1964,7 +2863,7 @@ function renderManagedMonitoring() {
         return `
           <tr>
             <td>
-              <strong>${escapeHtml(target.title)}</strong><br>
+              <strong>${escapeUi(target.title)}</strong><br>
               <span class="muted">${escapeHtml(target.targetId)}</span>
             </td>
             <td>
@@ -1973,7 +2872,7 @@ function renderManagedMonitoring() {
             </td>
             <td>
               ${escapeHtml(endpoint)}<br>
-              <span class="muted">expected ${escapeHtml(target.expectedStatus || '—')}</span>
+              <span class="muted">ожидается ${escapeUi(target.expectedStatus || '—')}</span>
             </td>
             <td>
               ${escapeHtml(target.intervalSeconds)} сек<br>
@@ -2000,7 +2899,7 @@ function renderManagedMonitoring() {
           </tr>
         `;
       })
-      .join('') || '<tr><td colspan="6">Целей мониторинга пока нет. Backend seed добавит базовые цели при старте.</td></tr>';
+      .join('') || '<tr><td colspan="6">Целей мониторинга пока нет. Сервер добавит базовые цели при старте.</td></tr>';
 
   if (probeSummaryContainer && probeTable) {
     const requiredTotal = (probeReadiness.requiredTargetIds || []).length;
@@ -2008,9 +2907,26 @@ function renderManagedMonitoring() {
     const readinessSummary = probeReadiness.summary || {};
     probeSummaryContainer.innerHTML = [
       [
-        'Готовность probes',
+        'Автовыбор маршрута',
+        selectedRoute.protocol ? serverProtocolTitle(selectedRoute.protocol) : '—',
+        selectedRoute.score === undefined
+          ? 'сервер API ещё не выбрал маршрут'
+          : `оценка ${selectedRoute.score}/100, ${selectedRoute.reason || 'самый лёгкий рабочий слой'}`,
+      ],
+      [
+        'Сигналы маршрутов',
+        routeSignal.freshObservations || 0,
+        `свежие наблюдения для выбора способа подключения`,
+      ],
+      [
+        'Сигналы клиентов',
+        selectedClientFeedback.observed || 0,
+        `успешных ${selectedClientFeedback.ok || 0}, сбоев ${selectedClientFeedback.failed || 0}`,
+      ],
+      [
+        'Готовность внешних проверок',
         probeReadiness.productionReady ? 'готово' : 'настройка',
-        readinessSummary.message || 'controlled agent readiness',
+        readinessSummary.message || 'готовность управляемого агента проверки',
       ],
       [
         'Покрытие целей',
@@ -2024,9 +2940,9 @@ function renderManagedMonitoring() {
     ]
       .map(([label, value, hint]) => `
         <div class="metric-card">
-          <span>${escapeHtml(label)}</span>
+          <span>${escapeUi(label)}</span>
           <strong>${escapeHtml(value)}</strong>
-          <p>${escapeHtml(hint)}</p>
+          <p>${escapeUi(hint)}</p>
         </div>
       `)
       .join('');
@@ -2034,13 +2950,13 @@ function renderManagedMonitoring() {
     if (probeInstallBundleContainer) {
       const ownerInputs = (probeInstallBundle.ownerInputs || [])
         .map((item) => {
-          const title = item.name || 'input';
-          const suffix = item.secret ? ' · secret' : '';
+          const title = item.name || 'поле';
+          const suffix = item.secret ? ' · секрет' : '';
           return `<span class="status-pill ${item.secret ? 'red' : 'muted'}">${escapeHtml(title)}${escapeHtml(suffix)}</span>`;
         })
         .join('');
       const verifySteps = (probeInstallBundle.verifySteps || [])
-        .map((step) => `<span class="muted">${escapeHtml(step)}</span>`)
+        .map((step) => `<span class="muted">${escapeUi(step)}</span>`)
         .join('');
       const requiredTargets = (probeInstallBundle.requiredTargetIds || [])
         .map((targetId) => `<span class="status-pill muted">${escapeHtml(targetId)}</span>`)
@@ -2051,26 +2967,26 @@ function renderManagedMonitoring() {
             <div class="external-action-head">
               ${statusDot(Boolean(probeReadiness.productionReady), !probeReadiness.productionReady)}
               <div>
-                <strong>External probe install bundle</strong>
-                <span>${escapeHtml(probeInstallBundle.tokenPolicy || 'Admin token stays only on the probe VPS.')}</span>
+                <strong>Пакет установки внешней проверки</strong>
+                <span>${escapeUi(probeInstallBundle.tokenPolicy || 'Админский ключ остаётся только на сервере проверки.')}</span>
               </div>
-              <span class="status-pill ${probeReadiness.productionReady ? '' : 'yellow'}">${probeReadiness.productionReady ? 'ready' : 'needs VPS'}</span>
+              <span class="status-pill ${probeReadiness.productionReady ? '' : 'yellow'}">${probeReadiness.productionReady ? 'готово' : 'нужен VPS'}</span>
             </div>
             <div class="external-action-meta">
-              <span>Install:</span>
+              <span>Установка:</span>
               <div class="code-list"><code>${escapeHtml(probeInstallBundle.installCommand)}</code></div>
             </div>
             <div class="external-action-meta">
-              <span>Owner input:</span>
-              <div class="pill-list">${ownerInputs || '<span class="muted">none</span>'}</div>
+              <span>Что нужно от владельца:</span>
+              <div class="pill-list">${ownerInputs || '<span class="muted">нет</span>'}</div>
             </div>
             <div class="external-action-meta">
-              <span>Required:</span>
-              <div class="pill-list">${requiredTargets || '<span class="muted">none</span>'}</div>
+              <span>Обязательные цели:</span>
+              <div class="pill-list">${requiredTargets || '<span class="muted">нет</span>'}</div>
             </div>
             <div class="external-action-meta">
-              <span>Verify:</span>
-              <div>${verifySteps || '<span class="muted">see monitoring readiness</span>'}</div>
+              <span>Проверить:</span>
+              <div>${verifySteps || '<span class="muted">смотри готовность мониторинга</span>'}</div>
             </div>
           </div>
         `
@@ -2111,7 +3027,7 @@ function renderManagedMonitoring() {
             </tr>
           `;
         })
-        .join('') || '<tr><td colspan="6">Агенты проверки пока не присылали наблюдения. Позже внешний probe будет запускаться отдельным скриптом без хранения токена в репозитории.</td></tr>';
+        .join('') || '<tr><td colspan="6">Агенты проверки пока не присылали наблюдения. Позже внешняя проверка будет запускаться отдельным скриптом без хранения токена в репозитории.</td></tr>';
   }
 
   const observations = observationsPayload.observations || [];
@@ -2121,7 +3037,7 @@ function renderManagedMonitoring() {
         <tr>
           <td>
             <strong>${escapeHtml(item.targetId)}</strong><br>
-            <span class="muted">${escapeHtml(item.errorCode || '')}</span>
+            <span class="muted">${escapeUi(item.errorCode || '')}</span>
           </td>
           <td>
             ${escapeHtml(item.probeId || 'probe —')}<br>
@@ -2129,11 +3045,69 @@ function renderManagedMonitoring() {
           </td>
           <td><span class="status-pill ${serviceObservationStatusPillClass(item.status)}">${escapeHtml(serviceObservationStatusTitle(item.status))}</span></td>
           <td>${item.latencyMs === null || item.latencyMs === undefined ? '—' : `${escapeHtml(item.latencyMs)} мс`}</td>
-          <td>${escapeHtml(item.message || '—')}</td>
+          <td>${serviceObservationQualityHtml(item)}</td>
+          <td>${escapeUi(item.message || '—')}</td>
           <td>${escapeHtml(shortDate(item.observedAt || item.createdAt))}</td>
         </tr>
       `)
-      .join('') || '<tr><td colspan="6">Наблюдений сервисов пока нет. Monitoring agent начнёт писать их позже.</td></tr>';
+      .join('') || '<tr><td colspan="7">Наблюдений сервисов пока нет. Проверяющий сервер начнёт писать их позже.</td></tr>';
+  renderClientRouteEventsPanel(clientRoutePayload, clientRouteSummaryContainer, clientRouteTable);
+}
+
+function renderClientRouteEventsPanel(clientRoutePayload, clientRouteSummaryContainer, clientRouteTable) {
+  if (!clientRouteSummaryContainer || !clientRouteTable) return;
+  const clientSummary = clientRoutePayload.summary || {};
+  const clientRouteDecision = clientRoutePayload.routeDecision || {};
+  const clientSelected = clientRouteDecision.selected || {};
+  clientRouteSummaryContainer.innerHTML = [
+    ['Клиентские сигналы', clientSummary.observed || 0, 'проверки маршрута от Windows/Android'],
+    ['Успешные', clientSummary.ok || 0, 'клиент увидел рабочий маршрут'],
+    ['Проблемы', clientSummary.failed || 0, 'нужен failover или ручная проверка'],
+    [
+      'Оценка клиента',
+      clientSummary.score === null || clientSummary.score === undefined ? '—' : `${clientSummary.score}/100`,
+      clientSummary.confidence ? `уверенность ${clientSummary.confidence}` : 'по последним client route-events',
+    ],
+    [
+      'Auto route',
+      clientSelected.protocol ? serverProtocolTitle(clientSelected.protocol) : '—',
+      clientSelected.reason || 'решение backend route selector',
+    ],
+  ]
+    .map(([label, value, hint]) => `
+      <div class="metric-card">
+        <span>${escapeHtml(label)}</span>
+        <strong>${escapeHtml(value)}</strong>
+        <p>${escapeHtml(hint)}</p>
+      </div>
+    `)
+    .join('');
+
+  const clientEvents = clientRoutePayload.events || [];
+  clientRouteTable.innerHTML = clientEvents
+    .map((event) => {
+      const protocol = event.protocol ? serverProtocolTitle(event.protocol) : '—';
+      const serverId = event.serverId || event.server_id || '—';
+      const resultText = event.ok ? 'OK' : 'Проблема';
+      const details = event.details || {};
+      return `
+        <tr>
+          <td>
+            <strong>${escapeHtml(serverId)}</strong><br>
+            <span class="muted">${escapeHtml(protocol)}</span>
+          </td>
+          <td>${escapeHtml(clientRouteStageTitle(event.stage))}</td>
+          <td><span class="status-pill ${clientRouteEventPillClass(event)}">${escapeHtml(resultText)}</span></td>
+          <td>${clientRouteEventQualityHtml(event)}</td>
+          <td>
+            ${escapeHtml(event.message || details.message || '—')}<br>
+            <span class="muted">${escapeHtml(event.clientPlatform || event.platform || '')}</span>
+          </td>
+          <td>${escapeHtml(shortDate(event.createdAt || event.created_at))}</td>
+        </tr>
+      `;
+    })
+    .join('') || '<tr><td colspan="6">Клиентских route-events пока нет. Они появятся после подключений свежих Windows/Android 0.2.10.</td></tr>';
 }
 
 function findMonitoringTarget(targetId) {
@@ -2409,6 +3383,38 @@ function hasAdminCredential() {
   return Boolean(state.sessionToken || state.adminToken);
 }
 
+const PERMISSION_LABELS = {
+  'dashboard.read': 'просмотр обзора',
+  'analytics.read': 'просмотр аналитики',
+  'incidents.read': 'просмотр инцидентов',
+  'incidents.manage': 'управление инцидентами',
+  'support.read': 'просмотр поддержки',
+  'support.manage': 'управление обращениями',
+  'support_actions.read': 'просмотр действий поддержки',
+  'support_actions.manage': 'выполнение действий поддержки',
+  'users.read': 'просмотр пользователей',
+  'users.manage': 'управление пользователями',
+  'devices.manage': 'управление устройствами',
+  'billing.read': 'просмотр платежей',
+  'billing.manage': 'управление платежами',
+  'audit.read': 'просмотр аудита и входов',
+  'staff.manage': 'управление командой',
+  'updates.read': 'просмотр обновлений',
+  'updates.manage': 'управление обновлениями',
+  'flags.manage': 'управление флагами',
+  'runbooks.manage': 'управление инструкциями',
+  'monitoring.read': 'просмотр мониторинга',
+  'monitoring.manage': 'управление мониторингом',
+  'servers.read': 'просмотр серверов',
+  'servers.manage': 'управление серверами',
+  'readiness.read': 'просмотр готовности',
+  'readiness.manage': 'управление готовностью',
+};
+
+function permissionLabel(permission) {
+  return PERMISSION_LABELS[permission] || permission || 'действие';
+}
+
 function can(permission) {
   if (!permission) return true;
   if (state.authType === 'bootstrap_token' && state.adminToken) return true;
@@ -2417,13 +3423,13 @@ function can(permission) {
 
 function requirePermission(permission, actionTitle = 'Действие') {
   if (can(permission)) return true;
-  setNotice(`${actionTitle}: у текущей роли нет права ${permission}.`, true);
+  setNotice(`${actionTitle}: у текущей роли нет права «${permissionLabel(permission)}».`, true);
   return false;
 }
 
 function readonlyActionsHtml(permission) {
   return `
-    <span class="status-pill muted" title="Нужно право ${escapeHtml(permission)}">
+    <span class="status-pill muted" title="Нужно право: ${escapeHtml(permissionLabel(permission))}">
       только чтение
     </span>
   `;
@@ -2436,7 +3442,7 @@ function setPermissionLock(element, locked, permission) {
     const banner = document.createElement('div');
     banner.dataset.permissionBanner = '1';
     banner.className = 'permission-banner';
-    banner.textContent = `Текущая роль может смотреть этот раздел, но не менять данные. Нужно право ${permission}.`;
+    banner.textContent = `Текущая роль может смотреть этот раздел, но не менять данные. Нужно право: ${permissionLabel(permission)}.`;
     element.prepend(banner);
   } else if (!locked && existingBanner) {
     existingBanner.remove();
@@ -2465,35 +3471,35 @@ function syncPermissionControls() {
     testAlertsButton.disabled = hasAdminCredential() && !can('incidents.manage');
     testAlertsButton.title = can('incidents.manage')
       ? ''
-      : 'Нужно право incidents.manage';
+      : `Нужно право: ${permissionLabel('incidents.manage')}`;
   }
   const createPlannedServerDraftButton = $('createPlannedServerDraftButton');
   if (createPlannedServerDraftButton) {
     createPlannedServerDraftButton.disabled = hasAdminCredential() && !can('servers.manage');
     createPlannedServerDraftButton.title = can('servers.manage')
-      ? 'Создать безопасный внутренний draft нового VPS из плана подключения'
-      : 'Нужно право servers.manage';
+      ? 'Создать безопасный внутренний черновик нового сервера из плана подключения'
+      : `Нужно право: ${permissionLabel('servers.manage')}`;
   }
   const seedCurrentServerButton = $('seedCurrentServerButton');
   if (seedCurrentServerButton) {
     seedCurrentServerButton.disabled = hasAdminCredential() && !can('servers.manage');
     seedCurrentServerButton.title = can('servers.manage')
-      ? 'Добавить текущий рабочий WireGuard endpoint во внутренний catalog'
-      : 'Нужно право servers.manage';
+      ? 'Добавить текущий рабочий WireGuard VPN-узел во внутренний каталог'
+      : `Нужно право: ${permissionLabel('servers.manage')}`;
   }
   const probeCurrentServerButton = $('probeCurrentServerButton');
   if (probeCurrentServerButton) {
     probeCurrentServerButton.disabled = hasAdminCredential() && !can('monitoring.manage');
     probeCurrentServerButton.title = can('monitoring.manage')
-      ? 'Запустить server-side проверку текущего WireGuard endpoint'
-      : 'Нужно право monitoring.manage';
+      ? 'Запустить серверную проверку текущего WireGuard VPN-узла'
+      : `Нужно право: ${permissionLabel('monitoring.manage')}`;
   }
   const seedDefaultMonitoringTargetsButton = $('seedDefaultMonitoringTargetsButton');
   if (seedDefaultMonitoringTargetsButton) {
     seedDefaultMonitoringTargetsButton.disabled = hasAdminCredential() && !can('monitoring.manage');
     seedDefaultMonitoringTargetsButton.title = can('monitoring.manage')
       ? 'Обновить встроенные цели API/YouTube/Discord/Telegram без удаления кастомных целей'
-      : 'Нужно право monitoring.manage';
+      : `Нужно право: ${permissionLabel('monitoring.manage')}`;
   }
 }
 
@@ -2524,19 +3530,27 @@ function currentAdminLabel() {
   if (state.currentStaff?.email) {
     return `${state.currentStaff.email} · ${state.roleTitle || state.currentStaff.role || 'staff'}`;
   }
-  return state.adminActor || (state.adminToken ? 'bootstrap token' : 'не подключено');
+  return state.adminActor || (state.adminToken ? 'владелец' : 'не подключено');
 }
 
 function applyAuthUi() {
-  $('logoutButton')?.classList.toggle('hidden', !hasAdminCredential());
-  $('openLoginButton').textContent = hasAdminCredential() ? 'Сменить вход' : 'Вход / API';
+  const authenticated = hasAdminCredential();
+  document.querySelector('.shell')?.classList.toggle('auth-locked', !authenticated);
+  $('loginPanel')?.classList.toggle('hidden', authenticated);
+  $('logoutButton')?.classList.toggle('hidden', !authenticated);
+  $('refreshButton')?.classList.toggle('hidden', !authenticated);
+  $('openLoginButton')?.classList.toggle('hidden', authenticated);
+  if ($('openLoginButton')) {
+    $('openLoginButton').textContent = 'Войти';
+  }
   document.querySelectorAll('.nav-link').forEach((button) => {
     const allowed = can(button.dataset.permission || '');
-    button.classList.toggle('hidden', hasAdminCredential() && !allowed);
-    button.disabled = hasAdminCredential() && !allowed;
+    button.classList.toggle('hidden', !authenticated || !allowed);
+    button.disabled = !authenticated || !allowed;
   });
-  if (hasAdminCredential() && !can(sectionPermission(state.section))) {
+  if (authenticated && !can(sectionPermission(state.section))) {
     state.section = firstAllowedSection();
+    switchSection(state.section);
   }
   syncPermissionControls();
 }
@@ -2558,6 +3572,7 @@ function resetLoadedData() {
     overview: null,
     analytics: null,
     launchReadiness: null,
+    advertisingReadiness: null,
     launchClosurePlan: null,
     launchOwnerPacket: null,
     readiness: null,
@@ -2601,8 +3616,10 @@ function resetLoadedData() {
     serverPublicationReadiness: null,
     serverProvisioningReadiness: null,
     serverHealth: null,
+    resilienceRoutes: null,
     monitoringTargets: null,
     serviceObservations: null,
+    clientRouteEvents: null,
     monitoringProbes: null,
     monitoringReadiness: null,
     adminSessions: [],
@@ -2667,11 +3684,9 @@ function renderMetrics(overview) {
     ['Устройства', overview?.devicesCount],
     ['Активные подписки', overview?.activeSubscriptionsCount],
     ['Ожидают оплату', overview?.pendingBillingOrdersCount],
-    ['Support reports', overview?.openSupportReportsCount],
-    ['Support actions 24h', overview?.supportActions24hCount],
+    ['Обращения в поддержку', overview?.openSupportReportsCount],
+    ['Действия поддержки за 24ч', overview?.supportActions24hCount],
     ['Инциденты', overview?.openIncidentsCount],
-    ['Флаги', overview?.activeFeatureFlagsCount],
-    ['Инструкции', overview?.activeRunbooksCount],
   ];
   $('metricGrid').innerHTML = metrics
     .map(
@@ -2689,16 +3704,16 @@ function renderAccountSecurity() {
   const isStaffSession = state.authType === 'staff_session' && state.currentStaff;
   const authTitle = isStaffSession
     ? state.currentStaff.displayName || state.currentStaff.email
-    : (state.authType === 'bootstrap_token' ? 'Bootstrap token' : 'Не подключено');
+    : (state.authType === 'bootstrap_token' ? 'Владелец' : 'Не подключено');
   const authHint = isStaffSession
     ? `${state.currentStaff.email} · ${state.roleTitle || state.currentStaff.role || 'роль'}`
-    : 'Аварийный owner-доступ. Для ежедневной работы лучше создать сотрудника и войти по email/паролю.';
+    : 'Для ежедневной работы используется почта сотрудника и пароль.';
   const twoFactorLabel = isStaffSession
-    ? (state.currentStaff.twoFactorEnabled ? '2FA включён' : '2FA выключен')
-    : '2FA только для staff-сессий';
+    ? (state.currentStaff.twoFactorEnabled ? 'Почтовый код включён' : 'Почтовый код выключен')
+    : 'Код по почте только для сотрудников';
   const twoFactorHint = state.loaded.adminTwoFactorReadiness
-    ? `staff: ${state.loaded.adminTwoFactorReadiness.enabledStaffCount || 0}/${state.loaded.adminTwoFactorReadiness.totalStaffCount || 0}`
-    : 'status загрузится вместе с разделом команды';
+    ? `сотрудников с кодом: ${state.loaded.adminTwoFactorReadiness.enabledStaffCount || 0}/${state.loaded.adminTwoFactorReadiness.totalStaffCount || 0}`
+    : 'статус загрузится вместе с разделом команды';
   $('accountSecuritySummary').innerHTML = `
     <div class="status-row">
       ${statusDot(Boolean(hasAdminCredential()), state.authType === 'bootstrap_token')}
@@ -2706,7 +3721,7 @@ function renderAccountSecurity() {
         <strong>${escapeHtml(authTitle)}</strong>
         <span>${escapeHtml(authHint)}</span>
       </div>
-      <span class="status-pill ${isStaffSession ? '' : 'yellow'}">${escapeHtml(state.authType || 'offline')}</span>
+      <span class="status-pill ${isStaffSession ? '' : 'yellow'}">${escapeUi(isStaffSession ? 'сотрудник' : (state.authType === 'bootstrap_token' ? 'владелец' : 'нет входа'))}</span>
     </div>
     <div class="status-row">
       ${statusDot(Boolean(isStaffSession && state.currentStaff.twoFactorEnabled), isStaffSession && !state.currentStaff.twoFactorEnabled)}
@@ -2714,7 +3729,7 @@ function renderAccountSecurity() {
         <strong>${escapeHtml(twoFactorLabel)}</strong>
         <span>${escapeHtml(twoFactorHint)}</span>
       </div>
-      <span class="status-pill ${isStaffSession && state.currentStaff.twoFactorEnabled ? '' : 'yellow'}">email code</span>
+      <span class="status-pill ${isStaffSession && state.currentStaff.twoFactorEnabled ? '' : 'yellow'}">код по почте</span>
     </div>
   `;
 
@@ -2725,10 +3740,10 @@ function renderAccountSecurity() {
       <div class="status-row">
         ${statusDot(false, true)}
         <div>
-          <strong>Сессии сотрудников недоступны для bootstrap token</strong>
-          <span>Войди сотрудником, чтобы видеть активные входы и менять свой пароль.</span>
+          <strong>Сессии сотрудников доступны после входа по почте</strong>
+          <span>Войди как сотрудник, чтобы видеть активные входы и менять свой пароль.</span>
         </div>
-        <span class="status-pill yellow">owner only</span>
+        <span class="status-pill yellow">только владелец</span>
       </div>
     `;
     return;
@@ -2752,7 +3767,7 @@ function renderAccountSecurity() {
               вход ${escapeHtml(shortDate(session.createdAt))} ·
               активность ${escapeHtml(shortDate(session.lastSeenAt))}
             </span>
-            <span>${escapeHtml(session.userAgent || 'user-agent не записан')}</span>
+            <span>${escapeHtml(session.userAgent || 'данные браузера не записаны')}</span>
           </div>
           ${action}
         </div>
@@ -2765,7 +3780,7 @@ function renderAccountSecurity() {
           <strong>Сессии пока не загружены</strong>
           <span>Обнови данные после входа сотрудником.</span>
         </div>
-        <span class="status-pill muted">empty</span>
+        <span class="status-pill muted">пусто</span>
       </div>
     `;
 }
@@ -2785,10 +3800,10 @@ function analyticsRow(label, value, hint = '', pillClass = 'muted') {
     <div class="status-row">
       ${statusDot(pillClass !== 'red', pillClass === 'yellow')}
       <div>
-        <strong>${escapeHtml(label)}</strong>
-        <span>${escapeHtml(hint, '')}</span>
+        <strong>${escapeUi(label)}</strong>
+        <span>${escapeUi(hint, '')}</span>
       </div>
-      <span class="status-pill ${escapeHtml(pillClass)}">${escapeHtml(value, '0')}</span>
+      <span class="status-pill ${escapeHtml(pillClass)}">${escapeUi(value, '0')}</span>
     </div>
   `;
 }
@@ -2797,14 +3812,14 @@ function renderBreakdown(title, items) {
   const rows = Object.entries(items || {})
     .map(([key, value]) => `
       <tr>
-        <td>${escapeHtml(key)}</td>
+        <td>${escapeUi(key)}</td>
         <td>${escapeHtml(numberText(value))}</td>
       </tr>
     `)
     .join('');
   return `
     <div class="detail-card">
-      <strong>${escapeHtml(title)}</strong>
+      <strong>${escapeUi(title)}</strong>
       <table class="mini-table">
         <tbody>${rows || '<tr><td colspan="2">Нет данных</td></tr>'}</tbody>
       </table>
@@ -2823,7 +3838,7 @@ function renderTrendTable(title, series, suffix = '') {
     .join('');
   return `
     <div class="detail-card">
-      <strong>${escapeHtml(title)}</strong>
+      <strong>${escapeUi(title)}</strong>
       <table class="mini-table">
         <tbody>${rows || '<tr><td colspan="2">Нет данных</td></tr>'}</tbody>
       </table>
@@ -2861,7 +3876,7 @@ function renderAnalytics() {
     ['Выручка', money(orders.grossRevenueRub), `${money(orders.paid30dRub)} за 30 дней`],
     ['Ожидают оплату', money(orders.pendingRevenueRub), `${numberText(orders.pending)} заказов`],
     ['Открытая поддержка', numberText(support.openTotal), `${numberText(support.overdueSla)} просрочено`],
-    ['Инциденты', numberText(incidents.openTotal), `${numberText(incidents.criticalOpen)} critical`],
+    ['Инциденты', numberText(incidents.openTotal), `${numberText(incidents.criticalOpen)} критичных`],
   ];
 
   $('analyticsKpiGrid').innerHTML = kpis
@@ -2875,18 +3890,18 @@ function renderAnalytics() {
     .join('');
 
   $('analyticsBusinessPanel').innerHTML = [
-    analyticsRow('Новые аккаунты за 30 дней', numberText(users.created30d), `${percentText(users.emailVerifiedSharePercent)} email verified`),
+    analyticsRow('Новые аккаунты за 30 дней', numberText(users.created30d), `${percentText(users.emailVerifiedSharePercent)} с подтверждённой почтой`),
     analyticsRow('Телефон подтверждён', numberText(users.phoneVerified), `${percentText(users.phoneVerifiedSharePercent)} от пользователей`),
     analyticsRow('Устройства', `${numberText(devices.enabled)} / ${numberText(devices.total)}`, `${numberText(devices.configIssued)} получили конфиг`),
     analyticsRow('Конверсия в оплату', percentText(conversion.paidUserSharePercent), `${numberText(conversion.usersWithPaidOrders)} пользователей с оплатой`),
-    analyticsRow('Истекают за 7 дней', numberText(subscriptions.expires7d), 'нужно будет продление/retention', subscriptions.expires7d > 0 ? 'yellow' : 'muted'),
+    analyticsRow('Истекают за 7 дней', numberText(subscriptions.expires7d), 'нужно продление или ручной контакт', subscriptions.expires7d > 0 ? 'yellow' : 'muted'),
   ].join('');
 
   $('analyticsFinancePanel').innerHTML = [
     analyticsRow('Всего заказов', numberText(orders.total), `${numberText(orders.activated)} активировано`),
-    analyticsRow('Оплачено, но не активировано', numberText(orders.paid), 'ручной контроль на MVP', orders.paid > 0 ? 'yellow' : 'muted'),
-    analyticsRow('Средний оплаченный заказ', money(orders.averagePaidOrderRub), 'по paid/activated'),
-    analyticsRow('Ошибочные/отменённые', `${numberText(orders.failed)} / ${numberText(orders.cancelled)}`, 'failed / cancelled', (orders.failed || orders.cancelled) ? 'yellow' : 'muted'),
+    analyticsRow('Оплачено, но не активировано', numberText(orders.paid), 'ручной контроль на старте', orders.paid > 0 ? 'yellow' : 'muted'),
+    analyticsRow('Средний оплаченный заказ', money(orders.averagePaidOrderRub), 'по оплаченным и активированным заказам'),
+    analyticsRow('Ошибочные/отменённые', `${numberText(orders.failed)} / ${numberText(orders.cancelled)}`, 'ошибочные / отменённые', (orders.failed || orders.cancelled) ? 'yellow' : 'muted'),
     renderBreakdown('Заказы по статусам', {
       pending: orders.pending,
       paid: orders.paid,
@@ -2905,13 +3920,13 @@ function renderAnalytics() {
   ].join('');
 
   $('analyticsOpsPanel').innerHTML = [
-    analyticsRow('Critical incidents', numberText(incidents.criticalOpen), 'production alerts', incidents.criticalOpen > 0 ? 'red' : 'muted'),
-    analyticsRow('Published releases', numberText(updates.published), `${numberText(updates.draft)} draft`),
-    analyticsRow('Публичные VPN endpoints', numberText(servers.publicServers), `${numberText(servers.managedPublicReady)} managed ready`),
-    analyticsRow('Endpoint failures 24h', numberText(servers.healthFailures24h), `${numberText(servers.healthEndpointsObserved)} observed`, servers.healthFailures24h > 0 ? 'yellow' : 'muted'),
-    analyticsRow('Auth events 24h', numberText(auth.events24h), `${numberText(auth.failed24h)} failed`, auth.failed24h > 0 ? 'yellow' : 'muted'),
-    analyticsRow('Admin alerts', readiness.alerts?.ready ? 'ready' : 'needs setup', readiness.alerts?.message || 'Telegram incident alerts'),
-    analyticsRow('Product readiness', readiness.product?.productionReady ? 'ready' : 'needs setup', readiness.product?.summary?.message || ''),
+    analyticsRow('Критичные инциденты', numberText(incidents.criticalOpen), 'боевые оповещения', incidents.criticalOpen > 0 ? 'red' : 'muted'),
+    analyticsRow('Опубликованные версии', numberText(updates.published), `${numberText(updates.draft)} черновиков`),
+    analyticsRow('Публичные VPN-узлы', numberText(servers.publicServers), `${numberText(servers.managedPublicReady)} управляемых готово`),
+    analyticsRow('Проблемы VPN-узлов за 24ч', numberText(servers.healthFailures24h), `${numberText(servers.healthEndpointsObserved)} наблюдений`, servers.healthFailures24h > 0 ? 'yellow' : 'muted'),
+    analyticsRow('События входа за 24ч', numberText(auth.events24h), `${numberText(auth.failed24h)} неудачных`, auth.failed24h > 0 ? 'yellow' : 'muted'),
+    analyticsRow('Оповещения админки', readiness.alerts?.ready ? 'готово' : 'нужна настройка', readiness.alerts?.message || 'Оповещения Telegram об инцидентах'),
+    analyticsRow('Готовность продукта', readiness.product?.productionReady ? 'готово' : 'нужна настройка', readiness.product?.summary?.message || ''),
     renderBreakdown('Серверы по протоколам', servers.byProtocol),
   ].join('');
 
@@ -2919,7 +3934,7 @@ function renderAnalytics() {
     renderTrendTable('Новые пользователи', analytics.timeseries?.users),
     renderTrendTable('Заказы', analytics.timeseries?.ordersCount),
     renderTrendTable('Выручка, ₽', analytics.timeseries?.ordersRevenue),
-    renderTrendTable('Support reports', analytics.timeseries?.supportReports),
+    renderTrendTable('Обращения в поддержку', analytics.timeseries?.supportReports),
   ].join('');
 }
 
@@ -2927,6 +3942,79 @@ function statusDot(ok, warning = false) {
   if (ok) return '<span class="dot"></span>';
   if (warning) return '<span class="dot yellow"></span>';
   return '<span class="dot red"></span>';
+}
+
+function renderAdvertisingReadiness() {
+  const payload = state.loaded.advertisingReadiness;
+  const containers = [
+    $('advertisingReadinessSummary'),
+    $('readinessAdvertisingReadiness'),
+  ].filter(Boolean);
+  if (!containers.length) return;
+
+  if (!payload) {
+    containers.forEach((container) => {
+      container.innerHTML = '<p class="muted">Готовность к рекламе пока не загружена.</p>';
+    });
+    return;
+  }
+
+  const summary = payload.summary || {};
+  const publicReady = Boolean(payload.publicAdvertisingReady);
+  const paidReady = Boolean(payload.paidTrafficReady);
+  const demoReady = Boolean(payload.privateDemoReady);
+  const pillClass = paidReady ? '' : publicReady || demoReady ? 'yellow' : 'red';
+  const stateLabel = paidReady
+    ? 'можно рекламировать'
+    : publicReady
+      ? 'можно ограниченно'
+      : demoReady
+        ? 'только личный показ'
+        : 'нельзя рекламировать';
+  const blockers = [
+    ...(payload.publicAdBlockers || []),
+    ...(payload.paidTrafficBlockers || []),
+  ];
+  const uniqueBlockers = blockers.filter((item, index, list) => (
+    list.findIndex((candidate) => candidate.code === item.code) === index
+  ));
+  const blockersHtml = uniqueBlockers.length
+    ? `
+      <div class="check-list compact-list">
+        ${uniqueBlockers.slice(0, 5).map((gate) => `
+          <div class="check-row">
+            ${statusDot(false, gate.severity !== 'critical')}
+            <div>
+              <strong>${escapeUi(gate.title || gate.code)}</strong>
+              <span>${escapeUi(gate.nextAction || gate.message)}</span>
+            </div>
+            <span class="status-pill ${gate.severity === 'critical' ? 'red' : 'yellow'}">${gate.severity === 'critical' ? 'блокер' : 'проверить'}</span>
+          </div>
+        `).join('')}
+      </div>
+    `
+    : '';
+
+  const html = `
+    <div class="status-row">
+      ${statusDot(paidReady, publicReady || demoReady)}
+      <div>
+        <strong>${escapeUi(summary.message, 'Готовность к рекламе')}</strong>
+        <span>
+          публичная реклама: ${publicReady ? 'да' : 'нет'}
+          · платный трафик: ${paidReady ? 'да' : 'нет'}
+          · личный показ: ${demoReady ? 'да' : 'нет'}
+        </span>
+        ${summary.nextAction ? `<span>${escapeUi(summary.nextAction)}</span>` : ''}
+      </div>
+      <span class="status-pill ${pillClass}">${stateLabel}</span>
+    </div>
+    ${blockersHtml}
+  `;
+
+  containers.forEach((container) => {
+    container.innerHTML = html;
+  });
 }
 
 function renderLaunchReadiness() {
@@ -2965,8 +4053,8 @@ function renderLaunchReadiness() {
           <div class="check-row">
             ${statusDot(false, gate.severity !== 'critical')}
             <div>
-              <strong>${escapeHtml(gate.title)}</strong>
-              <span>${escapeHtml(gate.nextAction || gate.message)}</span>
+              <strong>${escapeUi(gate.title)}</strong>
+              <span>${escapeUi(gate.nextAction || gate.message)}</span>
             </div>
             <span class="status-pill ${gate.severity === 'critical' ? 'red' : 'yellow'}">
               ${gate.severity === 'critical' ? 'критично' : 'предупреждение'}
@@ -2975,24 +4063,24 @@ function renderLaunchReadiness() {
         `).join('')}
       </div>
     `
-    : '<p class="muted">Все launch-gates зелёные.</p>';
+    : '<p class="muted">Все проверки запуска зелёные.</p>';
 
   const ownerActions = payload.nextOwnerActions || [];
   const ownerHtml = ownerActions.length
-    ? `<div class="mini-list">${ownerActions.slice(0, 4).map((action) => `<span>${escapeHtml(action.title || action.code)}: ${escapeHtml(action.ownerStatusTitle || action.status)}</span>`).join('')}</div>`
+    ? `<div class="mini-list">${ownerActions.slice(0, 4).map((action) => `<span>${escapeUi(action.title || action.code)}: ${escapeUi(action.ownerStatusTitle || action.status)}</span>`).join('')}</div>`
     : '';
 
   const html = `
     <div class="status-row">
       ${statusDot(productionReady, publicReady && !productionReady)}
       <div>
-        <strong>${escapeHtml(summary.message, 'Нет данных по запуску')}</strong>
+        <strong>${escapeUi(summary.message, 'Нет данных по запуску')}</strong>
         <span>
           Готово: ${escapeHtml(summary.ready, '0')}/${escapeHtml(summary.total, '0')}
           · критично: ${escapeHtml(summary.critical, '0')}
           · предупреждения: ${escapeHtml(summary.warnings, '0')}
         </span>
-        <span>${escapeHtml(nextAction)}</span>
+        <span>${escapeUi(nextAction)}</span>
       </div>
       <span class="status-pill ${pillClass}">${stateLabel}</span>
     </div>
@@ -3015,7 +4103,7 @@ function renderLaunchClosurePlan() {
 
   if (!plan) {
     containers.forEach((container) => {
-      container.innerHTML = '<p class="muted">Launch closure plan пока не загружен.</p>';
+      container.innerHTML = '<p class="muted">План закрытия запуска пока не загружен.</p>';
     });
     return;
   }
@@ -3030,54 +4118,54 @@ function renderLaunchClosurePlan() {
     .slice(0, 5)
     .map((item) => `
       <span class="status-pill ${item.secretInputExpected ? 'red' : 'yellow'}">
-        ${escapeHtml(item.title || item.code)}${item.secretInputExpected ? ' · secret' : ''}
+        ${escapeUi(item.title || item.code)}${item.secretInputExpected ? ' · секрет' : ''}
       </span>
     `)
     .join('');
   const autonomousHtml = nextAutonomous
     .slice(0, 5)
-    .map((item) => `<span class="status-pill yellow">${escapeHtml(item.title || item.code)}</span>`)
+    .map((item) => `<span class="status-pill yellow">${escapeUi(item.title || item.code)}</span>`)
     .join('');
   const finalHtml = finalHandoff
     .slice(0, 3)
-    .map((item) => `<span class="status-pill muted">${escapeHtml(item.title || item.code)}</span>`)
+    .map((item) => `<span class="status-pill muted">${escapeUi(item.title || item.code)}</span>`)
     .join('');
 
   const html = `
     <div class="status-row">
       ${statusDot(Boolean(plan.productionReady), plan.publicLaunchReady || summary.ownerBlocked > 0)}
       <div>
-        <strong>${escapeHtml(summary.message, 'Launch closure plan')}</strong>
+        <strong>${escapeUi(summary.message, 'План закрытия запуска')}</strong>
         <span>
-          ready=${escapeHtml(summary.ready, '0')}/${escapeHtml(summary.total, '0')},
-          owner=${escapeHtml(summary.ownerBlocked, '0')},
-          code=${escapeHtml(summary.codeOwned, '0')},
-          ops=${escapeHtml(summary.operationalReview, '0')},
-          final=${escapeHtml(summary.finalHandoffOnly, '0')}
+          готово=${escapeHtml(summary.ready, '0')}/${escapeHtml(summary.total, '0')},
+          владелец=${escapeHtml(summary.ownerBlocked, '0')},
+          код=${escapeHtml(summary.codeOwned, '0')},
+          операции=${escapeHtml(summary.operationalReview, '0')},
+          финал=${escapeHtml(summary.finalHandoffOnly, '0')}
         </span>
         ${
           summary.nextAutonomousAction
-            ? `<span>${escapeHtml(summary.nextAutonomousAction)}</span>`
+            ? `<span>${escapeUi(summary.nextAutonomousAction)}</span>`
             : ''
         }
       </div>
       <span class="status-pill ${plan.productionReady ? '' : summary.ownerBlocked ? 'red' : 'yellow'}">
-        ${escapeHtml(plan.state || 'pending')}
+        ${escapeUi(plan.state || 'pending')}
       </span>
     </div>
     <div class="external-action-meta">
-      <span>Owner inputs:</span>
-      <div class="pill-list">${ownerHtml || '<span class="muted">none</span>'}</div>
+      <span>Что нужно от владельца:</span>
+      <div class="pill-list">${ownerHtml || '<span class="muted">нет</span>'}</div>
     </div>
     <div class="external-action-meta">
-      <span>Autonomous/ops:</span>
-      <div class="pill-list">${autonomousHtml || '<span class="muted">no code-owned gate at the top</span>'}</div>
+      <span>Автономно/операции:</span>
+      <div class="pill-list">${autonomousHtml || '<span class="muted">нет ближайшего блокера по коду</span>'}</div>
     </div>
     <div class="external-action-meta">
-      <span>Final handoff:</span>
-      <div class="pill-list">${finalHtml || '<span class="muted">none</span>'}</div>
+      <span>Финальная передача:</span>
+      <div class="pill-list">${finalHtml || '<span class="muted">нет</span>'}</div>
     </div>
-    <p class="muted">${escapeHtml(plan.policy?.secretPolicy || 'Secret values are never returned.')}</p>
+    <p class="muted">${escapeHtml(plan.policy?.secretPolicy || 'Секретные значения никогда не возвращаются в админку.')}</p>
   `;
 
   containers.forEach((container) => {
@@ -3091,7 +4179,7 @@ function renderOwnerLaunchPacket() {
   if (!container) return;
 
   if (!packet) {
-    container.innerHTML = '<p class="muted">Owner launch packet пока не загружен.</p>';
+    container.innerHTML = '<p class="muted">Пакет запуска для владельца пока не загружен.</p>';
     return;
   }
 
@@ -3103,11 +4191,11 @@ function renderOwnerLaunchPacket() {
   const commandsHtml = commands
     .map((command) => `
       <div class="external-action-meta">
-        <span>${escapeHtml(command.title || command.code)}:</span>
+        <span>${escapeUi(command.title || command.code)}:</span>
         <div>
           <div class="code-list"><code>${escapeHtml(command.command)}</code></div>
-          <span class="status-pill ${command.secret ? 'red' : 'muted'}">${command.secret ? 'secret input' : 'no secret'}</span>
-          <span class="status-pill ${command.mutationFree ? 'muted' : 'yellow'}">${command.mutationFree ? 'mutation-free' : 'applies changes'}</span>
+          <span class="status-pill ${command.secret ? 'red' : 'muted'}">${command.secret ? 'ввод секрета' : 'без секрета'}</span>
+          <span class="status-pill ${command.mutationFree ? 'muted' : 'yellow'}">${command.mutationFree ? 'без изменений' : 'применяет изменения'}</span>
           <span class="muted">${escapeHtml(command.when || '')}</span>
         </div>
       </div>
@@ -3117,7 +4205,7 @@ function renderOwnerLaunchPacket() {
     .slice(0, 6)
     .map((item) => `
       <span class="status-pill ${item.secretInputExpected ? 'red' : 'yellow'}">
-        ${escapeHtml(item.title || item.code)}${item.secretInputExpected ? ' · secret' : ''}
+        ${escapeUi(item.title || item.code)}${item.secretInputExpected ? ' · секрет' : ''}
       </span>
     `)
     .join('');
@@ -3126,24 +4214,24 @@ function renderOwnerLaunchPacket() {
     .map((action) => {
       const inputs = (action.ownerInputs || [])
         .slice(0, 5)
-        .map((item) => `<span class="status-pill ${item.secret ? 'red' : 'muted'}">${escapeHtml(item.name || item.envKey || 'input')}${item.secret ? ' · secret' : ''}</span>`)
+        .map((item) => `<span class="status-pill ${item.secret ? 'red' : 'muted'}">${escapeUi(item.name || item.envKey || 'поле')}${item.secret ? ' · секрет' : ''}</span>`)
         .join('');
       return `
         <div class="check-row">
           ${statusDot(Boolean(action.ready), !action.ready)}
           <div>
-            <strong>${escapeHtml(action.title || action.code)}</strong>
-            <span>${escapeHtml(action.ownerAction || action.message || '')}</span>
-            <div class="pill-list">${inputs || '<span class="muted">owner input не требуется</span>'}</div>
+            <strong>${escapeUi(action.title || action.code)}</strong>
+            <span>${escapeUi(action.ownerAction || action.message || '')}</span>
+            <div class="pill-list">${inputs || '<span class="muted">от владельца ничего не требуется</span>'}</div>
           </div>
-          <span class="status-pill ${action.secretInputExpected ? 'red' : 'yellow'}">${action.secretInputExpected ? 'secret' : 'owner'}</span>
+          <span class="status-pill ${action.secretInputExpected ? 'red' : 'yellow'}">${action.secretInputExpected ? 'секрет' : 'владелец'}</span>
         </div>
       `;
     })
     .join('');
   const checksHtml = checks
     .slice(0, 10)
-    .map((check) => `<span class="status-pill muted">${escapeHtml(check)}</span>`)
+    .map((check) => `<span class="status-pill muted">${escapeUi(check)}</span>`)
     .join('');
 
   container.innerHTML = `
@@ -3151,31 +4239,31 @@ function renderOwnerLaunchPacket() {
       <div class="external-action-head">
         ${statusDot(Boolean(packet.productionReady), Boolean(packet.publicLaunchReady) || summary.ownerBlocked > 0)}
         <div>
-          <strong>${escapeHtml(summary.message, 'Owner launch packet')}</strong>
+        <strong>${escapeUi(summary.message, 'Пакет запуска для владельца')}</strong>
           <span>
-            commands=${escapeHtml(summary.commands, '0')},
-            ownerActions=${escapeHtml(summary.pendingOwnerActions, '0')},
+            команды=${escapeHtml(summary.commands, '0')},
+            действия владельца=${escapeHtml(summary.pendingOwnerActions, '0')},
             dns=${escapeHtml(summary.dnsRecords, '0')},
-            safeDefaults=${escapeHtml(summary.safeDefaults, '0')}
+            безопасные значения=${escapeHtml(summary.safeDefaults, '0')}
           </span>
         </div>
-        <span class="status-pill ${packet.safeNoSecretExposure ? '' : 'red'}">${packet.safeNoSecretExposure ? 'no secrets' : 'review'}</span>
+        <span class="status-pill ${packet.safeNoSecretExposure ? '' : 'red'}">${packet.safeNoSecretExposure ? 'без секретов' : 'проверить'}</span>
       </div>
-      ${commandsHtml || '<p class="muted">Команды owner packet пока не загружены.</p>'}
+      ${commandsHtml || '<p class="muted">Команды пакета владельца пока не загружены.</p>'}
       <div class="external-action-meta">
-        <span>Launch blockers:</span>
-        <div class="pill-list">${ownerBlockersHtml || '<span class="muted">none</span>'}</div>
+        <span>Блокеры запуска:</span>
+        <div class="pill-list">${ownerBlockersHtml || '<span class="muted">нет</span>'}</div>
       </div>
       ${
         ownerActionsHtml
           ? `<div class="check-list compact-list">${ownerActionsHtml}</div>`
-          : '<p class="muted">Все owner actions закрыты.</p>'
+          : '<p class="muted">Все действия владельца закрыты.</p>'
       }
       <div class="external-action-meta">
-        <span>After apply:</span>
-        <div class="pill-list">${checksHtml || '<span class="muted">see readiness self-check</span>'}</div>
+        <span>После применения:</span>
+        <div class="pill-list">${checksHtml || '<span class="muted">смотри самопроверку готовности</span>'}</div>
       </div>
-      <p class="muted">${escapeHtml(packet.policy?.secretPolicy || 'Secret values are never returned.')}</p>
+      <p class="muted">${escapeHtml(packet.policy?.secretPolicy || 'Секретные значения никогда не возвращаются в админку.')}</p>
     </div>
   `;
 }
@@ -3193,7 +4281,7 @@ function renderSiteReadiness() {
 
   if (!site) {
     containers.forEach((container) => {
-      container.innerHTML = '<p class="muted">Public site readiness пока не загружен.</p>';
+      container.innerHTML = '<p class="muted">Готовность публичного сайта пока не загружена.</p>';
     });
     return;
   }
@@ -3207,16 +4295,16 @@ function renderSiteReadiness() {
     <div class="status-row">
       ${statusDot(Boolean(site.productionReady), !site.productionReady)}
       <div>
-        <strong>${escapeHtml(summary.message, 'Public site readiness')}</strong>
+        <strong>${escapeUi(summary.message, 'Готовность публичного сайта')}</strong>
         <span>
-          site=${escapeHtml(site.siteUrl || '—')}
-          · green=${escapeHtml(summary.green, '0')}
-          · yellow=${escapeHtml(summary.yellow, '0')}
+          сайт=${escapeHtml(site.siteUrl || '—')}
+          · зелёные=${escapeHtml(summary.green, '0')}
+          · жёлтые=${escapeHtml(summary.yellow, '0')}
         </span>
         <span>
-          downloads: windows=${boolLabel(downloads.windowsConfigured)},
-          android=${boolLabel(downloads.androidConfigured)},
-          ios=${boolLabel(downloads.iosConfigured)}
+          загрузки: Windows=${boolLabel(downloads.windowsConfigured)},
+          Android=${boolLabel(downloads.androidConfigured)},
+          iOS=${boolLabel(downloads.iosConfigured)}
         </span>
         <span>
           YooKassa: ${escapeHtml(yookassa.returnUrl || 'return URL не задан')}
@@ -3224,7 +4312,7 @@ function renderSiteReadiness() {
         </span>
       </div>
       <span class="status-pill ${site.productionReady ? '' : 'yellow'}">
-        ${site.productionReady ? 'site ready' : 'needs action'}
+        ${site.productionReady ? 'сайт готов' : 'нужно действие'}
       </span>
     </div>
     ${
@@ -3237,16 +4325,16 @@ function renderSiteReadiness() {
         ? `<div class="check-list compact-list">${
             failedChecks.slice(0, 8).map((check) => `
               <div class="check-row">
-                ${statusDot(false, true)}
+                  ${statusDot(false, true)}
                 <div>
-                  <strong>${escapeHtml(check.title || check.code)}</strong>
-                  <span>${escapeHtml(check.message)}</span>
+                  <strong>${escapeUi(check.title || check.code)}</strong>
+                  <span>${escapeUi(check.message)}</span>
                 </div>
                 <span class="status-pill yellow">нужно действие</span>
               </div>
             `).join('')
           }</div>`
-        : '<p class="muted">Public site gate зелёный.</p>'
+        : '<p class="muted">Проверка публичного сайта зелёная.</p>'
     }
   `;
 
@@ -3290,11 +4378,11 @@ function renderServiceStatus() {
           <div class="status-row">
             ${statusDot(check.ok, check.warning)}
             <div>
-              <strong>${escapeHtml(check.title)}</strong>
-              <span>${escapeHtml(check.message, '')}</span>
+              <strong>${escapeUi(check.title)}</strong>
+              <span>${escapeUi(check.message, '')}</span>
             </div>
             <span class="status-pill ${check.ok ? '' : check.warning ? 'yellow' : 'red'}">
-              ${check.ok ? 'ok' : check.warning ? 'warning' : 'fail'}
+              ${check.ok ? 'ок' : check.warning ? 'внимание' : 'ошибка'}
             </span>
           </div>
         `,
@@ -3312,7 +4400,7 @@ function renderNetworkReadiness() {
 
   if (!network) {
     containers.forEach((container) => {
-      container.innerHTML = '<p class="muted">Проверка разделения сайта и VPN endpoint ещё не загружена.</p>';
+      container.innerHTML = '<p class="muted">Проверка разделения сайта и VPN-узла ещё не загружена.</p>';
     });
     return;
   }
@@ -3326,12 +4414,12 @@ function renderNetworkReadiness() {
   const checkTitles = {
     public_api_https: 'Публичные URL работают через HTTPS',
     public_api_dns_resolves: 'DNS сайта/API резолвится',
-    vpn_endpoint_resolves: 'VPN endpoint резолвится',
-    api_vpn_ip_split: 'Сайт/API и VPN endpoint на разных IP',
+    vpn_endpoint_resolves: 'VPN-узел резолвится',
+    api_vpn_ip_split: 'Сайт/API и VPN-узел на разных IP',
   };
   const primaryMessage = network.productionReady
-    ? 'Сайт/API отделены от VPN endpoint.'
-    : 'Сайт/API сейчас используют тот же IP, что и VPN endpoint.';
+    ? 'Сайт/API отделены от VPN-узла.'
+    : 'Сайт/API сейчас используют тот же IP, что и VPN-узел.';
   const requiredActions = network.requiredActions || [];
   const splitPayload = state.loaded.networkSplitPlan || {};
   const migrationPlan = network.migrationPlan || splitPayload.migrationPlan || splitPayload;
@@ -3360,11 +4448,11 @@ function renderNetworkReadiness() {
           <div class="check-row">
             ${statusDot(phase.status === 'done', phase.status !== 'blocked')}
             <div>
-              <strong>${escapeHtml(phase.title || phase.code)}</strong>
-              <span>${escapeHtml(phase.details || '')}</span>
+              <strong>${escapeUi(phase.title || phase.code)}</strong>
+              <span>${escapeUi(phase.details || '')}</span>
             </div>
             <span class="status-pill ${phase.status === 'blocked' ? 'red' : phase.status === 'done' ? '' : 'yellow'}">
-              ${escapeHtml(phase.status || 'pending')}
+              ${escapeUi(phase.status || 'pending')}
             </span>
           </div>
         `).join('')}
@@ -3374,7 +4462,7 @@ function renderNetworkReadiness() {
           ? `<div class="mini-list">${dnsRecords.map((record) => `
               <span>
                 DNS ${escapeHtml(record.name)} -> ${escapeHtml(record.target)}
-                (${escapeHtml(record.status)})
+                (${escapeUi(record.status)})
               </span>
             `).join('')}</div>`
           : ''
@@ -3382,10 +4470,10 @@ function renderNetworkReadiness() {
       ${
         preflight.command
           ? `<div class="external-action-meta">
-              <span>Preflight:</span>
+              <span>Предварительная проверка:</span>
               <div class="code-list"><code>${escapeHtml(preflight.command)}</code></div>
             </div>
-            <p class="muted">${escapeHtml(preflight.when || 'Запустить после подготовки отдельного API/site IP и DNS endpoint.')}</p>`
+            <p class="muted">${escapeUi(preflight.when || 'Запустить после подготовки отдельного API/site IP и DNS endpoint.')}</p>`
           : ''
       }
     `
@@ -3398,11 +4486,11 @@ function renderNetworkReadiness() {
         <strong>${escapeHtml(primaryMessage)}</strong>
         <span>
           API: ${escapeHtml(apiHosts.join(', ') || '—')}
-          · VPN endpoint: ${escapeHtml(network.vpnEndpointHost || '—')}
+          · VPN-узел: ${escapeHtml(network.vpnEndpointHost || '—')}
         </span>
         <span>
           IP API: ${escapeHtml(apiIps || '—')}
-          · IP endpoint: ${escapeHtml((network.vpnEndpointIps || []).join(', ') || '—')}
+          · IP VPN-узла: ${escapeHtml((network.vpnEndpointIps || []).join(', ') || '—')}
         </span>
         ${
           overlap.length
@@ -3416,7 +4504,7 @@ function renderNetworkReadiness() {
     </div>
     ${
       requiredActions.length
-        ? `<div class="mini-list">${requiredActions.map((action) => `<span>${escapeHtml(action)}</span>`).join('')}</div>`
+        ? `<div class="mini-list">${requiredActions.map((action) => `<span>${escapeUi(action)}</span>`).join('')}</div>`
         : ''
     }
     ${planHtml}
@@ -3425,14 +4513,14 @@ function renderNetworkReadiness() {
         ? `<div class="check-list compact-list">${
             checks.map((check) => `
               <div class="check-row">
-                ${statusDot(Boolean(check.ok), !check.ok)}
-                <div>
-                  <strong>${escapeHtml(checkTitles[check.code] || check.code)}</strong>
-                  <span>${escapeHtml(check.message)}</span>
+                  ${statusDot(Boolean(check.ok), !check.ok)}
+                  <div>
+                    <strong>${escapeUi(checkTitles[check.code] || check.code)}</strong>
+                    <span>${escapeUi(check.message)}</span>
+                  </div>
+                  <span class="status-pill ${check.ok ? '' : 'yellow'}">${check.ok ? 'ок' : 'нужно действие'}</span>
                 </div>
-                <span class="status-pill ${check.ok ? '' : 'yellow'}">${check.ok ? 'ok' : 'нужно действие'}</span>
-              </div>
-            `).join('')
+              `).join('')
           }</div>`
         : ''
     }
@@ -3450,11 +4538,11 @@ function renderReadiness() {
     <div class="status-row">
       ${statusDot(Boolean(readiness?.productionReady), summary?.yellow > 0)}
       <div>
-              <strong>${escapeHtml(summary?.message, 'Нет данных')}</strong>
-              <span>green=${escapeHtml(summary?.green, '0')}, yellow=${escapeHtml(summary?.yellow, '0')}</span>
+        <strong>${escapeUi(summary?.message, 'Нет данных')}</strong>
+              <span>зелёные=${escapeHtml(summary?.green, '0')}, жёлтые=${escapeHtml(summary?.yellow, '0')}</span>
       </div>
       <span class="status-pill ${readiness?.productionReady ? '' : 'yellow'}">
-        ${readiness?.productionReady ? 'production ready' : 'needs setup'}
+        ${readiness?.productionReady ? 'готово к запуску' : 'нужна настройка'}
       </span>
     </div>
   `;
@@ -3467,14 +4555,14 @@ function renderReadiness() {
           <div class="check-row">
             ${statusDot(Boolean(check.ok), !check.ok)}
             <div>
-              <strong>${escapeHtml(check.title)}</strong>
-              <span>${escapeHtml(check.message)}</span>
+              <strong>${escapeUi(check.title)}</strong>
+              <span>${escapeUi(check.message)}</span>
             </div>
             <span class="status-pill ${check.ok ? '' : 'yellow'}">${check.ok ? 'готово' : 'нужно действие'}</span>
           </div>
         `,
       )
-      .join('') || '<p>Checklist пока пуст.</p>';
+      .join('') || '<p>Список проверок пока пуст.</p>';
 
   renderExternalActions();
   renderAlertEvents();
@@ -3498,14 +4586,14 @@ function renderAlertEvents() {
             ${statusDot(event.status === 'sent', event.status === 'skipped')}
             <div>
               <strong>#${escapeHtml(event.id)} · ${escapeHtml(event.incidentKey || `incident:${event.incidentId}`)}</strong>
-              <span>${escapeHtml(event.reason || 'alert')} · ${escapeHtml(event.provider)} · ${escapeHtml(shortDate(event.createdAt))}</span>
-              <span class="muted">${escapeHtml(event.error || event.messagePreview || '')}</span>
+              <span>${escapeUi(event.reason || 'оповещение')} · ${escapeUi(event.provider)} · ${escapeHtml(shortDate(event.createdAt))}</span>
+              <span class="muted">${escapeUi(event.error || event.messagePreview || '')}</span>
             </div>
-            <span class="status-pill ${alertStatusPillClass(event.status)}">${escapeHtml(event.status)}</span>
+            <span class="status-pill ${alertStatusPillClass(event.status)}">${escapeUi(event.status)}</span>
           </div>
         `,
       )
-      .join('') || '<p class="muted">Alert history пока пуст.</p>';
+      .join('') || '<p class="muted">История оповещений пока пустая.</p>';
 }
 
 function ownerActionWorkflow() {
@@ -3560,9 +4648,9 @@ function ownerNoteSecretFindings(note) {
 
 function ownerNoteGuardHint(findings = []) {
   if (!findings.length) {
-    return 'Ключи, tokens, passwords и provider secrets вводить только через server env script.';
+    return 'Ключи, токены, пароли и секреты провайдеров вводить только через серверный env-скрипт.';
   }
-  return `Похоже на secret material: ${findings.slice(0, 5).join(', ')}. Удали значения из заметки.`;
+  return `Похоже на секретные данные: ${findings.slice(0, 5).join(', ')}. Удали значения из заметки.`;
 }
 
 function renderExternalActions() {
@@ -3585,8 +4673,8 @@ function renderExternalActions() {
     <div class="check-row external-summary">
       ${statusDot(Boolean(payload?.productionReady), !payload?.productionReady)}
       <div>
-        <strong>${escapeHtml(summary?.message, 'Внешние действия не загружены')}</strong>
-        <span>ready=${escapeHtml(summary?.ready, '0')}, pending=${escapeHtml(summary?.pending, '0')}, ownerDone=${escapeHtml(summary?.ownerDone, '0')}, blocked=${escapeHtml(summary?.ownerBlocked, '0')}, doneMismatch=${escapeHtml(summary?.doneButBackendNotReady, '0')}</span>
+        <strong>${escapeUi(summary?.message, 'Внешние действия не загружены')}</strong>
+        <span>готово=${escapeHtml(summary?.ready, '0')}, ожидает=${escapeHtml(summary?.pending, '0')}, владелец сделал=${escapeHtml(summary?.ownerDone, '0')}, заблокировано=${escapeHtml(summary?.ownerBlocked, '0')}, расхождений=${escapeHtml(summary?.doneButBackendNotReady, '0')}</span>
       </div>
       <span class="status-pill ${payload?.productionReady ? '' : 'yellow'}">
         ${payload?.productionReady ? 'готово' : 'нужно действие'}
@@ -3598,13 +4686,13 @@ function renderExternalActions() {
     <div class="check-row external-summary">
       ${statusDot(Boolean(blocking.safeToProceed), !blocking.safeToProceed)}
       <div>
-        <strong>Owner action audit</strong>
-        <span>readyToApply=${escapeHtml((blocking.readyToApplyCodes || []).length, '0')}, waiting=${escapeHtml((blocking.waitingCodes || []).length, '0')}, missingNotes=${escapeHtml((blocking.missingOwnerNoteCodes || []).length, '0')}</span>
-        <span>noteGuard=${ownerPolicy.serverEnforced ? 'server-enforced' : 'text-only'}, blockedPatterns=${escapeHtml((ownerPolicy.blockedNotePatternCodes || []).length, '0')}</span>
+        <strong>Журнал действий владельца</strong>
+        <span>готово к применению=${escapeHtml((blocking.readyToApplyCodes || []).length, '0')}, ждёт=${escapeHtml((blocking.waitingCodes || []).length, '0')}, нет заметок=${escapeHtml((blocking.missingOwnerNoteCodes || []).length, '0')}</span>
+        <span>защита заметок=${ownerPolicy.serverEnforced ? 'на сервере' : 'только текст'}, заблокированных шаблонов=${escapeHtml((ownerPolicy.blockedNotePatternCodes || []).length, '0')}</span>
       </div>
-      <span class="status-pill ${ownerPolicy.serverEnforced ? (blocking.safeToProceed ? '' : 'yellow') : 'red'}">${ownerPolicy.serverEnforced ? (blocking.safeToProceed ? 'clean' : 'review') : 'guard off'}</span>
+      <span class="status-pill ${ownerPolicy.serverEnforced ? (blocking.safeToProceed ? '' : 'yellow') : 'red'}">${ownerPolicy.serverEnforced ? (blocking.safeToProceed ? 'чисто' : 'проверить') : 'защита выключена'}</span>
     </div>
-    <p class="muted">${escapeHtml(ownerPolicy.secretPolicy || 'Owner notes must not contain secrets.')}</p>
+    <p class="muted">${escapeHtml(ownerPolicy.secretPolicy || 'В заметках владельца нельзя хранить секреты.')}</p>
   `;
 
   const setupBundleHtml = bundle.applyCommand || bundle.readinessCommand
@@ -3613,25 +4701,25 @@ function renderExternalActions() {
         <div class="external-action-head">
           ${statusDot(true, false)}
           <div>
-            <strong>Owner setup bundle</strong>
-            <span>${escapeHtml(bundle.secretPolicy || 'Secrets stay on the server only.')}</span>
+            <strong>Пакет настройки владельца</strong>
+            <span>${escapeHtml(bundle.secretPolicy || 'Секреты хранятся только на сервере.')}</span>
           </div>
-          <span class="status-pill">server-only env</span>
+          <span class="status-pill">env только на сервере</span>
         </div>
         <div class="external-action-meta">
-          <span>Apply:</span>
+          <span>Применить:</span>
           <div class="code-list"><code>${escapeHtml(bundle.applyCommand || '')}</code></div>
         </div>
         <div class="external-action-meta">
-          <span>Verify:</span>
+          <span>Проверить:</span>
           <div class="code-list"><code>${escapeHtml(bundle.readinessCommand || '')}</code></div>
         </div>
         <div class="external-action-meta">
           <span>DNS:</span>
           <div class="pill-list">
             ${(bundle.dnsRecords || [])
-              .map((record) => `<span class="status-pill muted">${escapeHtml(record.type)} ${escapeHtml(record.host)}</span>`)
-              .join('') || '<span class="muted">none</span>'}
+              .map((record) => `<span class="status-pill muted">${escapeUi(record.type)} ${escapeHtml(record.host)}</span>`)
+              .join('') || '<span class="muted">нет</span>'}
           </div>
         </div>
       </div>
@@ -3644,21 +4732,21 @@ function renderExternalActions() {
         .map((key) => `<code>${escapeHtml(key)}</code>`)
         .join('');
       const blocks = (action.blocks || [])
-        .map((item) => `<span class="status-pill muted">${escapeHtml(item)}</span>`)
+        .map((item) => `<span class="status-pill muted">${escapeUi(item)}</span>`)
         .join('');
       const ownerInputs = (action.ownerInputs || [])
         .map((item) => {
-          const title = item.name || item.envKey || 'input';
-          const suffix = item.secret ? ' · secret' : (item.optional ? ' · optional' : '');
+          const title = item.name || item.envKey || 'поле';
+          const suffix = item.secret ? ' · секрет' : (item.optional ? ' · необязательно' : '');
           const hint = item.example ? ` title="${escapeHtml(item.example)}"` : '';
           return `<span class="status-pill ${item.secret ? 'red' : 'muted'}"${hint}>${escapeHtml(title)}${escapeHtml(suffix)}</span>`;
         })
         .join('');
       const applySteps = (action.applySteps || [])
-        .map((step) => `<span class="muted">${escapeHtml(step)}</span>`)
+        .map((step) => `<span class="muted">${escapeUi(step)}</span>`)
         .join('');
       const verifySteps = (action.verifySteps || [])
-        .map((step) => `<span class="muted">${escapeHtml(step)}</span>`)
+        .map((step) => `<span class="muted">${escapeUi(step)}</span>`)
         .join('');
       const ownerStatus = action.ownerStatus || (action.ready ? 'done' : 'todo');
       const ownerNote = action.ownerNote || '';
@@ -3677,7 +4765,7 @@ function renderExternalActions() {
             </label>
             <label>
               Заметка без секретов
-              <textarea data-owner-action-note="${escapeHtml(action.code)}" placeholder="Например: домен куплен, MX/SPF/DKIM внесены, ждём propagation DNS.">${escapeHtml(ownerNote, '')}</textarea>
+              <textarea data-owner-action-note="${escapeHtml(action.code)}" placeholder="Например: домен куплен, MX/SPF/DKIM внесены, ждём распространение DNS.">${escapeHtml(ownerNote, '')}</textarea>
               <span class="muted">${escapeHtml(ownerNoteGuardHint(noteFindings))}</span>
             </label>
             <button class="small-button" data-owner-action-save="${escapeHtml(action.code)}">Сохранить статус</button>
@@ -3693,8 +4781,8 @@ function renderExternalActions() {
           <div class="external-action-head">
             ${statusDot(Boolean(action.ready), !action.ready)}
             <div>
-              <strong>${escapeHtml(action.title)}</strong>
-              <span>${escapeHtml(action.message || action.ownerAction)}</span>
+              <strong>${escapeUi(action.title)}</strong>
+              <span>${escapeUi(action.message || action.ownerAction)}</span>
             </div>
             <div class="external-action-badges">
               <span class="status-pill ${action.ready ? '' : 'yellow'}">${action.ready ? 'готово' : 'ждёт владельца'}</span>
@@ -3702,9 +4790,9 @@ function renderExternalActions() {
               ${action.secret ? '<span class="status-pill red">секрет</span>' : '<span class="status-pill muted">без секрета</span>'}
             </div>
           </div>
-          <p>${escapeHtml(action.ownerAction)}</p>
+          <p>${escapeUi(action.ownerAction)}</p>
           <div class="external-action-meta">
-            <span>Env:</span>
+            <span>Переменные окружения:</span>
             <div class="code-list">${envKeys || '<span class="muted">нет</span>'}</div>
           </div>
           <div class="external-action-meta">
@@ -3712,19 +4800,19 @@ function renderExternalActions() {
             <div class="pill-list">${blocks || '<span class="muted">ничего</span>'}</div>
           </div>
           <div class="external-action-meta">
-            <span>Owner input:</span>
-            <div class="pill-list">${ownerInputs || '<span class="muted">none</span>'}</div>
+            <span>Что нужно от владельца:</span>
+            <div class="pill-list">${ownerInputs || '<span class="muted">нет</span>'}</div>
           </div>
           <div class="external-action-meta">
-            <span>Apply:</span>
-            <div>${applySteps || '<span class="muted">see setup bundle</span>'}</div>
+            <span>Применить:</span>
+            <div>${applySteps || '<span class="muted">смотри пакет настройки</span>'}</div>
           </div>
           <div class="external-action-meta">
-            <span>Verify:</span>
-            <div>${verifySteps || '<span class="muted">see readiness checker</span>'}</div>
+            <span>Проверить:</span>
+            <div>${verifySteps || '<span class="muted">смотри проверку готовности</span>'}</div>
           </div>
           <div class="external-action-meta">
-            <span>Owner:</span>
+            <span>Владелец:</span>
             <div>${ownerMeta}</div>
           </div>
           ${ownerControl}
@@ -3737,7 +4825,7 @@ function renderExternalActions() {
     ${summaryHtml}
     ${ownerPolicyHtml}
     ${setupBundleHtml}
-    <p class="muted">${escapeHtml(payload.secretPolicy, '')}</p>
+    <p class="muted">${escapeUi(payload.secretPolicy, '')}</p>
     ${actionsHtml}
   `;
 }
@@ -3754,7 +4842,7 @@ async function saveOwnerActionStatus(code) {
   const note = noteInput?.value || '';
   const noteFindings = ownerNoteSecretFindings(note);
   if (noteFindings.length) {
-    setNotice(`Заметка похожа на secret material (${noteFindings.slice(0, 5).join(', ')}). Удали значение и оставь только статус.`, true);
+    setNotice(`Заметка похожа на секретные данные (${noteFindings.slice(0, 5).join(', ')}). Удали значение и оставь только статус.`, true);
     noteInput?.focus();
     return;
   }
@@ -3788,7 +4876,7 @@ function renderSupportTable() {
             <td><span class="status-pill muted">${escapeHtml(workflowTitle('categories', report.category))}</span></td>
             <td><span class="status-pill ${priorityPillClass(report.priority)}">${escapeHtml(workflowTitle('priorities', report.priority))}</span></td>
             <td>
-              <span class="status-pill ${report.reviewPending ? 'yellow' : 'muted'}">${escapeHtml(report.status)}</span><br>
+              <span class="status-pill ${report.reviewPending ? 'yellow' : 'muted'}">${escapeUi(report.status)}</span><br>
               <span class="muted">
                 ${report.reviewedAt ? `просмотрено: ${escapeHtml(shortDate(report.reviewedAt))}` : 'первый ответ нужен'}
                 ${report.assignedTo ? `<br>исполнитель: ${escapeHtml(report.assignedTo)}` : ''}
@@ -3824,24 +4912,24 @@ function renderSupportSlaSummary() {
   if (!container) return;
   const sla = state.loaded.supportSla;
   if (!sla) {
-    container.innerHTML = '<p class="muted">SLA queue not loaded yet.</p>';
+    container.innerHTML = '<p class="muted">Очередь SLA пока не загружена.</p>';
     return;
   }
   const summary = sla.summary || {};
   const items = [
     {
-      title: 'SLA queue',
-      message: `open=${numberText(summary.open)}, reviewPending=${numberText(summary.reviewPending)}, firstResponseMissing=${numberText(summary.firstResponseMissing)}`,
+      title: 'Очередь SLA',
+      message: `открыто=${numberText(summary.open)}, ждут разбора=${numberText(summary.reviewPending)}, без первого ответа=${numberText(summary.firstResponseMissing)}`,
       ok: !sla.attentionRequired,
       warning: Boolean(sla.attentionRequired),
-      pill: sla.attentionRequired ? 'attention' : 'clean',
+      pill: sla.attentionRequired ? 'нужно внимание' : 'чисто',
     },
     {
-      title: 'Overdue / due soon',
-      message: `overdue=${numberText(summary.overdue)}, dueSoon=${numberText(summary.dueSoon)}, missingSla=${numberText(summary.missingSla)}`,
+      title: 'Просрочено / скоро срок',
+      message: `просрочено=${numberText(summary.overdue)}, скоро срок=${numberText(summary.dueSoon)}, без SLA=${numberText(summary.missingSla)}`,
       ok: !summary.overdue && !summary.dueSoon && !summary.missingSla,
       warning: Boolean(summary.overdue || summary.dueSoon || summary.missingSla),
-      pill: summary.overdue ? 'overdue' : (summary.dueSoon ? 'soon' : 'ok'),
+      pill: summary.overdue ? 'просрочено' : (summary.dueSoon ? 'скоро срок' : 'норма'),
     },
   ];
   container.innerHTML = items
@@ -3850,10 +4938,10 @@ function renderSupportSlaSummary() {
         <div class="check-row">
           ${statusDot(item.ok, item.warning)}
           <div>
-            <strong>${escapeHtml(item.title)}</strong>
-            <span>${escapeHtml(item.message)}</span>
+            <strong>${escapeUi(item.title)}</strong>
+            <span>${escapeUi(item.message)}</span>
           </div>
-          <span class="status-pill ${item.ok ? '' : 'yellow'}">${escapeHtml(item.pill)}</span>
+          <span class="status-pill ${item.ok ? '' : 'yellow'}">${escapeUi(item.pill)}</span>
         </div>
       `,
     )
@@ -3866,7 +4954,7 @@ function incidentRunbooksHtml(incident) {
     return '<span class="muted">Runbook: не найден</span>';
   }
   return runbooks
-    .map((runbook) => `<span class="status-pill muted">${escapeHtml(runbook.key || runbook.title)}</span>`)
+    .map((runbook) => `<span class="status-pill muted">${escapeUi(runbook.key || runbook.title)}</span>`)
     .join(' ');
 }
 
@@ -3887,8 +4975,8 @@ function renderIncidentsTable() {
               <span class="muted">${escapeHtml(incident.affectedEndpoint || incident.incidentKey)}</span>
             </td>
             <td>
-              <strong>${escapeHtml(incident.title)}</strong><br>
-              <span class="muted">${escapeHtml(incident.summary)}</span><br>
+              <strong>${escapeUi(incident.title)}</strong><br>
+              <span class="muted">${escapeUi(incident.summary)}</span><br>
               ${incidentRunbooksHtml(incident)}
             </td>
             <td>
@@ -3943,9 +5031,9 @@ function renderSubscriptionExpirySummary() {
         : (candidate.expiringWithinWindow ? 'expiring' : 'review');
       const reviewButton =
         candidate.requiresManualReview && can('billing.manage')
-          ? `<button class="small-button inline-button" type="button" data-expiry-review="${escapeHtml(candidate.subscriptionId)}">Review</button>`
+          ? `<button class="small-button inline-button" type="button" data-expiry-review="${escapeHtml(candidate.subscriptionId)}">Проверить</button>`
           : '';
-      const reviewed = candidate.reviewedForExpiry ? 'reviewed · ' : '';
+      const reviewed = candidate.reviewedForExpiry ? 'проверено · ' : '';
       return `<span class="status-pill ${candidate.requiresManualReview ? 'yellow' : 'muted'}">#${escapeHtml(candidate.userId)} · ${escapeHtml(reviewed + label)} ${reviewButton}</span>`;
     })
     .join('');
@@ -3955,35 +5043,35 @@ function renderSubscriptionExpirySummary() {
       <div class="check-row">
         ${statusDot(expiry.safeToEnableExpiryEnforcement, expiry.requiresAttention || !expiry.productionPaymentReady || !expiry.paymentSmokeReady)}
         <div>
-          <strong>${escapeHtml(summary.message, 'Subscription expiry readiness')}</strong>
+          <strong>${escapeUi(summary.message, 'Готовность окончания подписок')}</strong>
           <span>
-            active=${escapeHtml(summary.activeNow, '0')},
-            expiring=${escapeHtml(summary.expiringWithinWindow, '0')},
-            expired=${escapeHtml(summary.expired, '0')},
-            manual=${escapeHtml(summary.paidExpiringWithoutAutoRenew, '0')},
-            reviewed=${escapeHtml(summary.reviewedMissingRetentionContact, '0')},
-            smoke=${boolLabel(expiry.paymentSmokeCompleted)}
+            активно=${escapeHtml(summary.activeNow, '0')},
+            скоро закончится=${escapeHtml(summary.expiringWithinWindow, '0')},
+            закончилось=${escapeHtml(summary.expired, '0')},
+            вручную=${escapeHtml(summary.paidExpiringWithoutAutoRenew, '0')},
+            проверено=${escapeHtml(summary.reviewedMissingRetentionContact, '0')},
+            тестовый платёж=${boolLabel(expiry.paymentSmokeCompleted)}
           </span>
         </div>
         <span class="status-pill ${expiry.safeToEnableExpiryEnforcement ? '' : 'yellow'}">
-          ${expiry.subscriptionEnforcementCurrentlyEnabled ? 'enforced' : 'not enforced'}
+          ${expiry.subscriptionEnforcementCurrentlyEnabled ? 'включено' : 'не включено'}
         </span>
       </div>
       <div class="external-action-meta">
-        <span>Expiry issues:</span>
-        <div class="pill-list">${issuePills || '<span class="muted">none</span>'}</div>
+        <span>Проблемы окончания подписок:</span>
+        <div class="pill-list">${issuePills || '<span class="muted">нет</span>'}</div>
       </div>
       <div class="external-action-meta">
-        <span>Candidates:</span>
-        <div class="pill-list">${candidatePreview || '<span class="muted">none in window</span>'}</div>
+        <span>Кандидаты на проверку:</span>
+        <div class="pill-list">${candidatePreview || '<span class="muted">нет в окне проверки</span>'}</div>
       </div>
       <p class="muted">
-        ${escapeHtml(expiry.policy?.mode, 'expiry readiness only')}.
-        ${expiry.policy?.requiresPaymentSmoke ? 'Requires clean payment smoke.' : ''}
+        ${escapeUi(expiry.policy?.mode, 'только проверка окончания подписок')}.
+        ${expiry.policy?.requiresPaymentSmoke ? 'Нужен чистый тестовый платёж.' : ''}
         ${escapeHtml(expiry.policy?.safePaymentMethodExposure, '')}
       </p>
     `
-    : '<p class="muted">Subscription expiry readiness not loaded yet.</p>';
+    : '<p class="muted">Готовность окончания подписок пока не загружена.</p>';
 }
 
 function renderUsersTable() {
@@ -4000,7 +5088,7 @@ function renderUsersTable() {
             <td>${boolLabel(user.phoneVerified)}</td>
             <td>
               ${escapeHtml(shortDate(user.createdAt))}<br>
-              <span class="muted">devices: ${escapeHtml(user.enabledDeviceCount, '0')}/${escapeHtml(user.deviceCount, '0')}</span>
+              <span class="muted">устройства: ${escapeHtml(user.enabledDeviceCount, '0')}/${escapeHtml(user.deviceCount, '0')}</span>
             </td>
             <td>
               <button class="small-button" data-user-open="${safeText(user.id)}">Открыть</button>
@@ -4176,12 +5264,12 @@ async function setPromoActive(code, active) {
 }
 
 async function reviewSubscriptionExpiry(subscriptionId) {
-  if (!requirePermission('billing.manage', 'Subscription expiry review')) return;
+  if (!requirePermission('billing.manage', 'Проверка окончания подписки')) return;
   const candidate = (state.loaded.subscriptionExpiry?.candidates || []).find(
     (item) => String(item.subscriptionId) === String(subscriptionId),
   );
-  const defaultReason = 'Reviewed trial/free expiry without verified contact; no automatic charge is attempted and natural expiry is allowed.';
-  const reason = window.prompt('Expiry review reason', defaultReason);
+  const defaultReason = 'Проверена пробная/бесплатная подписка без подтверждённого контакта; автосписание не запускаем, подписка закончится естественно.';
+  const reason = window.prompt('Причина проверки окончания подписки', defaultReason);
   if (!reason || !reason.trim()) return;
   try {
     const result = await apiPost(`/api/v1/admin/subscriptions/${encodeURIComponent(subscriptionId)}/expiry-review`, {
@@ -4196,9 +5284,9 @@ async function reviewSubscriptionExpiry(subscriptionId) {
     }
     renderSubscriptionExpirySummary();
     renderLaunchClosurePlan();
-    setNotice(`Expiry review saved for subscription #${escapeHtml(candidate?.subscriptionId || subscriptionId)}.`);
+    setNotice(`Проверка окончания подписки сохранена для подписки #${escapeHtml(candidate?.subscriptionId || subscriptionId)}.`);
   } catch (error) {
-    setNotice(`Could not save expiry review: ${error.message}`, true);
+    setNotice(`Не удалось сохранить проверку окончания подписки: ${error.message}`, true);
   }
 }
 
@@ -4222,12 +5310,12 @@ function renderPromoCodes() {
         <div class="check-row">
           ${statusDot(readiness.safeToRunLaunchCampaign, readiness.requiresAttention)}
           <div>
-            <strong>${escapeHtml(readinessSummary.message, 'Готовность стартовой акции')}</strong>
+            <strong>${escapeUi(readinessSummary.message, 'Готовность стартовой акции')}</strong>
             <span>
-              total=${escapeHtml(readinessSummary.total, '0')},
-              active=${escapeHtml(readinessSummary.active, '0')},
-              launchReady=${escapeHtml(readinessSummary.launchReady, '0')},
-              risky=${escapeHtml(readinessSummary.activeRisky, '0')}
+              всего=${escapeHtml(readinessSummary.total, '0')},
+              активно=${escapeHtml(readinessSummary.active, '0')},
+              готово к запуску=${escapeHtml(readinessSummary.launchReady, '0')},
+              риск=${escapeHtml(readinessSummary.activeRisky, '0')}
             </span>
           </div>
           <span class="status-pill ${readiness.safeToRunLaunchCampaign ? '' : 'yellow'}">
@@ -4236,7 +5324,7 @@ function renderPromoCodes() {
         </div>
         <div class="external-action-meta">
           <span>Риски:</span>
-          <div class="pill-list">${issuePills || '<span class="muted">none</span>'}</div>
+          <div class="pill-list">${issuePills || '<span class="muted">нет</span>'}</div>
         </div>
         <div class="external-action-meta">
           <span>Проверить:</span>
@@ -4265,12 +5353,12 @@ function renderPromoCodes() {
             <div>
               <strong>${escapeHtml(promo.code)}</strong>
               <span>
-                ${escapeHtml(promo.title || 'Без названия')} · скидка ${promoDiscountLabel(promo)}
+                ${escapeUi(promo.title || 'Без названия')} · скидка ${promoDiscountLabel(promo)}
               </span>
               <span>
                 тарифы: ${escapeHtml(promoPlansLabel(promo))};
                 использовано: ${limitLabel};
-                статус: ${escapeHtml(promo.statusReason)}
+                статус: ${escapeUi(promo.statusReason)}
               </span>
             </div>
             <span class="status-pill ${currentClass}">${activeLabel}</span>
@@ -4315,7 +5403,7 @@ function renderOrdersTable() {
       const issues = candidate.blockingIssueCodes?.length
         ? candidate.blockingIssueCodes.join(', ')
         : (candidate.chargeEligibleDryRun ? 'dry-run eligible' : 'review');
-      return `<span class="status-pill ${candidate.chargeEligibleDryRun ? '' : 'yellow'}">${escapeHtml(candidate.email || candidate.userId)} В· ${escapeHtml(issues)}</span>`;
+      return `<span class="status-pill ${candidate.chargeEligibleDryRun ? '' : 'yellow'}">${escapeHtml(candidate.email || candidate.userId)} · ${escapeHtml(issues)}</span>`;
     })
     .join('');
   const reconciliationContainer = $('billingReconciliationSummary');
@@ -4325,29 +5413,29 @@ function renderOrdersTable() {
         <div class="check-row">
           ${statusDot(!reconciliation.requiresAttention, reconciliation.requiresAttention)}
           <div>
-            <strong>${escapeHtml(summary.message, 'Billing reconciliation')}</strong>
+            <strong>${escapeUi(summary.message, 'Сверка платежей')}</strong>
             <span>
-              total=${escapeHtml(summary.total, '0')},
-              attention=${escapeHtml(summary.ordersWithAttention, '0')},
-              high=${escapeHtml(summary.high, '0')},
-              medium=${escapeHtml(summary.medium, '0')}
+              всего=${escapeHtml(summary.total, '0')},
+              требуют внимания=${escapeHtml(summary.ordersWithAttention, '0')},
+              высокая важность=${escapeHtml(summary.high, '0')},
+              средняя важность=${escapeHtml(summary.medium, '0')}
             </span>
           </div>
           <span class="status-pill ${reconciliation.requiresAttention ? 'yellow' : ''}">
-            ${reconciliation.requiresAttention ? 'review' : 'clean'}
+            ${reconciliation.requiresAttention ? 'проверить' : 'чисто'}
           </span>
         </div>
         <div class="external-action-meta">
-          <span>Issues:</span>
-          <div class="pill-list">${issuePills || '<span class="muted">none</span>'}</div>
+          <span>Проблемы:</span>
+          <div class="pill-list">${issuePills || '<span class="muted">нет</span>'}</div>
         </div>
         <div class="external-action-meta">
-          <span>Orders:</span>
-          <div class="pill-list">${attentionPreview || '<span class="muted">none</span>'}</div>
+          <span>Заказы:</span>
+          <div class="pill-list">${attentionPreview || '<span class="muted">нет</span>'}</div>
         </div>
         <p class="muted">${escapeHtml(reconciliation.manualActivationPolicy || '')}</p>
       `
-      : '<p class="muted">Billing reconciliation пока не загружен.</p>';
+      : '<p class="muted">Сверка платежей пока не загружена.</p>';
   }
   const smokeContainer = $('billingPaymentSmokeSummary');
   if (smokeContainer) {
@@ -4358,37 +5446,37 @@ function renderOrdersTable() {
     const smokePolicy = paymentSmoke.policy || {};
     const stepPreview = smokeSteps
       .slice(0, 5)
-      .map((step) => `<span class="status-pill ${step.status === 'done' ? '' : step.status === 'blocked' ? 'red' : 'yellow'}">${escapeHtml(step.code)}: ${escapeHtml(step.status)}</span>`)
+      .map((step) => `<span class="status-pill ${step.status === 'done' ? '' : step.status === 'blocked' ? 'red' : 'yellow'}">${escapeUi(step.code)}: ${escapeUi(step.status)}</span>`)
       .join('');
     smokeContainer.innerHTML = paymentSmoke.ok
       ? `
         <div class="check-row">
           ${statusDot(Boolean(paymentSmoke.productionReady), Boolean(paymentSmoke.safeToRunSmoke))}
           <div>
-            <strong>${escapeHtml(smokeSummary.message, 'Payment smoke readiness')}</strong>
+            <strong>${escapeHtml(smokeSummary.message, 'Готовность тестового платежа')}</strong>
             <span>
-              provider=${escapeHtml(paymentSmoke.provider || '—')},
-              safeToRun=${boolLabel(paymentSmoke.safeToRunSmoke)},
-              completed=${boolLabel(paymentSmoke.smokeCompleted)}
+              провайдер=${escapeUi(paymentSmoke.provider || '—')},
+              можно запускать=${boolLabel(paymentSmoke.safeToRunSmoke)},
+              завершено=${boolLabel(paymentSmoke.smokeCompleted)}
             </span>
             <span>
-              yookassaOrders=${escapeHtml(smokeSummary.yookassaOrdersTotal, '0')},
-              pendingUrl=${escapeHtml(smokeSummary.pendingWithPaymentUrl, '0')},
-              successful=${escapeHtml(smokeSummary.successfulSmokeCandidates, '0')}
+              заказы ЮKassa=${escapeHtml(smokeSummary.yookassaOrdersTotal, '0')},
+              ждут ссылки=${escapeHtml(smokeSummary.pendingWithPaymentUrl, '0')},
+              успешно=${escapeHtml(smokeSummary.successfulSmokeCandidates, '0')}
             </span>
           </div>
           <span class="status-pill ${paymentSmoke.productionReady ? '' : paymentSmoke.safeToRunSmoke ? 'yellow' : 'red'}">
-            ${paymentSmoke.productionReady ? 'smoke ok' : paymentSmoke.safeToRunSmoke ? 'run smoke' : 'blocked'}
+            ${paymentSmoke.productionReady ? 'тестовый платёж пройден' : paymentSmoke.safeToRunSmoke ? 'запустить тестовый платёж' : 'заблокировано'}
           </span>
         </div>
         <div class="external-action-meta">
-          <span>Smoke steps:</span>
-          <div class="pill-list">${stepPreview || '<span class="muted">none</span>'}</div>
+          <span>Шаги тестового платежа:</span>
+          <div class="pill-list">${stepPreview || '<span class="muted">нет</span>'}</div>
         </div>
         ${
           failedSmokeChecks.length
             ? `<div class="external-action-meta">
-                <span>Blocks:</span>
+                <span>Блокеры:</span>
                 <div class="pill-list">${
                   failedSmokeChecks.map((check) => `<span class="status-pill ${check.code === 'payment_production_ready' || check.code === 'site_payment_urls_ready' ? 'red' : 'yellow'}">${escapeHtml(check.code)}</span>`).join('')
                 }</div>
@@ -4400,7 +5488,7 @@ function renderOrdersTable() {
           ${escapeHtml(smokePolicy.activationSource || '')}
         </p>
       `
-      : '<p class="muted">Payment smoke readiness пока не загружен.</p>';
+      : '<p class="muted">Готовность тестового платежа пока не загружена.</p>';
   }
   const renewalContainer = $('billingRenewalSummary');
   if (renewalContainer) {
@@ -4409,34 +5497,34 @@ function renderOrdersTable() {
         <div class="check-row">
           ${statusDot(renewals.safeToEnableAutoRenewalCharges, renewals.requiresAttention || !renewals.productionPaymentReady || !renewals.paymentSmokeReady)}
           <div>
-            <strong>${escapeHtml(renewalSummary.message, 'Auto-renewal readiness')}</strong>
+            <strong>${escapeHtml(renewalSummary.message, 'Готовность автопродления')}</strong>
             <span>
-              autoRenew=${escapeHtml(renewalSummary.autoRenewSubscriptions, '0')},
-              due=${escapeHtml(renewalSummary.dueWithinWindow, '0')},
-              eligible=${escapeHtml(renewalSummary.chargeEligibleDryRun, '0')},
-              missingMethod=${escapeHtml(renewalSummary.missingPaymentMethod, '0')},
-              smoke=${boolLabel(renewals.paymentSmokeCompleted)}
+              автопродление=${escapeHtml(renewalSummary.autoRenewSubscriptions, '0')},
+              срок=${escapeHtml(renewalSummary.dueWithinWindow, '0')},
+              подходит=${escapeHtml(renewalSummary.chargeEligibleDryRun, '0')},
+              нет способа оплаты=${escapeHtml(renewalSummary.missingPaymentMethod, '0')},
+              тестовый платёж=${boolLabel(renewals.paymentSmokeCompleted)}
             </span>
           </div>
           <span class="status-pill ${renewals.safeToEnableAutoRenewalCharges ? '' : 'yellow'}">
-            ${renewals.safeToEnableAutoRenewalCharges ? 'safe dry-run' : 'blocked'}
+            ${renewals.safeToEnableAutoRenewalCharges ? 'безопасная проверка' : 'заблокировано'}
           </span>
         </div>
         <div class="external-action-meta">
-          <span>Renewal issues:</span>
-          <div class="pill-list">${renewalIssuePills || '<span class="muted">none</span>'}</div>
+          <span>Проблемы автопродления:</span>
+          <div class="pill-list">${renewalIssuePills || '<span class="muted">нет</span>'}</div>
         </div>
         <div class="external-action-meta">
-          <span>Candidates:</span>
-          <div class="pill-list">${renewalPreview || '<span class="muted">none in window</span>'}</div>
+          <span>Кандидаты на проверку:</span>
+          <div class="pill-list">${renewalPreview || '<span class="muted">нет в окне проверки</span>'}</div>
         </div>
         <p class="muted">
-          ${escapeHtml(renewals.policy?.automaticChargeExecution, 'dry-run only')}.
-          ${renewals.policy?.requiresPaymentSmoke ? 'Requires clean payment smoke.' : ''}
+          ${escapeUi(renewals.policy?.automaticChargeExecution, 'только проверка без списания')}.
+          ${renewals.policy?.requiresPaymentSmoke ? 'Нужен чистый тестовый платеж.' : ''}
           ${escapeHtml(renewals.policy?.safePaymentMethodExposure, '')}
         </p>
       `
-      : '<p class="muted">Auto-renewal readiness not loaded yet.</p>';
+      : '<p class="muted">Готовность автопродления пока не загружена.</p>';
   }
   $('ordersTable').innerHTML =
     rows
@@ -4453,7 +5541,7 @@ function renderOrdersTable() {
                   : '<br><span class="muted">без акции</span>'
               }
             </td>
-            <td><span class="status-pill muted">${escapeHtml(order.status)}</span></td>
+            <td><span class="status-pill muted">${escapeUi(order.status)}</span></td>
             <td>${escapeHtml(orderPlanLabel(order))}</td>
             <td>${escapeHtml(shortDate(order.createdAt))}</td>
           </tr>
@@ -4471,8 +5559,8 @@ function renderAuthTable() {
         (event) => `
           <tr>
             <td>#${escapeHtml(event.id)}</td>
-            <td>${escapeHtml(event.eventType)}</td>
-            <td><span class="status-pill ${event.status === 'verified' ? '' : event.status === 'created' ? 'yellow' : 'red'}">${escapeHtml(event.status)}</span></td>
+            <td>${escapeUi(event.eventType)}</td>
+            <td><span class="status-pill ${event.status === 'verified' ? '' : event.status === 'created' ? 'yellow' : 'red'}">${escapeUi(event.status)}</span></td>
             <td>${escapeHtml(event.email || event.phone)}</td>
             <td>${escapeHtml(event.requestIp)}</td>
             <td>${escapeHtml(shortDate(event.createdAt))}</td>
@@ -4490,7 +5578,7 @@ function renderUserAuthReadiness() {
     state.loaded.readiness?.userAuthFlowReadiness ||
     state.loaded.overview?.userAuthFlowReadiness;
   if (!auth) {
-    container.innerHTML = '<p class="muted">User auth readiness пока не загружен.</p>';
+    container.innerHTML = '<p class="muted">Готовность входа пользователей пока не загружена.</p>';
     return;
   }
 
@@ -4501,8 +5589,8 @@ function renderUserAuthReadiness() {
   const methodPills = methods
     .map((method) => {
       const label = method.legacy
-        ? `${method.code}: legacy`
-        : `${method.code}: ${method.available ? 'available' : 'blocked'}`;
+        ? `${method.code}: старый режим`
+        : `${method.code}: ${method.available ? 'доступно' : 'заблокировано'}`;
       const pillClass = method.productionReady ? '' : method.available ? 'yellow' : 'red';
       return `<span class="status-pill ${pillClass}">${escapeHtml(label)}</span>`;
     })
@@ -4513,8 +5601,8 @@ function renderUserAuthReadiness() {
       <div class="check-row">
         ${statusDot(false, true)}
         <div>
-          <strong>${escapeHtml(check.title || check.code)}</strong>
-          <span>${escapeHtml(check.message)}</span>
+          <strong>${escapeUi(check.title || check.code)}</strong>
+          <span>${escapeUi(check.message)}</span>
         </div>
         <span class="status-pill yellow">нужно действие</span>
       </div>
@@ -4522,39 +5610,39 @@ function renderUserAuthReadiness() {
     .join('');
   const problemPills = problems
     .slice(0, 6)
-    .map((event) => `<span class="status-pill yellow">#${escapeHtml(event.id)} ${escapeHtml(event.eventType)}:${escapeHtml(event.status)}</span>`)
+    .map((event) => `<span class="status-pill yellow">#${escapeHtml(event.id)} ${escapeUi(event.eventType)}: ${escapeUi(event.status)}</span>`)
     .join('');
 
   container.innerHTML = `
     <div class="check-row">
-      ${statusDot(Boolean(auth.productionReady), !auth.productionReady)}
+        ${statusDot(Boolean(auth.productionReady), !auth.productionReady)}
       <div>
-        <strong>${escapeHtml(summary.message, 'Code-first auth readiness')}</strong>
+        <strong>${escapeUi(summary.message, 'Готовность входа по коду')}</strong>
         <span>
-          primary=${escapeHtml(auth.primaryMethod || '—')},
-          fallback=${escapeHtml(auth.fallbackMethod || '—')},
-          users=${escapeHtml(summary.usersTotal, '0')},
-          verified24h=${escapeHtml(summary.verified24h, '0')},
-          problems24h=${escapeHtml(summary.problem24h, '0')}
+          основной способ=${escapeHtml(auth.primaryMethod || '—')},
+          запасной способ=${escapeHtml(auth.fallbackMethod || '—')},
+          пользователей=${escapeHtml(summary.usersTotal, '0')},
+          подтверждений за 24ч=${escapeHtml(summary.verified24h, '0')},
+          проблем за 24ч=${escapeHtml(summary.problem24h, '0')}
         </span>
       </div>
       <span class="status-pill ${auth.productionReady ? '' : 'yellow'}">${auth.productionReady ? 'готово' : 'настройка'}</span>
     </div>
     <div class="external-action-meta">
-      <span>Methods:</span>
-      <div class="pill-list">${methodPills || '<span class="muted">none</span>'}</div>
+      <span>Способы входа:</span>
+      <div class="pill-list">${methodPills || '<span class="muted">нет</span>'}</div>
     </div>
     ${
       failedChecks
         ? `<div class="check-list compact-list">${failedChecks}</div>`
-        : '<p class="muted">Auth flow gate зелёный.</p>'
+        : '<p class="muted">Проверка входа зелёная.</p>'
     }
     ${
       problemPills
-        ? `<div class="external-action-meta"><span>Recent problems:</span><div class="pill-list">${problemPills}</div></div>`
+        ? `<div class="external-action-meta"><span>Последние проблемы:</span><div class="pill-list">${problemPills}</div></div>`
         : ''
     }
-    <p class="muted">${escapeHtml(auth.policy?.secretExposure || 'No auth secrets are exposed by readiness.')}</p>
+    <p class="muted">${escapeHtml(auth.policy?.secretExposure || 'Проверка готовности не раскрывает секреты входа.')}</p>
   `;
 }
 
@@ -4585,7 +5673,7 @@ function renderStaffTools() {
             <span class="dot"></span>
             <div>
               <strong>${escapeHtml(role.title)}</strong>
-              <span>${escapeHtml(role.permissions?.join(', ') || '—')}</span>
+              <span>${escapeHtml((role.permissions || []).map(permissionLabel).join(', ') || '—')}</span>
             </div>
             <span class="status-pill muted">${escapeHtml(role.code)}</span>
           </div>
@@ -4610,20 +5698,20 @@ function renderStaffTable() {
             </td>
             <td>
               ${escapeHtml(staff.roleTitle || staff.role)}<br>
-              <span class="muted">${escapeHtml(staff.role)}</span>
+              <span class="muted">код роли: ${escapeHtml(staff.role)}</span>
             </td>
             <td>${boolPill(staff.isActive, 'активен', 'выключен')}</td>
             <td>
-              ${boolPill(staff.twoFactorEnabled, 'email', 'off')}
+              ${boolPill(staff.twoFactorEnabled, 'код по почте', 'выключен')}
               <br><span class="muted">${escapeHtml(shortDate(staff.twoFactorSetAt))}</span>
             </td>
             <td>
               ${boolPill(staff.hasPassword, 'задан', 'нет')}
-              <br><span class="muted">login: ${escapeHtml(shortDate(staff.lastLoginAt))}</span>
+              <br><span class="muted">последний вход: ${escapeHtml(shortDate(staff.lastLoginAt))}</span>
             </td>
             <td>
               <strong>${escapeHtml(activeSessions)}</strong> активных<br>
-              <span class="muted">last: ${escapeHtml(shortDate(staff.lastSessionSeenAt))}</span><br>
+              <span class="muted">последняя активность: ${escapeHtml(shortDate(staff.lastSessionSeenAt))}</span><br>
               ${
                 canManageStaff
                   ? `<button class="small-button" data-staff-sessions="${escapeHtml(staff.id)}">Сессии</button>`
@@ -4657,7 +5745,7 @@ function renderStaffSessionsPanel() {
   if (!container) return;
   const data = state.loaded.staffSessions;
   if (!data) {
-    container.innerHTML = '<p class="muted">Выбери сотрудника в таблице, чтобы посмотреть его staff sessions.</p>';
+    container.innerHTML = '<p class="muted">Выбери сотрудника в таблице, чтобы посмотреть его активные входы.</p>';
     return;
   }
   const staff = data.staff || {};
@@ -4668,8 +5756,8 @@ function renderStaffSessionsPanel() {
     <div class="check-row">
       ${statusDot(true, false)}
       <div>
-        <strong>Sessions: ${escapeHtml(staff.displayName || staff.email || staffId)}</strong>
-        <span>${escapeHtml(sessions.length)} total, active ${escapeHtml(staff.activeSessionCount || 0)}</span>
+        <strong>Входы сотрудника: ${escapeHtml(staff.displayName || staff.email || staffId)}</strong>
+        <span>всего=${escapeHtml(sessions.length)}, активно=${escapeHtml(staff.activeSessionCount || 0)}</span>
       </div>
       ${
         canRevokeAll
@@ -4695,13 +5783,13 @@ function renderStaffSessionsPanel() {
                 вход ${escapeHtml(shortDate(session.createdAt))} ·
                 активность ${escapeHtml(shortDate(session.lastSeenAt))}
               </span>
-              <span>${escapeHtml(session.userAgent || 'user-agent не записан')}</span>
+            <span>${escapeHtml(session.userAgent || 'данные браузера не записаны')}</span>
             </div>
             ${action}
           </div>
         `;
       })
-      .join('') || '<p class="muted">У сотрудника пока нет sessions.</p>'}
+      .join('') || '<p class="muted">У сотрудника пока нет активных входов.</p>'}
   `;
 }
 
@@ -4729,12 +5817,13 @@ function renderAuditTable() {
 }
 
 function renderAll() {
-  $('sidebarApiBase').textContent = state.apiBase;
+  $('sidebarApiBase').textContent = 'Green VPN';
   applyAuthUi();
   renderMetrics(state.loaded.overview || {});
   renderAccountSecurity();
   renderAnalytics();
   renderServiceStatus();
+  renderAdvertisingReadiness();
   renderLaunchReadiness();
   renderLaunchClosurePlan();
   renderOwnerLaunchPacket();
@@ -4767,6 +5856,7 @@ function renderAll() {
   renderServerHealth();
   renderManagedMonitoring();
   renderAdmin2faPrompt();
+  translateAdminDom(document.querySelector('.main'));
 }
 
 async function loginWithStaffSession(email, password, actor) {
@@ -4805,7 +5895,7 @@ async function finishStaffLogin(result, email, actor) {
   state.adminEmail = email;
   state.adminActor = actor || result.staff?.displayName || result.staff?.email || email;
   if (!state.sessionToken) {
-    throw new Error('Backend не вернул admin session token.');
+    throw new Error('Сервер не вернул сессию администратора.');
   }
   const me = await apiGet('/api/v1/admin/auth/me');
   setAdminContext(me);
@@ -4939,46 +6029,46 @@ async function revokeAdminSession(sessionId) {
 }
 
 async function openStaffSessions(staffId) {
-  if (!requirePermission('staff.manage', 'Просмотр staff sessions')) return;
+  if (!requirePermission('staff.manage', 'Просмотр входов сотрудника')) return;
   try {
     const result = await apiGet(`/api/v1/admin/staff/${encodeURIComponent(staffId)}/sessions`);
     state.loaded.staffSessions = result;
     renderStaffSessionsPanel();
-    setNotice('Staff sessions загружены.');
+    setNotice('Сессии сотрудников загружены.');
   } catch (error) {
-    setNotice(`Не удалось загрузить staff sessions: ${error.message}`, true);
+    setNotice(`Не удалось загрузить входы сотрудника: ${error.message}`, true);
   }
 }
 
 async function revokeStaffSession(staffId, sessionId) {
-  if (!requirePermission('staff.manage', 'Отзыв staff session')) return;
+  if (!requirePermission('staff.manage', 'Отзыв входа сотрудника')) return;
   try {
     await apiPost(`/api/v1/admin/staff/${encodeURIComponent(staffId)}/sessions/revoke`, { sessionId });
     await openStaffSessions(staffId);
     await loadDashboardData();
-    setNotice('Staff session отозвана.');
+    setNotice('Сессия сотрудника отозвана.');
   } catch (error) {
-    setNotice(`Не удалось отозвать staff session: ${error.message}`, true);
+    setNotice(`Не удалось отозвать вход сотрудника: ${error.message}`, true);
   }
 }
 
 async function revokeAllStaffSessions(staffId) {
-  if (!requirePermission('staff.manage', 'Сброс staff sessions')) return;
-  if (!window.confirm('Сбросить все активные sessions выбранного сотрудника?')) return;
+  if (!requirePermission('staff.manage', 'Сброс входов сотрудника')) return;
+  if (!window.confirm('Сбросить все активные входы выбранного сотрудника?')) return;
   try {
     const result = await apiPost(`/api/v1/admin/staff/${encodeURIComponent(staffId)}/sessions/revoke-all`, {});
     await openStaffSessions(staffId);
     await loadDashboardData();
-    setNotice(`Staff sessions сброшены: ${escapeHtml(result.revokedSessions, '0')}.`);
+    setNotice(`Сессии сотрудников сброшены: ${escapeHtml(result.revokedSessions, '0')}.`);
   } catch (error) {
-    setNotice(`Не удалось сбросить staff sessions: ${error.message}`, true);
+    setNotice(`Не удалось сбросить входы сотрудника: ${error.message}`, true);
   }
 }
 
 async function loadDashboardData() {
   if (!hasAdminCredential()) {
-    setSidebarStatus('нужен токен', 'muted');
-    setNotice('Войди сотрудником или вставь bootstrap admin token, чтобы открыть внутреннюю панель.', true);
+    setSidebarStatus('нужен вход', 'muted');
+    setNotice('Войди по почте сотрудника и паролю, чтобы открыть внутреннюю панель.', true);
     return;
   }
 
@@ -5010,6 +6100,7 @@ async function loadDashboardData() {
   addAllowedRequest(requests, 'overview', 'dashboard.read', () => apiGet('/api/v1/admin/overview'));
   addAllowedRequest(requests, 'analytics', 'analytics.read', () => apiGet('/api/v1/admin/analytics/summary'));
   addAllowedRequest(requests, 'launchReadiness', 'readiness.read', () => apiGet('/api/v1/admin/launch/readiness'));
+  addAllowedRequest(requests, 'advertisingReadiness', 'readiness.read', () => apiGet('/api/v1/admin/launch/advertising-readiness'));
   addAllowedRequest(requests, 'launchClosurePlan', 'readiness.read', () => apiGet('/api/v1/admin/launch/closure-plan'));
   addAllowedRequest(requests, 'launchOwnerPacket', 'readiness.read', () => apiGet('/api/v1/admin/launch/owner-packet'));
   addAllowedRequest(requests, 'readiness', 'readiness.read', () => apiGet('/api/v1/admin/readiness'));
@@ -5039,14 +6130,15 @@ async function loadDashboardData() {
   addAllowedRequest(requests, 'alertEvents', 'incidents.read', () => apiGet('/api/v1/admin/alerts/events?limit=40'));
   addAllowedRequest(requests, 'updateReadiness', 'updates.read', () => apiGet(`/api/v1/admin/updates/readiness${encodeQuery(updateReadinessFilterParams())}`));
   addAllowedRequest(requests, 'releases', 'updates.read', () => apiGet(`/api/v1/admin/updates/releases${encodeQuery(releaseFilterParams())}`));
-  addAllowedRequest(requests, 'featureFlags', 'flags.read', () => apiGet('/api/v1/admin/feature-flags'));
-  addAllowedRequest(requests, 'runbooks', 'runbooks.read', () => apiGet('/api/v1/admin/runbooks'));
   addAllowedRequest(requests, 'servers', 'servers.read', () => apiGet(`/api/v1/admin/server-catalog${encodeQuery(serverFilterParams())}`));
   addAllowedRequest(requests, 'serverPublicationReadiness', 'servers.read', () => apiGet('/api/v1/admin/server-catalog/publication-readiness'));
   addAllowedRequest(requests, 'serverProvisioningReadiness', 'servers.read', () => apiGet('/api/v1/admin/server-catalog/provisioning-readiness'));
   addAllowedRequest(requests, 'serverHealth', 'monitoring.read', () => apiGet(`/api/v1/admin/server-health${encodeQuery(serverHealthFilterParams())}`));
+  addAllowedRequest(requests, 'resilienceRoutes', 'monitoring.read', () => apiGet('/api/v1/admin/resilience/routes'));
+  addAllowedRequest(requests, 'resilienceTransportRollout', 'monitoring.read', () => apiGet('/api/v1/admin/resilience/transport-rollout'));
   addAllowedRequest(requests, 'monitoringTargets', 'monitoring.read', () => apiGet(`/api/v1/admin/monitoring/targets${encodeQuery(monitoringTargetFilterParams())}`));
   addAllowedRequest(requests, 'serviceObservations', 'monitoring.read', () => apiGet(`/api/v1/admin/monitoring/service-observations${encodeQuery(serviceObservationFilterParams())}`));
+  addAllowedRequest(requests, 'clientRouteEvents', 'monitoring.read', () => apiGet(`/api/v1/admin/resilience/client-route-events${encodeQuery(clientRouteEventFilterParams())}`));
   addAllowedRequest(requests, 'monitoringProbes', 'monitoring.read', () => apiGet('/api/v1/admin/monitoring/probes?limit=100'));
   addAllowedRequest(requests, 'monitoringReadiness', 'monitoring.read', () => apiGet('/api/v1/admin/monitoring/readiness'));
   addAllowedRequest(requests, 'monitoring', 'dashboard.read', () => apiGet('/api/v1/monitoring/status', false));
@@ -5113,7 +6205,40 @@ async function loadDashboardData() {
         state.loaded.runbookWorkflow = value.workflow || null;
       }
       else if (key === 'servers') {
-        state.loaded.servers = value.managedEntries || [];
+        const managedRows = Array.isArray(value.managedEntries) ? value.managedEntries : [];
+        const directRows = Array.isArray(value.servers) ? value.servers : [];
+        const catalogRows = Array.isArray(value.publicCatalog?.servers)
+          ? value.publicCatalog.servers.map((server) => {
+            const id = server.id || server.serverId || server.name || server.host || server.endpointHost;
+            const capacity = server.capacity || {};
+            return {
+              ...server,
+              id,
+              serverId: server.serverId || id,
+              title: server.title || server.name || server.city || id || 'VPN-сервер',
+              host: serverEndpointHost(server),
+              port: serverEndpointPort(server),
+              provider: server.provider || 'Green VPN',
+              protocol: server.protocol || 'wireguard_udp',
+              transport: server.transport || 'udp_443',
+              status: server.status || (server.healthy === false ? 'degraded' : 'ready'),
+              healthScore: server.healthScore ?? server.score ?? 100,
+              isActive: server.isActive ?? true,
+              isPublic: server.isPublic ?? true,
+              clientConfigReady: server.clientConfigReady ?? true,
+              capacity,
+              activeClients: capacity.activeClients ?? server.activeClients ?? 0,
+              assignedUsers: capacity.assignedUsers ?? server.assignedUsers ?? 0,
+              publicCatalogOnly: true,
+            };
+          })
+          : [];
+        const primaryRows = managedRows.length ? managedRows : directRows;
+        const knownIds = new Set(primaryRows.flatMap(serverIdentityValues));
+        const fallbackRows = catalogRows.filter((server) => (
+          !serverIdentityValues(server).some((id) => knownIds.has(id))
+        ));
+        state.loaded.servers = [...primaryRows, ...fallbackRows];
         state.loaded.serverWorkflow = value.workflow || null;
         state.loaded.serverCatalog = value.publicCatalog || null;
         state.loaded.serverCatalogSummary = value.summary || null;
@@ -5125,6 +6250,9 @@ async function loadDashboardData() {
       }
       else if (key === 'serviceObservations') {
         state.loaded.serviceObservations = value;
+      }
+      else if (key === 'clientRouteEvents') {
+        state.loaded.clientRouteEvents = value;
       }
       else if (key === 'monitoringProbes') {
         state.loaded.monitoringProbes = value;
@@ -5146,6 +6274,11 @@ async function loadDashboardData() {
 }
 
 function switchSection(section) {
+  if (!hasAdminCredential()) {
+    state.section = 'dashboard';
+    setNotice('Сначала войди в админку.', true);
+    return;
+  }
   if (hasAdminCredential() && !can(sectionPermission(section))) {
     setNotice('У этой роли нет доступа к выбранному разделу.', true);
     section = firstAllowedSection();
@@ -5232,7 +6365,7 @@ async function openReport(reportId) {
           <span class="muted">Первый ответ: ${escapeHtml(shortDate(report.firstResponseAt))}</span>
         </section>
         <section class="detail-card">
-          <p class="eyebrow">Review</p>
+          <p class="eyebrow">Проверка</p>
           <strong>${report.reviewedAt ? escapeHtml(shortDate(report.reviewedAt)) : 'Нужен первый просмотр'}</strong>
           <span class="muted">${escapeHtml(report.reviewedBy || report.assignedTo || 'исполнитель не назначен')}</span>
         </section>
@@ -5292,26 +6425,26 @@ async function openReport(reportId) {
         }
       </div>
       <div>
-        <p class="eyebrow">Decoded report для техподдержки</p>
-        <pre class="report-code">${decoded ? escapeHtml(prettyJson(decoded)) : escapeHtml(decodedError || 'Decoded report пока недоступен.')}</pre>
+        <p class="eyebrow">Расшифрованный отчёт для техподдержки</p>
+        <pre class="report-code">${decoded ? escapeHtml(prettyJson(decoded)) : escapeHtml(decodedError || 'Расшифрованный отчёт пока недоступен.')}</pre>
       </div>
       <div>
-        <p class="eyebrow">Encoded report</p>
+        <p class="eyebrow">Исходный отчёт</p>
         <pre class="report-code compact">${escapeHtml(report.report)}</pre>
       </div>
     `;
     if (canManageSupport) {
       $('reviewReportButton')?.addEventListener('click', async () => {
-        if (!requirePermission('support.manage', 'Review support report')) return;
+        if (!requirePermission('support.manage', 'Проверка обращения')) return;
         await apiPost(`/api/v1/admin/support/reports/${report.id}/review`, {
           assignedTo: $('reportAssignedInput').value || currentSupportAssignee(),
-          note: $('reportNoteInput').value || 'Отчёт взят в работу из Green VPN Admin Console.',
+          note: $('reportNoteInput').value || 'Отчёт взят в работу из админки Green VPN.',
         });
         await loadDashboardData();
         await openReport(report.id);
       });
       $('saveReportStatusButton').addEventListener('click', async () => {
-        if (!requirePermission('support.manage', 'Сохранение support report')) return;
+        if (!requirePermission('support.manage', 'Сохранение обращения')) return;
         await apiPost(`/api/v1/admin/support/reports/${report.id}/status`, {
           status: $('reportStatusSelect').value,
           priority: $('reportPrioritySelect').value,
@@ -5324,7 +6457,7 @@ async function openReport(reportId) {
         $('reportDialog').close();
       });
       $('addReportCommentButton').addEventListener('click', async () => {
-        if (!requirePermission('support.manage', 'Комментарий support report')) return;
+        if (!requirePermission('support.manage', 'Комментарий к обращению')) return;
         const body = $('reportCommentInput').value.trim();
         if (!body) {
           setNotice('Комментарий пустой, добавлять нечего.', true);
@@ -5341,17 +6474,18 @@ async function openReport(reportId) {
     if (!$('reportDialog').open) {
       $('reportDialog').showModal();
     }
+    translateAdminDom($('reportDialog'));
   } catch (error) {
     setNotice(`Не удалось открыть отчёт: ${error.message}`, true);
   }
 }
 
 async function reviewReport(reportId) {
-  if (!requirePermission('support.manage', 'Review support report')) return;
+  if (!requirePermission('support.manage', 'Проверка обращения')) return;
   try {
     await apiPost(`/api/v1/admin/support/reports/${reportId}/review`, {
       assignedTo: currentSupportAssignee(),
-      note: 'Отчёт взят в работу из Green VPN Admin Console.',
+      note: 'Отчёт взят в работу из админки Green VPN.',
     });
     await loadDashboardData();
     setNotice('Отчёт взят в работу.');
@@ -5361,11 +6495,11 @@ async function reviewReport(reportId) {
 }
 
 async function resolveReport(reportId) {
-  if (!requirePermission('support.manage', 'Закрытие support report')) return;
+  if (!requirePermission('support.manage', 'Закрытие обращения')) return;
   try {
     await apiPost(`/api/v1/admin/support/reports/${reportId}/status`, {
       status: 'resolved',
-      note: 'Marked as resolved from Green VPN Admin Console.',
+      note: 'Отмечено решённым из админки Green VPN.',
     });
     await loadDashboardData();
   } catch (error) {
@@ -5388,7 +6522,7 @@ async function assignIncident(incidentId, assigneeValue) {
   const payload = incidentAssigneeUpdatePayload(assigneeValue);
   await updateIncident(incidentId, {
     ...payload,
-    note: assigneeValue ? 'Ответственный назначен из Green VPN Admin Console.' : 'Ответственный снят из Green VPN Admin Console.',
+    note: assigneeValue ? 'Ответственный назначен из админки Green VPN.' : 'Ответственный снят из админки Green VPN.',
   });
 }
 
@@ -5398,7 +6532,7 @@ function renderMiniOrders(orders = []) {
     <table class="mini-table">
       <thead>
         <tr>
-          <th>Order</th>
+          <th>Заказ</th>
           <th>Сумма</th>
           <th>Статус</th>
           <th>Создан</th>
@@ -5411,7 +6545,7 @@ function renderMiniOrders(orders = []) {
               <tr>
                 <td>${escapeHtml(order.orderId || order.id)}</td>
                 <td>${escapeHtml(money(order.priceRub || order.amountRub))}</td>
-                <td>${escapeHtml(order.status)}</td>
+                <td>${escapeUi(order.status)}</td>
                 <td>${escapeHtml(shortDate(order.createdAt))}</td>
               </tr>
             `,
@@ -5441,7 +6575,7 @@ function renderMiniReports(reports = []) {
               <tr>
                 <td>#${escapeHtml(report.id)}</td>
                 <td>${escapeHtml(report.summary)}</td>
-                <td>${escapeHtml(report.status)}</td>
+                <td>${escapeUi(report.status)}</td>
                 <td><button class="small-button" data-report-open="${escapeHtml(report.id)}">Открыть</button></td>
               </tr>
             `,
@@ -5507,12 +6641,12 @@ function supportActionsWorkflow() {
       },
       {
         code: 'grant_support_trial_3d',
-        title: 'Выдать support trial на 3 дня',
+        title: 'Выдать пробный доступ на 3 дня',
         requiresDevice: false,
         requiresReason: true,
         danger: false,
-        confirmationText: 'Выдать пользователю временный support trial на 3 дня?',
-        description: 'Продлевает trial/support_trial на 3 дня и не перезаписывает активную платную подписку.',
+        confirmationText: 'Выдать пользователю временный пробный доступ на 3 дня?',
+        description: 'Продлевает пробный доступ на 3 дня и не перезаписывает активную платную подписку.',
       },
     ],
     statuses: ['queued', 'done', 'failed', 'noop'],
@@ -5573,7 +6707,7 @@ function renderSupportActions(actions = []) {
                   <strong>${escapeHtml(supportActionTitle(action.action))}</strong><br>
                   <span class="muted">${escapeHtml(action.reason || result || 'Без комментария')}</span>
                 </td>
-                <td><span class="status-pill ${supportActionStatusClass(action.status)}">${escapeHtml(action.status)}</span></td>
+                <td><span class="status-pill ${supportActionStatusClass(action.status)}">${escapeUi(action.status)}</span></td>
                 <td>${escapeHtml(action.deviceUid)}</td>
                 <td>${escapeHtml(action.requestedBy)}</td>
                 <td>${escapeHtml(shortDate(action.createdAt))}</td>
@@ -5593,7 +6727,7 @@ function renderSupportActionPanel(user, devices = [], actions = []) {
   const actionOptions = (workflow.actions || [])
     .map((action) => `
       <option value="${escapeHtml(action.code)}">
-        ${escapeHtml(action.danger ? `${action.title} · осторожно` : action.title)}
+        ${escapeUi(action.danger ? `${action.title} · осторожно` : action.title)}
       </option>
     `)
     .join('');
@@ -5614,7 +6748,7 @@ function renderSupportActionPanel(user, devices = [], actions = []) {
             <strong>Быстрое действие поддержки</strong>
             <span>Действия пишутся в аудит и не показывают секреты, токены или WireGuard private keys.</span>
           </div>
-          <span class="status-pill muted">User #${escapeHtml(user.id)}</span>
+          <span class="status-pill muted">Пользователь #${escapeHtml(user.id)}</span>
         </div>
         ${
           canManageSupportActions
@@ -5668,22 +6802,22 @@ function renderDeviceCards(devices = []) {
                 ${boolPill(isEnabled, 'включено', 'выключено')}
               </div>
               <div class="detail-meta">
-                <span>Platform: ${escapeHtml(device.platform)}</span>
-                <span>App: ${escapeHtml(device.appVersion)}</span>
+                <span>Платформа: ${escapeHtml(device.platform)}</span>
+                <span>Версия приложения: ${escapeHtml(device.appVersion)}</span>
                 <span>IP: ${escapeHtml(device.assignedIp)}</span>
-                <span>Last seen: ${escapeHtml(shortDate(device.lastSeenAt))}</span>
-                <span>Last config: ${escapeHtml(shortDate(device.lastConfigAt))}</span>
-                <span>Config refresh: ${
+                <span>Последний сигнал: ${escapeHtml(shortDate(device.lastSeenAt))}</span>
+                <span>Последний конфиг: ${escapeHtml(shortDate(device.lastConfigAt))}</span>
+                <span>Запрос обновления конфига: ${
                   device.supportConfigRefreshRequestedAt
                     ? `${escapeHtml(shortDate(device.supportConfigRefreshRequestedAt))} · ${escapeHtml(device.supportConfigRefreshReason)}`
                     : 'нет'
                 }</span>
-                <span>Refresh applied: ${
+                <span>Обновление применено: ${
                   device.supportConfigRefreshAppliedAt
                     ? `${escapeHtml(shortDate(device.supportConfigRefreshAppliedAt))} · ${escapeHtml(device.supportConfigRefreshAppliedReason)}`
                     : 'нет'
                 }</span>
-                <span>Reason: ${escapeHtml(device.disabledReason)}</span>
+                <span>Причина отключения: ${escapeHtml(device.disabledReason)}</span>
               </div>
               <div class="row-actions left">
                 ${
@@ -5704,13 +6838,69 @@ function renderDeviceCards(devices = []) {
   `;
 }
 
+function renderUserPaymentSummary(subscription = {}, orders = []) {
+  const latestOrder = orders[0] || null;
+  return `
+    <section class="detail-card">
+      <p class="eyebrow">Деньги</p>
+      <h3>${escapeHtml(subscription.planName || 'Платной подписки нет')}</h3>
+      <div class="detail-meta">
+        <span>Подписка активна: ${boolLabel(subscription.isActive)}</span>
+        <span>Действует до: ${escapeHtml(shortDate(subscription.expiresAt))}</span>
+        <span>Автопродление: ${boolLabel(subscription.autoRenew)}</span>
+        <span>Последний заказ: ${latestOrder ? escapeHtml(latestOrder.orderId || latestOrder.id) : 'нет'}</span>
+        <span>Статус заказа: ${latestOrder ? escapeUi(latestOrder.status) : '—'}</span>
+        <span>Сумма заказа: ${latestOrder ? escapeHtml(money(latestOrder.priceRub || latestOrder.amountRub)) : '—'}</span>
+      </div>
+      <div class="row-actions left">
+        <button class="small-button" type="button" data-user-open-billing>Открыть раздел платежей</button>
+      </div>
+    </section>
+  `;
+}
+
+function renderUserOperatorActions(user, devices = []) {
+  const canManageUsers = can('users.manage');
+  const canManageDevices = can('devices.manage');
+  const canManageSupport = can('support_actions.manage');
+  const enabledDevices = devices.filter((device) => device.isEnabled);
+  return `
+    <section class="detail-card danger-zone">
+      <p class="eyebrow">Управление аккаунтом</p>
+      <h3>Быстрые действия администратора</h3>
+      <div class="detail-meta">
+        <span>Все действия попадают в журнал. Секреты, пароли и WireGuard private keys здесь не показываются.</span>
+        <span>Полное удаление стирает аккаунт, устройства, заказы, коды входа, обращения и внутренние действия поддержки.</span>
+      </div>
+      <div class="operator-action-grid">
+        <button class="small-button" type="button" data-user-reset-sessions="${escapeHtml(user.id)}" ${canManageSupport ? '' : 'disabled'}>
+          Сбросить входы
+        </button>
+        <button class="small-button" type="button" data-user-refresh-configs="${escapeHtml(user.id)}" ${canManageSupport ? '' : 'disabled'}>
+          Обновить конфиги
+        </button>
+        <button class="small-button danger" type="button" data-user-disable-all-devices="${escapeHtml(user.id)}" ${canManageDevices && enabledDevices.length ? '' : 'disabled'}>
+          Отключить все устройства
+        </button>
+        <button class="small-button danger" type="button" data-user-delete="${escapeHtml(user.id)}" ${canManageUsers ? '' : 'disabled'}>
+          Удалить аккаунт
+        </button>
+      </div>
+      <p class="muted compact-note">
+        Если кнопка неактивна, у текущей роли нет нужного права или у пользователя нет активных устройств.
+      </p>
+    </section>
+  `;
+}
+
 async function openUser(userId) {
   try {
     state.activeUserId = userId;
     const response = await apiGet(`/api/v1/admin/users/${userId}`);
+    state.activeUserDetail = response;
     const user = response.user;
     const subscription = response.subscription || user.subscription || {};
-    $('userDialogTitle').textContent = `${user.email || user.phone || `User #${user.id}`}`;
+    $('userDialogTitle').textContent = `${user.email || user.phone || `Пользователь #${user.id}`}`;
     $('userDialogBody').innerHTML = `
       <div class="detail-grid">
         <section class="detail-card">
@@ -5719,22 +6909,14 @@ async function openUser(userId) {
           <div class="detail-meta">
             <span>ID: #${escapeHtml(user.id)}</span>
             <span>Телефон: ${escapeHtml(user.phone)}</span>
-            <span>Email verified: ${boolLabel(user.emailVerified)}</span>
-            <span>Phone verified: ${boolLabel(user.phoneVerified)}</span>
+            <span>Почта подтверждена: ${boolLabel(user.emailVerified)}</span>
+            <span>Телефон подтверждён: ${boolLabel(user.phoneVerified)}</span>
             <span>Создан: ${escapeHtml(shortDate(user.createdAt))}</span>
           </div>
         </section>
-        <section class="detail-card">
-          <p class="eyebrow">Подписка</p>
-          <h3>${escapeHtml(subscription.planName || 'Нет активного тарифа')}</h3>
-          <div class="detail-meta">
-            <span>Активна: ${boolLabel(subscription.isActive)}</span>
-            <span>До: ${escapeHtml(shortDate(subscription.expiresAt))}</span>
-            <span>Устройств: ${escapeHtml(subscription.maxDevices)}</span>
-            <span>Автопродление: ${boolLabel(subscription.autoRenew)}</span>
-          </div>
-        </section>
+        ${renderUserPaymentSummary(subscription, response.orders || [])}
       </div>
+      ${renderUserOperatorActions(user, response.devices || [])}
       <section>
         <p class="eyebrow">Устройства</p>
         ${renderDeviceCards(response.devices || [])}
@@ -5755,6 +6937,7 @@ async function openUser(userId) {
     if (!$('userDialog').open) {
       $('userDialog').showModal();
     }
+    translateAdminDom($('userDialog'));
   } catch (error) {
     setNotice(`Не удалось открыть пользователя: ${error.message}`, true);
   }
@@ -5818,6 +7001,101 @@ async function toggleDevice(deviceUid, enabled) {
   }
 }
 
+async function runQuickUserSupportAction(userId, action, reason, deviceUid = null) {
+  if (!requirePermission('support_actions.manage', 'Действие с пользователем')) return;
+  try {
+    await apiPost(`/api/v1/admin/users/${encodeURIComponent(userId)}/support-actions`, {
+      action,
+      deviceUid,
+      reason,
+      note: reason,
+    });
+    if (state.activeUserId) {
+      await openUser(state.activeUserId);
+    }
+    await loadDashboardData();
+    setNotice(`Готово: ${supportActionTitle(action)}.`);
+  } catch (error) {
+    setNotice(`Не удалось выполнить действие: ${error.message}`, true);
+  }
+}
+
+async function resetUserSessions(userId) {
+  const confirmed = window.confirm('Сбросить все входы пользователя? Он войдёт заново.');
+  if (!confirmed) return;
+  await runQuickUserSupportAction(userId, 'reset_user_sessions', 'Сброс сессий из карточки пользователя.');
+}
+
+async function refreshUserConfigs(userId) {
+  await runQuickUserSupportAction(userId, 'request_config_refresh', 'Запрос обновления конфигов из карточки пользователя.');
+}
+
+async function disableAllUserDevices(userId) {
+  if (!requirePermission('devices.manage', 'Отключение устройств пользователя')) return;
+  const devices = (state.activeUserDetail?.devices || []).filter((device) => device.isEnabled);
+  if (!devices.length) {
+    setNotice('У пользователя нет активных устройств.');
+    return;
+  }
+  const confirmed = window.confirm(`Отключить все активные устройства пользователя (${devices.length} шт.)?`);
+  if (!confirmed) return;
+  try {
+    for (const device of devices) {
+      await apiPost(`/api/v1/admin/devices/${encodeURIComponent(device.deviceUid)}/disable`, {
+        reason: 'Отключение всех устройств из карточки пользователя.',
+      });
+    }
+    if (state.activeUserId) {
+      await openUser(state.activeUserId);
+    }
+    await loadDashboardData();
+    setNotice(`Отключено устройств: ${devices.length}.`);
+  } catch (error) {
+    setNotice(`Не удалось отключить устройства: ${error.message}`, true);
+  }
+}
+
+async function deleteUserRecord(userId) {
+  if (!requirePermission('users.manage', 'Удаление пользователя')) return;
+  const detail = state.activeUserDetail || {};
+  const user = detail.user || {};
+  const email = user.email || '';
+  const confirmEmail = email
+    ? window.prompt(`Для удаления введи почту пользователя: ${email}`)
+    : window.prompt('У пользователя нет почты. Для удаления введи слово DELETE.');
+  if (confirmEmail === null) return;
+  if (email && confirmEmail.trim().toLowerCase() !== email.trim().toLowerCase()) {
+    setNotice('Почта не совпала. Удаление отменено.', true);
+    return;
+  }
+  if (!email && confirmEmail.trim() !== 'DELETE') {
+    setNotice('Подтверждение не совпало. Удаление отменено.', true);
+    return;
+  }
+  const reason = window.prompt('Причина удаления для журнала:', 'Очистка тестового аккаунта перед запуском.');
+  if (reason === null) return;
+  if (reason.trim().length < 8) {
+    setNotice('Причина удаления должна быть понятной: минимум 8 символов.', true);
+    return;
+  }
+  const finalConfirm = window.confirm('Последнее подтверждение: удалить аккаунт и связанные записи без восстановления?');
+  if (!finalConfirm) return;
+
+  try {
+    const result = await apiPost(`/api/v1/admin/users/${encodeURIComponent(userId)}/delete`, {
+      confirmEmail: email || null,
+      reason: reason.trim(),
+    });
+    state.activeUserId = null;
+    state.activeUserDetail = null;
+    $('userDialog')?.close();
+    await loadDashboardData();
+    setNotice(`Пользователь удалён. Таблиц очищено: ${Object.keys(result.deleted || {}).length}.`);
+  } catch (error) {
+    setNotice(`Не удалось удалить пользователя: ${error.message}`, true);
+  }
+}
+
 async function toggleStaffActive(staffId, isActive) {
   if (!requirePermission('staff.manage', 'Изменение сотрудника')) return;
   try {
@@ -5840,9 +7118,9 @@ async function testAdminAlert() {
   try {
     const result = await apiPost('/api/v1/admin/alerts/test', {});
     await loadDashboardData();
-    setNotice(`Тестовый Telegram alert отправлен: ${safeText(result?.result?.status, 'ok')}.`);
+    setNotice(`Тестовое оповещение Telegram отправлено: ${safeText(result?.result?.status, 'ok')}.`);
   } catch (error) {
-    setNotice(`Telegram alert пока не готов: ${error.message}`, true);
+    setNotice(`Оповещение Telegram пока не готово: ${error.message}`, true);
   }
 }
 
@@ -5850,22 +7128,19 @@ function bindEvents() {
   $('loginForm').addEventListener('submit', async (event) => {
     event.preventDefault();
     try {
-      state.apiBase = normalizeApiBase($('apiBaseInput').value);
+      state.apiBase = normalizeApiBase($('apiBaseInput')?.value || DEFAULT_API_BASE);
       if (state.pendingAdmin2fa) {
         await verifyAdminTwoFactor();
         return;
       }
       const email = $('adminEmailInput').value.trim().toLowerCase();
       const password = $('adminPasswordInput').value;
-      const bootstrapToken = $('adminTokenInput').value.trim();
-      const actor = $('adminActorInput').value.trim();
+      const actor = $('adminActorInput')?.value.trim() || email || 'staff';
       if (email && password) {
         const loginResult = await loginWithStaffSession(email, password, actor);
         if (loginResult?.pending) return;
-      } else if (bootstrapToken) {
-        await loginWithBootstrapToken(bootstrapToken, actor);
       } else {
-        setNotice('Введи email+пароль сотрудника или bootstrap admin token.', true);
+        setNotice('Введите почту и пароль сотрудника.', true);
         return;
       }
       saveSession($('rememberTokenInput').checked);
@@ -5927,6 +7202,9 @@ function bindEvents() {
   $('monitoringTargetServiceFilter')?.addEventListener('input', delayedReload);
   $('serviceObservationStatusFilter')?.addEventListener('change', loadDashboardData);
   $('serviceObservationTargetFilter')?.addEventListener('input', delayedReload);
+  $('clientRouteStageFilter')?.addEventListener('change', loadDashboardData);
+  $('clientRouteOkFilter')?.addEventListener('change', loadDashboardData);
+  $('clientRouteServerFilter')?.addEventListener('input', delayedReload);
   $('releaseForm')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     await saveRelease();
@@ -6061,7 +7339,7 @@ function bindEvents() {
       updateIncident(incidentInvestigateButton.dataset.incidentInvestigate, {
         status: 'investigating',
         ...currentIncidentAssigneePayload(),
-        note: 'Инцидент взят в работу из Green VPN Admin Console.',
+        note: 'Инцидент взят в работу из админки Green VPN.',
       });
       return;
     }
@@ -6070,7 +7348,7 @@ function bindEvents() {
       updateIncident(incidentResolveButton.dataset.incidentResolve, {
         status: 'resolved',
         ...currentIncidentAssigneePayload(),
-        note: 'Инцидент закрыт вручную из Green VPN Admin Console.',
+        note: 'Инцидент закрыт вручную из админки Green VPN.',
       });
       return;
     }
@@ -6079,7 +7357,7 @@ function bindEvents() {
       updateIncident(incidentOpenButton.dataset.incidentOpen, {
         status: 'open',
         ...currentIncidentAssigneePayload(),
-        note: 'Инцидент переоткрыт вручную из Green VPN Admin Console.',
+        note: 'Инцидент переоткрыт вручную из админки Green VPN.',
       });
       return;
     }
@@ -6103,6 +7381,33 @@ function bindEvents() {
       performSupportAction(supportActionRunButton.dataset.supportActionRun);
       return;
     }
+    const userResetSessionsButton = event.target.closest('[data-user-reset-sessions]');
+    if (userResetSessionsButton) {
+      resetUserSessions(userResetSessionsButton.dataset.userResetSessions);
+      return;
+    }
+    const userRefreshConfigsButton = event.target.closest('[data-user-refresh-configs]');
+    if (userRefreshConfigsButton) {
+      refreshUserConfigs(userRefreshConfigsButton.dataset.userRefreshConfigs);
+      return;
+    }
+    const userDisableAllDevicesButton = event.target.closest('[data-user-disable-all-devices]');
+    if (userDisableAllDevicesButton) {
+      disableAllUserDevices(userDisableAllDevicesButton.dataset.userDisableAllDevices);
+      return;
+    }
+    const userDeleteButton = event.target.closest('[data-user-delete]');
+    if (userDeleteButton) {
+      deleteUserRecord(userDeleteButton.dataset.userDelete);
+      return;
+    }
+    const userOpenBillingButton = event.target.closest('[data-user-open-billing]');
+    if (userOpenBillingButton) {
+      $('userDialog')?.close();
+      switchSection('orders');
+      setNotice('Раздел платежей открыт. Последние платежи выбранного пользователя также видны в его карточке.');
+      return;
+    }
     const ownerActionSaveButton = event.target.closest('[data-owner-action-save]');
     if (ownerActionSaveButton) {
       saveOwnerActionStatus(ownerActionSaveButton.dataset.ownerActionSave);
@@ -6118,9 +7423,9 @@ function bindEvents() {
     }
     const releaseEditButton = event.target.closest('[data-release-edit]');
     if (releaseEditButton) {
-      if (!requirePermission('updates.manage', 'Редактирование release')) return;
+      if (!requirePermission('updates.manage', 'Редактирование версии')) return;
       fillReleaseForm(findRelease(releaseEditButton.dataset.releaseEdit));
-      setNotice('Release загружен в форму. Можно поправить поля и сохранить.');
+      setNotice('Версия загружена в форму. Можно поправить поля и сохранить.');
       return;
     }
     const releasePublishButton = event.target.closest('[data-release-publish]');
@@ -6141,9 +7446,9 @@ function bindEvents() {
 
     const featureFlagEditButton = event.target.closest('[data-feature-flag-edit]');
     if (featureFlagEditButton) {
-      if (!requirePermission('flags.manage', 'Редактирование feature flag')) return;
+      if (!requirePermission('flags.manage', 'Редактирование переключателя функции')) return;
       fillFeatureFlagForm(findFeatureFlag(featureFlagEditButton.dataset.featureFlagEdit));
-      setNotice('Feature flag загружен в форму. Можно поправить поля и сохранить.');
+      setNotice('Переключатель функции загружен в форму. Можно поправить поля и сохранить.');
       return;
     }
     const featureFlagEnableButton = event.target.closest('[data-feature-flag-enable]');
@@ -6177,14 +7482,34 @@ function bindEvents() {
 
     const serverEditButton = event.target.closest('[data-server-edit]');
     if (serverEditButton) {
-      if (!requirePermission('servers.manage', 'Редактирование endpoint')) return;
+      if (!requirePermission('servers.manage', 'Редактирование VPN-узла')) return;
       fillServerForm(findServerEntry(serverEditButton.dataset.serverEdit));
-      setNotice('Endpoint загружен в форму. Можно поправить поля и сохранить.');
+      setNotice('VPN-узел загружен в форму. Можно поправить поля и сохранить.');
       return;
     }
     const serverHealthyButton = event.target.closest('[data-server-healthy]');
     if (serverHealthyButton) {
       updateServerEntryStatus(serverHealthyButton.dataset.serverHealthy, 'healthy');
+      return;
+    }
+    const serverRemoteSmokeButton = event.target.closest('[data-server-remote-smoke]');
+    if (serverRemoteSmokeButton) {
+      runRemotePeerSmoke(serverRemoteSmokeButton.dataset.serverRemoteSmoke);
+      return;
+    }
+    const serverClientConfigSmokeButton = event.target.closest('[data-server-client-config-smoke]');
+    if (serverClientConfigSmokeButton) {
+      runClientConfigSmoke(serverClientConfigSmokeButton.dataset.serverClientConfigSmoke);
+      return;
+    }
+    const serverPublishButton = event.target.closest('[data-server-publish]');
+    if (serverPublishButton) {
+      publishServerEntry(serverPublishButton.dataset.serverPublish);
+      return;
+    }
+    const serverUnpublishButton = event.target.closest('[data-server-unpublish]');
+    if (serverUnpublishButton) {
+      unpublishServerEntry(serverUnpublishButton.dataset.serverUnpublish);
       return;
     }
     const serverDisableButton = event.target.closest('[data-server-disable]');
@@ -6217,16 +7542,24 @@ function bindEvents() {
   });
 
   $('closeReportDialog').addEventListener('click', () => $('reportDialog').close());
-  $('closeUserDialog').addEventListener('click', () => $('userDialog').close());
+  $('closeUserDialog').addEventListener('click', () => {
+    $('userDialog').close();
+    state.activeUserId = null;
+    state.activeUserDetail = null;
+  });
+  $('userDialog')?.addEventListener('close', () => {
+    state.activeUserId = null;
+    state.activeUserDetail = null;
+  });
 }
 
 function init() {
   loadSession();
-  $('apiBaseInput').value = state.apiBase;
+  $('apiBaseInput').value = state.apiBase || DEFAULT_API_BASE;
   $('adminEmailInput').value = state.adminEmail;
-  $('adminTokenInput').value = state.adminToken;
-  $('adminActorInput').value = state.adminActor;
-  $('sidebarApiBase').textContent = state.apiBase;
+  $('adminTokenInput').value = '';
+  $('adminActorInput').value = state.adminActor || state.adminEmail || '';
+  $('sidebarApiBase').textContent = 'Green VPN';
   bindEvents();
   renderAll();
   applyAuthUi();

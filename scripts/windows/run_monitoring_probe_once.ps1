@@ -9,6 +9,7 @@ param(
     [string]$Status = "active",
     [int]$Limit = 200,
     [switch]$ServerHealth,
+    [switch]$RouteHealth,
     [switch]$DryRun
 )
 
@@ -61,7 +62,11 @@ if ($ServerHealth) {
     $argsList += "--server-health"
 }
 
-Write-Host "[Green VPN monitoring probe] api=$ApiBase probe=$ProbeId region=$ProbeRegion serverHealth=$($ServerHealth.IsPresent) dryRun=$($DryRun.IsPresent)"
+if ($RouteHealth) {
+    $argsList += "--route-health"
+}
+
+Write-Host "[Green VPN monitoring probe] api=$ApiBase probe=$ProbeId region=$ProbeRegion serverHealth=$($ServerHealth.IsPresent) routeHealth=$($RouteHealth.IsPresent) dryRun=$($DryRun.IsPresent)"
 Write-Host "[Green VPN monitoring probe] Secrets are read only from stdin, env GREENVPN_ADMIN_TOKEN, or token file."
 
 & python @argsList

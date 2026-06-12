@@ -8,6 +8,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import smtplib
 import socket
 import sqlite3
@@ -31,7 +32,7 @@ from pydantic import BaseModel
 
 
 APP_TITLE = "Green VPN Backend"
-APP_VERSION = "0.9.69"
+APP_VERSION = "0.9.102"
 DEFAULT_PUBLIC_API_BASE_URL = "https://api.greenvpn.pro"
 
 
@@ -78,6 +79,21 @@ UPDATE_CHANGELOG = [
     )
     if item.strip(" -")
 ]
+WINDOWS_CODE_SIGNING_PROVIDER = os.getenv("GREENVPN_WINDOWS_CODE_SIGNING_PROVIDER", "").strip()
+WINDOWS_CODE_SIGNING_PUBLISHER = os.getenv("GREENVPN_WINDOWS_CODE_SIGNING_PUBLISHER", "").strip()
+WINDOWS_CODE_SIGNING_CERT_THUMBPRINT = re.sub(
+    r"\s+",
+    "",
+    os.getenv("GREENVPN_WINDOWS_CODE_SIGNING_CERT_THUMBPRINT", "").strip(),
+).upper()
+WINDOWS_SIGNED_INSTALLER_URL = os.getenv("GREENVPN_WINDOWS_SIGNED_INSTALLER_URL", "").strip()
+WINDOWS_SIGNED_INSTALLER_SHA256 = re.sub(
+    r"\s+",
+    "",
+    os.getenv("GREENVPN_WINDOWS_SIGNED_INSTALLER_SHA256", "").strip(),
+).upper()
+WINDOWS_DEFENDER_SUBMISSION_ID = os.getenv("GREENVPN_DEFENDER_SUBMISSION_ID", "").strip()
+WINDOWS_YANDEX_SUBMISSION_ID = os.getenv("GREENVPN_YANDEX_AV_SUBMISSION_ID", "").strip()
 SERVER_CATALOG_VERSION = os.getenv(
     "GREENVPN_SERVER_CATALOG_VERSION",
     "2026-04-30-dev1",
@@ -139,17 +155,62 @@ WG_INTERFACE = os.getenv("BLUEVPN_WG_INTERFACE", "wg0")
 WG_CONFIG_PATH = Path(os.getenv("BLUEVPN_WG_CONFIG_PATH", "/etc/wireguard/wg0.conf"))
 WG_ENDPOINT_HOST = os.getenv("BLUEVPN_ENDPOINT_HOST", "37.220.85.211")
 WG_ENDPOINT_PORT = int(os.getenv("BLUEVPN_ENDPOINT_PORT", "443"))
-WG_DNS = os.getenv("BLUEVPN_DNS", "1.1.1.1")
-WG_ALLOWED_IPS = os.getenv("BLUEVPN_ALLOWED_IPS", "0.0.0.0/1,128.0.0.0/1")
+WG_DNS = os.getenv("BLUEVPN_DNS", "1.1.1.1, 8.8.8.8")
+WG_CLIENT_MTU = max(576, min(1420, int(os.getenv("BLUEVPN_CLIENT_MTU", "1280"))))
+WG_PERSISTENT_KEEPALIVE = max(
+    0,
+    min(65535, int(os.getenv("BLUEVPN_PERSISTENT_KEEPALIVE", "25"))),
+)
+WG_ALLOWED_IPS = os.getenv(
+    "BLUEVPN_ALLOWED_IPS",
+    "10.10.0.1/32,0.0.0.0/1,128.0.0.0/1",
+)
 WG_CLIENT_IP_PREFIX = os.getenv("BLUEVPN_CLIENT_IP_PREFIX", "10.10.0.")
 WG_CLIENT_IP_START = int(os.getenv("BLUEVPN_CLIENT_IP_START", "10"))
 WG_CLIENT_IP_END = int(os.getenv("BLUEVPN_CLIENT_IP_END", "250"))
+REMOTE_NODE_SMOKE_PEER_IP = os.getenv("GREENVPN_REMOTE_NODE_SMOKE_PEER_IP", "10.10.0.253")
+REMOTE_NODE_CLIENT_CONFIG_SMOKE_PEER_IP = os.getenv(
+    "GREENVPN_REMOTE_NODE_CLIENT_CONFIG_SMOKE_PEER_IP",
+    "10.10.0.252",
+)
+VPN_NODE_CONFIG_DIR = Path(
+    os.getenv("GREENVPN_VPN_NODE_CONFIG_DIR", "/etc/bluevpn/vpn_nodes")
+)
+VPN_NODE_SSH_TIMEOUT_SECONDS = int(os.getenv("GREENVPN_VPN_NODE_SSH_TIMEOUT_SECONDS", "12"))
 
 DEFAULT_PLAN_NAME = "Trial"
 DEFAULT_PLAN_CODE = "trial"
 DEFAULT_MAX_DEVICES = int(os.getenv("BLUEVPN_DEFAULT_MAX_DEVICES", "5"))
 DEFAULT_TRIAL_DAYS = int(os.getenv("BLUEVPN_DEFAULT_TRIAL_DAYS", "3"))
 PAID_PLAN_DAYS = int(os.getenv("BLUEVPN_PAID_PLAN_DAYS", "30"))
+FREE_AD_GATE_ENABLED = (
+    os.getenv("GREENVPN_FREE_AD_GATE_ENABLED", "").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+FREE_AD_GATE_PROVIDER = os.getenv("GREENVPN_FREE_AD_GATE_PROVIDER", "test_web").strip().lower() or "test_web"
+FREE_AD_GATE_CLIENT_MARKER = os.getenv("GREENVPN_FREE_AD_GATE_CLIENT_MARKER", "adgate").strip().lower()
+FREE_AD_GATE_PLATFORMS = {
+    item.lower()
+    for item in split_env_list(os.getenv("GREENVPN_FREE_AD_GATE_PLATFORMS", "windows,android"))
+}
+FREE_AD_CHALLENGE_TTL_MINUTES = max(
+    1,
+    int(os.getenv("GREENVPN_FREE_AD_CHALLENGE_TTL_MINUTES", "10")),
+)
+FREE_AD_GRANT_TTL_MINUTES = max(
+    1,
+    int(os.getenv("GREENVPN_FREE_AD_GRANT_TTL_MINUTES", "360")),
+)
+FREE_AD_GRANT_CONNECTS = max(1, int(os.getenv("GREENVPN_FREE_AD_GRANT_CONNECTS", "1")))
+FREE_AD_ANDROID_REWARDED_ENABLED = (
+    os.getenv("GREENVPN_YANDEX_REWARDED_ANDROID_ENABLED", "").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+FREE_AD_ANDROID_REWARDED_AD_UNIT_ID = os.getenv(
+    "GREENVPN_YANDEX_REWARDED_ANDROID_AD_UNIT_ID",
+    "",
+).strip()
+FREE_AD_ANDROID_REWARDED_PROVIDER = "yandex_mobile_ads"
 
 YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID", "").strip()
 YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "").strip()
@@ -165,35 +226,98 @@ PUBLIC_SITE_URL = clean_base_url(
 )
 PUBLIC_WINDOWS_DOWNLOAD_URL = os.getenv("GREENVPN_PUBLIC_WINDOWS_DOWNLOAD_URL", UPDATE_DOWNLOAD_URL).strip()
 PUBLIC_ANDROID_DOWNLOAD_URL = os.getenv("GREENVPN_PUBLIC_ANDROID_DOWNLOAD_URL", "").strip()
+ANDROID_UPDATE_LATEST_VERSION = os.getenv(
+    "GREENVPN_ANDROID_LATEST_VERSION",
+    UPDATE_LATEST_VERSION,
+).strip()
+ANDROID_UPDATE_DOWNLOAD_URL = os.getenv(
+    "GREENVPN_ANDROID_UPDATE_URL",
+    PUBLIC_ANDROID_DOWNLOAD_URL,
+).strip()
+ANDROID_UPDATE_SHA256 = re.sub(
+    r"\s+",
+    "",
+    os.getenv("GREENVPN_ANDROID_UPDATE_SHA256", "").strip(),
+).upper()
+ANDROID_UPDATE_REQUIRED = (
+    os.getenv("GREENVPN_ANDROID_UPDATE_REQUIRED", "").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+ANDROID_UPDATE_RELEASED_AT = os.getenv(
+    "GREENVPN_ANDROID_UPDATE_RELEASED_AT",
+    UPDATE_RELEASED_AT,
+).strip()
+ANDROID_UPDATE_CHANGELOG = [
+    item.strip(" -")
+    for item in re.split(
+        r"\r?\n|\s*;\s*",
+        os.getenv(
+            "GREENVPN_ANDROID_UPDATE_CHANGELOG",
+            "Android-обновление Green VPN.",
+        ),
+    )
+    if item.strip(" -")
+]
+ANDROID_PREVIEW_UPDATE_LATEST_VERSION = os.getenv(
+    "GREENVPN_ANDROID_PREVIEW_LATEST_VERSION",
+    "",
+).strip()
+ANDROID_PREVIEW_UPDATE_DOWNLOAD_URL = os.getenv(
+    "GREENVPN_ANDROID_PREVIEW_UPDATE_URL",
+    "",
+).strip()
+ANDROID_PREVIEW_UPDATE_SHA256 = re.sub(
+    r"\s+",
+    "",
+    os.getenv("GREENVPN_ANDROID_PREVIEW_UPDATE_SHA256", "").strip(),
+).upper()
+ANDROID_PREVIEW_UPDATE_REQUIRED = (
+    os.getenv("GREENVPN_ANDROID_PREVIEW_UPDATE_REQUIRED", "").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+ANDROID_PREVIEW_UPDATE_RELEASED_AT = os.getenv(
+    "GREENVPN_ANDROID_PREVIEW_UPDATE_RELEASED_AT",
+    UPDATE_RELEASED_AT,
+).strip()
+ANDROID_PREVIEW_UPDATE_CHANGELOG = [
+    item.strip(" -")
+    for item in re.split(
+        r"\r?\n|\s*;\s*",
+        os.getenv(
+            "GREENVPN_ANDROID_PREVIEW_UPDATE_CHANGELOG",
+            "Android preview обновление Green VPN.",
+        ),
+    )
+    if item.strip(" -")
+]
 PUBLIC_IOS_DOWNLOAD_URL = os.getenv("GREENVPN_PUBLIC_IOS_DOWNLOAD_URL", "").strip()
 LEGAL_OWNER_NAME = os.getenv("GREENVPN_LEGAL_OWNER_NAME", "Владелец Green VPN").strip()
 LEGAL_OWNER_INN = os.getenv("GREENVPN_LEGAL_OWNER_INN", "").strip()
 LEGAL_CONTACT_EMAIL = os.getenv("GREENVPN_LEGAL_CONTACT_EMAIL", "support@greenvpn.pro").strip()
 LEGAL_NOTICE = os.getenv("GREENVPN_LEGAL_NOTICE", "").strip()
 PUBLIC_SITE_REQUIRED_PATHS = [
-    {"path": "/", "title": "Landing page"},
-    {"path": "/download/windows", "title": "Windows download"},
-    {"path": "/download/android", "title": "Android download"},
-    {"path": "/download/ios", "title": "iOS download"},
-    {"path": "/legal/requisites", "title": "Legal requisites"},
-    {"path": "/legal/offer", "title": "Public offer"},
-    {"path": "/legal/privacy", "title": "Privacy policy"},
-    {"path": "/legal/acceptable-use", "title": "Acceptable use"},
-    {"path": "/legal/refunds", "title": "Refund policy"},
-    {"path": "/payment/return", "title": "YooKassa return page"},
+    {"path": "/", "title": "Главная страница"},
+    {"path": "/download/windows", "title": "Скачивание для Windows"},
+    {"path": "/download/android", "title": "Скачивание для Android"},
+    {"path": "/download/ios", "title": "Скачивание для iOS"},
+    {"path": "/legal/requisites", "title": "Реквизиты"},
+    {"path": "/legal/offer", "title": "Публичная оферта"},
+    {"path": "/legal/privacy", "title": "Политика конфиденциальности"},
+    {"path": "/legal/acceptable-use", "title": "Правила использования"},
+    {"path": "/legal/refunds", "title": "Возвраты"},
+    {"path": "/payment/return", "title": "Страница возврата ЮKassa"},
 ]
 PUBLIC_SITE_REQUIRED_LANDING_LINKS = [
-    {"code": "download_windows", "label": "Windows download button", "needle": "/download/windows"},
-    {"code": "download_android", "label": "Android download card", "needle": "/download/android"},
-    {"code": "download_ios", "label": "iOS download card", "needle": "/download/ios"},
-    {"code": "pricing_anchor", "label": "Pricing anchor", "needle": "#plans"},
+    {"code": "download_windows", "label": "Кнопка скачивания Windows", "needle": "/download/windows"},
+    {"code": "pricing_anchor", "label": "Ссылка на тарифы", "needle": "#plans"},
+    {"code": "setup_anchor", "label": "Ссылка на старт", "needle": "#setup"},
+    {"code": "support_anchor", "label": "Ссылка на поддержку", "needle": "#support"},
 ]
 PUBLIC_SITE_REQUIRED_PRICING_MARKERS = [
-    {"code": "trial_plan", "label": "Trial plan", "needle": "Пробный"},
-    {"code": "starter_price", "label": "Starter price", "needle": "149 ₽/мес"},
-    {"code": "standard_price", "label": "Standard price", "needle": "299 ₽/мес"},
-    {"code": "plus_price", "label": "Plus price", "needle": "449 ₽/мес"},
-    {"code": "maximum_price", "label": "Maximum price", "needle": "699 ₽/мес"},
+    {"code": "free_start", "label": "Free start", "needle": "Бесплатный старт"},
+    {"code": "two_ads", "label": "Two ads", "needle": "2 рекламы"},
+    {"code": "zero_price", "label": "Zero rubles start", "needle": "0 ₽"},
+    {"code": "configurable_tariff", "label": "Configurable tariff", "needle": "Тариф без рекламы"},
 ]
 PUBLIC_SITE_BANNED_PHRASES = [
     "обход блокировок",
@@ -251,6 +375,8 @@ AUTH_CODE_RESEND_COOLDOWN_SECONDS = int(
 )
 AUTH_CODE_MAX_VERIFY_ATTEMPTS = int(os.getenv("GREENVPN_AUTH_CODE_MAX_VERIFY_ATTEMPTS", "5"))
 AUTH_CODE_LOCKOUT_MINUTES = int(os.getenv("GREENVPN_AUTH_CODE_LOCKOUT_MINUTES", "15"))
+AUTH_CODE_DIGITS = max(4, min(8, int(os.getenv("GREENVPN_AUTH_CODE_DIGITS", "4"))))
+AUTH_CODE_BOUND = 10 ** AUTH_CODE_DIGITS
 AUTH_CODE_PEPPER = (
     os.getenv("GREENVPN_AUTH_CODE_PEPPER", "").strip()
     or SMS_CODE_PEPPER
@@ -272,23 +398,243 @@ ADMIN_CORS_ORIGINS = [
     )
     if item.strip()
 ]
-APP_RELEASE_PLATFORMS = ["windows"]
+APP_RELEASE_PLATFORMS = ["windows", "android"]
 APP_RELEASE_CHANNELS = ["stable", "beta", "internal"]
 APP_RELEASE_STATUSES = ["draft", "published", "paused", "retired"]
 SERVER_CATALOG_STATUSES = ["draft", "healthy", "degraded", "maintenance", "disabled"]
 SERVER_CATALOG_PROTOCOLS = [
     "wireguard_udp",
     "wireguard_tcp",
+    "amneziawg",
     "openvpn_tcp",
     "shadowsocks",
     "hysteria2",
-    "stealth",
+    "trojan_tls",
+    "vless_reality",
+    "masque_udp",
 ]
-SERVER_CATALOG_TRANSPORTS = ["udp", "tcp", "tls", "quic", "http3"]
-SERVER_CLIENT_CONFIG_PROFILES = ["none", "builtin_wg0"]
+SERVER_CATALOG_TRANSPORTS = ["udp", "tcp", "tls", "quic", "http3", "reality", "masque"]
+SERVER_CLIENT_CONFIG_PROFILES = ["none", "builtin_wg0", "remote_ssh_wg0"]
 SERVER_CLIENT_CONFIG_PROFILE_TITLES = {
     "none": "Не выдавать клиентам",
     "builtin_wg0": "Текущий backend wg0",
+    "remote_ssh_wg0": "Удалённый WireGuard wg0",
+}
+SERVER_PROTOCOL_TITLES = {
+    "wireguard_udp": "WireGuard UDP",
+    "wireguard_tcp": "WireGuard поверх TCP",
+    "amneziawg": "AmneziaWG",
+    "openvpn_tcp": "OpenVPN TCP/443",
+    "shadowsocks": "Shadowsocks AEAD",
+    "hysteria2": "Hysteria2 QUIC",
+    "trojan_tls": "Trojan TLS",
+    "vless_reality": "VLESS REALITY",
+    "masque_udp": "MASQUE CONNECT-UDP",
+}
+SERVER_PROTOCOL_ROLLOUT_ORDER = [
+    "wireguard_udp",
+    "wireguard_tcp",
+    "amneziawg",
+    "openvpn_tcp",
+    "hysteria2",
+    "shadowsocks",
+    "vless_reality",
+    "trojan_tls",
+    "masque_udp",
+]
+SERVER_CLIENT_READY_PROTOCOLS = {"wireguard_udp"}
+RESILIENCE_ROUTE_STATUSES = ["green", "yellow", "red", "unknown"]
+RESILIENCE_ROUTE_MIN_SCORE = int(os.getenv("GREENVPN_RESILIENCE_ROUTE_MIN_SCORE", "70"))
+RESILIENCE_ROUTE_STALE_AFTER_SECONDS = int(
+    os.getenv("GREENVPN_RESILIENCE_ROUTE_STALE_AFTER_SECONDS", "900")
+)
+CLIENT_ROUTE_EVENT_STAGES = [
+    "bootstrap",
+    "config_fetch",
+    "connect",
+    "handshake",
+    "connected",
+    "disconnect",
+    "network_probe",
+    "network_probe_final_failure",
+]
+CLIENT_ROUTE_EVENT_WINDOW_SECONDS = int(
+    os.getenv("GREENVPN_CLIENT_ROUTE_EVENT_WINDOW_SECONDS", "1800")
+)
+RESILIENCE_ROUTE_LAYERS = [
+    {
+        "code": "wireguard_udp",
+        "title": "WireGuard UDP",
+        "weight": 10,
+        "resourceCost": 1,
+        "stealthTier": 1,
+        "role": "fast_default",
+        "description": "Самый лёгкий режим: минимум нагрузки и лучшая скорость, пока сеть его пропускает.",
+    },
+    {
+        "code": "wireguard_tcp",
+        "title": "WireGuard поверх TCP",
+        "weight": 20,
+        "resourceCost": 2,
+        "stealthTier": 2,
+        "role": "udp_block_fallback",
+        "description": "Запасной TCP-слой для сетей, где UDP режется или деградирует.",
+    },
+    {
+        "code": "amneziawg",
+        "title": "AmneziaWG",
+        "weight": 30,
+        "resourceCost": 3,
+        "stealthTier": 3,
+        "role": "wireguard_obfuscation",
+        "description": "Маскировка WireGuard-паттернов для более жёсткой фильтрации.",
+    },
+    {
+        "code": "openvpn_tcp",
+        "title": "OpenVPN TCP/443",
+        "weight": 40,
+        "resourceCost": 4,
+        "stealthTier": 3,
+        "role": "legacy_tcp_443",
+        "description": "Консервативный TLS/TCP-резерв для сетей, где важнее совместимость, чем скорость.",
+    },
+    {
+        "code": "hysteria2",
+        "title": "Hysteria2 QUIC",
+        "weight": 50,
+        "resourceCost": 5,
+        "stealthTier": 4,
+        "role": "quic_fallback",
+        "description": "QUIC-режим для сетей, где UDP ещё жив, но классические сигнатуры мешают.",
+    },
+    {
+        "code": "shadowsocks",
+        "title": "Shadowsocks AEAD",
+        "weight": 60,
+        "resourceCost": 5,
+        "stealthTier": 4,
+        "role": "proxy_fallback",
+        "description": "Лёгкий прокси-слой для приложений и сервисов, которым не нужен полный VPN-туннель.",
+    },
+    {
+        "code": "vless_reality",
+        "title": "VLESS REALITY",
+        "weight": 70,
+        "resourceCost": 6,
+        "stealthTier": 5,
+        "role": "reality_fallback",
+        "description": "Продвинутый режим маскировки под реальный TLS-трафик.",
+    },
+    {
+        "code": "trojan_tls",
+        "title": "Trojan TLS",
+        "weight": 80,
+        "resourceCost": 6,
+        "stealthTier": 5,
+        "role": "tls_fallback",
+        "description": "TLS-резерв для ситуаций, когда нужен максимально обычный внешний вид подключения.",
+    },
+    {
+        "code": "masque_udp",
+        "title": "MASQUE CONNECT-UDP",
+        "weight": 90,
+        "resourceCost": 7,
+        "stealthTier": 5,
+        "role": "http3_udp_proxy",
+        "description": "HTTP/3 CONNECT-UDP слой для будущей устойчивой прокси-маршрутизации.",
+    },
+]
+RESILIENCE_TRANSPORT_ROLLOUT_PROFILES = {
+    "wireguard_udp": {
+        "engine": "WireGuardNT",
+        "windowsWork": "Уже используется текущим Windows-клиентом.",
+        "serverWork": "wg0 на VPN-сервере, публикация через безопасный catalog gate.",
+        "probeWork": "server-health и route-health probes.",
+        "risk": "low",
+        "canaryScript": "",
+        "validationScript": "",
+        "ownerInput": [],
+    },
+    "wireguard_tcp": {
+        "engine": "WireGuard + TCP wrapper",
+        "windowsWork": "Добавить клиентский transport wrapper и health-aware retry.",
+        "serverWork": "Поднять TCP/443 fallback рядом с wg0 без замены основного UDP.",
+        "probeWork": "Проверять TCP endpoint и маршруты к YouTube/Telegram/Discord через этот слой.",
+        "risk": "medium",
+        "canaryScript": "scripts/server/install_wireguard_tcp_canary.sh",
+        "validationScript": "scripts/server/check_transport_canary_readiness.sh --protocol wireguard_tcp",
+        "ownerInput": ["выделенный порт или отдельный endpoint"],
+    },
+    "amneziawg": {
+        "engine": "AmneziaWG",
+        "windowsWork": "Упаковать совместимый Windows engine и отдельный config parser.",
+        "serverWork": "Развернуть AmneziaWG daemon на отдельном endpoint, не трогая текущий wg0.",
+        "probeWork": "Отдельный handshake/route probe с теми же public targets.",
+        "risk": "medium",
+        "canaryScript": "scripts/server/install_transport_canary_service.sh --protocol amneziawg",
+        "validationScript": "scripts/server/check_transport_canary_readiness.sh --protocol amneziawg",
+        "ownerInput": ["дополнительный endpoint/server для canary"],
+    },
+    "openvpn_tcp": {
+        "engine": "OpenVPN",
+        "windowsWork": "Упаковать OpenVPN binary/profile import без видимых console windows.",
+        "serverWork": "OpenVPN TCP/443 daemon, отдельные user credentials/certs.",
+        "probeWork": "TCP/TLS connect плюс прикладные route checks после подключения.",
+        "risk": "medium",
+        "canaryScript": "scripts/server/install_transport_canary_service.sh --protocol openvpn_tcp",
+        "validationScript": "scripts/server/check_transport_canary_readiness.sh --protocol openvpn_tcp",
+        "ownerInput": ["домен или SNI для TLS fallback"],
+    },
+    "hysteria2": {
+        "engine": "Hysteria2",
+        "windowsWork": "Упаковать hysteria client, config lifecycle и reconnect policy.",
+        "serverWork": "QUIC daemon с отдельными credentials и rate limits.",
+        "probeWork": "QUIC reachability и route checks по public targets.",
+        "risk": "high",
+        "canaryScript": "scripts/server/install_transport_canary_service.sh --protocol hysteria2",
+        "validationScript": "scripts/server/check_transport_canary_readiness.sh --protocol hysteria2",
+        "ownerInput": ["домен/TLS material для canary"],
+    },
+    "shadowsocks": {
+        "engine": "Shadowsocks AEAD",
+        "windowsWork": "Добавить app/proxy routing mode или TUN integration.",
+        "serverWork": "AEAD proxy endpoint, отдельные user keys и abuse limits.",
+        "probeWork": "Proxy connect plus per-service HTTP/TLS checks.",
+        "risk": "high",
+        "canaryScript": "scripts/server/install_transport_canary_service.sh --protocol shadowsocks",
+        "validationScript": "scripts/server/check_transport_canary_readiness.sh --protocol shadowsocks",
+        "ownerInput": ["решение: proxy-only или full-tunnel через TUN"],
+    },
+    "vless_reality": {
+        "engine": "Xray VLESS REALITY",
+        "windowsWork": "Упаковать xray client, profile lifecycle и safe log redaction.",
+        "serverWork": "REALITY endpoint с корректным dest/SNI и key rotation plan.",
+        "probeWork": "TLS-like reachability плюс route checks.",
+        "risk": "high",
+        "canaryScript": "scripts/server/install_transport_canary_service.sh --protocol vless_reality",
+        "validationScript": "scripts/server/check_transport_canary_readiness.sh --protocol vless_reality",
+        "ownerInput": ["подходящий dest/SNI и отдельный canary endpoint"],
+    },
+    "trojan_tls": {
+        "engine": "Trojan TLS",
+        "windowsWork": "Упаковать client engine и профиль без раскрытия password material.",
+        "serverWork": "TLS endpoint с отдельными credentials и сертификатом.",
+        "probeWork": "TLS connect plus target checks.",
+        "risk": "high",
+        "canaryScript": "scripts/server/install_transport_canary_service.sh --protocol trojan_tls",
+        "validationScript": "scripts/server/check_transport_canary_readiness.sh --protocol trojan_tls",
+        "ownerInput": ["домен и TLS certificate plan"],
+    },
+    "masque_udp": {
+        "engine": "MASQUE CONNECT-UDP",
+        "windowsWork": "Нужен зрелый Windows client engine и TUN/HTTP3 integration.",
+        "serverWork": "HTTP/3 CONNECT-UDP endpoint, auth и quota limits.",
+        "probeWork": "HTTP/3 reachability plus UDP target checks.",
+        "risk": "experimental",
+        "canaryScript": "scripts/server/install_transport_canary_service.sh --protocol masque_udp",
+        "validationScript": "scripts/server/check_transport_canary_readiness.sh --protocol masque_udp",
+        "ownerInput": ["решение по provider/client ecosystem"],
+    },
 }
 SERVER_HEALTH_STATUSES = ["healthy", "degraded", "down", "unknown"]
 SERVER_PUBLIC_MIN_HEALTH_SCORE = int(os.getenv("GREENVPN_SERVER_PUBLIC_MIN_HEALTH_SCORE", "80"))
@@ -302,6 +648,26 @@ SERVER_PUBLIC_AUTO_PAUSE_ENABLED = (
     os.getenv("GREENVPN_SERVER_PUBLIC_AUTO_PAUSE_ENABLED", "1").strip().lower()
     not in {"0", "false", "no", "off"}
 )
+SERVER_DEFAULT_BANDWIDTH_MBPS = max(
+    1,
+    int(os.getenv("GREENVPN_DEFAULT_VPN_BANDWIDTH_MBPS", "1000")),
+)
+SERVER_DEFAULT_RESERVED_MBPS = max(
+    0,
+    int(os.getenv("GREENVPN_DEFAULT_VPN_RESERVED_MBPS", "250")),
+)
+SERVER_CAPACITY_GREEN_MAX_PERCENT = max(
+    1,
+    int(os.getenv("GREENVPN_SERVER_CAPACITY_GREEN_MAX_PERCENT", "60")),
+)
+SERVER_CAPACITY_RED_MIN_PERCENT = max(
+    SERVER_CAPACITY_GREEN_MAX_PERCENT + 1,
+    int(os.getenv("GREENVPN_SERVER_CAPACITY_RED_MIN_PERCENT", "85")),
+)
+CLIENT_ENDPOINT_STICKY_HOURS = max(
+    1,
+    int(os.getenv("GREENVPN_CLIENT_ENDPOINT_STICKY_HOURS", "24")),
+)
 MONITORING_TARGET_STATUSES = ["active", "paused", "disabled"]
 MONITORING_TARGET_TYPES = [
     "web",
@@ -309,6 +675,9 @@ MONITORING_TARGET_TYPES = [
     "dns",
     "tcp",
     "tls",
+    "media",
+    "throughput",
+    "youtube_media",
     "telegram",
     "discord",
     "youtube",
@@ -328,7 +697,7 @@ SERVICE_PROBE_REQUIRED_TARGET_IDS = [
         r"\r?\n|\s*;\s*|,\s*",
         os.getenv(
             "GREENVPN_SERVICE_PROBE_REQUIRED_TARGET_IDS",
-            "green_api_healthz,production_api_healthz,youtube_web,discord_web,telegram_web",
+            "green_api_healthz,production_api_healthz,youtube_web,youtube_media,discord_web,telegram_web",
         ),
     )
     if item.strip()
@@ -636,40 +1005,109 @@ INCIDENT_SEVERITIES = {
     "medium": {"title": "Средняя", "rank": 2},
     "low": {"title": "Низкая", "rank": 1},
 }
+TARIFF_POLICY_VERSION = "2026-05-14-flex-v3"
+UNIT_ECONOMICS_DEFAULT_FIXED_COST_RUB = max(
+    0,
+    int(os.getenv("GREENVPN_FIXED_MONTHLY_COST_RUB", "16000")),
+)
+UNIT_ECONOMICS_NET_REVENUE_RATIO_BPS = max(
+    1000,
+    min(10000, int(os.getenv("GREENVPN_NET_REVENUE_RATIO_BPS", "7600"))),
+)
+UNIT_ECONOMICS_TARGET_USERS_PER_GBPS_NODE = max(
+    1,
+    int(os.getenv("GREENVPN_TARGET_USERS_PER_GBPS_NODE", "300")),
+)
+UNIT_ECONOMICS_STRETCH_USERS_PER_GBPS_NODE = max(
+    UNIT_ECONOMICS_TARGET_USERS_PER_GBPS_NODE,
+    int(os.getenv("GREENVPN_STRETCH_USERS_PER_GBPS_NODE", "600")),
+)
 TRAFFIC_GB_POINTS = [
-    (1, 59),
-    (5, 79),
-    (20, 149),
-    (50, 229),
-    (100, 329),
-    (200, 429),
-    (500, 599),
+    (1, 99),
+    (20, 119),
+    (50, 149),
+    (150, 199),
+    (350, 259),
+    (800, 299),
 ]
 TRAFFIC_PACK_BASE = {
-    "gb5": {"title": "5 ГБ", "gb": 5, "priceRub": 79},
-    "gb20": {"title": "20 ГБ", "gb": 20, "priceRub": 149},
-    "gb50": {"title": "50 ГБ", "gb": 50, "priceRub": 229},
-    "gb100": {"title": "100 ГБ", "gb": 100, "priceRub": 329},
-    "unlimited": {"title": "Безлимит", "gb": None, "priceRub": 549},
+    "gb20": {"title": "Старт", "gb": 20, "priceRub": 119, "legacyCode": True},
+    "gb50": {"title": "Лёгкий", "gb": 50, "priceRub": 149},
+    "gb150": {"title": "Оптимальный", "gb": 150, "priceRub": 199},
+    "gb350": {"title": "Активный", "gb": 350, "priceRub": 259},
+    "fairuse800": {"title": "Максимум", "gb": 800, "priceRub": 299},
+    "unlimited": {"title": "Максимум", "gb": 800, "priceRub": 299, "fairUse": True},
+}
+TARIFF_SPEED_PROFILES = {
+    "light": {
+        "title": "Лёгкий",
+        "maxGb": 50,
+        "sustainedMbps": 25,
+        "burstMbps": 100,
+        "priorityClass": "paid_light",
+        "priorityWeight": 30,
+        "includedDevices": 1,
+    },
+    "optimal": {
+        "title": "Оптимальный",
+        "maxGb": 150,
+        "sustainedMbps": 50,
+        "burstMbps": 150,
+        "priorityClass": "paid_standard",
+        "priorityWeight": 55,
+        "includedDevices": 1,
+    },
+    "active": {
+        "title": "Активный",
+        "maxGb": 350,
+        "sustainedMbps": 100,
+        "burstMbps": 250,
+        "priorityClass": "paid_plus",
+        "priorityWeight": 75,
+        "includedDevices": 2,
+    },
+    "maximum": {
+        "title": "Максимум",
+        "maxGb": 800,
+        "sustainedMbps": 150,
+        "burstMbps": 300,
+        "priorityClass": "paid_max",
+        "priorityWeight": 100,
+        "includedDevices": 2,
+    },
 }
 UNLIMITED_APP_CATALOG = [
-    {"code": "youtube", "title": "YouTube"},
-    {"code": "telegram", "title": "Telegram"},
-    {"code": "tiktok", "title": "TikTok"},
-    {"code": "instagram", "title": "Instagram"},
-    {"code": "discord", "title": "Discord"},
-    {"code": "steam", "title": "Steam"},
-    {"code": "netflix", "title": "Netflix"},
+    {"code": "youtube", "title": "YouTube", "priceRub": 29},
+    {"code": "telegram", "title": "Telegram", "priceRub": 29},
+    {"code": "tiktok", "title": "TikTok", "priceRub": 29},
+    {"code": "instagram", "title": "Instagram", "priceRub": 29},
+    {"code": "discord", "title": "Discord", "priceRub": 19},
+    {"code": "steam", "title": "Steam", "priceRub": 10},
+    {"code": "netflix", "title": "Netflix", "priceRub": 29},
 ]
 UNLIMITED_APP_CODES = {item["code"] for item in UNLIMITED_APP_CATALOG}
+UNLIMITED_APP_PRICE_RUB = {
+    item["code"]: int(item.get("priceRub") or 0)
+    for item in UNLIMITED_APP_CATALOG
+}
 ADDITIONAL_DEVICE_RUB = 39
 DEDICATED_IP_RUB = 149
 INCLUDED_FEATURES = [
     "no_ads",
     "smart_routing",
+    "paid_android_quick_settings_tile",
 ]
 PROMO_DISCOUNT_TYPES = {"percent", "fixed"}
-PROMO_PLAN_CODES = {"starter", "base", "plus", "unlimited"}
+PROMO_PLAN_CODES = {
+    "starter",
+    "base",
+    "plus",
+    "unlimited",
+    "light",
+    "optimal",
+    "active",
+    "maximum",
+}
 PROMO_LAUNCH_RECOMMENDED_CODE = "START20"
 PROMO_LAUNCH_RECOMMENDED_PERCENT = 20
 PROMO_LAUNCH_RECOMMENDED_LIMIT = 100
@@ -677,7 +1115,7 @@ PROMO_LAUNCH_RECOMMENDED_WINDOW_DAYS = 30
 PROMO_LAUNCH_MAX_PUBLIC_PERCENT = 30
 PROMO_LAUNCH_MAX_FIXED_DISCOUNT_RUB = 200
 PROMO_LAUNCH_MAX_WINDOW_DAYS = 60
-PROMO_LAUNCH_RECOMMENDED_PLANS = ["starter", "base", "plus"]
+PROMO_LAUNCH_RECOMMENDED_PLANS = ["light", "optimal", "active"]
 
 app = FastAPI(title=APP_TITLE, version=APP_VERSION)
 app.add_middleware(
@@ -712,6 +1150,17 @@ class ClientConfigIn(BaseModel):
     serverId: Optional[str] = None
 
 
+class AdChallengeStartIn(BaseModel):
+    deviceUid: str
+    platform: Optional[str] = None
+    provider: Optional[str] = None
+    appVersion: Optional[str] = None
+
+
+class AdChallengeCompleteIn(BaseModel):
+    token: str
+
+
 class AdminDeviceToggleIn(BaseModel):
     reason: Optional[str] = None
 
@@ -722,6 +1171,11 @@ class AdminSubscriptionIn(BaseModel):
     maxDevices: int
     isActive: bool = True
     expiresAt: Optional[str] = None
+
+
+class AdminUserDeleteIn(BaseModel):
+    reason: str
+    confirmEmail: Optional[str] = None
 
 
 class TariffSelectionIn(BaseModel):
@@ -926,7 +1380,37 @@ class AdminServerCatalogEntryIn(BaseModel):
     priority: Optional[int] = None
     isActive: Optional[bool] = None
     isPublic: Optional[bool] = None
+    plannedBandwidthMbps: Optional[int] = None
+    reservedBandwidthMbps: Optional[int] = None
+    currentLoadMbps: Optional[int] = None
+    activeClients: Optional[int] = None
+    assignedUsers: Optional[int] = None
+    loadUpdatedAt: Optional[str] = None
     notes: Optional[str] = None
+
+
+class AdminServerCapacityIn(BaseModel):
+    plannedBandwidthMbps: Optional[int] = None
+    reservedBandwidthMbps: Optional[int] = None
+    currentLoadMbps: Optional[int] = None
+    activeClients: Optional[int] = None
+    assignedUsers: Optional[int] = None
+    loadUpdatedAt: Optional[str] = None
+
+
+class AdminPeerTrafficSampleIn(BaseModel):
+    publicKey: Optional[str] = None
+    peerIp: Optional[str] = None
+    rxBytes: int = 0
+    txBytes: int = 0
+    latestHandshakeAt: Optional[str] = None
+
+
+class AdminPeerTrafficReportIn(BaseModel):
+    serverId: Optional[str] = "current_wg0"
+    iface: Optional[str] = "wg0"
+    observedAt: Optional[str] = None
+    peers: list[AdminPeerTrafficSampleIn] = []
 
 
 class AdminServerCatalogDraftIn(BaseModel):
@@ -991,6 +1475,37 @@ class AdminServiceAvailabilityObservationIn(BaseModel):
     observedAt: Optional[str] = None
 
 
+class AdminResilienceRouteObservationIn(BaseModel):
+    endpointId: Optional[str] = None
+    protocol: str
+    transport: Optional[str] = None
+    targetId: str
+    service: Optional[str] = None
+    probeId: Optional[str] = None
+    probeRegion: Optional[str] = None
+    ok: Optional[bool] = None
+    status: Optional[str] = None
+    latencyMs: Optional[int] = None
+    errorCode: Optional[str] = None
+    message: Optional[str] = None
+    details: Optional[dict] = None
+    observedAt: Optional[str] = None
+
+
+class ClientRouteEventIn(BaseModel):
+    deviceUid: str
+    serverId: Optional[str] = None
+    protocol: Optional[str] = "wireguard_udp"
+    transport: Optional[str] = None
+    stage: str
+    ok: bool
+    latencyMs: Optional[int] = None
+    errorCode: Optional[str] = None
+    message: Optional[str] = None
+    details: Optional[dict] = None
+    appVersion: Optional[str] = None
+
+
 class AdminFeatureFlagIn(BaseModel):
     key: Optional[str] = None
     title: Optional[str] = None
@@ -1030,8 +1545,11 @@ def parse_dt(value: Optional[str]) -> Optional[datetime]:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except (TypeError, ValueError):
         return None
 
 
@@ -1541,6 +2059,12 @@ def init_db() -> None:
                 priority INTEGER NOT NULL DEFAULT 100,
                 is_active INTEGER NOT NULL DEFAULT 0,
                 is_public INTEGER NOT NULL DEFAULT 0,
+                planned_bandwidth_mbps INTEGER,
+                reserved_bandwidth_mbps INTEGER,
+                current_load_mbps INTEGER,
+                active_clients INTEGER,
+                assigned_users INTEGER,
+                load_updated_at TEXT,
                 notes TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -1571,10 +2095,103 @@ def init_db() -> None:
             "publication_paused_by",
             "publication_paused_by TEXT",
         )
+        ensure_column(
+            conn,
+            "server_catalog_entries",
+            "planned_bandwidth_mbps",
+            "planned_bandwidth_mbps INTEGER",
+        )
+        ensure_column(
+            conn,
+            "server_catalog_entries",
+            "reserved_bandwidth_mbps",
+            "reserved_bandwidth_mbps INTEGER",
+        )
+        ensure_column(
+            conn,
+            "server_catalog_entries",
+            "current_load_mbps",
+            "current_load_mbps INTEGER",
+        )
+        ensure_column(
+            conn,
+            "server_catalog_entries",
+            "active_clients",
+            "active_clients INTEGER",
+        )
+        ensure_column(
+            conn,
+            "server_catalog_entries",
+            "assigned_users",
+            "assigned_users INTEGER",
+        )
+        ensure_column(
+            conn,
+            "server_catalog_entries",
+            "load_updated_at",
+            "load_updated_at TEXT",
+        )
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_server_catalog_entries_lookup
             ON server_catalog_entries(is_active, is_public, status, priority)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS client_endpoint_assignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                device_uid TEXT NOT NULL,
+                server_id TEXT NOT NULL,
+                protocol TEXT NOT NULL DEFAULT 'wireguard_udp',
+                selected_by TEXT NOT NULL,
+                assignment_reason TEXT,
+                sticky_until_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(user_id, device_uid)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_client_endpoint_assignments_lookup
+            ON client_endpoint_assignments(server_id, protocol, sticky_until_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS device_traffic_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                device_uid TEXT NOT NULL,
+                client_public_key TEXT,
+                server_id TEXT NOT NULL,
+                peer_ip TEXT,
+                period_key TEXT NOT NULL,
+                rx_bytes INTEGER NOT NULL DEFAULT 0,
+                tx_bytes INTEGER NOT NULL DEFAULT 0,
+                last_rx_bytes INTEGER NOT NULL DEFAULT 0,
+                last_tx_bytes INTEGER NOT NULL DEFAULT 0,
+                last_handshake_at TEXT,
+                last_report_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(device_uid, server_id, period_key)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_device_traffic_usage_user_period
+            ON device_traffic_usage(user_id, period_key, updated_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_device_traffic_usage_public_key
+            ON device_traffic_usage(client_public_key, period_key)
             """
         )
         conn.execute(
@@ -1681,6 +2298,145 @@ def init_db() -> None:
             """
             CREATE INDEX IF NOT EXISTS idx_service_availability_observations_probe
             ON service_availability_observations(probe_region, observed_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS resilience_route_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                endpoint_id TEXT NOT NULL,
+                protocol TEXT NOT NULL,
+                transport TEXT,
+                target_id TEXT NOT NULL,
+                service TEXT,
+                probe_id TEXT,
+                probe_region TEXT,
+                ok INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL,
+                latency_ms INTEGER,
+                error_code TEXT,
+                message TEXT,
+                details_json TEXT,
+                observed_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_resilience_route_observations_lookup
+            ON resilience_route_observations(protocol, endpoint_id, target_id, observed_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_resilience_route_observations_status
+            ON resilience_route_observations(status, observed_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_resilience_route_observations_probe
+            ON resilience_route_observations(probe_region, protocol, observed_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS client_route_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                device_uid TEXT NOT NULL,
+                server_id TEXT,
+                protocol TEXT NOT NULL,
+                transport TEXT,
+                stage TEXT NOT NULL,
+                ok INTEGER NOT NULL DEFAULT 0,
+                latency_ms INTEGER,
+                error_code TEXT,
+                message TEXT,
+                details_json TEXT,
+                app_version TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_client_route_events_lookup
+            ON client_route_events(protocol, server_id, stage, created_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_client_route_events_device
+            ON client_route_events(user_id, device_uid, created_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_client_route_events_status
+            ON client_route_events(ok, created_at)
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ad_challenges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                public_id TEXT NOT NULL UNIQUE,
+                user_id INTEGER NOT NULL,
+                device_uid TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                token_hash TEXT NOT NULL,
+                reward_url TEXT,
+                grant_public_id TEXT,
+                app_version TEXT,
+                expires_at TEXT NOT NULL,
+                completed_at TEXT,
+                consumed_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ad_challenges_lookup
+            ON ad_challenges(user_id, device_uid, status, expires_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ad_challenges_public_id
+            ON ad_challenges(public_id)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS free_access_grants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                public_id TEXT NOT NULL UNIQUE,
+                challenge_public_id TEXT,
+                user_id INTEGER NOT NULL,
+                device_uid TEXT NOT NULL,
+                source TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                max_connects INTEGER NOT NULL DEFAULT 1,
+                connects_used INTEGER NOT NULL DEFAULT 0,
+                starts_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                consumed_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_free_access_grants_lookup
+            ON free_access_grants(user_id, device_uid, status, expires_at)
             """
         )
 
@@ -2123,6 +2879,12 @@ def subscription_status(row) -> dict:
             payment_method_saved = bool(row["provider_payment_method_id"]) if "provider_payment_method_id" in row.keys() else False
         except Exception:
             payment_method_saved = False
+    current_quote = None
+    if selection:
+        try:
+            current_quote = quote_tariff(selection)
+        except Exception:
+            current_quote = None
 
     return {
         "planName": row["plan_name"] if row else "None",
@@ -2135,24 +2897,812 @@ def subscription_status(row) -> dict:
         "paymentMethodSaved": payment_method_saved,
         "selection": selection,
         "includedFeatures": INCLUDED_FEATURES,
+        "policyVersion": TARIFF_POLICY_VERSION,
+        "trafficLimitGb": (current_quote or {}).get("trafficLimitGb"),
+        "speedSustainedMbps": (current_quote or {}).get("speedSustainedMbps"),
+        "speedBurstMbps": (current_quote or {}).get("speedBurstMbps"),
+        "priorityClass": (current_quote or {}).get("priorityClass"),
+        "fairUsePolicy": (current_quote or {}).get("fairUsePolicy"),
+        "rateLimitPolicy": (current_quote or {}).get("rateLimitPolicy"),
+    }
+
+
+FREE_AD_PLAN_CODES = {"trial", "free", "free_start", "support_trial", DEFAULT_PLAN_CODE}
+
+
+def free_ad_platform_enabled(platform: Optional[str]) -> bool:
+    if not FREE_AD_GATE_ENABLED:
+        return False
+    normalized = (platform or "").strip().lower()
+    return not FREE_AD_GATE_PLATFORMS or normalized in FREE_AD_GATE_PLATFORMS
+
+
+def free_ad_client_supports_gate(app_version: Optional[str]) -> bool:
+    if not FREE_AD_GATE_CLIENT_MARKER:
+        return True
+    return FREE_AD_GATE_CLIENT_MARKER in (app_version or "").strip().lower()
+
+
+def subscription_is_paid_active(sub: dict) -> bool:
+    if not sub.get("isActive"):
+        return False
+    plan_code = str(sub.get("planCode") or "").strip().lower()
+    try:
+        amount = int(sub.get("monthlyPriceRub") or 0)
+    except Exception:
+        amount = 0
+    return amount > 0 and plan_code not in FREE_AD_PLAN_CODES
+
+
+def free_ad_gate_required_for(
+    sub: dict,
+    platform: Optional[str],
+    app_version: Optional[str] = None,
+) -> bool:
+    return (
+        free_ad_platform_enabled(platform)
+        and free_ad_client_supports_gate(app_version)
+        and not subscription_is_paid_active(sub)
+    )
+
+
+def free_ad_token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def expire_free_ad_gate_rows(conn: sqlite3.Connection, now: Optional[datetime] = None) -> None:
+    current = now or utc_now()
+    current_iso = current.isoformat()
+    conn.execute(
+        """
+        UPDATE ad_challenges
+        SET status = 'expired', updated_at = ?
+        WHERE status = 'pending' AND expires_at <= ?
+        """,
+        (current_iso, current_iso),
+    )
+    conn.execute(
+        """
+        UPDATE free_access_grants
+        SET status = 'expired', updated_at = ?
+        WHERE status = 'active' AND expires_at <= ?
+        """,
+        (current_iso, current_iso),
+    )
+
+
+def free_access_grant_payload(row) -> Optional[dict]:
+    if row is None:
+        return None
+    remaining = max(0, int(row["max_connects"] or 1) - int(row["connects_used"] or 0))
+    return {
+        "grantId": row["public_id"],
+        "status": row["status"],
+        "source": row["source"],
+        "deviceUid": row["device_uid"],
+        "startsAt": row["starts_at"],
+        "expiresAt": row["expires_at"],
+        "maxConnects": int(row["max_connects"] or 1),
+        "connectsUsed": int(row["connects_used"] or 0),
+        "connectsRemaining": remaining,
+    }
+
+
+def active_free_access_grant_row(
+    conn: sqlite3.Connection,
+    user_id: int,
+    device_uid: str,
+    now: Optional[datetime] = None,
+):
+    current = now or utc_now()
+    expire_free_ad_gate_rows(conn, current)
+    return conn.execute(
+        """
+        SELECT *
+        FROM free_access_grants
+        WHERE user_id = ?
+          AND device_uid = ?
+          AND status = 'active'
+          AND starts_at <= ?
+          AND expires_at > ?
+          AND connects_used < max_connects
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (user_id, device_uid, current.isoformat(), current.isoformat()),
+    ).fetchone()
+
+
+def free_ad_gate_policy(
+    user_id: int,
+    device_uid: str,
+    platform: Optional[str],
+    sub: dict,
+    app_version: Optional[str] = None,
+) -> dict:
+    platform_normalized = (platform or "").strip().lower()
+    client_supported = free_ad_client_supports_gate(app_version)
+    required_by_plan = free_ad_gate_required_for(sub, platform_normalized, app_version)
+    grant = None
+    if FREE_AD_GATE_ENABLED:
+        with db() as conn:
+            grant = active_free_access_grant_row(
+                conn,
+                int(user_id),
+                device_uid.strip(),
+                now=utc_now(),
+            )
+            conn.commit()
+
+    has_grant = grant is not None
+    required = required_by_plan and not has_grant
+    return {
+        "enabled": FREE_AD_GATE_ENABLED,
+        "required": required,
+        "requiredByPlan": required_by_plan,
+        "provider": FREE_AD_GATE_PROVIDER,
+        "platform": platform_normalized,
+        "clientSupported": client_supported,
+        "clientMarker": FREE_AD_GATE_CLIENT_MARKER,
+        "reason": "ad_reward_required" if required else None,
+        "message": (
+            "Нужно посмотреть рекламу перед подключением бесплатного режима."
+            if required
+            else "Реклама перед подключением не требуется."
+        ),
+        "grant": free_access_grant_payload(grant),
+        "grantTtlMinutes": FREE_AD_GRANT_TTL_MINUTES,
+        "grantMaxConnects": FREE_AD_GRANT_CONNECTS,
+        "androidRewarded": {
+            "enabled": bool(
+                platform_normalized == "android"
+                and client_supported
+                and FREE_AD_ANDROID_REWARDED_ENABLED
+                and FREE_AD_ANDROID_REWARDED_AD_UNIT_ID
+            ),
+            "provider": FREE_AD_ANDROID_REWARDED_PROVIDER,
+            "adUnitId": (
+                FREE_AD_ANDROID_REWARDED_AD_UNIT_ID
+                if (
+                    platform_normalized == "android"
+                    and client_supported
+                    and FREE_AD_ANDROID_REWARDED_ENABLED
+                )
+                else ""
+            ),
+        },
+    }
+
+
+def create_free_ad_challenge(user: sqlite3.Row, payload: AdChallengeStartIn) -> dict:
+    device_uid = payload.deviceUid.strip()
+    if not device_uid:
+        raise HTTPException(status_code=400, detail="deviceUid пустой.")
+
+    with db() as conn:
+        device = conn.execute(
+            "SELECT * FROM devices WHERE device_uid = ?",
+            (device_uid,),
+        ).fetchone()
+        if device is None:
+            raise HTTPException(status_code=404, detail="Device not found. Call bootstrap first.")
+        if int(device["user_id"]) != int(user["id"]):
+            raise HTTPException(status_code=403, detail="Device belongs to another user.")
+
+    platform = (
+        (payload.platform or "").strip().lower()
+        or str(device["platform"] or "").strip().lower()
+        or "windows"
+    )
+    sub = subscription_status(get_subscription_row(int(user["id"])))
+    policy = free_ad_gate_policy(
+        int(user["id"]),
+        device_uid,
+        platform,
+        sub,
+        app_version=(payload.appVersion or device["app_version"] or ""),
+    )
+    if not policy["required"]:
+        return {
+            "ok": True,
+            "challenge": None,
+            "adGate": policy,
+            "message": "Реклама сейчас не требуется.",
+        }
+
+    now = utc_now()
+    expires_at = now + timedelta(minutes=FREE_AD_CHALLENGE_TTL_MINUTES)
+    public_id = "ad_" + secrets.token_urlsafe(18).replace("-", "").replace("_", "")[:24]
+    token = secrets.token_urlsafe(24)
+    reward_url = (
+        f"{PUBLIC_API_BASE_URL}/ads/reward/{urllib.parse.quote(public_id)}"
+        f"?t={urllib.parse.quote(token)}"
+    )
+    provider = (payload.provider or FREE_AD_GATE_PROVIDER).strip().lower() or "test_web"
+
+    with db() as conn:
+        expire_free_ad_gate_rows(conn, now)
+        conn.execute(
+            """
+            INSERT INTO ad_challenges(
+                public_id, user_id, device_uid, platform, provider, status,
+                token_hash, reward_url, app_version, expires_at,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                public_id,
+                int(user["id"]),
+                device_uid,
+                platform,
+                provider,
+                "pending",
+                free_ad_token_hash(token),
+                reward_url,
+                (payload.appVersion or "").strip() or None,
+                expires_at.isoformat(),
+                now.isoformat(),
+                now.isoformat(),
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM ad_challenges WHERE public_id = ?",
+            (public_id,),
+        ).fetchone()
+
+    return {
+        "ok": True,
+        "challenge": ad_challenge_payload(row, include_private=False),
+        "adGate": policy,
+        "message": "Откройте рекламный экран и дождитесь зачёта просмотра.",
+    }
+
+
+def ad_challenge_payload(row, include_private: bool = False) -> Optional[dict]:
+    if row is None:
+        return None
+    payload = {
+        "challengeId": row["public_id"],
+        "deviceUid": row["device_uid"],
+        "platform": row["platform"],
+        "provider": row["provider"],
+        "status": row["status"],
+        "rewardUrl": row["reward_url"],
+        "grantId": row["grant_public_id"],
+        "expiresAt": row["expires_at"],
+        "completedAt": row["completed_at"],
+        "consumedAt": row["consumed_at"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+    if include_private:
+        payload["tokenHash"] = row["token_hash"]
+    return payload
+
+
+def get_ad_challenge_for_user(public_id: str, user_id: int) -> dict:
+    with db() as conn:
+        expire_free_ad_gate_rows(conn, utc_now())
+        row = conn.execute(
+            "SELECT * FROM ad_challenges WHERE public_id = ? AND user_id = ?",
+            (public_id.strip(), int(user_id)),
+        ).fetchone()
+        conn.commit()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Рекламный challenge не найден.")
+    return {
+        "ok": True,
+        "challenge": ad_challenge_payload(row),
+    }
+
+
+def complete_ad_challenge(public_id: str, token: str) -> dict:
+    safe_public_id = public_id.strip()
+    safe_token = token.strip()
+    if not safe_public_id or not safe_token:
+        raise HTTPException(status_code=400, detail="Некорректный рекламный challenge.")
+
+    now = utc_now()
+    with db() as conn:
+        expire_free_ad_gate_rows(conn, now)
+        row = conn.execute(
+            "SELECT * FROM ad_challenges WHERE public_id = ?",
+            (safe_public_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Рекламный challenge не найден.")
+        if row["token_hash"] != free_ad_token_hash(safe_token):
+            raise HTTPException(status_code=403, detail="Рекламный token не совпал.")
+        if row["status"] == "expired":
+            raise HTTPException(status_code=410, detail="Рекламный challenge истёк.")
+
+        existing_grant = None
+        if row["grant_public_id"]:
+            existing_grant = conn.execute(
+                "SELECT * FROM free_access_grants WHERE public_id = ?",
+                (row["grant_public_id"],),
+            ).fetchone()
+
+        if existing_grant is None:
+            grant_id = "grant_" + secrets.token_urlsafe(18).replace("-", "").replace("_", "")[:24]
+            starts_at = now
+            expires_at = now + timedelta(minutes=FREE_AD_GRANT_TTL_MINUTES)
+            conn.execute(
+                """
+                INSERT INTO free_access_grants(
+                    public_id, challenge_public_id, user_id, device_uid, source,
+                    status, max_connects, connects_used, starts_at, expires_at,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    grant_id,
+                    safe_public_id,
+                    int(row["user_id"]),
+                    row["device_uid"],
+                    row["provider"],
+                    "active",
+                    FREE_AD_GRANT_CONNECTS,
+                    0,
+                    starts_at.isoformat(),
+                    expires_at.isoformat(),
+                    now.isoformat(),
+                    now.isoformat(),
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE ad_challenges
+                SET status = 'completed', completed_at = COALESCE(completed_at, ?),
+                    grant_public_id = ?, updated_at = ?
+                WHERE public_id = ?
+                """,
+                (now.isoformat(), grant_id, now.isoformat(), safe_public_id),
+            )
+            conn.commit()
+            existing_grant = conn.execute(
+                "SELECT * FROM free_access_grants WHERE public_id = ?",
+                (grant_id,),
+            ).fetchone()
+        else:
+            conn.execute(
+                """
+                UPDATE ad_challenges
+                SET status = 'completed', completed_at = COALESCE(completed_at, ?),
+                    updated_at = ?
+                WHERE public_id = ?
+                """,
+                (now.isoformat(), now.isoformat(), safe_public_id),
+            )
+            conn.commit()
+            existing_grant = conn.execute(
+                "SELECT * FROM free_access_grants WHERE public_id = ?",
+                (existing_grant["public_id"],),
+            ).fetchone()
+
+        challenge = conn.execute(
+            "SELECT * FROM ad_challenges WHERE public_id = ?",
+            (safe_public_id,),
+        ).fetchone()
+
+    return {
+        "ok": True,
+        "challenge": ad_challenge_payload(challenge),
+        "grant": free_access_grant_payload(existing_grant),
+        "message": "Просмотр засчитан. Можно вернуться в Green VPN и подключиться.",
+    }
+
+
+def consume_free_access_grant(user_id: int, device_uid: str) -> Optional[dict]:
+    now = utc_now()
+    with db() as conn:
+        grant = active_free_access_grant_row(conn, int(user_id), device_uid.strip(), now=now)
+        if grant is None:
+            conn.commit()
+            return None
+        next_used = int(grant["connects_used"] or 0) + 1
+        next_status = "consumed" if next_used >= int(grant["max_connects"] or 1) else "active"
+        conn.execute(
+            """
+            UPDATE free_access_grants
+            SET connects_used = ?, status = ?, consumed_at = CASE
+                    WHEN ? = 'consumed' THEN COALESCE(consumed_at, ?)
+                    ELSE consumed_at
+                END,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (next_used, next_status, next_status, now.isoformat(), now.isoformat(), int(grant["id"])),
+        )
+        conn.execute(
+            """
+            UPDATE ad_challenges
+            SET consumed_at = COALESCE(consumed_at, ?), updated_at = ?
+            WHERE grant_public_id = ?
+            """,
+            (now.isoformat(), now.isoformat(), grant["public_id"]),
+        )
+        conn.commit()
+        updated = conn.execute(
+            "SELECT * FROM free_access_grants WHERE id = ?",
+            (int(grant["id"]),),
+        ).fetchone()
+    return free_access_grant_payload(updated)
+
+
+def traffic_period_key(value: Optional[datetime] = None) -> str:
+    dt = value or utc_now()
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%Y-%m")
+
+
+def bytes_to_gb(value: int) -> float:
+    return round(max(0, int(value or 0)) / (1024 ** 3), 3)
+
+
+def subscription_traffic_limit_bytes(subscription: dict) -> Optional[int]:
+    try:
+        limit_gb = subscription.get("trafficLimitGb")
+        if limit_gb is None:
+            return None
+        return max(0, int(limit_gb)) * (1024 ** 3)
+    except Exception:
+        return None
+
+
+def subscription_traffic_usage_status(
+    user_id: int,
+    subscription: Optional[dict] = None,
+    period_key: Optional[str] = None,
+) -> dict:
+    safe_period_key = clean_limited_text(period_key, 16).strip() or traffic_period_key()
+    subscription = subscription or subscription_status(get_subscription_row(user_id))
+    with db() as conn:
+        totals = conn.execute(
+            """
+            SELECT
+                COALESCE(SUM(rx_bytes), 0) AS rx_bytes,
+                COALESCE(SUM(tx_bytes), 0) AS tx_bytes,
+                COUNT(*) AS device_rows,
+                MAX(updated_at) AS updated_at
+            FROM device_traffic_usage
+            WHERE user_id = ? AND period_key = ?
+            """,
+            (int(user_id), safe_period_key),
+        ).fetchone()
+        device_rows = conn.execute(
+            """
+            SELECT
+                device_uid,
+                server_id,
+                peer_ip,
+                rx_bytes,
+                tx_bytes,
+                last_report_at,
+                updated_at
+            FROM device_traffic_usage
+            WHERE user_id = ? AND period_key = ?
+            ORDER BY (rx_bytes + tx_bytes) DESC, updated_at DESC
+            """,
+            (int(user_id), safe_period_key),
+        ).fetchall()
+
+    rx_bytes = int(totals["rx_bytes"] or 0) if totals else 0
+    tx_bytes = int(totals["tx_bytes"] or 0) if totals else 0
+    used_bytes = rx_bytes + tx_bytes
+    limit_bytes = subscription_traffic_limit_bytes(subscription)
+    remaining_bytes = None if limit_bytes is None else max(0, limit_bytes - used_bytes)
+    used_percent = None
+    if limit_bytes:
+        used_percent = round((used_bytes / limit_bytes) * 100, 1)
+
+    return {
+        "periodKey": safe_period_key,
+        "usedBytes": used_bytes,
+        "usedGb": bytes_to_gb(used_bytes),
+        "rxBytes": rx_bytes,
+        "txBytes": tx_bytes,
+        "trafficLimitGb": subscription.get("trafficLimitGb"),
+        "limitBytes": limit_bytes,
+        "remainingBytes": remaining_bytes,
+        "remainingGb": None if remaining_bytes is None else bytes_to_gb(remaining_bytes),
+        "usedPercent": used_percent,
+        "overLimit": bool(limit_bytes is not None and used_bytes >= limit_bytes),
+        "updatedAt": totals["updated_at"] if totals else None,
+        "devices": [
+            {
+                "deviceUid": row["device_uid"],
+                "serverId": row["server_id"],
+                "peerIp": row["peer_ip"],
+                "usedBytes": int(row["rx_bytes"] or 0) + int(row["tx_bytes"] or 0),
+                "usedGb": bytes_to_gb(int(row["rx_bytes"] or 0) + int(row["tx_bytes"] or 0)),
+                "rxBytes": int(row["rx_bytes"] or 0),
+                "txBytes": int(row["tx_bytes"] or 0),
+                "lastReportAt": row["last_report_at"],
+                "updatedAt": row["updated_at"],
+            }
+            for row in device_rows
+        ],
+    }
+
+
+def apply_peer_traffic_report(payload: AdminPeerTrafficReportIn) -> dict:
+    observed_dt = parse_dt(payload.observedAt) or utc_now()
+    if observed_dt.tzinfo is None:
+        observed_dt = observed_dt.replace(tzinfo=timezone.utc)
+    observed_at = observed_dt.astimezone(timezone.utc).isoformat()
+    period_key = traffic_period_key(observed_dt)
+    server_id = clean_limited_text(payload.serverId, 120).strip() or "current_wg0"
+    iface = clean_limited_text(payload.iface, 40).strip() or WG_INTERFACE
+    now = utc_now_iso()
+    matched = 0
+    baseline_only = 0
+    counter_resets = 0
+    delta_rx_total = 0
+    delta_tx_total = 0
+    unknown_peers: list[dict] = []
+    updated_devices: list[dict] = []
+
+    with db() as conn:
+        for sample in (payload.peers or [])[:2000]:
+            public_key = clean_limited_text(sample.publicKey, 140).strip()
+            peer_ip = clean_limited_text(sample.peerIp, 80).strip().split("/", 1)[0]
+            rx_bytes = max(0, int(sample.rxBytes or 0))
+            tx_bytes = max(0, int(sample.txBytes or 0))
+            latest_handshake_at = None
+            raw_handshake = clean_limited_text(sample.latestHandshakeAt, 80).strip()
+            parsed_handshake = None
+            if raw_handshake.isdigit() and int(raw_handshake) > 0:
+                parsed_handshake = datetime.fromtimestamp(int(raw_handshake), tz=timezone.utc)
+            else:
+                parsed_handshake = parse_dt(raw_handshake)
+            if parsed_handshake is not None:
+                if parsed_handshake.tzinfo is None:
+                    parsed_handshake = parsed_handshake.replace(tzinfo=timezone.utc)
+                latest_handshake_at = parsed_handshake.astimezone(timezone.utc).isoformat()
+
+            device = None
+            if public_key:
+                device = conn.execute(
+                    """
+                    SELECT d.*, u.email
+                    FROM devices d
+                    JOIN users u ON u.id = d.user_id
+                    WHERE d.client_public_key = ?
+                    LIMIT 1
+                    """,
+                    (public_key,),
+                ).fetchone()
+            if device is None and peer_ip:
+                device = conn.execute(
+                    """
+                    SELECT d.*, u.email
+                    FROM devices d
+                    JOIN users u ON u.id = d.user_id
+                    WHERE d.assigned_ip = ? OR d.assigned_ip = ?
+                    LIMIT 1
+                    """,
+                    (peer_ip, f"{peer_ip}/32"),
+                ).fetchone()
+
+            if device is None:
+                unknown_peers.append(
+                    {
+                        "publicKeyPrefix": public_key[:10] if public_key else "",
+                        "peerIp": peer_ip,
+                    }
+                )
+                continue
+
+            matched += 1
+            usage_row = conn.execute(
+                """
+                SELECT *
+                FROM device_traffic_usage
+                WHERE device_uid = ? AND server_id = ? AND period_key = ?
+                """,
+                (device["device_uid"], server_id, period_key),
+            ).fetchone()
+
+            if usage_row is None:
+                delta_rx = 0
+                delta_tx = 0
+                baseline_only += 1
+                conn.execute(
+                    """
+                    INSERT INTO device_traffic_usage(
+                        user_id, device_uid, client_public_key, server_id, peer_ip,
+                        period_key, rx_bytes, tx_bytes, last_rx_bytes, last_tx_bytes,
+                        last_handshake_at, last_report_at, created_at, updated_at
+                    )
+                    VALUES(?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        int(device["user_id"]),
+                        device["device_uid"],
+                        public_key or device["client_public_key"],
+                        server_id,
+                        peer_ip or device["assigned_ip"],
+                        period_key,
+                        rx_bytes,
+                        tx_bytes,
+                        latest_handshake_at,
+                        observed_at,
+                        now,
+                        now,
+                    ),
+                )
+            else:
+                last_rx = int(usage_row["last_rx_bytes"] or 0)
+                last_tx = int(usage_row["last_tx_bytes"] or 0)
+                if rx_bytes >= last_rx:
+                    delta_rx = rx_bytes - last_rx
+                else:
+                    delta_rx = rx_bytes
+                    counter_resets += 1
+                if tx_bytes >= last_tx:
+                    delta_tx = tx_bytes - last_tx
+                else:
+                    delta_tx = tx_bytes
+                    counter_resets += 1
+                conn.execute(
+                    """
+                    UPDATE device_traffic_usage
+                    SET client_public_key = ?,
+                        peer_ip = ?,
+                        rx_bytes = rx_bytes + ?,
+                        tx_bytes = tx_bytes + ?,
+                        last_rx_bytes = ?,
+                        last_tx_bytes = ?,
+                        last_handshake_at = ?,
+                        last_report_at = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        public_key or usage_row["client_public_key"],
+                        peer_ip or usage_row["peer_ip"],
+                        delta_rx,
+                        delta_tx,
+                        rx_bytes,
+                        tx_bytes,
+                        latest_handshake_at,
+                        observed_at,
+                        now,
+                        usage_row["id"],
+                    ),
+                )
+
+            conn.execute(
+                """
+                UPDATE devices
+                SET last_seen_at = COALESCE(?, last_seen_at), updated_at = ?
+                WHERE id = ?
+                """,
+                (latest_handshake_at or observed_at, now, device["id"]),
+            )
+            delta_rx_total += delta_rx
+            delta_tx_total += delta_tx
+            updated_devices.append(
+                {
+                    "deviceUid": device["device_uid"],
+                    "userId": int(device["user_id"]),
+                    "peerIp": peer_ip or device["assigned_ip"],
+                    "deltaBytes": delta_rx + delta_tx,
+                }
+            )
+
+        conn.commit()
+
+    delta_total = delta_rx_total + delta_tx_total
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "serverId": server_id,
+        "iface": iface,
+        "periodKey": period_key,
+        "observedAt": observed_at,
+        "matchedPeers": matched,
+        "unknownPeers": unknown_peers[:50],
+        "unknownPeerCount": len(unknown_peers),
+        "baselineOnlyPeers": baseline_only,
+        "counterResets": counter_resets,
+        "deltaRxBytes": delta_rx_total,
+        "deltaTxBytes": delta_tx_total,
+        "deltaBytes": delta_total,
+        "deltaGb": bytes_to_gb(delta_total),
+        "updatedDevices": updated_devices[:100],
+    }
+
+
+def list_admin_traffic_usage(period_key: Optional[str] = None, limit: int = 100) -> dict:
+    safe_period_key = clean_limited_text(period_key, 16).strip() or traffic_period_key()
+    safe_limit = max(1, min(500, int(limit or 100)))
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                u.id AS user_id,
+                u.email,
+                COALESCE(SUM(t.rx_bytes), 0) AS rx_bytes,
+                COALESCE(SUM(t.tx_bytes), 0) AS tx_bytes,
+                COUNT(DISTINCT t.device_uid) AS devices,
+                MAX(t.updated_at) AS updated_at
+            FROM users u
+            LEFT JOIN device_traffic_usage t
+              ON t.user_id = u.id AND t.period_key = ?
+            GROUP BY u.id, u.email
+            ORDER BY (COALESCE(SUM(t.rx_bytes), 0) + COALESCE(SUM(t.tx_bytes), 0)) DESC, u.id DESC
+            LIMIT ?
+            """,
+            (safe_period_key, safe_limit),
+        ).fetchall()
+
+    users = []
+    for row in rows:
+        sub = subscription_status(get_subscription_row(int(row["user_id"])))
+        used_bytes = int(row["rx_bytes"] or 0) + int(row["tx_bytes"] or 0)
+        limit_bytes = subscription_traffic_limit_bytes(sub)
+        users.append(
+            {
+                "userId": int(row["user_id"]),
+                "email": row["email"],
+                "periodKey": safe_period_key,
+                "usedBytes": used_bytes,
+                "usedGb": bytes_to_gb(used_bytes),
+                "trafficLimitGb": sub.get("trafficLimitGb"),
+                "usedPercent": None if not limit_bytes else round((used_bytes / limit_bytes) * 100, 1),
+                "overLimit": bool(limit_bytes is not None and used_bytes >= limit_bytes),
+                "devices": int(row["devices"] or 0),
+                "planName": sub.get("planName"),
+                "planCode": sub.get("planCode"),
+                "updatedAt": row["updated_at"],
+            }
+        )
+
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "periodKey": safe_period_key,
+        "users": users,
     }
 
 
 def build_tariff_catalog() -> dict:
     return {
+        "policyVersion": TARIFF_POLICY_VERSION,
+        "pricingModel": "free_start_plus_configurable_paid_plan",
         "trafficPacks": [
             {
                 "code": code,
                 "title": item["title"],
                 "gb": item["gb"],
                 "priceRub": item["priceRub"],
+                "fairUse": bool(item.get("fairUse")),
+                "legacyCode": bool(item.get("legacyCode")),
             }
             for code, item in TRAFFIC_PACK_BASE.items()
         ],
+        "freeMode": {
+            "enabled": True,
+            "title": "Бесплатный старт",
+            "priceRub": 0,
+            "activation": "ads_or_promo_credit",
+            "trafficLimitGb": 3,
+            "speedSustainedMbps": 5,
+            "speedBurstMbps": 20,
+            "priorityClass": "free_ad",
+            "message": "Бесплатный режим живёт отдельно от YooKassa-заказов: реклама или промо-кредит вместо оплаты.",
+        },
+        "speedProfiles": TARIFF_SPEED_PROFILES,
         "gbSlider": {
             "min": 1,
-            "max": 500,
-            "presets": [5, 20, 50, 100],
+            "max": 800,
+            "presets": [50, 150, 350, 800],
             "points": [
                 {"gb": gb, "priceRub": price}
                 for gb, price in TRAFFIC_GB_POINTS
@@ -2163,9 +3713,9 @@ def build_tariff_catalog() -> dict:
         "dedicatedIpRub": DEDICATED_IP_RUB,
         "includedFeatures": INCLUDED_FEATURES,
         "notes": [
-            "Любой платный тариф уже включает отключение рекламы.",
-            "Режим Social Only уже входит в подписку и не продаётся отдельно.",
-            "Безлимитные приложения можно добавить поверх тарифа по ГБ.",
+            "Бесплатный старт не создаёт платёжный заказ: он включается рекламой или промо-кредитом.",
+            "Любой платный тариф отключает рекламу и получает выше приоритет на загруженных серверах.",
+            "Большие скачивания могут временно уходить в низкий приоритет по fair-use, чтобы один пользователь не ломал качество всем остальным.",
         ],
     }
 
@@ -2292,14 +3842,14 @@ def apply_promo_to_quote(
     row = get_promo_row(code)
     if row is None:
         if strict:
-            raise HTTPException(status_code=400, detail="Promo code not found.")
+            raise HTTPException(status_code=400, detail="Промокод не найден.")
         quote["promo"] = {"code": code, "applied": False, "statusReason": "not_found"}
         return quote
 
     is_current, reason = promo_is_current(row, plan_code=quote.get("planCode"))
     if not is_current:
         if strict:
-            raise HTTPException(status_code=400, detail=f"Promo code is not available: {reason}.")
+            raise HTTPException(status_code=400, detail=f"Промокод недоступен: {reason}.")
         quote["promo"] = {"code": code, "applied": False, "statusReason": reason}
         return quote
 
@@ -2371,7 +3921,7 @@ def recommended_launch_promo_specs() -> list[dict]:
             "title": payload["title"],
             "purpose": "Первая ограниченная акция на старт продаж без поломки экономики.",
             "payload": payload,
-            "activationPolicy": "Создать как неактивный черновик; включить вручную только после production-платежей и финального release gate.",
+            "activationPolicy": "Создать как неактивный черновик; включить вручную только после боевого теста платежей и финальной релизной проверки.",
         },
         {
             "code": "FRIEND",
@@ -2617,10 +4167,10 @@ def parse_optional_promo_dt(value: Optional[str], field: str) -> Optional[str]:
 def upsert_promo_code(payload: AdminPromoCodeIn) -> dict:
     code = normalize_promo_code(payload.code)
     if len(code) < 3:
-        raise HTTPException(status_code=400, detail="Promo code must contain at least 3 characters.")
+        raise HTTPException(status_code=400, detail="Промокод должен содержать минимум 3 символа.")
     discount_type = str(payload.discountType or "").strip().lower()
     if discount_type not in PROMO_DISCOUNT_TYPES:
-        raise HTTPException(status_code=400, detail="discountType must be percent or fixed.")
+        raise HTTPException(status_code=400, detail="discountType должен быть percent или fixed.")
     discount_value = max(1, int(payload.discountValue or 0))
     if discount_type == "percent":
         discount_value = min(discount_value, 95)
@@ -2632,7 +4182,7 @@ def upsert_promo_code(payload: AdminPromoCodeIn) -> dict:
     starts_at = parse_optional_promo_dt(payload.startsAt, "startsAt")
     expires_at = parse_optional_promo_dt(payload.expiresAt, "expiresAt")
     if starts_at and expires_at and promo_date(starts_at) >= promo_date(expires_at):
-        raise HTTPException(status_code=400, detail="expiresAt must be later than startsAt.")
+        raise HTTPException(status_code=400, detail="expiresAt должен быть позже startsAt.")
 
     plan_codes = normalize_promo_plan_codes(payload.appliesToPlanCodes)
     title = clean_limited_text(payload.title, 120) or code
@@ -2706,7 +4256,7 @@ def upsert_promo_code(payload: AdminPromoCodeIn) -> dict:
 def set_promo_code_active(code: str, is_active: bool) -> dict:
     promo_code = normalize_promo_code(code)
     if not promo_code:
-        raise HTTPException(status_code=400, detail="Promo code is empty.")
+        raise HTTPException(status_code=400, detail="Промокод пустой.")
     with db() as conn:
         conn.execute(
             """
@@ -2722,7 +4272,7 @@ def set_promo_code_active(code: str, is_active: bool) -> dict:
             (promo_code,),
         ).fetchone()
     if row is None:
-        raise HTTPException(status_code=404, detail="Promo code not found.")
+        raise HTTPException(status_code=404, detail="Промокод не найден.")
     return promo_status(row)
 
 
@@ -2732,7 +4282,7 @@ def create_launch_promo_draft() -> dict:
     if existing is not None and bool(existing["is_active"]):
         raise HTTPException(
             status_code=409,
-            detail="START20 already exists and is active. Deactivate or edit it manually before creating a new launch draft.",
+            detail="Промокод START20 уже существует и включён. Выключите или отредактируйте его вручную перед созданием нового стартового черновика.",
         )
     promo = upsert_promo_code(AdminPromoCodeIn(**payload))
     return promo
@@ -2787,7 +4337,7 @@ def record_promo_redemption(order_row, order_status: dict) -> None:
 
 
 def _interpolate_price(gb: int) -> int:
-    value = max(1, min(500, int(gb)))
+    value = max(1, min(800, int(gb)))
     if value <= TRAFFIC_GB_POINTS[0][0]:
         return TRAFFIC_GB_POINTS[0][1]
 
@@ -2801,28 +4351,42 @@ def _interpolate_price(gb: int) -> int:
     return TRAFFIC_GB_POINTS[-1][1]
 
 
-def _apps_price(count: int) -> int:
-    if count <= 0:
-        return 0
-    if count == 1:
-        return 15
-    if count == 2:
-        return 25
-    if count == 3:
-        return 35
-    if count == 4:
-        return 45
-    if count == 5:
-        return 55
-    return 65
+def tariff_speed_profile_for_gb(gb: int) -> tuple[str, dict]:
+    value = max(1, min(800, int(gb)))
+    if value <= 50:
+        code = "light"
+    elif value <= 150:
+        code = "optimal"
+    elif value <= 350:
+        code = "active"
+    else:
+        code = "maximum"
+    return code, dict(TARIFF_SPEED_PROFILES[code])
+
+
+def _apps_price(codes: list[str]) -> int:
+    total = 0
+    for raw_code in codes:
+        code = str(raw_code or "").strip().lower()
+        total += UNLIMITED_APP_PRICE_RUB.get(code, 0)
+    return total
 
 
 def normalize_tariff_selection(payload: TariffSelectionIn) -> dict:
     traffic_pack = payload.trafficPack.strip().lower()
     if traffic_pack not in TRAFFIC_PACK_BASE:
-        traffic_pack = "gb20"
+        traffic_pack = "gb50"
 
-    traffic_gb = max(1, min(500, int(payload.trafficGb or 20)))
+    pack_gb = TRAFFIC_PACK_BASE[traffic_pack].get("gb")
+    raw_traffic_gb = int(payload.trafficGb or pack_gb or 50)
+    if traffic_pack == "unlimited":
+        traffic_gb = 800
+    else:
+        traffic_gb = max(1, min(800, raw_traffic_gb))
+    paid_effective_gb = max(20, traffic_gb)
+    if pack_gb:
+        paid_effective_gb = max(paid_effective_gb, int(pack_gb))
+    paid_effective_gb = max(1, min(800, paid_effective_gb))
     devices = max(1, min(5, int(payload.devices or 1)))
 
     apps = []
@@ -2840,6 +4404,7 @@ def normalize_tariff_selection(payload: TariffSelectionIn) -> dict:
     return {
         "trafficPack": traffic_pack,
         "trafficGb": traffic_gb,
+        "paidEffectiveGb": paid_effective_gb,
         "devices": devices,
         "unlimitedApps": apps,
         "dedicatedIp": dedicated_ip,
@@ -2852,50 +4417,79 @@ def normalize_tariff_selection(payload: TariffSelectionIn) -> dict:
 def quote_tariff(selection: dict, strict_promo: bool = False) -> dict:
     traffic_pack = selection["trafficPack"]
     traffic_gb = int(selection["trafficGb"])
+    paid_effective_gb = max(20, int(selection.get("paidEffectiveGb") or traffic_gb))
     devices = int(selection["devices"])
     apps = list(selection["unlimitedApps"])
     dedicated_ip = bool(selection["dedicatedIp"])
 
     if traffic_pack == "unlimited":
-        traffic_title = "Безлимит"
-        traffic_price = int(TRAFFIC_PACK_BASE["unlimited"]["priceRub"])
-    else:
-        traffic_title = f"{traffic_gb} ГБ"
-        traffic_price = _interpolate_price(traffic_gb)
+        paid_effective_gb = 800
+    plan_code, speed_profile = tariff_speed_profile_for_gb(paid_effective_gb)
+    traffic_title = f"{paid_effective_gb} ГБ"
+    if traffic_pack == "unlimited":
+        traffic_title = "800 ГБ fair-use"
+    traffic_price = _interpolate_price(paid_effective_gb)
 
-    apps_price = 0 if traffic_pack == "unlimited" else _apps_price(len(apps))
-    devices_price = max(0, devices - 1) * ADDITIONAL_DEVICE_RUB
+    plan_name = speed_profile["title"]
+    apps_price = 0 if plan_code == "maximum" else _apps_price(apps)
+    included_devices = int(speed_profile.get("includedDevices") or 1)
+    devices_price = max(0, devices - included_devices) * ADDITIONAL_DEVICE_RUB
     dedicated_ip_price = DEDICATED_IP_RUB if dedicated_ip else 0
     total = traffic_price + apps_price + devices_price + dedicated_ip_price
 
-    if traffic_pack == "unlimited":
-        plan_code = "unlimited"
-        plan_name = "Безлимит"
-    elif dedicated_ip or devices >= 3 or traffic_gb >= 100 or len(apps) >= 4:
-        plan_code = "plus"
-        plan_name = "Plus"
-    elif traffic_gb <= 5 and len(apps) == 0 and devices == 1:
-        plan_code = "starter"
-        plan_name = "Старт"
-    else:
-        plan_code = "base"
-        plan_name = "Base"
+    fair_use_policy = {
+        "type": "monthly_traffic_with_priority",
+        "trafficLimitGb": paid_effective_gb,
+        "afterLimit": {
+            "action": "lower_priority_not_disconnect",
+            "speedSustainedMbps": 10 if plan_code in {"light", "optimal"} else 30,
+            "message": "После лимита сервис не выключается: скорость и приоритет снижаются до следующего периода.",
+        },
+        "heavyDownloadPolicy": {
+            "enabled": True,
+            "priorityClass": "bulk_heavy",
+            "message": "Долгие крупные загрузки могут временно уходить в низкий приоритет, если сервер загружен.",
+        },
+    }
+    rate_limit_policy = {
+        "enforcedBy": "server_tc_planned",
+        "speedSustainedMbps": int(speed_profile["sustainedMbps"]),
+        "speedBurstMbps": int(speed_profile["burstMbps"]),
+        "priorityClass": speed_profile["priorityClass"],
+        "priorityWeight": int(speed_profile["priorityWeight"]),
+    }
 
     quote = {
         "planCode": plan_code,
         "planName": plan_name,
+        "policyVersion": TARIFF_POLICY_VERSION,
         "trafficPack": traffic_pack,
         "trafficGb": traffic_gb,
+        "trafficLimitGb": paid_effective_gb,
+        "fairUseGb": paid_effective_gb,
         "devices": devices,
+        "includedDevices": included_devices,
         "unlimitedApps": apps,
         "dedicatedIp": dedicated_ip,
         "autoRenew": bool(selection.get("autoRenew", True)),
         "includedFeatures": INCLUDED_FEATURES,
+        "speedSustainedMbps": int(speed_profile["sustainedMbps"]),
+        "speedBurstMbps": int(speed_profile["burstMbps"]),
+        "priorityClass": speed_profile["priorityClass"],
+        "priorityWeight": int(speed_profile["priorityWeight"]),
+        "rateLimitPolicy": rate_limit_policy,
+        "fairUsePolicy": fair_use_policy,
+        "serverCapacityPolicy": {
+            "selection": "capacity_aware_sticky_endpoint",
+            "greenMaxUtilizationPercent": SERVER_CAPACITY_GREEN_MAX_PERCENT,
+            "redMinUtilizationPercent": SERVER_CAPACITY_RED_MIN_PERCENT,
+            "stickyHours": CLIENT_ENDPOINT_STICKY_HOURS,
+        },
         "lineItems": [
-            {"code": "traffic", "title": "Трафик", "priceRub": traffic_price},
+            {"code": "traffic", "title": f"Объём и скорость: {traffic_title}", "priceRub": traffic_price},
             {
                 "code": "apps",
-                "title": "Безлимитные приложения",
+                "title": "Дополнительные приложения без рекламы",
                 "priceRub": apps_price,
             },
             {
@@ -2912,8 +4506,12 @@ def quote_tariff(selection: dict, strict_promo: bool = False) -> dict:
         "monthlyPriceRub": total,
         "summary": {
             "trafficTitle": traffic_title,
+            "requestedTrafficGb": traffic_gb,
+            "includedTrafficGb": paid_effective_gb,
             "appsCount": len(apps),
-            "appsIncluded": traffic_pack == "unlimited",
+            "appsIncluded": plan_code == "maximum",
+            "speedTitle": f"{speed_profile['sustainedMbps']} Мбит/с, всплески до {speed_profile['burstMbps']} Мбит/с",
+            "priorityTitle": "выше приоритет" if plan_code in {"active", "maximum"} else "обычный платный приоритет",
         },
     }
     return apply_promo_to_quote(quote, selection, strict=strict_promo)
@@ -2965,11 +4563,11 @@ def issue_token(user_id: int) -> str:
 
 def get_user_by_token(authorization: Optional[str]):
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing bearer token.")
+        raise HTTPException(status_code=401, detail="Нет bearer token.")
 
     token = authorization.split(" ", 1)[1].strip()
     if not token:
-        raise HTTPException(status_code=401, detail="Empty bearer token.")
+        raise HTTPException(status_code=401, detail="Bearer token пустой.")
 
     with db() as conn:
         row = conn.execute(
@@ -2990,7 +4588,7 @@ def get_user_by_token(authorization: Optional[str]):
         ).fetchone()
 
     if row is None:
-        raise HTTPException(status_code=401, detail="Invalid token.")
+        raise HTTPException(status_code=401, detail="Некорректный token.")
 
     return row
 
@@ -3036,23 +4634,23 @@ def email_confirmation_readiness() -> dict:
             "code": "public_base_url",
             "ok": _is_https_url(public_base)
             and public_host not in {"bluevpn.local", "localhost", "127.0.0.1"},
-            "message": "Set GREENVPN_EMAIL_PUBLIC_BASE_URL or GREENVPN_PUBLIC_BASE_URL to a real HTTPS origin.",
+            "message": "Укажи GREENVPN_EMAIL_PUBLIC_BASE_URL или GREENVPN_PUBLIC_BASE_URL с реальным HTTPS-адресом.",
             "value": public_base,
         },
         {
             "code": "smtp_host",
             "ok": bool(SMTP_HOST),
-            "message": "Set GREENVPN_SMTP_HOST.",
+            "message": "Укажи GREENVPN_SMTP_HOST.",
         },
         {
             "code": "smtp_from",
             "ok": bool(SMTP_FROM),
-            "message": "Set GREENVPN_SMTP_FROM.",
+            "message": "Укажи GREENVPN_SMTP_FROM.",
         },
         {
             "code": "smtp_password",
             "ok": not SMTP_USERNAME or bool(SMTP_PASSWORD),
-            "message": "Set GREENVPN_SMTP_PASSWORD when GREENVPN_SMTP_USERNAME is used.",
+            "message": "Укажи GREENVPN_SMTP_PASSWORD, если используется GREENVPN_SMTP_USERNAME.",
         },
     ]
     production_ready = all(check["ok"] for check in checks)
@@ -3309,7 +4907,7 @@ def normalize_phone(phone: str) -> str:
     raw = (phone or "").strip()
     digits = re.sub(r"\D+", "", raw)
     if not digits:
-        raise HTTPException(status_code=400, detail="Invalid phone.")
+        raise HTTPException(status_code=400, detail="Некорректный телефон.")
 
     if digits.startswith("8") and len(digits) == 11:
         digits = "7" + digits[1:]
@@ -3317,7 +4915,7 @@ def normalize_phone(phone: str) -> str:
         digits = "7" + digits
 
     if len(digits) < 10 or len(digits) > 15:
-        raise HTTPException(status_code=400, detail="Invalid phone.")
+        raise HTTPException(status_code=400, detail="Некорректный телефон.")
 
     return f"+{digits}"
 
@@ -3332,18 +4930,18 @@ def clean_limited_text(value: Optional[str], limit: int) -> str:
 def normalize_email(email: str) -> str:
     value = (email or "").strip().lower()
     if not value or len(value) > 254:
-        raise HTTPException(status_code=400, detail="Invalid email.")
+        raise HTTPException(status_code=400, detail="Некорректный email.")
     if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value):
-        raise HTTPException(status_code=400, detail="Invalid email.")
+        raise HTTPException(status_code=400, detail="Некорректный email.")
     return value
 
 
 def validate_support_report_code(report: str) -> str:
     value = (report or "").strip()
     if len(value) < 24 or len(value) > 250_000:
-        raise HTTPException(status_code=400, detail="Invalid support report.")
+        raise HTTPException(status_code=400, detail="Некорректный отчёт поддержки.")
     if not re.fullmatch(r"GVPN1\.[A-Za-z0-9_\-=]+", value):
-        raise HTTPException(status_code=400, detail="Invalid support report.")
+        raise HTTPException(status_code=400, detail="Некорректный отчёт поддержки.")
     return value
 
 
@@ -3472,9 +5070,9 @@ def decode_support_report_code(report: str) -> dict:
         raw = gzip.decompress(packed).decode("utf-8")
         decoded = json.loads(raw)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail="Support report decode failed.") from exc
+        raise HTTPException(status_code=400, detail="Не удалось разобрать отчёт поддержки.") from exc
     if not isinstance(decoded, dict):
-        raise HTTPException(status_code=400, detail="Support report payload is invalid.")
+        raise HTTPException(status_code=400, detail="Содержимое отчёта поддержки некорректно.")
     return redact_support_report_value(decoded)
 
 
@@ -3633,26 +5231,35 @@ def one_time_code_hash(kind: str, target: str, code: str) -> str:
 
 
 def auth_code_readiness() -> dict:
+    sms_ready = sms_confirmation_readiness()
+    email_ready = email_sender_configured()
     checks = [
         {
             "code": "auth_code_pepper",
             "ok": len(AUTH_CODE_PEPPER) >= 24
             and AUTH_CODE_PEPPER != "greenvpn-dev-auth-code-pepper-not-for-production",
-            "message": "Set GREENVPN_AUTH_CODE_PEPPER to a long random secret before production.",
+            "message": "Перед боевым запуском задай длинный случайный GREENVPN_AUTH_CODE_PEPPER.",
         },
         {
             "code": "email_delivery",
-            "ok": email_sender_configured(),
-            "message": "Configure SMTP to deliver email login codes.",
+            "ok": email_ready,
+            "message": "Настрой SMTP для отправки кодов входа на почту.",
         },
         {
             "code": "sms_delivery",
-            "ok": sms_sender_configured(),
-            "message": "Configure SMS provider to deliver phone login codes.",
+            "ok": True,
+            "message": (
+                "SMS-коды входа можно доставлять."
+                if sms_ready.get("productionReady")
+                else "SMS-вход временно не основной; публичный MVP использует email-код."
+            ),
+            "optional": True,
+            "productionReady": bool(sms_ready.get("productionReady")),
         },
     ]
     return {
         "ok": True,
+        "codeDigits": AUTH_CODE_DIGITS,
         "ttlMinutes": AUTH_CODE_TTL_MINUTES,
         "resendCooldownSeconds": AUTH_CODE_RESEND_COOLDOWN_SECONDS,
         "maxVerifyAttempts": AUTH_CODE_MAX_VERIFY_ATTEMPTS,
@@ -3671,10 +5278,11 @@ def user_auth_flow_readiness(limit: int = 10) -> dict:
     email = email_confirmation_readiness()
     sms = sms_confirmation_readiness()
     auth_codes = auth_code_readiness()
-    phone_available = bool(sms_sender_configured() or DEV_AUTH_CODES)
-    email_available = bool(email_sender_configured() or DEV_AUTH_CODES)
+    phone_available = bool(sms.get("productionReady") or DEV_AUTH_CODES)
+    email_available = bool(email.get("productionReady") or DEV_AUTH_CODES)
     code_policy_ok = (
-        3 <= int(AUTH_CODE_TTL_MINUTES or 0) <= 30
+        4 <= int(AUTH_CODE_DIGITS or 0) <= 8
+        and 3 <= int(AUTH_CODE_TTL_MINUTES or 0) <= 30
         and 30 <= int(AUTH_CODE_RESEND_COOLDOWN_SECONDS or 0) <= 600
         and 3 <= int(AUTH_CODE_MAX_VERIFY_ATTEMPTS or 0) <= 10
         and 5 <= int(AUTH_CODE_LOCKOUT_MINUTES or 0) <= 60
@@ -3740,37 +5348,39 @@ def user_auth_flow_readiness(limit: int = 10) -> dict:
 
     checks = [
         {
-            "code": "primary_phone_code",
-            "title": "Primary auth method",
-            "ok": True,
-            "message": "Windows bootstrap exposes phone_code as the primary login/register method.",
-        },
-        {
-            "code": "phone_code_delivery",
-            "title": "Phone-code delivery",
-            "ok": phone_available,
-            "message": (
-                "SMS login codes can be delivered."
-                if phone_available
-                else "Configure SMS.ru or keep the app on email fallback until SMS is ready."
-            ),
-        },
-        {
-            "code": "email_code_fallback",
-            "title": "Email-code fallback",
+            "code": "primary_email_code",
+            "title": "Основной способ входа",
             "ok": email_available,
             "message": (
-                "Email login code fallback can be delivered."
+                "Windows/Android-клиент показывает вход и регистрацию по email-коду как основной способ."
                 if email_available
-                else "Configure SMTP so users have a non-SMS fallback."
+                else "Настрой SMTP, чтобы основной вход по email-коду работал."
             ),
+        },
+        {
+            "code": "phone_code_optional",
+            "title": "Код на телефон",
+            "ok": True,
+            "message": (
+                "SMS-коды входа можно доставлять."
+                if phone_available
+                else "SMS-вход временно отключён как основной канал; пользователи входят по email-коду."
+            ),
+            "available": phone_available,
+        },
+        {
+            "code": "legacy_password_fallback",
+            "title": "Запасной вход по паролю",
+            "ok": True,
+            "message": "Email/пароль остаётся запасным старым способом.",
         },
         {
             "code": "code_policy",
-            "title": "Code TTL/rate-limit policy",
+            "title": "Срок действия и лимиты кодов",
             "ok": code_policy_ok,
-            "message": "One-time code TTL, resend cooldown, attempts and lockout are within safe production bounds.",
+            "message": "Срок действия кода, пауза повторной отправки, лимит попыток и блокировка находятся в безопасных пределах.",
             "value": {
+                "codeDigits": AUTH_CODE_DIGITS,
                 "ttlMinutes": AUTH_CODE_TTL_MINUTES,
                 "resendCooldownSeconds": AUTH_CODE_RESEND_COOLDOWN_SECONDS,
                 "maxVerifyAttempts": AUTH_CODE_MAX_VERIFY_ATTEMPTS,
@@ -3779,25 +5389,25 @@ def user_auth_flow_readiness(limit: int = 10) -> dict:
         },
         {
             "code": "auth_code_pepper",
-            "title": "Code hash pepper",
+            "title": "Защита хэшей кодов",
             "ok": auth_pepper_ok,
-            "message": "GREENVPN_AUTH_CODE_PEPPER is set to a non-default random secret.",
+            "message": "GREENVPN_AUTH_CODE_PEPPER задан и не похож на значение по умолчанию.",
         },
         {
             "code": "dev_codes_disabled",
-            "title": "Development code exposure",
+            "title": "Выдача dev-кодов",
             "ok": not DEV_AUTH_CODES,
             "message": (
-                "DEV_AUTH_CODES is disabled; one-time codes are not returned by public auth endpoints."
+                "DEV_AUTH_CODES выключен; одноразовые коды не возвращаются публичными auth endpoints."
                 if not DEV_AUTH_CODES
-                else "Disable GREENVPN_DEV_AUTH_CODES before any public launch."
+                else "Выключи GREENVPN_DEV_AUTH_CODES перед любым публичным запуском."
             ),
         },
         {
             "code": "legacy_password_not_primary",
-            "title": "Legacy password path",
+            "title": "Старый вход по паролю",
             "ok": True,
-            "message": "Email/password remains available only as a legacy path; code-first auth is the public contract.",
+            "message": "Email/пароль остаётся запасным старым способом; публичный сценарий строится вокруг одноразовых кодов.",
         },
     ]
     missing = [check for check in checks if not check["ok"]]
@@ -3807,9 +5417,9 @@ def user_auth_flow_readiness(limit: int = 10) -> dict:
         "version": APP_VERSION,
         "generatedAt": utc_now_iso(),
         "productionReady": production_ready,
-        "publicAuthReady": phone_available and code_policy_ok and auth_pepper_ok and not DEV_AUTH_CODES,
-        "primaryMethod": "phone_code",
-        "fallbackMethod": "email_code",
+        "publicAuthReady": email_available and code_policy_ok and auth_pepper_ok and not DEV_AUTH_CODES,
+        "primaryMethod": "email_code",
+        "fallbackMethod": "email_password",
         "checks": checks,
         "requiredActions": [check["message"] for check in missing],
         "summary": {
@@ -3818,9 +5428,9 @@ def user_auth_flow_readiness(limit: int = 10) -> dict:
             "red": 0,
             "state": "green" if production_ready else "yellow",
             "message": (
-                "Code-first login/register flow is ready."
+                "Вход и регистрация по одноразовому коду готовы."
                 if production_ready
-                else "Code-first login/register flow is implemented, but delivery/configuration still needs attention."
+                else "Вход и регистрация по одноразовому коду реализованы, но доставка/настройки еще требуют внимания."
             ),
             "usersTotal": int(user_counts["total"] or 0),
             "emailVerifiedUsers": int(user_counts["email_verified"] or 0),
@@ -3833,18 +5443,9 @@ def user_auth_flow_readiness(limit: int = 10) -> dict:
         },
         "methods": [
             {
-                "code": "phone_code",
-                "challengeMethod": "phone_sms",
-                "primary": True,
-                "available": phone_available,
-                "deliveryReady": sms_sender_configured(),
-                "productionReady": bool(sms.get("productionReady")),
-                "provider": sms.get("provider"),
-            },
-            {
                 "code": "email_code",
                 "challengeMethod": "email_code",
-                "primary": False,
+                "primary": True,
                 "available": email_available,
                 "deliveryReady": email_sender_configured(),
                 "productionReady": bool(email.get("productionReady")),
@@ -3857,10 +5458,19 @@ def user_auth_flow_readiness(limit: int = 10) -> dict:
                 "available": True,
                 "productionReady": True,
             },
+            {
+                "code": "phone_code",
+                "challengeMethod": "phone_sms",
+                "primary": False,
+                "available": phone_available,
+                "deliveryReady": sms_sender_configured(),
+                "productionReady": bool(sms.get("productionReady")),
+                "provider": sms.get("provider"),
+            },
         ],
         "bootstrapContract": {
             "publicEndpoint": "/api/v1/bootstrap/windows",
-            "primaryMethod": "phone_code",
+            "primaryMethod": "email_code",
             "challengeStart": "/api/v1/auth/challenge/start",
             "challengeVerify": "/api/v1/auth/challenge/verify",
             "phoneStart": "/api/v1/auth/phone/login/start",
@@ -3870,6 +5480,7 @@ def user_auth_flow_readiness(limit: int = 10) -> dict:
             "legacyPasswordEndpoints": ["/api/v1/auth/register", "/api/v1/auth/login"],
         },
         "codePolicy": {
+            "codeDigits": AUTH_CODE_DIGITS,
             "ttlMinutes": AUTH_CODE_TTL_MINUTES,
             "resendCooldownSeconds": AUTH_CODE_RESEND_COOLDOWN_SECONDS,
             "maxVerifyAttempts": AUTH_CODE_MAX_VERIFY_ATTEMPTS,
@@ -3893,7 +5504,7 @@ def user_auth_flow_readiness(limit: int = 10) -> dict:
         "policy": {
             "mode": "readiness_only_no_codes_sent",
             "secretExposure": "No one-time codes, tokens, password hashes, provider keys or private keys are returned.",
-            "publicContract": "Phone code is primary; email code is fallback; email/password is legacy only.",
+            "publicContract": "Email code is primary; email/password is fallback; phone code is optional while SMS delivery is unavailable.",
         },
         "emailReadiness": email,
         "smsReadiness": sms,
@@ -3986,7 +5597,7 @@ def ensure_email_code_resend_allowed(email: str) -> None:
             """
             SELECT created_at
             FROM email_login_codes
-            WHERE email = ? AND status = ?
+            WHERE email = ? AND status = ? AND sent_at IS NOT NULL
             ORDER BY id DESC
             LIMIT 1
             """,
@@ -3999,7 +5610,7 @@ def ensure_email_code_resend_allowed(email: str) -> None:
         return
     retry_at = created_at + timedelta(seconds=AUTH_CODE_RESEND_COOLDOWN_SECONDS)
     if utc_now() < retry_at:
-        raise HTTPException(status_code=429, detail="Email code resend cooldown.")
+        raise HTTPException(status_code=429, detail="Повторная отправка email-кода пока недоступна.")
 
 
 def ensure_user_for_email_code(email: str) -> tuple[sqlite3.Row, bool]:
@@ -4048,7 +5659,7 @@ def ensure_user_for_email_code(email: str) -> tuple[sqlite3.Row, bool]:
 
 
 def create_email_login_code(user_id: int, email: str) -> tuple[int, str]:
-    code = f"{secrets.randbelow(1000000):06d}"
+    code = f"{secrets.randbelow(AUTH_CODE_BOUND):0{AUTH_CODE_DIGITS}d}"
     now = utc_now()
     expires_at = now + timedelta(minutes=AUTH_CODE_TTL_MINUTES)
     with db() as conn:
@@ -4109,6 +5720,16 @@ def send_or_queue_email_login_code(
     )
 
     if not email_sender_configured():
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE email_login_codes
+                SET status = ?, consumed_at = COALESCE(consumed_at, ?)
+                WHERE id = ? AND status = ?
+                """,
+                ("delivery_failed", utc_now_iso(), code_id, "pending"),
+            )
+            conn.commit()
         return {"deliveryStatus": "not_configured", "outboxId": outbox_id}
 
     try:
@@ -4123,12 +5744,22 @@ def send_or_queue_email_login_code(
         return {"deliveryStatus": "sent", "outboxId": outbox_id}
     except Exception as exc:
         update_email_outbox_status(outbox_id, "failed", str(exc))
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE email_login_codes
+                SET status = ?, consumed_at = COALESCE(consumed_at, ?)
+                WHERE id = ? AND status = ?
+                """,
+                ("delivery_failed", utc_now_iso(), code_id, "pending"),
+            )
+            conn.commit()
         return {"deliveryStatus": "failed", "outboxId": outbox_id}
 
 
 def consume_email_login_code(email: str, code: str) -> dict:
     clean_code = re.sub(r"\D+", "", code or "")
-    if len(clean_code) != 6:
+    if len(clean_code) != AUTH_CODE_DIGITS:
         return {"ok": False, "status": "invalid_code"}
 
     now = utc_now()
@@ -4307,29 +5938,80 @@ def sms_sender_configured() -> bool:
     return False
 
 
+def classify_sms_delivery_error(error: Optional[str]) -> Optional[dict]:
+    text = (error or "").strip()
+    lower = text.lower()
+    if not text:
+        return None
+    if "буквен" in lower and "отправител" in lower:
+        return {
+            "code": "sender_required",
+            "message": (
+                "SMS.ru отклонил отправку: нужно создать и согласовать "
+                "буквенного отправителя Sender ID в кабинете SMS.ru."
+            ),
+        }
+    if "баланс" in lower or "balance" in lower:
+        return {
+            "code": "balance_required",
+            "message": "SMS.ru отклонил отправку: проверь баланс SMS.ru.",
+        }
+    return {
+        "code": "provider_delivery_failed",
+        "message": "Последняя отправка SMS была отклонена провайдером.",
+    }
+
+
+def latest_sms_delivery_issue() -> Optional[dict]:
+    try:
+        with db() as conn:
+            row = conn.execute(
+                """
+                SELECT status, error, created_at
+                FROM sms_outbox
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+    except Exception:
+        return None
+
+    if row is None or row["status"] != "failed":
+        return None
+    issue = classify_sms_delivery_error(row["error"])
+    if issue is None:
+        return None
+    issue["lastFailedAt"] = row["created_at"]
+    return issue
+
+
 def sms_confirmation_readiness() -> dict:
     provider_known = SMS_PROVIDER in {"manual_mvp", "smsru"}
     checks = [
         {
             "code": "provider",
             "ok": provider_known,
-            "message": "Set GREENVPN_SMS_PROVIDER to smsru or manual_mvp.",
+            "message": "Укажи GREENVPN_SMS_PROVIDER: smsru или manual_mvp.",
             "value": SMS_PROVIDER,
         },
         {
             "code": "smsru_api_id",
             "ok": SMS_PROVIDER != "smsru" or bool(SMS_RU_API_ID),
-            "message": "Set GREENVPN_SMS_RU_API_ID for SMS.ru delivery.",
+            "message": "Укажи GREENVPN_SMS_RU_API_ID для отправки через SMS.ru.",
         },
         {
             "code": "code_pepper",
             "ok": len(SMS_CODE_PEPPER) >= 24,
-            "message": "Set GREENVPN_SMS_CODE_PEPPER to a long random secret before production.",
+            "message": "Перед публичным запуском укажи длинный случайный GREENVPN_SMS_CODE_PEPPER.",
         },
     ]
+    latest_issue = latest_sms_delivery_issue()
     production_ready = provider_known and SMS_PROVIDER != "manual_mvp" and all(
         check["ok"] for check in checks
-    )
+    ) and latest_issue is None
+    required_actions = [check["message"] for check in checks if not check["ok"]]
+    if latest_issue is not None:
+        required_actions.append(latest_issue["message"])
     return {
         "ok": True,
         "provider": SMS_PROVIDER,
@@ -4338,10 +6020,9 @@ def sms_confirmation_readiness() -> dict:
         "ttlMinutes": SMS_CONFIRMATION_TTL_MINUTES,
         "resendCooldownSeconds": SMS_RESEND_COOLDOWN_SECONDS,
         "testMode": SMS_RU_TEST_MODE,
+        "lastDeliveryIssue": latest_issue,
         "checks": checks,
-        "requiredActions": [
-            check["message"] for check in checks if not check["ok"]
-        ],
+        "requiredActions": required_actions,
     }
 
 
@@ -4351,7 +6032,7 @@ def phone_code_hash(phone: str, code: str) -> str:
 
 
 def create_phone_confirmation(user_id: int, phone: str) -> str:
-    code = f"{secrets.randbelow(1000000):06d}"
+    code = f"{secrets.randbelow(AUTH_CODE_BOUND):0{AUTH_CODE_DIGITS}d}"
     now = utc_now()
     expires_at = now + timedelta(minutes=SMS_CONFIRMATION_TTL_MINUTES)
     with db() as conn:
@@ -4443,12 +6124,12 @@ def send_smsru(phone: str, body: str) -> None:
         payload = json.loads(resp.read().decode("utf-8"))
 
     if payload.get("status") != "OK":
-        raise RuntimeError(payload.get("status_text") or "SMS.ru delivery failed")
+        raise RuntimeError(payload.get("status_text") or "Не удалось отправить SMS через SMS.ru")
 
     sms_items = payload.get("sms") or {}
     first = next(iter(sms_items.values()), None)
     if isinstance(first, dict) and first.get("status") != "OK":
-        raise RuntimeError(first.get("status_text") or "SMS.ru phone delivery failed")
+        raise RuntimeError(first.get("status_text") or "Не удалось отправить SMS на телефон через SMS.ru")
 
 
 def send_or_queue_phone_confirmation(user_id: int, phone: str, code: str) -> dict:
@@ -4488,11 +6169,23 @@ def send_or_queue_phone_confirmation(user_id: int, phone: str, code: str) -> dic
             "outboxId": outbox_id,
         }
     except Exception as exc:
-        update_sms_outbox_status(outbox_id, "failed", str(exc))
+        error_text = str(exc)
+        update_sms_outbox_status(outbox_id, "failed", error_text)
+        failed_at = utc_now_iso()
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE phone_confirmations
+                SET status = ?, consumed_at = COALESCE(consumed_at, ?)
+                WHERE user_id = ? AND phone = ? AND status = ?
+                """,
+                ("delivery_failed", failed_at, user_id, phone, "pending"),
+            )
+            conn.commit()
         return {
             "deliveryStatus": "failed",
             "outboxId": outbox_id,
-            "error": str(exc),
+            "error": error_text,
         }
 
 
@@ -4544,13 +6237,13 @@ def ensure_sms_resend_allowed(user_id: int) -> None:
     if utc_now() < retry_at:
         raise HTTPException(
             status_code=429,
-            detail="SMS resend cooldown.",
+            detail="Повторная отправка SMS пока недоступна.",
         )
 
 
 def consume_phone_confirmation_code(user_id: int, phone: str, code: str) -> dict:
     code = re.sub(r"\D+", "", code or "")
-    if len(code) != 6:
+    if len(code) != AUTH_CODE_DIGITS:
         return {"ok": False, "status": "invalid_code"}
 
     now = utc_now()
@@ -4631,7 +6324,7 @@ def admin_password_hash(password: str) -> str:
     if len(raw_password) < 10:
         raise HTTPException(
             status_code=400,
-            detail="Admin password must contain at least 10 characters.",
+            detail="Пароль администратора должен содержать минимум 10 символов.",
         )
     salt = secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac(
@@ -4725,21 +6418,21 @@ def admin_2fa_readiness() -> dict:
         {
             "code": "smtp_configured",
             "ok": email_sender_configured(),
-            "message": "SMTP для отправки staff-кодов настроен." if email_sender_configured()
+            "message": "SMTP для отправки кодов сотрудникам настроен." if email_sender_configured()
             else "Для обязательного 2FA нужно настроить SMTP отправку.",
         },
         {
             "code": "code_pepper",
             "ok": len(ADMIN_2FA_CODE_PEPPER) >= 24
             and ADMIN_2FA_CODE_PEPPER != "greenvpn-dev-auth-code-pepper-not-for-production",
-            "message": "Секрет хеширования staff-кодов задан." if len(ADMIN_2FA_CODE_PEPPER) >= 24
-            else "Перед production задай GREENVPN_ADMIN_2FA_CODE_PEPPER или GREENVPN_AUTH_CODE_PEPPER.",
+            "message": "Секрет хеширования кодов сотрудников задан." if len(ADMIN_2FA_CODE_PEPPER) >= 24
+            else "Перед боевым запуском задай GREENVPN_ADMIN_2FA_CODE_PEPPER или GREENVPN_AUTH_CODE_PEPPER.",
         },
         {
             "code": "staff_coverage",
             "ok": not ADMIN_2FA_REQUIRED or int(total_staff or 0) > 0,
-            "message": "Staff-аккаунты заведены." if int(total_staff or 0) > 0
-            else "Перед обязательным 2FA нужен хотя бы один staff-аккаунт.",
+            "message": "Аккаунты сотрудников заведены." if int(total_staff or 0) > 0
+            else "Перед обязательным 2FA нужен хотя бы один аккаунт сотрудника.",
         },
     ]
     required_actions = [
@@ -4857,7 +6550,7 @@ def resolve_admin_context(
         }
 
     if not bearer_candidate:
-        raise HTTPException(status_code=401, detail="Admin authorization required.")
+        raise HTTPException(status_code=401, detail="Нужна авторизация администратора.")
 
     token_hash = admin_session_token_hash(bearer_candidate)
     now = utc_now()
@@ -4888,14 +6581,14 @@ def resolve_admin_context(
             (token_hash,),
         ).fetchone()
         if row is None:
-            raise HTTPException(status_code=401, detail="Invalid admin session.")
+            raise HTTPException(status_code=401, detail="Некорректная сессия администратора.")
         if row["revoked_at"]:
-            raise HTTPException(status_code=401, detail="Admin session revoked.")
+            raise HTTPException(status_code=401, detail="Сессия администратора отозвана.")
         expires_at = parse_dt(row["expires_at"])
         if expires_at is None or expires_at <= now:
-            raise HTTPException(status_code=401, detail="Admin session expired.")
+            raise HTTPException(status_code=401, detail="Сессия администратора истекла.")
         if not bool(row["is_active"]):
-            raise HTTPException(status_code=403, detail="Admin staff member is disabled.")
+            raise HTTPException(status_code=403, detail="Аккаунт сотрудника отключён.")
 
         now_iso = now.isoformat()
         conn.execute(
@@ -4952,7 +6645,7 @@ def require_admin(
     if required_permissions and not any(
         item in context.get("permissions", []) for item in required_permissions
     ):
-        raise HTTPException(status_code=403, detail="Admin role lacks required permission.")
+        raise HTTPException(status_code=403, detail="У роли администратора нет нужного доступа.")
     return context
 
 
@@ -4981,11 +6674,44 @@ def get_server_public_key() -> str:
     return run_capture(["wg", "show", WG_INTERFACE, "public-key"])
 
 
+def builtin_wireguard_runtime_ready() -> bool:
+    try:
+        result = subprocess.run(
+            ["wg", "show", WG_INTERFACE, "public-key"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+            check=False,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 def builtin_server_catalog_entry() -> dict:
+    runtime_ready = builtin_wireguard_runtime_ready()
     endpoint = {
         "host": WG_ENDPOINT_HOST,
         "port": WG_ENDPOINT_PORT,
     }
+    capacity = endpoint_capacity_payload(
+        SERVER_DEFAULT_BANDWIDTH_MBPS,
+        SERVER_DEFAULT_RESERVED_MBPS,
+        0,
+        0,
+        0,
+        "",
+    )
+    public_capacity = public_endpoint_capacity_payload(capacity)
+    health_score = 95 if runtime_ready else 0
+    selection_score = endpoint_selection_score(
+        {
+            "healthScore": health_score,
+            "latencyMs": 44,
+            "priority": 10,
+            "capacity": public_capacity,
+        }
+    ) if runtime_ready else 0
     return {
         "id": "intelligent_smew",
         "title": "Netherlands #1",
@@ -4993,10 +6719,13 @@ def builtin_server_catalog_entry() -> dict:
         "country": "NL",
         "city": "Amsterdam",
         "provider": "current-dev-provider",
-        "status": "healthy",
-        "available": True,
-        "healthScore": 95,
+        "status": "healthy" if runtime_ready else "unavailable",
+        "available": runtime_ready,
+        "healthScore": health_score,
         "latencyMs": 44,
+        "priority": 10,
+        "capacity": public_capacity,
+        "selectionScore": selection_score,
         "endpoint": endpoint,
         "protocols": [
             {
@@ -5008,34 +6737,185 @@ def builtin_server_catalog_entry() -> dict:
             }
         ],
         "managed": False,
-        "clientConfigReady": True,
+        "clientConfigReady": runtime_ready,
+        "runtimeReady": runtime_ready,
     }
 
 
+def protocol_catalog_item(code: str) -> dict:
+    title = SERVER_PROTOCOL_TITLES.get(code, code)
+    client_ready = code in SERVER_CLIENT_READY_PROTOCOLS
+    return {
+        "code": code,
+        "title": title,
+        "clientReady": client_ready,
+        "serverReady": code == "wireguard_udp",
+        "publicReady": client_ready and code == "wireguard_udp",
+        "rolloutOrder": SERVER_PROTOCOL_ROLLOUT_ORDER.index(code)
+        if code in SERVER_PROTOCOL_ROLLOUT_ORDER
+        else 999,
+        "status": "ready" if client_ready and code == "wireguard_udp" else "planned",
+    }
+
+
+def build_resilience_policy(servers: Optional[list[dict]] = None) -> dict:
+    protocol_matrix = [protocol_catalog_item(code) for code in SERVER_CATALOG_PROTOCOLS]
+    route_decision = build_resilience_route_decision(
+        servers or [builtin_server_catalog_entry()]
+    )
+    return {
+        "autoSwitch": True,
+        "strategy": "best_healthy_config_ready",
+        "clientRouteProbe": {
+            "enabled": False,
+            "reason": "client_side_probe_removed_from_android_stable",
+        },
+        "clientSideQualityGate": {
+            "enabled": False,
+            "reason": "server_does_not_require_client_youtube_probe_for_connect",
+        },
+        "adaptiveRouting": {
+            "enabled": True,
+            "mode": route_decision["mode"],
+            "selectionPolicy": route_decision["selectionPolicy"],
+            "description": (
+                "Backend выбирает самый лёгкий живой способ подключения. "
+                "Тяжёлые режимы включаются только когда более простые слои "
+                "не проходят свежие проверки."
+            ),
+        },
+        "routeDecision": route_decision,
+        "clientReadyProtocols": sorted(SERVER_CLIENT_READY_PROTOCOLS),
+        "rolloutOrder": list(SERVER_PROTOCOL_ROLLOUT_ORDER),
+        "protocols": protocol_matrix,
+        "currentWindowsClient": {
+            "canUse": sorted(SERVER_CLIENT_READY_PROTOCOLS),
+            "cannotUseYet": [
+                item["code"] for item in protocol_matrix if not item["clientReady"]
+            ],
+            "message": (
+                "Windows-клиент сейчас умеет подключаться только к безопасно "
+                "выданным WireGuard UDP конфигам. Остальные режимы заведены в "
+                "каталог как план rollout и не попадут пользователю без клиента, "
+                "серверной установки и проверок."
+            ),
+        },
+        "publicationGate": server_publication_requirements(),
+    }
+
+
+def managed_catalog_entry_to_public_server(entry: dict) -> dict:
+    protocol = entry.get("protocol") or "wireguard_udp"
+    transport = entry.get("transport") or "udp"
+    public_capacity = public_endpoint_capacity_payload(entry.get("capacity") or {})
+    return {
+        "id": entry.get("serverId") or "",
+        "title": entry.get("title") or "VPN-узел Green VPN",
+        "subtitle": entry.get("subtitle") or "",
+        "country": entry.get("country") or "",
+        "city": entry.get("city") or "",
+        "provider": entry.get("provider") or "",
+        "status": entry.get("status") or "unknown",
+        "available": bool(entry.get("available")) and bool(entry.get("publicEligible")),
+        "healthScore": int(entry.get("healthScore") or 0),
+        "latencyMs": entry.get("latencyMs"),
+        "priority": int(entry.get("priority") or 100),
+        "capacity": public_capacity,
+        "selectionScore": int(entry.get("selectionScore") or 0),
+        "endpoint": {
+            "host": entry.get("host") or "",
+            "port": int(entry.get("port") or 0),
+        },
+        "protocols": [
+            {
+                "code": protocol,
+                "title": SERVER_PROTOCOL_TITLES.get(protocol, protocol),
+                "transport": transport,
+                "port": int(entry.get("port") or 0),
+                "primary": True,
+            }
+        ],
+        "managed": True,
+        "clientConfigReady": bool(entry.get("clientConfigReady")),
+        "publicEligible": bool(entry.get("publicEligible")),
+    }
+
+
+def list_public_client_catalog_servers() -> list[dict]:
+    try:
+        managed_entries = list_managed_server_catalog_entries(
+            status="healthy",
+            active="active",
+            public="public",
+            limit=100,
+            offset=0,
+        )
+    except Exception:
+        return []
+    return [
+        managed_catalog_entry_to_public_server(entry)
+        for entry in managed_entries
+        if entry.get("publicEligible") and entry.get("clientConfigReady")
+    ]
+
+
 def build_server_catalog() -> dict:
-    servers = [builtin_server_catalog_entry()]
+    builtin = builtin_server_catalog_entry()
+    managed_servers = [
+        item
+        for item in list_public_client_catalog_servers()
+        if item.get("id") != builtin["id"]
+    ]
+    builtin_client_ready = bool(builtin.get("available")) and bool(
+        builtin.get("clientConfigReady")
+    )
+    servers = ([builtin] if builtin_client_ready else []) + managed_servers
+    default_candidates = [server for server in servers if server_auto_capacity_ok(server)]
+    if not default_candidates:
+        default_candidates = [
+            server
+            for server in servers
+            if bool(server.get("available")) and bool(server.get("clientConfigReady"))
+        ]
+    default_server = (
+        sorted(
+            default_candidates,
+            key=lambda item: (
+                -int(item.get("selectionScore") or endpoint_selection_score(item)),
+                int(item.get("priority") or 100),
+                -int((item.get("capacity") or {}).get("capacityScore") or 0),
+            ),
+        )[0]
+        if default_candidates
+        else None
+    )
+    default_fallback = servers[0] if servers else builtin
+    default_server_id = str(
+        (default_server or default_fallback).get("id") or "intelligent_smew"
+    )
     return {
         "version": SERVER_CATALOG_VERSION,
         "generatedAt": utc_now_iso(),
-        "defaultServerId": "intelligent_smew",
+        "defaultServerId": default_server_id,
         "auto": {
             "title": "Авто",
-            "subtitle": "Пока выбирает основной стабильный endpoint",
-            "strategy": "first_healthy",
+            "subtitle": "Выбирает самый здоровый VPN-узел, который умеет текущий клиент",
+            "strategy": "best_healthy_config_ready",
         },
         "servers": servers,
+        "resilience": build_resilience_policy(servers),
         "bootstrap": {
             "apiBaseUrls": SERVER_CATALOG_API_BASE_URLS,
             "emergencyCatalogUrl": SERVER_CATALOG_EMERGENCY_URL,
         },
         "managedCatalog": {
             "enabled": True,
-            "mode": "admin_preparation",
+            "mode": "safe_publication_gate",
             "message": (
-                "Дополнительные endpoint управляются в админке, но не выдаются "
-                "клиенту до отдельного provisioning-слоя."
+                "Дополнительные VPN-узлы управляются в админке, но не выдаются "
+                "клиенту без готового профиля конфига, свежего мониторинга и rollout gate."
             ),
-            "clientVisibleManagedEntries": 0,
+            "clientVisibleManagedEntries": len(managed_servers),
             "publicationRules": server_publication_requirements(),
         },
     }
@@ -5047,6 +6927,9 @@ def server_publication_requirements() -> dict:
         "maxObservationAgeHours": SERVER_PUBLIC_OBSERVATION_MAX_AGE_HOURS,
         "minHealthyObservations24h": SERVER_PUBLIC_MIN_HEALTHY_OBSERVATIONS,
         "requiredProtocol": "wireguard_udp",
+        "clientReadyProtocols": sorted(SERVER_CLIENT_READY_PROTOCOLS),
+        "preparedProtocols": list(SERVER_CATALOG_PROTOCOLS),
+        "protocolRolloutOrder": list(SERVER_PROTOCOL_ROLLOUT_ORDER),
         "clientConfigProfiles": list(SERVER_CLIENT_CONFIG_PROFILES),
         "requiresActive": True,
         "requiresPublicCandidate": True,
@@ -5059,21 +6942,21 @@ def server_publication_requirements() -> dict:
 def normalize_server_catalog_status(value: Optional[str], fallback: str = "draft") -> str:
     candidate = clean_limited_text(value, 40).strip().lower() or fallback
     if candidate not in SERVER_CATALOG_STATUSES:
-        raise HTTPException(status_code=400, detail="Unknown server status.")
+        raise HTTPException(status_code=400, detail="Неизвестный статус сервера.")
     return candidate
 
 
 def normalize_server_catalog_protocol(value: Optional[str], fallback: str = "wireguard_udp") -> str:
     candidate = clean_limited_text(value, 40).strip().lower() or fallback
     if candidate not in SERVER_CATALOG_PROTOCOLS:
-        raise HTTPException(status_code=400, detail="Unknown server protocol.")
+        raise HTTPException(status_code=400, detail="Неизвестный протокол сервера.")
     return candidate
 
 
 def normalize_server_catalog_transport(value: Optional[str], fallback: str = "udp") -> str:
     candidate = clean_limited_text(value, 40).strip().lower() or fallback
     if candidate not in SERVER_CATALOG_TRANSPORTS:
-        raise HTTPException(status_code=400, detail="Unknown server transport.")
+        raise HTTPException(status_code=400, detail="Неизвестный транспорт сервера.")
     return candidate
 
 
@@ -5083,30 +6966,30 @@ def normalize_server_client_config_profile(
 ) -> str:
     candidate = clean_limited_text(value, 60).strip().lower() or fallback
     if candidate not in SERVER_CLIENT_CONFIG_PROFILES:
-        raise HTTPException(status_code=400, detail="Unknown client config profile.")
+        raise HTTPException(status_code=400, detail="Неизвестный профиль клиентского конфига.")
     return candidate
 
 
 def normalize_server_id(value: Optional[str]) -> str:
     candidate = clean_limited_text(value, 80).strip().lower()
     if not candidate:
-        raise HTTPException(status_code=400, detail="serverId is required.")
+        raise HTTPException(status_code=400, detail="serverId обязателен.")
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{2,79}", candidate):
         raise HTTPException(
             status_code=400,
-            detail="serverId must contain latin letters, numbers, dash or underscore.",
+            detail="serverId должен содержать латинские буквы, цифры, дефис или подчёркивание.",
         )
     if candidate in {"auto", "intelligent_smew"}:
-        raise HTTPException(status_code=400, detail="serverId is reserved.")
+        raise HTTPException(status_code=400, detail="serverId зарезервирован.")
     return candidate
 
 
 def normalize_server_host(value: Optional[str]) -> str:
     host = clean_limited_text(value, 250).strip().lower()
     if not host:
-        raise HTTPException(status_code=400, detail="host is required.")
+        raise HTTPException(status_code=400, detail="host обязателен.")
     if "/" in host or "\\" in host or " " in host:
-        raise HTTPException(status_code=400, detail="host must be a DNS name or IP address.")
+        raise HTTPException(status_code=400, detail="host должен быть DNS-именем или IP-адресом.")
     return host
 
 
@@ -5116,7 +6999,7 @@ def normalize_server_port(value: Optional[int]) -> int:
     except Exception:
         port = 0
     if port < 1 or port > 65535:
-        raise HTTPException(status_code=400, detail="port must be 1..65535.")
+        raise HTTPException(status_code=400, detail="port должен быть в диапазоне 1..65535.")
     return port
 
 
@@ -5191,6 +7074,168 @@ def server_health_meta_for_entries(
     return result
 
 
+def vpn_node_config_path(server_id: str) -> Path:
+    safe_id = clean_limited_text(server_id, 80).strip().lower()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{2,79}", safe_id or ""):
+        raise HTTPException(status_code=400, detail="Некорректный serverId для node-конфига.")
+    return VPN_NODE_CONFIG_DIR / f"{safe_id}.env"
+
+
+def parse_server_only_env_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Не удалось прочитать server-only node env: {path.name}.",
+        ) from exc
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if (
+            len(value) >= 2
+            and value[0] == value[-1]
+            and value[0] in {"'", '"'}
+        ):
+            value = value[1:-1]
+        if key:
+            values[key] = value
+    return values
+
+
+def remote_vpn_node_config_check(
+    server_id: str,
+    row_host: Optional[str] = None,
+    row_port: Optional[int] = None,
+) -> tuple[dict, list[dict]]:
+    blockers: list[dict] = []
+
+    def add_blocker(code: str, message: str) -> None:
+        blockers.append({"code": code, "message": message})
+
+    try:
+        path = vpn_node_config_path(server_id)
+    except HTTPException as exc:
+        add_blocker("remote_node_config_server_id_invalid", str(exc.detail))
+        return {}, blockers
+
+    if not path.exists():
+        add_blocker(
+            "remote_node_config_missing",
+            f"Нет server-only env для удалённого VPN-узла: {path}.",
+        )
+        return {}, blockers
+
+    try:
+        env = parse_server_only_env_file(path)
+    except HTTPException as exc:
+        add_blocker("remote_node_config_unreadable", str(exc.detail))
+        return {}, blockers
+    except FileNotFoundError:
+        add_blocker("remote_node_config_missing", f"Нет server-only env: {path}.")
+        return {}, blockers
+
+    ssh_host = (env.get("GREENVPN_NODE_HOST") or "").strip()
+    ssh_user = (env.get("GREENVPN_NODE_USER") or "root").strip()
+    ssh_port_raw = (env.get("GREENVPN_NODE_PORT") or "22").strip()
+    ssh_key_raw = (env.get("GREENVPN_NODE_SSH_KEY") or "").strip()
+    public_host = (env.get("GREENVPN_NODE_PUBLIC_HOST") or ssh_host).strip().lower()
+    public_port_raw = (env.get("GREENVPN_NODE_PUBLIC_PORT") or str(WG_ENDPOINT_PORT)).strip()
+    iface = (env.get("GREENVPN_NODE_WG_INTERFACE") or WG_INTERFACE).strip()
+    wg_config = (env.get("GREENVPN_NODE_WG_CONFIG") or "/etc/wireguard/wg0.conf").strip()
+    wg_public_key = (env.get("GREENVPN_NODE_WG_PUBLIC_KEY") or "").strip()
+    client_mtu_raw = (env.get("GREENVPN_NODE_CLIENT_MTU") or "").strip()
+
+    try:
+        ssh_port = int(ssh_port_raw)
+    except Exception:
+        ssh_port = 0
+    try:
+        public_port = int(public_port_raw)
+    except Exception:
+        public_port = 0
+    client_mtu = WG_CLIENT_MTU
+    if client_mtu_raw:
+        try:
+            client_mtu = int(client_mtu_raw)
+        except Exception:
+            client_mtu = 0
+
+    ssh_key = Path(ssh_key_raw) if ssh_key_raw else Path()
+
+    if not ssh_host:
+        add_blocker("remote_node_host_missing", "Не задан GREENVPN_NODE_HOST.")
+    if not ssh_user:
+        add_blocker("remote_node_user_missing", "Не задан GREENVPN_NODE_USER.")
+    if ssh_port < 1 or ssh_port > 65535:
+        add_blocker("remote_node_port_invalid", "GREENVPN_NODE_PORT должен быть 1..65535.")
+    if not ssh_key_raw:
+        add_blocker("remote_node_ssh_key_missing", "Не задан GREENVPN_NODE_SSH_KEY.")
+    elif not ssh_key.exists():
+        add_blocker("remote_node_ssh_key_not_found", "SSH-ключ удалённого узла не найден на backend.")
+    if not public_host:
+        add_blocker("remote_node_public_host_missing", "Не задан публичный host VPN-узла.")
+    if public_port < 1 or public_port > 65535:
+        add_blocker("remote_node_public_port_invalid", "Публичный порт VPN-узла должен быть 1..65535.")
+    if not iface:
+        add_blocker("remote_node_interface_missing", "Не задан WireGuard interface удалённого узла.")
+    if not wg_config:
+        add_blocker("remote_node_wg_config_missing", "Не задан путь к wg0.conf удалённого узла.")
+    if not wg_public_key:
+        add_blocker("remote_node_public_key_missing", "Не задан публичный WireGuard-ключ узла.")
+    if client_mtu < 576 or client_mtu > 1420:
+        add_blocker("remote_node_client_mtu_invalid", "GREENVPN_NODE_CLIENT_MTU должен быть 576..1420.")
+
+    normalized_row_host = str(row_host or "").strip().lower()
+    if normalized_row_host and public_host and normalized_row_host != public_host:
+        add_blocker(
+            "remote_node_public_host_mismatch",
+            f"host в каталоге ({normalized_row_host}) не совпадает с node env ({public_host}).",
+        )
+    if row_port is not None and public_port and int(row_port or 0) != public_port:
+        add_blocker(
+            "remote_node_public_port_mismatch",
+            f"port в каталоге ({row_port}) не совпадает с node env ({public_port}).",
+        )
+
+    return {
+        "serverId": server_id,
+        "path": str(path),
+        "sshHost": ssh_host,
+        "sshUser": ssh_user,
+        "sshPort": ssh_port,
+        "sshKeyPath": str(ssh_key) if ssh_key_raw else "",
+        "publicHost": public_host,
+        "publicPort": public_port,
+        "interface": iface,
+        "wgConfig": wg_config,
+        "wgPublicKey": wg_public_key,
+        "clientMtu": client_mtu,
+    }, blockers
+
+
+def load_remote_vpn_node_config(server_id: str) -> dict:
+    config, blockers = remote_vpn_node_config_check(server_id)
+    if blockers:
+        raise HTTPException(
+            status_code=409,
+            detail="Удалённый VPN-узел не готов к выдаче клиентского конфига.",
+        )
+    return config
+
+
 def server_row_client_config_profile(row: sqlite3.Row) -> str:
     try:
         raw_profile = row["client_config_profile"]
@@ -5212,7 +7257,7 @@ def server_client_config_readiness(row: sqlite3.Row) -> dict:
     if profile == "none":
         add_blocker(
             "client_config_profile_missing",
-            "Не выбран профиль выдачи конфига. Endpoint остаётся только внутренней записью.",
+            "Не выбран профиль выдачи конфига. VPN-узел остаётся только внутренней записью.",
         )
     elif profile == "builtin_wg0":
         host = str(row["host"] or "").strip().lower()
@@ -5226,34 +7271,159 @@ def server_client_config_readiness(row: sqlite3.Row) -> dict:
         if row["transport"] != "udp":
             add_blocker(
                 "client_config_transport_mismatch",
-                "Профиль builtin_wg0 поддерживает только UDP transport.",
+                "Профиль builtin_wg0 поддерживает только транспорт UDP.",
             )
         if host != expected_host or port != WG_ENDPOINT_PORT:
             add_blocker(
                 "client_config_endpoint_mismatch",
                 (
                     "Профиль builtin_wg0 можно включать только для текущего backend "
-                    f"endpoint {WG_ENDPOINT_HOST}:{WG_ENDPOINT_PORT}."
+                    f"VPN-узла {WG_ENDPOINT_HOST}:{WG_ENDPOINT_PORT}."
                 ),
             )
+    elif profile == "remote_ssh_wg0":
+        server_id = str(row["server_id"] or "").strip().lower()
+        if row["protocol"] != "wireguard_udp":
+            add_blocker(
+                "client_config_protocol_mismatch",
+                "Профиль remote_ssh_wg0 поддерживает только WireGuard UDP.",
+            )
+        if row["transport"] != "udp":
+            add_blocker(
+                "client_config_transport_mismatch",
+                "Профиль remote_ssh_wg0 поддерживает только транспорт UDP.",
+            )
+        remote_config, remote_blockers = remote_vpn_node_config_check(
+            server_id,
+            row_host=str(row["host"] or "").strip().lower(),
+            row_port=int(row["port"] or 0),
+        )
+        blockers.extend(remote_blockers)
     else:
         add_blocker(
             "client_config_profile_unknown",
-            "Неизвестный профиль выдачи конфига. Endpoint заблокирован до ручной проверки.",
+            "Неизвестный профиль выдачи конфига. VPN-узел заблокирован до ручной проверки.",
         )
+
+    if profile == "remote_ssh_wg0" and "remote_config" in locals() and remote_config:
+        expected_endpoint = {
+            "host": remote_config.get("publicHost") or row["host"],
+            "port": remote_config.get("publicPort") or int(row["port"] or 0),
+            "interface": remote_config.get("interface") or WG_INTERFACE,
+            "nodeEnv": remote_config.get("path") or "",
+        }
+        managed_by = "remote_ssh_wg0"
+    else:
+        expected_endpoint = {
+            "host": WG_ENDPOINT_HOST,
+            "port": WG_ENDPOINT_PORT,
+            "interface": WG_INTERFACE,
+        }
+        managed_by = "backend_wg0" if profile == "builtin_wg0" else "manual"
 
     return {
         "ready": not blockers,
         "profile": profile,
         "title": SERVER_CLIENT_CONFIG_PROFILE_TITLES.get(profile, profile),
         "blockers": blockers,
-        "managedBy": "backend_wg0" if profile == "builtin_wg0" else "manual",
-        "expectedEndpoint": {
-            "host": WG_ENDPOINT_HOST,
-            "port": WG_ENDPOINT_PORT,
-            "interface": WG_INTERFACE,
-        },
+        "managedBy": managed_by,
+        "expectedEndpoint": expected_endpoint,
     }
+
+
+def safe_row_int(row: sqlite3.Row, key: str, fallback: Optional[int] = None) -> Optional[int]:
+    try:
+        raw = row[key]
+    except Exception:
+        return fallback
+    if raw is None:
+        return fallback
+    try:
+        return int(raw)
+    except Exception:
+        return fallback
+
+
+def safe_row_text(row: sqlite3.Row, key: str, fallback: str = "") -> str:
+    try:
+        raw = row[key]
+    except Exception:
+        return fallback
+    return str(raw or fallback)
+
+
+def endpoint_capacity_payload(
+    bandwidth_mbps: Optional[int],
+    reserved_mbps: Optional[int],
+    current_load_mbps: Optional[int],
+    active_clients: Optional[int],
+    assigned_users: Optional[int],
+    load_updated_at: Optional[str],
+) -> dict:
+    planned = max(1, int(bandwidth_mbps or SERVER_DEFAULT_BANDWIDTH_MBPS))
+    reserved = max(0, min(int(reserved_mbps if reserved_mbps is not None else SERVER_DEFAULT_RESERVED_MBPS), planned - 1))
+    usable = max(1, planned - reserved)
+    load = max(0, int(current_load_mbps or 0))
+    utilization = round((load / usable) * 100) if usable else 100
+    if utilization >= SERVER_CAPACITY_RED_MIN_PERCENT:
+        status = "red"
+        score = 0
+    elif utilization > SERVER_CAPACITY_GREEN_MAX_PERCENT:
+        status = "yellow"
+        span = max(1, SERVER_CAPACITY_RED_MIN_PERCENT - SERVER_CAPACITY_GREEN_MAX_PERCENT)
+        score = max(10, round(70 - (((utilization - SERVER_CAPACITY_GREEN_MAX_PERCENT) / span) * 45)))
+    else:
+        status = "green"
+        score = max(70, min(100, 100 - round((utilization / max(1, SERVER_CAPACITY_GREEN_MAX_PERCENT)) * 20)))
+    return {
+        "plannedBandwidthMbps": planned,
+        "reservedBandwidthMbps": reserved,
+        "usableBandwidthMbps": usable,
+        "currentLoadMbps": load,
+        "freeBandwidthMbps": max(0, usable - load),
+        "utilizationPercent": utilization,
+        "capacityStatus": status,
+        "capacityScore": score,
+        "activeClients": max(0, int(active_clients or 0)),
+        "assignedUsers": max(0, int(assigned_users or 0)),
+        "loadUpdatedAt": load_updated_at or "",
+        "greenMaxUtilizationPercent": SERVER_CAPACITY_GREEN_MAX_PERCENT,
+        "redMinUtilizationPercent": SERVER_CAPACITY_RED_MIN_PERCENT,
+    }
+
+
+def public_endpoint_capacity_payload(capacity: dict) -> dict:
+    raw_score = capacity.get("capacityScore") if isinstance(capacity, dict) else None
+    try:
+        score = int(raw_score if raw_score is not None else 100)
+    except Exception:
+        score = 100
+    raw_status = str((capacity or {}).get("capacityStatus") or "green").strip().lower()
+    if raw_status not in {"green", "yellow", "red"}:
+        raw_status = "green"
+    return {
+        "capacityStatus": raw_status,
+        "capacityScore": max(0, min(score, 100)),
+        "greenMaxUtilizationPercent": SERVER_CAPACITY_GREEN_MAX_PERCENT,
+        "redMinUtilizationPercent": SERVER_CAPACITY_RED_MIN_PERCENT,
+    }
+
+
+def endpoint_selection_score(server: dict) -> int:
+    capacity = server.get("capacity") if isinstance(server.get("capacity"), dict) else {}
+    health = int(server.get("healthScore") or 0)
+    capacity_score = int(capacity.get("capacityScore") if capacity else 100)
+    latency = server.get("latencyMs")
+    try:
+        latency_penalty = min(25, max(0, int(latency or 0) // 20))
+    except Exception:
+        latency_penalty = 8
+    priority = int(server.get("priority") or 100)
+    priority_bonus = max(0, 20 - min(20, priority // 5))
+    score = round((health * 0.45) + (capacity_score * 0.40) + priority_bonus - latency_penalty)
+    if capacity.get("capacityStatus") == "red":
+        score = min(score, 20)
+    return max(0, min(100, score))
 
 
 def server_public_eligibility(row: sqlite3.Row, health_meta: Optional[dict] = None) -> dict:
@@ -5275,31 +7445,31 @@ def server_public_eligibility(row: sqlite3.Row, health_meta: Optional[dict] = No
     config_readiness = server_client_config_readiness(row)
 
     if not is_active:
-        add_blocker("inactive", "Endpoint выключен в админке.")
+        add_blocker("inactive", "VPN-узел выключен в админке.")
     if not is_public:
-        add_blocker("not_public_candidate", "Endpoint пока не отмечен кандидатом в публичный catalog.")
+        add_blocker("not_public_candidate", "VPN-узел пока не отмечен кандидатом в публичный каталог.")
     if status != "healthy":
-        add_blocker("status_not_healthy", f"Статус endpoint сейчас {status}.")
+        add_blocker("status_not_healthy", f"Статус VPN-узла сейчас {status}.")
     if health_score < SERVER_PUBLIC_MIN_HEALTH_SCORE:
         add_blocker(
             "health_score_low",
-            f"Health score {health_score}%, нужно минимум {SERVER_PUBLIC_MIN_HEALTH_SCORE}%.",
+            f"Оценка здоровья {health_score}%, нужно минимум {SERVER_PUBLIC_MIN_HEALTH_SCORE}%.",
         )
     if protocol != "wireguard_udp":
         add_blocker(
             "client_protocol_not_ready",
-            "Клиентский provisioning сейчас готов только для основного WireGuard UDP слоя.",
+            "Выдача конфигов клиентам сейчас готова только для основного слоя WireGuard UDP.",
         )
     if latest is None:
         add_blocker(
             "no_health_observation",
-            "Нет monitoring-наблюдения по endpoint, нельзя выдавать его пользователям.",
+            "Нет наблюдения мониторинга по VPN-узлу, нельзя выдавать его пользователям.",
         )
     else:
         if latest.get("status") != "healthy":
             add_blocker(
                 "latest_health_not_healthy",
-                f"Последнее monitoring-наблюдение: {latest.get('status') or 'unknown'}.",
+                f"Последнее наблюдение мониторинга: {latest.get('status') or 'unknown'}.",
             )
         if latest_age_hours is None:
             add_blocker("latest_health_unparseable", "Не удалось разобрать время последней проверки.")
@@ -5315,14 +7485,14 @@ def server_public_eligibility(row: sqlite3.Row, health_meta: Optional[dict] = No
         add_blocker(
             "not_enough_healthy_observations",
             (
-                f"Healthy-проверок за 24ч: {healthy_24h}, нужно минимум "
+                f"Здоровых проверок за 24ч: {healthy_24h}, нужно минимум "
                 f"{SERVER_PUBLIC_MIN_HEALTHY_OBSERVATIONS}."
             ),
         )
     if failed_24h > 0:
         add_blocker(
             "recent_failures_present",
-            f"За последние 24ч есть failed/degraded проверки: {failed_24h}.",
+            f"За последние 24ч есть проверки со сбоями или деградацией: {failed_24h}.",
         )
 
     if not config_readiness["ready"]:
@@ -5353,18 +7523,18 @@ def server_catalog_workflow_options() -> dict:
             {
                 "code": profile,
                 "title": SERVER_CLIENT_CONFIG_PROFILE_TITLES.get(profile, profile),
-                "description": (
-                    "Не выдавать клиентам, только inventory"
-                    if profile == "none"
-                    else "Только текущий backend wg0 endpoint, без новых VPS"
-                ),
+                "description": {
+                    "none": "Не выдавать клиентам, только inventory",
+                    "builtin_wg0": "Только текущий backend wg0 endpoint",
+                    "remote_ssh_wg0": "Отдельный WireGuard VPS через server-only SSH",
+                }.get(profile, "Профиль выдачи клиентского конфига"),
             }
             for profile in SERVER_CLIENT_CONFIG_PROFILES
         ],
         "publicMode": "admin_preparation",
         "publicSafety": (
-            "Managed entries are internal planning records until they have an explicit "
-            "client config profile, fresh health checks, and release review."
+            "Управляемые записи остаются внутренним планом, пока у них нет явного "
+            "профиля клиентского конфига, свежих проверок здоровья и релизного ревью."
         ),
         "safeDraftCreation": {
             "endpoint": "/api/v1/admin/server-catalog/draft-from-plan",
@@ -5378,7 +7548,7 @@ def server_catalog_workflow_options() -> dict:
                 "healthScore": 0,
                 "priority": 100,
             },
-            "clientImpact": "Новый VPS сохраняется только как внутренний черновик и не попадает в клиентский catalog.",
+            "clientImpact": "Новый VPS сохраняется только как внутренний черновик и не попадает в клиентский каталог.",
         },
         "publicRequirements": server_publication_requirements(),
     }
@@ -5388,6 +7558,22 @@ def server_catalog_entry_payload(row: sqlite3.Row, health_meta: Optional[dict] =
     health_meta = health_meta or {}
     eligibility = server_public_eligibility(row, health_meta)
     config_readiness = eligibility["clientConfigReadiness"]
+    capacity = endpoint_capacity_payload(
+        safe_row_int(row, "planned_bandwidth_mbps", SERVER_DEFAULT_BANDWIDTH_MBPS),
+        safe_row_int(row, "reserved_bandwidth_mbps", SERVER_DEFAULT_RESERVED_MBPS),
+        safe_row_int(row, "current_load_mbps", 0),
+        safe_row_int(row, "active_clients", 0),
+        safe_row_int(row, "assigned_users", 0),
+        safe_row_text(row, "load_updated_at", ""),
+    )
+    selection_score = endpoint_selection_score(
+        {
+            "healthScore": int(row["health_score"] or 0),
+            "latencyMs": int(row["latency_ms"]) if row["latency_ms"] is not None else None,
+            "priority": int(row["priority"] or 100),
+            "capacity": capacity,
+        }
+    )
     return {
         "id": int(row["id"]),
         "serverId": row["server_id"],
@@ -5407,6 +7593,8 @@ def server_catalog_entry_payload(row: sqlite3.Row, health_meta: Optional[dict] =
         "healthScore": int(row["health_score"] or 0),
         "latencyMs": int(row["latency_ms"]) if row["latency_ms"] is not None else None,
         "priority": int(row["priority"] or 100),
+        "capacity": capacity,
+        "selectionScore": selection_score,
         "isActive": bool(row["is_active"]),
         "isPublic": bool(row["is_public"]),
         "publicationPausedAt": row["publication_paused_at"] or "",
@@ -5494,9 +7682,9 @@ def build_server_catalog_admin_summary(
         "blockersByCode": blockers_by_code,
         "mode": "safe_admin_preparation",
         "message": (
-            "Публичный клиентский catalog пока намеренно выдаёт только проверенный "
-            "builtin endpoint. Managed endpoints будут открыты клиентам после "
-            "provisioning, свежих health-проверок и явного допуска."
+            "Публичный клиентский каталог пока намеренно выдаёт только проверенный "
+            "встроенный VPN-узел. Управляемые VPN-узлы будут открыты клиентам после "
+            "выдачи конфигов, свежих проверок здоровья и явного допуска."
         ),
     }
 
@@ -5536,10 +7724,10 @@ def build_server_publication_readiness(
         next_actions.append(
             {
                 "code": "add_managed_endpoint",
-                "title": "Добавить первый managed endpoint",
+                "title": "Добавить первый управляемый VPN-узел",
                 "owner": "admin",
                 "detail": (
-                    "Занеси новый VPS в Server Catalog как draft/internal. "
+                    "Занеси новый VPS в каталог серверов как draft/internal. "
                     "Публичный клиент от этого не изменится."
                 ),
             }
@@ -5552,7 +7740,7 @@ def build_server_publication_readiness(
                 "owner": "codex",
                 "detail": (
                     "Для текущего сервера можно выбрать builtin_wg0, для новых VPS "
-                    "профиль остаётся none до отдельного provisioning слоя."
+                    "после server-only env доступен remote_ssh_wg0."
                 ),
             }
         )
@@ -5560,11 +7748,25 @@ def build_server_publication_readiness(
         next_actions.append(
             {
                 "code": "implement_multi_endpoint_provisioning",
-                "title": "Сделать provisioning для внешних VPN endpoint",
+                "title": "Сделать выдачу конфигов для внешних VPN-узлов",
                 "owner": "codex",
                 "detail": (
-                    "Новые VPS нельзя отдавать клиентам через текущий wg0-профиль. "
-                    "Нужны отдельные peer/config rules, routing и health-gate по serverId."
+                    "Для внешнего VPS нужен профиль remote_ssh_wg0 и server-only env на backend. "
+                    "После этого всё равно нужны DNS, мониторинг и canary перед публикацией."
+                ),
+            }
+        )
+    if blockers_by_code.get("remote_node_config_missing") or blockers_by_code.get(
+        "remote_node_ssh_key_not_found"
+    ):
+        next_actions.append(
+            {
+                "code": "configure_remote_node_env",
+                "title": "Положить server-only env и SSH-ключ удалённого VPN-узла",
+                "owner": "codex",
+                "detail": (
+                    "Файл /etc/bluevpn/vpn_nodes/<serverId>.env и SSH-ключ должны быть только "
+                    "на backend-сервере, не в репозитории."
                 ),
             }
         )
@@ -5574,10 +7776,10 @@ def build_server_publication_readiness(
         next_actions.append(
             {
                 "code": "add_monitoring_observations",
-                "title": "Накопить health observations",
+                "title": "Накопить проверки здоровья",
                 "owner": "ops",
                 "detail": (
-                    "Endpoint должен иметь свежие healthy-проверки за последние 24 часа, "
+                    "VPN-узел должен иметь свежие здоровые проверки за последние 24 часа, "
                     "иначе авто-выбор сервера будет небезопасным."
                 ),
             }
@@ -5586,7 +7788,7 @@ def build_server_publication_readiness(
         next_actions.append(
             {
                 "code": "mark_public_candidate_after_canary",
-                "title": "Отметить endpoint кандидатом только после canary",
+                "title": "Отметить VPN-узел кандидатом только после канареечной проверки",
                 "owner": "admin",
                 "detail": (
                     "Флаг public сейчас означает только кандидат на публикацию, "
@@ -5598,11 +7800,11 @@ def build_server_publication_readiness(
         next_actions.append(
             {
                 "code": "ready_for_manual_review",
-                "title": "Готово к ручному release review",
+                "title": "Готово к ручному релизному ревью",
                 "owner": "admin",
                 "detail": (
-                    "Перед публикацией всё равно нужен release gate, staged rollout "
-                    "и план rollback."
+                    "Перед публикацией всё равно нужны релизная проверка, поэтапная раскатка "
+                    "и план отката."
                 ),
             }
         )
@@ -5632,11 +7834,175 @@ def build_server_publication_readiness(
         "blockedManagedEntries": blocked_entries,
         "nextActions": next_actions,
         "clientImpact": (
-            "Публичный клиентский server catalog пока остаётся на builtin endpoint "
+            "Публичный клиентский каталог серверов пока остаётся на встроенном VPN-узле "
             "intelligent_smew. Это намеренно защищает работающий VPN от случайной "
             "выдачи неподготовленного сервера."
         ),
     }
+
+
+def publication_gate_entry_summary(entry: dict) -> dict:
+    return {
+        "id": entry.get("id"),
+        "serverId": entry.get("serverId"),
+        "title": entry.get("title"),
+        "host": entry.get("host"),
+        "port": entry.get("port"),
+        "status": entry.get("status"),
+        "isActive": bool(entry.get("isActive")),
+        "isPublic": bool(entry.get("isPublic")),
+        "healthScore": entry.get("healthScore"),
+        "clientConfigProfile": entry.get("clientConfigProfile"),
+        "clientConfigReady": bool(entry.get("clientConfigReady")),
+        "publicEligible": bool(entry.get("publicEligible")),
+        "blockers": entry.get("publicBlockers") or [],
+        "latestObservationAt": entry.get("latestObservationAt"),
+        "latestObservationStatus": entry.get("latestObservationStatus"),
+        "latestObservationAgeHours": entry.get("latestObservationAgeHours"),
+        "healthyObservations24h": entry.get("healthyObservations24h"),
+        "failedObservations24h": entry.get("failedObservations24h"),
+        "capacity": entry.get("capacity") or {},
+    }
+
+
+def build_server_publication_gate_preview(server_id: str) -> dict:
+    normalized_server_id = normalize_server_id(server_id)
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM server_catalog_entries WHERE server_id = ?",
+            (normalized_server_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Managed VPN-узел не найден.")
+
+        current_meta = server_health_meta_for_entries(conn, [normalized_server_id])
+        current_entry = server_catalog_entry_payload(
+            row,
+            current_meta.get(normalized_server_id),
+        )
+
+        transaction_open = False
+        try:
+            conn.execute("BEGIN")
+            transaction_open = True
+            conn.execute(
+                """
+                UPDATE server_catalog_entries
+                SET is_active = 1,
+                    is_public = 1,
+                    publication_paused_at = NULL,
+                    publication_paused_reason = NULL,
+                    publication_paused_by = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (utc_now_iso(), int(row["id"])),
+            )
+            candidate_row = conn.execute(
+                "SELECT * FROM server_catalog_entries WHERE id = ?",
+                (int(row["id"]),),
+            ).fetchone()
+            candidate_meta = server_health_meta_for_entries(conn, [normalized_server_id])
+            candidate_entry = server_catalog_entry_payload(
+                candidate_row,
+                candidate_meta.get(normalized_server_id),
+            )
+        finally:
+            if transaction_open:
+                conn.rollback()
+
+    blockers = candidate_entry.get("publicBlockers") or []
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "serverId": normalized_server_id,
+        "mode": "dry_run_publication_gate",
+        "canPublish": bool(candidate_entry.get("publicEligible")),
+        "current": publication_gate_entry_summary(current_entry),
+        "candidate": publication_gate_entry_summary(candidate_entry),
+        "blockers": blockers,
+        "requirements": server_publication_requirements(),
+        "clientImpact": (
+            "При применении backend включит VPN-узел в публичный клиентский каталог. "
+            "Если хотя бы одна проверка красная, публикация будет заблокирована."
+        ),
+    }
+
+
+def publish_managed_server_catalog_entry(server_id: str) -> dict:
+    normalized_server_id = normalize_server_id(server_id)
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM server_catalog_entries WHERE server_id = ?",
+            (normalized_server_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Managed VPN-узел не найден.")
+
+        now = utc_now_iso()
+        conn.execute(
+            """
+            UPDATE server_catalog_entries
+            SET is_active = 1,
+                is_public = 1,
+                publication_paused_at = NULL,
+                publication_paused_reason = NULL,
+                publication_paused_by = NULL,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (now, int(row["id"])),
+        )
+        updated = conn.execute(
+            "SELECT * FROM server_catalog_entries WHERE id = ?",
+            (int(row["id"]),),
+        ).fetchone()
+        health_meta = server_health_meta_for_entries(conn, [normalized_server_id])
+        entry = server_catalog_entry_payload(updated, health_meta.get(normalized_server_id))
+        if not entry.get("publicEligible"):
+            conn.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Публикация VPN-узла заблокирована шлюзом безопасности.",
+                    "serverId": normalized_server_id,
+                    "blockers": entry.get("publicBlockers") or [],
+                },
+            )
+        conn.commit()
+    return entry
+
+
+def unpublish_managed_server_catalog_entry(server_id: str, reason: str = "manual_unpublish") -> dict:
+    normalized_server_id = normalize_server_id(server_id)
+    now = utc_now_iso()
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM server_catalog_entries WHERE server_id = ?",
+            (normalized_server_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Managed VPN-узел не найден.")
+        conn.execute(
+            """
+            UPDATE server_catalog_entries
+            SET is_public = 0,
+                publication_paused_at = ?,
+                publication_paused_reason = ?,
+                publication_paused_by = 'admin',
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (now, clean_limited_text(reason, 180).strip() or "manual_unpublish", now, int(row["id"])),
+        )
+        updated = conn.execute(
+            "SELECT * FROM server_catalog_entries WHERE id = ?",
+            (int(row["id"]),),
+        ).fetchone()
+        health_meta = server_health_meta_for_entries(conn, [normalized_server_id])
+        entry = server_catalog_entry_payload(updated, health_meta.get(normalized_server_id))
+        conn.commit()
+    return entry
 
 
 def build_new_server_onboarding_plan(
@@ -5671,7 +8037,7 @@ def build_new_server_onboarding_plan(
             "safeDraftPayload": {
                 "serverId": "nl1",
                 "title": "Netherlands #1",
-                "subtitle": "Внутренний черновик нового endpoint Green VPN",
+                "subtitle": "Внутренний черновик нового VPN-узла Green VPN",
                 "country": "NL",
                 "city": "Amsterdam",
                 "provider": "timeweb-or-next-provider",
@@ -5682,23 +8048,23 @@ def build_new_server_onboarding_plan(
             },
         },
         {
-            "serverId": "de1",
-            "hostname": "de1.vpn.greenvpn.pro",
-            "region": "Frankfurt, Germany",
-            "country": "DE",
-            "city": "Frankfurt",
-            "role": "latency_and_fallback_candidate",
+            "serverId": "gb1",
+            "hostname": "gb1.vpn.greenvpn.pro",
+            "region": "London, United Kingdom",
+            "country": "GB",
+            "city": "London",
+            "role": "next_provider_test_candidate",
             "safeDraftPayload": {
-                "serverId": "de1",
-                "title": "Germany #1",
-                "subtitle": "Внутренний черновик резервного endpoint Green VPN",
-                "country": "DE",
-                "city": "Frankfurt",
-                "provider": "timeweb-or-next-provider",
-                "host": "de1.vpn.greenvpn.pro",
+                "serverId": "gb1",
+                "title": "United Kingdom #1",
+                "subtitle": "Внутренний черновик тестового VPN-узла Green VPN",
+                "country": "GB",
+                "city": "London",
+                "provider": "ruvds-or-hostkey",
+                "host": "gb1.vpn.greenvpn.pro",
                 "port": WG_ENDPOINT_PORT,
                 "plannedBandwidthMbps": 200,
-                "monthlyCostRub": 3240,
+                "monthlyCostRub": 3500,
             },
         },
         {
@@ -5711,7 +8077,7 @@ def build_new_server_onboarding_plan(
             "safeDraftPayload": {
                 "serverId": "kz1",
                 "title": "Kazakhstan #1",
-                "subtitle": "Внутренний черновик регионального endpoint Green VPN",
+                "subtitle": "Внутренний черновик регионального VPN-узла Green VPN",
                 "country": "KZ",
                 "city": "Almaty",
                 "provider": "timeweb-or-next-provider",
@@ -5727,7 +8093,7 @@ def build_new_server_onboarding_plan(
         {
             "name": "Провайдер и тариф VPS",
             "secret": False,
-            "example": "Timeweb / Amsterdam / 1 Gbit/s / monthly cost",
+            "example": "Timeweb / Amsterdam / 1 Gbit/s / месячная стоимость",
         },
         {
             "name": "Публичный IPv4 нового VPS",
@@ -5735,19 +8101,19 @@ def build_new_server_onboarding_plan(
             "example": "203.0.113.10",
         },
         {
-            "name": "Hostname для VPN endpoint",
+            "name": "Hostname для VPN-узла",
             "secret": False,
             "example": "nl1.vpn.greenvpn.pro",
         },
         {
-            "name": "WireGuard UDP port",
+            "name": "UDP-порт WireGuard",
             "secret": False,
             "example": str(WG_ENDPOINT_PORT),
         },
         {
             "name": "Плановая пропускная способность",
             "secret": False,
-            "example": "1000 Mbps provider channel, internal planning cap per node",
+            "example": "канал провайдера 1000 Mbps, внутренний плановый лимит на узел",
         },
         {
             "name": "Публичная подпись региона",
@@ -5768,8 +8134,8 @@ def build_new_server_onboarding_plan(
             ),
             "exitCriteria": [
                 "serverId уникален",
-                "public catalog не изменился",
-                "клиент всё ещё получает только default endpoint",
+                "публичный каталог не изменился",
+                "клиент всё ещё получает только основной VPN-узел",
             ],
         },
         {
@@ -5779,12 +8145,12 @@ def build_new_server_onboarding_plan(
             "status": "blocked_until_vps_exists",
             "details": (
                 "Создать A-запись вида nl1.vpn.greenvpn.pro -> новый IPv4, "
-                "открыть WireGuard UDP port и убедиться, что API/site IP не смешан с VPN endpoint."
+                "открыть UDP-порт WireGuard и убедиться, что IP сайта/API не смешан с VPN-узлом."
             ),
             "exitCriteria": [
                 "hostname резолвится в новый IPv4",
                 "UDP порт доступен снаружи",
-                "api.greenvpn.pro остаётся отдельным public API/site host",
+                "api.greenvpn.pro остаётся отдельным публичным хостом API/сайта",
             ],
         },
         {
@@ -5794,7 +8160,7 @@ def build_new_server_onboarding_plan(
             "status": "planned",
             "details": (
                 "Настроить интерфейс и peer allocation на новом VPS. Private keys и admin tokens "
-                "хранятся только на сервере, в чат и repository не попадают."
+                "хранятся только на сервере, в чат и репозиторий не попадают."
             ),
             "exitCriteria": [
                 "server private key создан только на VPS",
@@ -5808,27 +8174,27 @@ def build_new_server_onboarding_plan(
             "owner": "codex",
             "status": "blocked_until_probe_host",
             "details": (
-                "Проверять новый endpoint с отдельного monitoring VPS, а не только с самого backend."
+                "Проверять новый VPN-узел с отдельного VPS мониторинга, а не только с самого backend."
             ),
             "exitCriteria": [
-                "есть свежие healthy observations",
+                "есть свежие здоровые наблюдения",
                 "нет активных server-health incidents",
-                "endpoint покрыт external probe agent",
+                "VPN-узел покрыт внешним агентом мониторинга",
             ],
         },
         {
             "code": "staged_publication",
-            "title": "Публиковать только после отдельной выдачи конфигов",
+            "title": "Публиковать только после server-only provisioning и canary",
             "owner": "codex",
-            "status": "locked",
+            "status": "blocked_until_dns_and_canary",
             "details": (
-                "До готовности multi-endpoint provisioning новый VPS остаётся внутренним. "
-                "Публичный catalog для Windows MVP не меняется."
+                "Новый VPS может получить профиль remote_ssh_wg0, но публичный каталог Windows "
+                "не меняется до DNS, внешнего мониторинга и ручного допуска."
             ),
             "exitCriteria": [
-                "clientConfigProfile не builtin_wg0 для чужого VPS",
-                "стадии canary/rollback готовы",
-                "release gate зелёный кроме сознательных owner blockers",
+                "clientConfigProfile=remote_ssh_wg0 для чужого VPS",
+                "стадии канареечной проверки и отката готовы",
+                "релизная проверка зелёная кроме сознательных блокеров владельца",
             ],
         },
     ]
@@ -5846,15 +8212,15 @@ def build_new_server_onboarding_plan(
         },
         {
             "code": "server_specific_config_required",
-            "ok": False,
-            "warning": True,
-            "message": "Для второго VPS нужен отдельный peer/config builder; builtin_wg0 подходит только текущему endpoint.",
+            "ok": True,
+            "warning": False,
+            "message": "Для второго VPS предусмотрен профиль remote_ssh_wg0; builtin_wg0 остаётся только для текущего VPN-узла.",
         },
         {
             "code": "external_probe_required",
             "ok": False,
             "warning": True,
-            "message": "Перед публикацией нужен внешний monitoring probe с отдельной машины.",
+            "message": "Перед публикацией нужен внешний агент мониторинга с отдельной машины.",
         },
     ]
 
@@ -5889,22 +8255,22 @@ def build_new_server_onboarding_plan(
             for entry in internal_drafts[:20]
         ],
         "blockedUntil": [
-            "API/site host and VPN endpoint are split before public launch",
-            "new VPS exists and DNS A record points to it",
-            "server-specific WireGuard peer/config provisioning is implemented",
-            "external monitoring probe has fresh healthy observations",
-            "staged rollout and rollback are checked",
+            "IP сайта/API и VPN-узла разделены до публичного запуска",
+            "новый VPS создан и DNS A-запись указывает на него",
+            "server-only env и remote_ssh_wg0 проверены на конкретном сервере",
+            "внешний агент мониторинга имеет свежие здоровые наблюдения",
+            "поэтапная раскатка и откат проверены",
         ],
         "verification": [
             {"kind": "admin_api", "path": "/api/v1/admin/server-catalog"},
             {"kind": "admin_api", "path": "/api/v1/admin/server-catalog/publication-readiness"},
             {"kind": "admin_api", "path": "/api/v1/admin/server-catalog/provisioning-readiness"},
             {"kind": "admin_api", "path": "/api/v1/admin/server-health"},
-            {"kind": "public_api", "path": "/api/v1/catalog/servers", "expected": "managed endpoints hidden"},
+            {"kind": "public_api", "path": "/api/v1/catalog/servers", "expected": "управляемые VPN-узлы скрыты"},
         ],
         "clientImpact": (
             "Можно заранее описывать и проверять новые VPS в админке, но пользователи "
-            "Windows MVP не увидят их до отдельной безопасной публикации."
+            "Windows-клиенты не увидят их до отдельной безопасной публикации."
         ),
     }
 
@@ -5971,47 +8337,47 @@ def build_server_provisioning_readiness(
 
     add_check(
         "public_default_server_present",
-        "Default server есть в публичном catalog",
+        "Основной сервер есть в публичном каталоге",
         bool(default_server),
-        f"defaultServerId={default_server_id}.",
+        f"основной serverId={default_server_id}.",
     )
     add_check(
         "client_config_builder_matches_public_default",
-        "Client config builder совпадает с публичным endpoint",
+        "Сборщик клиентского конфига совпадает с публичным VPN-узлом",
         default_endpoint_matches,
         (
-            f"Публичный default endpoint совпадает с backend wg0 {expected_endpoint}."
+            f"Публичный основной VPN-узел совпадает с backend wg0 {expected_endpoint}."
             if default_endpoint_matches
             else (
-                "Публичный default endpoint должен совпадать с backend wg0 "
+                "Публичный основной VPN-узел должен совпадать с backend wg0 "
                 f"{expected_endpoint}; сейчас {default_endpoint or 'не задан'}."
             )
         ),
     )
     add_check(
         "client_selection_is_public_catalog_only",
-        "Выбор serverId ограничен публичным catalog",
+        "Выбор сервера ограничен публичным каталогом",
         True,
-        "Клиентский /api/v1/client/config принимает только auto/default и public catalog ids.",
+        "Клиентский /api/v1/client/config принимает только auto/default и serverId из публичного каталога.",
     )
     add_check(
         "managed_entries_not_client_visible",
-        "Managed endpoints не видны клиенту",
+        "Управляемые VPN-узлы не видны клиенту",
         len(managed_visible_to_client) == 0,
         (
-            "Managed entries отсутствуют в публичном catalog."
+            "Управляемые записи отсутствуют в публичном каталоге."
             if not managed_visible_to_client
-            else "Managed entries попали в публичный catalog и требуют ручной проверки."
+            else "Управляемые записи попали в публичный каталог и требуют ручной проверки."
         ),
     )
     add_check(
         "current_wg0_seeded",
-        "current_wg0 есть во внутреннем catalog",
+        "current_wg0 есть во внутреннем каталоге",
         bool(current_wg0),
         (
-            "current_wg0 найден во внутреннем managed catalog."
+            "current_wg0 найден во внутреннем управляемом каталоге."
             if current_wg0
-            else "Нужно выполнить seed-current перед проверкой текущего endpoint."
+            else "Нужно выполнить seed-current перед проверкой текущего VPN-узла."
         ),
         warning=not bool(current_wg0),
     )
@@ -6020,7 +8386,7 @@ def build_server_provisioning_readiness(
         "current_wg0 готов как builtin_wg0 профиль",
         current_wg0_ready,
         (
-            "current_wg0 готов к выдаче через существующий wg0 config builder."
+            "current_wg0 готов к выдаче через существующий сборщик wg0-конфига."
             if current_wg0_ready
             else "current_wg0 пока не прошёл clientConfigReadiness."
         ),
@@ -6028,9 +8394,9 @@ def build_server_provisioning_readiness(
     )
     add_check(
         "multi_endpoint_provisioning_locked",
-        "Новые endpoint закрыты до отдельного provisioning",
+        "Новые VPN-узлы закрыты до отдельной выдачи конфигов",
         True,
-        "Внешние managed VPS не выдаются пользователям через текущий builtin_wg0 профиль.",
+        "Внешние управляемые VPS не выдаются пользователям через текущий профиль builtin_wg0.",
         warning=True,
     )
     new_server_draft_gate_ready = (
@@ -6043,9 +8409,9 @@ def build_server_provisioning_readiness(
         "Новый VPS можно готовить только как внутренний черновик",
         new_server_draft_gate_ready,
         (
-            "Безопасно заводить новый VPS в managed catalog как draft/isPublic=false/clientConfigProfile=none."
+            "Безопасно заводить новый VPS в управляемый каталог как draft/isPublic=false/clientConfigProfile=none."
             if new_server_draft_gate_ready
-            else "Перед добавлением нового VPS нужно вернуть public catalog и default endpoint в безопасное состояние."
+            else "Перед добавлением нового VPS нужно вернуть публичный каталог и основной VPN-узел в безопасное состояние."
         ),
         warning=not new_server_draft_gate_ready,
     )
@@ -6111,16 +8477,16 @@ def build_server_provisioning_readiness(
             "configProfile": "builtin_wg0",
             "endpoint": expected_endpoint,
             "managedCatalogClientVisible": False,
-            "unknownManagedBehavior": "400 Unknown serverId",
+            "unknownManagedBehavior": "400 неизвестный serverId",
         },
         "summary": {
             "green": len(checks) - len(warnings),
             "yellow": len(warnings),
             "red": len(failed_required),
             "message": (
-                "Client config выдаётся только через безопасный публичный catalog."
+                "Клиентский конфиг выдаётся только через безопасный публичный каталог."
                 if safe_for_current_client
-                else "Client config serverId gate требует исправления перед публикацией."
+                else "Проверка serverId для клиентского конфига требует исправления перед публикацией."
             ),
         },
         "checks": checks,
@@ -6150,17 +8516,17 @@ def build_server_provisioning_readiness(
         "nextActions": [
             {
                 "code": "keep_public_catalog_safe",
-                "title": "Не публиковать managed endpoints автоматически",
+                "title": "Не публиковать управляемые VPN-узлы автоматически",
                 "owner": "codex",
-                "detail": "Перед multi-endpoint нужны отдельные peer/config rules, probes и staged rollout.",
+                "detail": "Перед несколькими VPN-узлами нужны отдельные правила peer/config, проверки мониторинга и поэтапная раскатка.",
             },
             {
                 "code": "prepare_next_vps_as_internal_draft",
-                "title": "Готовить следующий VPS только как внутренний draft",
+                "title": "Готовить следующий VPS только как внутренний черновик",
                 "owner": "codex",
                 "detail": (
-                    "Сначала DNS/health/probe/inventory, затем отдельная выдача конфигов; "
-                    "публичный catalog не меняется."
+                    "Сначала DNS, проверки здоровья, мониторинг и инвентаризация, затем отдельная выдача конфигов; "
+                    "публичный каталог не меняется."
                 ),
             }
         ],
@@ -6176,18 +8542,22 @@ def normalize_optional_nonnegative_int(
     try:
         parsed = int(value)
     except Exception:
-        raise HTTPException(status_code=400, detail="Expected numeric planning value.")
+        raise HTTPException(status_code=400, detail="Ожидалось числовое плановое значение.")
     return max(0, min(parsed, max_value))
+
+
+def normalize_optional_iso_text(value: Optional[str]) -> str:
+    return clean_limited_text(value, 80).strip()
 
 
 def safe_new_server_draft_entry_input(payload: AdminServerCatalogDraftIn) -> AdminServerCatalogEntryIn:
     server_id = normalize_server_id(payload.serverId)
     title = clean_limited_text(payload.title, 120).strip()
     if not title:
-        raise HTTPException(status_code=400, detail="title is required.")
+        raise HTTPException(status_code=400, detail="Название обязательно.")
     country = clean_limited_text(payload.country, 8).strip().upper()
     if not country:
-        raise HTTPException(status_code=400, detail="country is required.")
+        raise HTTPException(status_code=400, detail="Страна обязательна.")
     host = normalize_server_host(payload.host)
     port = normalize_server_port(payload.port or WG_ENDPOINT_PORT)
     bandwidth_mbps = normalize_optional_nonnegative_int(payload.plannedBandwidthMbps, 100_000)
@@ -6197,18 +8567,18 @@ def safe_new_server_draft_entry_input(payload: AdminServerCatalogDraftIn) -> Adm
     if base_notes:
         note_parts.append(base_notes)
     if bandwidth_mbps:
-        note_parts.append(f"Planned bandwidth: {bandwidth_mbps} Mbps.")
+        note_parts.append(f"Планируемая скорость: {bandwidth_mbps} Mbps.")
     if monthly_cost_rub:
-        note_parts.append(f"Monthly VPS cost: {monthly_cost_rub} RUB.")
+        note_parts.append(f"Стоимость VPS в месяц: {monthly_cost_rub} RUB.")
     note_parts.append(
-        "Created via safe new VPS draft workflow: internal-only, inactive, not public, clientConfigProfile=none."
+        "Создано через безопасный workflow черновика нового VPS: только внутри, выключен, не публичный, clientConfigProfile=none."
     )
     return AdminServerCatalogEntryIn(
         serverId=server_id,
         title=title,
         subtitle=(
             clean_limited_text(payload.subtitle, 180).strip()
-            or "Внутренний черновик нового VPN endpoint Green VPN"
+            or "Внутренний черновик нового VPN-узла Green VPN"
         ),
         country=country,
         city=clean_limited_text(payload.city, 80).strip(),
@@ -6224,6 +8594,12 @@ def safe_new_server_draft_entry_input(payload: AdminServerCatalogDraftIn) -> Adm
         priority=100,
         isActive=False,
         isPublic=False,
+        plannedBandwidthMbps=bandwidth_mbps,
+        reservedBandwidthMbps=None,
+        currentLoadMbps=0,
+        activeClients=0,
+        assignedUsers=0,
+        loadUpdatedAt=None,
         notes="\n".join(note_parts),
     )
 
@@ -6236,10 +8612,10 @@ def upsert_managed_server_catalog_entry(
     server_id = normalize_server_id(payload.serverId)
     title = clean_limited_text(payload.title, 120).strip()
     if not title:
-        raise HTTPException(status_code=400, detail="title is required.")
+        raise HTTPException(status_code=400, detail="Название обязательно.")
     country = clean_limited_text(payload.country, 8).strip().upper()
     if not country:
-        raise HTTPException(status_code=400, detail="country is required.")
+        raise HTTPException(status_code=400, detail="Страна обязательна.")
     host = normalize_server_host(payload.host)
     port = normalize_server_port(payload.port)
     protocol = normalize_server_catalog_protocol(payload.protocol)
@@ -6253,6 +8629,21 @@ def upsert_managed_server_catalog_entry(
     priority = normalize_priority(payload.priority, 100)
     is_active = 1 if payload.isActive else 0
     is_public = 1 if payload.isPublic else 0
+    planned_bandwidth_mbps = normalize_optional_nonnegative_int(
+        payload.plannedBandwidthMbps,
+        100_000,
+    )
+    reserved_bandwidth_mbps = normalize_optional_nonnegative_int(
+        payload.reservedBandwidthMbps,
+        100_000,
+    )
+    current_load_mbps = normalize_optional_nonnegative_int(
+        payload.currentLoadMbps,
+        100_000,
+    )
+    active_clients = normalize_optional_nonnegative_int(payload.activeClients, 1_000_000)
+    assigned_users = normalize_optional_nonnegative_int(payload.assignedUsers, 10_000_000)
+    load_updated_at = normalize_optional_iso_text(payload.loadUpdatedAt)
     publication_reset = is_public == 1
 
     with db() as conn:
@@ -6262,7 +8653,7 @@ def upsert_managed_server_catalog_entry(
                 (entry_id,),
             ).fetchone()
             if exists is None:
-                raise HTTPException(status_code=404, detail="Server catalog entry not found.")
+                raise HTTPException(status_code=404, detail="Запись каталога серверов не найдена.")
             duplicate = conn.execute(
                 """
                 SELECT id FROM server_catalog_entries
@@ -6271,14 +8662,17 @@ def upsert_managed_server_catalog_entry(
                 (server_id, entry_id),
             ).fetchone()
             if duplicate is not None:
-                raise HTTPException(status_code=409, detail="serverId already exists.")
+                raise HTTPException(status_code=409, detail="serverId уже существует.")
             conn.execute(
                 """
                 UPDATE server_catalog_entries
                 SET server_id = ?, title = ?, subtitle = ?, country = ?, city = ?,
                     provider = ?, host = ?, port = ?, protocol = ?, transport = ?,
                     client_config_profile = ?, status = ?, health_score = ?, latency_ms = ?, priority = ?,
-                    is_active = ?, is_public = ?, notes = ?,
+                    is_active = ?, is_public = ?,
+                    planned_bandwidth_mbps = ?, reserved_bandwidth_mbps = ?,
+                    current_load_mbps = ?, active_clients = ?, assigned_users = ?,
+                    load_updated_at = ?, notes = ?,
                     publication_paused_at = CASE WHEN ? THEN NULL ELSE publication_paused_at END,
                     publication_paused_reason = CASE WHEN ? THEN NULL ELSE publication_paused_reason END,
                     publication_paused_by = CASE WHEN ? THEN NULL ELSE publication_paused_by END,
@@ -6303,6 +8697,12 @@ def upsert_managed_server_catalog_entry(
                     priority,
                     is_active,
                     is_public,
+                    planned_bandwidth_mbps,
+                    reserved_bandwidth_mbps,
+                    current_load_mbps,
+                    active_clients,
+                    assigned_users,
+                    load_updated_at,
                     clean_limited_text(payload.notes, 1000).strip(),
                     1 if publication_reset else 0,
                     1 if publication_reset else 0,
@@ -6318,15 +8718,17 @@ def upsert_managed_server_catalog_entry(
                 (server_id,),
             ).fetchone()
             if existing is not None:
-                raise HTTPException(status_code=409, detail="serverId already exists.")
+                raise HTTPException(status_code=409, detail="serverId уже существует.")
             cur = conn.execute(
                 """
                 INSERT INTO server_catalog_entries(
                     server_id, title, subtitle, country, city, provider, host, port,
                     protocol, transport, client_config_profile, status, health_score, latency_ms, priority,
-                    is_active, is_public, notes, created_at, updated_at
+                    is_active, is_public, planned_bandwidth_mbps, reserved_bandwidth_mbps,
+                    current_load_mbps, active_clients, assigned_users, load_updated_at,
+                    notes, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     server_id,
@@ -6346,26 +8748,132 @@ def upsert_managed_server_catalog_entry(
                     priority,
                     is_active,
                     is_public,
+                    planned_bandwidth_mbps,
+                    reserved_bandwidth_mbps,
+                    current_load_mbps,
+                    active_clients,
+                    assigned_users,
+                    load_updated_at,
                     clean_limited_text(payload.notes, 1000).strip(),
                     now,
                     now,
                 ),
             )
             row_id = int(cur.lastrowid)
-        conn.commit()
         row = conn.execute(
             "SELECT * FROM server_catalog_entries WHERE id = ?",
             (row_id,),
         ).fetchone()
         health_meta = server_health_meta_for_entries(conn, [row["server_id"]])
-    return server_catalog_entry_payload(row, health_meta.get(row["server_id"]))
+        entry = server_catalog_entry_payload(row, health_meta.get(row["server_id"]))
+        if bool(row["is_public"]) and not entry.get("publicEligible"):
+            conn.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "Публичный VPN-узел не прошёл publication gate.",
+                    "serverId": entry.get("serverId"),
+                    "blockers": entry.get("publicBlockers") or [],
+                },
+            )
+        conn.commit()
+    return entry
+
+
+def update_managed_server_capacity_entry(
+    entry_id: int,
+    payload: AdminServerCapacityIn,
+) -> dict:
+    now = utc_now_iso()
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM server_catalog_entries WHERE id = ?",
+            (entry_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Запись каталога серверов не найдена.")
+
+        planned_bandwidth_mbps = (
+            normalize_optional_nonnegative_int(payload.plannedBandwidthMbps, 100_000)
+            if payload.plannedBandwidthMbps is not None
+            else safe_row_int(row, "planned_bandwidth_mbps", None)
+        )
+        reserved_bandwidth_mbps = (
+            normalize_optional_nonnegative_int(payload.reservedBandwidthMbps, 100_000)
+            if payload.reservedBandwidthMbps is not None
+            else safe_row_int(row, "reserved_bandwidth_mbps", None)
+        )
+        current_load_mbps = (
+            normalize_optional_nonnegative_int(payload.currentLoadMbps, 100_000)
+            if payload.currentLoadMbps is not None
+            else safe_row_int(row, "current_load_mbps", None)
+        )
+        active_clients = (
+            normalize_optional_nonnegative_int(payload.activeClients, 1_000_000)
+            if payload.activeClients is not None
+            else safe_row_int(row, "active_clients", None)
+        )
+        assigned_users = (
+            normalize_optional_nonnegative_int(payload.assignedUsers, 10_000_000)
+            if payload.assignedUsers is not None
+            else safe_row_int(row, "assigned_users", None)
+        )
+        load_updated_at = normalize_optional_iso_text(payload.loadUpdatedAt)
+        if not load_updated_at:
+            load_updated_at = now
+
+        conn.execute(
+            """
+            UPDATE server_catalog_entries
+            SET planned_bandwidth_mbps = ?,
+                reserved_bandwidth_mbps = ?,
+                current_load_mbps = ?,
+                active_clients = ?,
+                assigned_users = ?,
+                load_updated_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                planned_bandwidth_mbps,
+                reserved_bandwidth_mbps,
+                current_load_mbps,
+                active_clients,
+                assigned_users,
+                load_updated_at,
+                now,
+                entry_id,
+            ),
+        )
+        conn.commit()
+        updated = conn.execute(
+            "SELECT * FROM server_catalog_entries WHERE id = ?",
+            (entry_id,),
+        ).fetchone()
+        health_meta = server_health_meta_for_entries(conn, [updated["server_id"]])
+    return server_catalog_entry_payload(updated, health_meta.get(updated["server_id"]))
+
+
+def update_managed_server_capacity_by_server_id(
+    server_id: str,
+    payload: AdminServerCapacityIn,
+) -> dict:
+    normalized = normalize_server_id(server_id)
+    with db() as conn:
+        row = conn.execute(
+            "SELECT id FROM server_catalog_entries WHERE server_id = ?",
+            (normalized,),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Запись каталога серверов не найдена.")
+    return update_managed_server_capacity_entry(int(row["id"]), payload)
 
 
 def current_wireguard_managed_server_payload() -> AdminServerCatalogEntryIn:
     return AdminServerCatalogEntryIn(
         serverId="current_wg0",
         title="Netherlands #1",
-        subtitle="Текущий рабочий WireGuard endpoint Green VPN",
+        subtitle="Текущий рабочий WireGuard VPN-узел Green VPN",
         country="NL",
         city="Amsterdam",
         provider="current-dev-provider",
@@ -6380,9 +8888,15 @@ def current_wireguard_managed_server_payload() -> AdminServerCatalogEntryIn:
         priority=10,
         isActive=True,
         isPublic=False,
+        plannedBandwidthMbps=SERVER_DEFAULT_BANDWIDTH_MBPS,
+        reservedBandwidthMbps=SERVER_DEFAULT_RESERVED_MBPS,
+        currentLoadMbps=0,
+        activeClients=0,
+        assignedUsers=0,
+        loadUpdatedAt=None,
         notes=(
-            "Seeded from backend environment. Safe internal managed entry: "
-            "client config profile is ready, but public candidate is intentionally off."
+            "Создано из backend-окружения. Безопасная внутренняя управляемая запись: "
+            "профиль клиентского конфига готов, но публичный кандидат намеренно выключен."
         ),
     )
 
@@ -6403,11 +8917,11 @@ def upsert_current_wireguard_managed_server() -> dict:
 def normalize_server_health_endpoint_id(value: Optional[str]) -> str:
     endpoint_id = clean_limited_text(value, 120).strip().lower()
     if not endpoint_id:
-        raise HTTPException(status_code=400, detail="endpointId is required.")
+        raise HTTPException(status_code=400, detail="endpointId обязателен.")
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{2,119}", endpoint_id):
         raise HTTPException(
             status_code=400,
-            detail="endpointId must contain latin letters, numbers, dash or underscore.",
+            detail="endpointId должен содержать латинские буквы, цифры, дефис или подчёркивание.",
         )
     return endpoint_id
 
@@ -6422,7 +8936,7 @@ def normalize_server_health_status(value: Optional[str], ok: Optional[bool] = No
         else:
             candidate = "unknown"
     if candidate not in SERVER_HEALTH_STATUSES:
-        raise HTTPException(status_code=400, detail="Unknown server health status.")
+        raise HTTPException(status_code=400, detail="Неизвестный статус здоровья сервера.")
     return candidate
 
 
@@ -6432,7 +8946,7 @@ def normalize_latency_ms(value: Optional[int]) -> Optional[int]:
     try:
         parsed = int(value)
     except Exception:
-        raise HTTPException(status_code=400, detail="latencyMs must be a number.")
+        raise HTTPException(status_code=400, detail="latencyMs должен быть числом.")
     return max(0, min(parsed, 600000))
 
 
@@ -6442,7 +8956,7 @@ def normalize_packet_loss(value: Optional[float]) -> Optional[float]:
     try:
         parsed = float(value)
     except Exception:
-        raise HTTPException(status_code=400, detail="packetLossPercent must be a number.")
+        raise HTTPException(status_code=400, detail="packetLossPercent должен быть числом.")
     return max(0.0, min(parsed, 100.0))
 
 
@@ -6488,10 +9002,10 @@ def server_health_score_from_details(details: dict, status: str) -> int:
 def server_catalog_public_pause_reasons(status: str, health_score: int) -> list[str]:
     reasons: list[str] = []
     if status in {"down", "degraded"}:
-        reasons.append(f"latest health status is {status}")
+        reasons.append(f"последний статус здоровья: {status}")
     if health_score < SERVER_PUBLIC_MIN_HEALTH_SCORE:
         reasons.append(
-            f"health score {health_score}% below {SERVER_PUBLIC_MIN_HEALTH_SCORE}%"
+            f"оценка здоровья {health_score}% ниже {SERVER_PUBLIC_MIN_HEALTH_SCORE}%"
         )
     return reasons
 
@@ -7085,6 +9599,7 @@ def build_server_health_external_probe_operator_plan(
         "-ProbeId windows-external-check "
         "-ProbeRegion local-windows "
         "-ServerHealth "
+        "-RouteHealth "
         "-AdminTokenFromStdin"
     )
     linux_run_once = (
@@ -7093,6 +9608,7 @@ def build_server_health_external_probe_operator_plan(
         "--probe-id probe-eu-1 "
         "--probe-region eu "
         "--server-health "
+        "--route-health "
         "--admin-token-stdin"
     )
     install_command = (
@@ -7102,6 +9618,7 @@ def build_server_health_external_probe_operator_plan(
         "--probe-region eu "
         "--interval 300 "
         "--server-health "
+        "--route-health "
         "--token-stdin"
     )
     endpoints_needing_action = sorted(
@@ -7109,10 +9626,10 @@ def build_server_health_external_probe_operator_plan(
     )
     return {
         "mode": "safe_external_probe_operation",
-        "productionRecommendation": "Use a separate monitoring VPS outside the main backend/VPN server.",
+        "productionRecommendation": "Использовать отдельный VPS мониторинга вне основного backend/VPN-сервера.",
         "tokenPolicy": (
-            "Admin token must be supplied through stdin or a 600-permission token file on the probe host. "
-            "Never pass it in command arguments, repo files, docs, shell history, screenshots, or chat."
+            "Admin token нужно передавать через stdin или файл токена с правами 600 на хосте мониторинга. "
+            "Нельзя передавать его в аргументах команд, файлах репозитория, документах, истории shell, скриншотах или чате."
         ),
         "windowsRunOnceCommand": windows_run_once,
         "linuxRunOnceCommand": linux_run_once,
@@ -7120,13 +9637,13 @@ def build_server_health_external_probe_operator_plan(
         "runOnceCommands": [
             {
                 "platform": "windows",
-                "purpose": "Manual one-off external check from this PC/network.",
+                "purpose": "Разовая внешняя проверка вручную с этого ПК/сети.",
                 "command": windows_run_once,
                 "safeForPublicRelease": False,
             },
             {
                 "platform": "linux",
-                "purpose": "Manual one-off check from a monitoring VPS before installing timer.",
+                "purpose": "Разовая проверка с VPS мониторинга перед установкой таймера.",
                 "command": linux_run_once,
                 "safeForPublicRelease": False,
             },
@@ -7146,7 +9663,7 @@ def build_server_health_external_probe_operator_plan(
         "missingCoverageActions": [
             {
                 "endpointId": endpoint_id,
-                "action": "Run the external probe with --server-health until this endpoint has a fresh healthy observation.",
+                "action": "Run the external probe with --server-health --route-health until this endpoint has a fresh healthy observation.",
             }
             for endpoint_id in endpoints_needing_action
         ],
@@ -7154,7 +9671,7 @@ def build_server_health_external_probe_operator_plan(
             "Run the command from a network outside the main backend/VPN host.",
             "Confirm GET /api/v1/admin/server-health shows the endpoint under coveredEndpointIds.",
             "Confirm the observation is healthy, fresh and has probeRegion not equal to backend.",
-            "Confirm GET /api/v1/admin/monitoring/readiness still has --server-health in installCommand.",
+            "Confirm GET /api/v1/admin/monitoring/readiness still has --server-health and --route-health in installCommand.",
         ],
         "safeToRunWithoutOwner": False,
         "blockedUntilOwnerProvides": [
@@ -7186,6 +9703,9 @@ def server_health_external_probe_readiness(summary: dict) -> dict:
     external_probe_agents = [item for item in probe_agents if item.get("isExternal")]
     stale_external_probe_agents = [
         item for item in external_probe_agents if item.get("isStale")
+    ]
+    active_external_probe_agents = [
+        item for item in external_probe_agents if not item.get("isStale")
     ]
     problem_external_probe_agents = [
         item
@@ -7287,16 +9807,16 @@ def server_health_external_probe_readiness(summary: dict) -> dict:
 
     add_check(
         "required_endpoints_configured",
-        "Config-ready endpoints",
+        "VPN-узлы с готовым конфигом",
         bool(required_endpoint_ids),
-        "Есть config-ready endpoint для внешних server-health probes."
+        "Есть config-ready endpoint для внешних server-health проверок."
         if required_endpoint_ids
         else "Нет активных config-ready managed endpoint для внешней проверки.",
         {"requiredEndpointIds": required_endpoint_ids},
     )
     add_check(
         "external_probe_seen",
-        "External endpoint probe",
+        "Внешняя проверка VPN-узла",
         bool(external_probe_agents),
         "Backend уже видел внешний server-health probe."
         if external_probe_agents
@@ -7305,21 +9825,28 @@ def server_health_external_probe_readiness(summary: dict) -> dict:
     )
     add_check(
         "external_probe_fresh",
-        "Fresh external endpoint signal",
-        bool(external_probe_agents) and not stale_external_probe_agents,
-        "Внешние endpoint probes свежие."
-        if external_probe_agents and not stale_external_probe_agents
-        else "Внешний endpoint probe ещё не установлен или давно молчит.",
+        "Свежий внешний сигнал VPN-узла",
+        bool(active_external_probe_agents),
+        "Есть свежий внешний probe. Старые неактивные агенты не блокируют запуск."
+        if active_external_probe_agents and stale_external_probe_agents
+        else (
+            "Внешние проверки VPN-узлов свежие."
+            if active_external_probe_agents
+            else "Внешняя проверка VPN-узла ещё не установлена или давно молчит."
+        ),
         {
             "staleAfterSeconds": SERVICE_PROBE_STALE_AFTER_SECONDS,
             "staleProbeAgents": [
                 item.get("probeId") for item in stale_external_probe_agents[:10]
             ],
+            "activeProbeAgents": [
+                item.get("probeId") for item in active_external_probe_agents[:10]
+            ],
         },
     )
     add_check(
         "required_endpoints_covered",
-        "Required endpoint coverage",
+        "Покрытие обязательных VPN-узлов",
         bool(required_endpoint_ids) and not missing_endpoint_ids,
         "Все обязательные config-ready endpoint покрыты внешними observations."
         if required_endpoint_ids and not missing_endpoint_ids
@@ -7331,7 +9858,7 @@ def server_health_external_probe_readiness(summary: dict) -> dict:
     )
     add_check(
         "required_endpoints_fresh",
-        "Required endpoint freshness",
+        "Свежесть обязательных VPN-узлов",
         bool(required_endpoint_ids) and not missing_endpoint_ids and not stale_endpoint_ids,
         "Внешние endpoint observations свежие."
         if required_endpoint_ids and not missing_endpoint_ids and not stale_endpoint_ids
@@ -7340,7 +9867,7 @@ def server_health_external_probe_readiness(summary: dict) -> dict:
     )
     add_check(
         "required_endpoints_healthy",
-        "Required endpoint status",
+        "Статус обязательных VPN-узлов",
         bool(required_endpoint_ids) and not missing_endpoint_ids and not failed_endpoint_ids,
         "Обязательные endpoint сейчас healthy по внешним probes."
         if required_endpoint_ids and not missing_endpoint_ids and not failed_endpoint_ids
@@ -7349,7 +9876,7 @@ def server_health_external_probe_readiness(summary: dict) -> dict:
     )
     add_check(
         "external_probe_clean_24h",
-        "External endpoint probe 24h",
+        "Внешняя проверка VPN-узла за 24ч",
         external_failed_24h == 0 and not problem_external_probe_agents,
         "За последние 24 часа внешний endpoint probe не видел degraded/down."
         if external_failed_24h == 0 and not problem_external_probe_agents
@@ -7380,7 +9907,7 @@ def server_health_external_probe_readiness(summary: dict) -> dict:
         "failedEndpointIds": failed_endpoint_ids,
         "endpointSnapshots": endpoint_snapshots,
         "externalProbeAgentsTotal": len(external_probe_agents),
-        "activeExternalProbeAgents": len(external_probe_agents) - len(stale_external_probe_agents),
+        "activeExternalProbeAgents": len(active_external_probe_agents),
         "staleExternalProbeAgents": len(stale_external_probe_agents),
         "problemExternalProbeAgents": len(problem_external_probe_agents),
         "externalFailed24h": external_failed_24h,
@@ -7394,9 +9921,9 @@ def server_health_external_probe_readiness(summary: dict) -> dict:
             "yellow": len(missing),
             "red": 0,
             "message": (
-                "Внешние endpoint probes готовы."
+                "Внешние проверки VPN-узлов готовы."
                 if not missing
-                else "Нужен внешний endpoint probe и свежие healthy observations."
+                else "Нужна внешняя проверка VPN-узла и свежие healthy observations."
             ),
         },
         "ownerAction": (
@@ -7513,11 +10040,11 @@ def sync_server_health_observation_incident(observation: dict) -> None:
 def normalize_monitoring_target_id(value: Optional[str]) -> str:
     target_id = clean_limited_text(value, 120).strip().lower()
     if not target_id:
-        raise HTTPException(status_code=400, detail="targetId is required.")
+        raise HTTPException(status_code=400, detail="targetId обязателен.")
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{2,119}", target_id):
         raise HTTPException(
             status_code=400,
-            detail="targetId must contain latin letters, numbers, dash or underscore.",
+            detail="targetId должен содержать латинские буквы, цифры, дефис или подчёркивание.",
         )
     return target_id
 
@@ -7525,14 +10052,14 @@ def normalize_monitoring_target_id(value: Optional[str]) -> str:
 def normalize_monitoring_target_status(value: Optional[str], fallback: str = "active") -> str:
     candidate = clean_limited_text(value, 40).strip().lower() or fallback
     if candidate not in MONITORING_TARGET_STATUSES:
-        raise HTTPException(status_code=400, detail="Unknown monitoring target status.")
+        raise HTTPException(status_code=400, detail="Неизвестный статус цели мониторинга.")
     return candidate
 
 
 def normalize_monitoring_target_type(value: Optional[str], fallback: str = "web") -> str:
     candidate = clean_limited_text(value, 40).strip().lower() or fallback
     if candidate not in MONITORING_TARGET_TYPES:
-        raise HTTPException(status_code=400, detail="Unknown monitoring target type.")
+        raise HTTPException(status_code=400, detail="Неизвестный тип цели мониторинга.")
     return candidate
 
 
@@ -7546,7 +10073,7 @@ def normalize_service_availability_status(value: Optional[str], ok: Optional[boo
         else:
             candidate = "unknown"
     if candidate not in SERVICE_AVAILABILITY_STATUSES:
-        raise HTTPException(status_code=400, detail="Unknown service availability status.")
+        raise HTTPException(status_code=400, detail="Неизвестный статус доступности сервиса.")
     return candidate
 
 
@@ -7556,9 +10083,9 @@ def normalize_monitoring_port(value: Optional[int]) -> Optional[int]:
     try:
         port = int(value)
     except Exception:
-        raise HTTPException(status_code=400, detail="port must be a number.")
+        raise HTTPException(status_code=400, detail="port должен быть числом.")
     if port < 1 or port > 65535:
-        raise HTTPException(status_code=400, detail="port must be between 1 and 65535.")
+        raise HTTPException(status_code=400, detail="port должен быть в диапазоне 1..65535.")
     return port
 
 
@@ -7568,7 +10095,7 @@ def normalize_monitoring_timeout(value: Optional[int]) -> int:
     try:
         parsed = int(value)
     except Exception:
-        raise HTTPException(status_code=400, detail="timeoutSeconds must be a number.")
+        raise HTTPException(status_code=400, detail="timeoutSeconds должен быть числом.")
     return max(1, min(parsed, 60))
 
 
@@ -7578,7 +10105,7 @@ def normalize_monitoring_interval(value: Optional[int]) -> int:
     try:
         parsed = int(value)
     except Exception:
-        raise HTTPException(status_code=400, detail="intervalSeconds must be a number.")
+        raise HTTPException(status_code=400, detail="intervalSeconds должен быть числом.")
     return max(30, min(parsed, 86400))
 
 
@@ -7706,7 +10233,7 @@ def upsert_monitoring_target(
     now = utc_now_iso()
 
     if not url and not host:
-        raise HTTPException(status_code=400, detail="url or host is required.")
+        raise HTTPException(status_code=400, detail="Нужен url или host.")
 
     with db() as conn:
         existing = conn.execute(
@@ -7793,57 +10320,107 @@ def default_monitoring_targets() -> list[dict]:
             "host": target["host"],
             "expectedStatus": 204 if target["code"] == "youtube" else None,
             "tags": ["blocked-service", "social-only"],
-            "notes": "Built-in important service target. Real probes will write observations here.",
+            "notes": "Встроенная важная цель сервиса. Реальные проверки будут писать наблюдения сюда.",
         }
         for target in SERVICE_CHECK_TARGETS
     ]
+    service_targets.extend(
+        [
+            {
+                "targetId": "youtube_media",
+                "title": "YouTube video CDN speed",
+                "service": "youtube",
+                "targetType": "youtube_media",
+                "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                "host": "www.youtube.com",
+                "timeoutSeconds": 15,
+                "intervalSeconds": 300,
+                "tags": [
+                    "blocked-service",
+                    "media-throughput",
+                    "ru-degradation",
+                    "min_green_mbps=5",
+                    "min_yellow_mbps=1",
+                ],
+                "notes": (
+                    "Проверка деградации YouTube: probe открывает страницу ролика, "
+                    "достаёт реальный media URL и скачивает небольшой Range. "
+                    "Red = не достали/не скачали, Yellow = CDN доступен, но скорость ниже порога."
+                ),
+            },
+            {
+                "targetId": "x_tls",
+                "title": "X/Twitter TLS reachability",
+                "service": "x",
+                "targetType": "tls",
+                "host": "x.com",
+                "port": 443,
+                "timeoutSeconds": 8,
+                "intervalSeconds": 600,
+                "tags": ["blocked-service", "hard-block", "ru"],
+                "notes": "Пример жёсткой блокировки: достаточно DNS/TCP/TLS, без проверки контента.",
+            },
+            {
+                "targetId": "instagram_tls",
+                "title": "Instagram TLS reachability",
+                "service": "instagram",
+                "targetType": "tls",
+                "host": "www.instagram.com",
+                "port": 443,
+                "timeoutSeconds": 8,
+                "intervalSeconds": 600,
+                "tags": ["blocked-service", "hard-block", "ru"],
+                "notes": "Пример жёсткой блокировки: достаточно DNS/TCP/TLS, без проверки контента.",
+            },
+        ]
+    )
     api_url = SERVER_CATALOG_API_BASE_URLS[0] if SERVER_CATALOG_API_BASE_URLS else PUBLIC_API_BASE_URL
     service_targets.extend(
         [
             {
                 "targetId": "green_api_healthz",
-                "title": "Green VPN API healthz",
+                "title": "Проверка API Green VPN",
                 "service": "api",
                 "targetType": "api",
                 "url": f"{api_url.rstrip('/')}/healthz",
                 "host": urllib.parse.urlparse(api_url).hostname or WG_ENDPOINT_HOST,
                 "expectedStatus": 200,
                 "tags": ["api", "bootstrap"],
-                "notes": "Primary API health endpoint for internal monitoring.",
+                "notes": "Основная проверка API для внутреннего мониторинга.",
             },
             {
                 "targetId": "production_api_healthz",
-                "title": "Production API domain",
+                "title": "Боевой домен API",
                 "service": "api",
                 "targetType": "bootstrap",
                 "url": "https://api.greenvpn.pro/healthz",
                 "host": "api.greenvpn.pro",
                 "expectedStatus": 200,
                 "tags": ["api", "domain", "bootstrap"],
-                "notes": "Public DNS/HTTPS domain target. Keep paused if DNS is still propagating.",
+                "notes": "Публичная DNS/HTTPS цель. Держать на паузе, если DNS ещё расходится.",
                 "status": "active",
             },
             {
                 "targetId": "windows_update_manifest",
-                "title": "Windows update manifest",
+                "title": "Манифест обновлений Windows",
                 "service": "updates",
                 "targetType": "update",
                 "url": f"{api_url.rstrip('/')}/api/v1/updates/windows",
                 "host": urllib.parse.urlparse(api_url).hostname or WG_ENDPOINT_HOST,
                 "expectedStatus": 200,
                 "tags": ["updates", "windows"],
-                "notes": "Update manifest endpoint used by future client updater.",
+                "notes": "Проверка манифеста обновлений для будущего клиентского обновлятора.",
             },
             {
                 "targetId": "payment_return_page",
-                "title": "Payment return page",
+                "title": "Страница возврата оплаты",
                 "service": "payments",
                 "targetType": "payment",
                 "url": f"{api_url.rstrip('/')}/payment/return",
                 "host": urllib.parse.urlparse(api_url).hostname or WG_ENDPOINT_HOST,
                 "expectedStatus": 200,
                 "tags": ["payments", "yookassa"],
-                "notes": "Payment return page until production YooKassa is enabled.",
+                "notes": "Страница возврата оплаты для боевой ЮKassa.",
             },
         ]
     )
@@ -7855,10 +10432,20 @@ def seed_default_monitoring_targets(refresh_existing: bool = False) -> list[dict
         existing = int(
             conn.execute("SELECT COUNT(*) AS cnt FROM monitoring_targets").fetchone()["cnt"]
         )
+        existing_target_ids = {
+            str(row["target_id"] or "").strip().lower()
+            for row in conn.execute("SELECT target_id FROM monitoring_targets").fetchall()
+        }
     if existing > 0 and not refresh_existing:
-        return []
+        default_targets = [
+            item
+            for item in default_monitoring_targets()
+            if normalize_monitoring_target_id(item.get("targetId")) not in existing_target_ids
+        ]
+    else:
+        default_targets = default_monitoring_targets()
     seeded: list[dict] = []
-    for item in default_monitoring_targets():
+    for item in default_targets:
         try:
             seeded.append(upsert_monitoring_target(AdminMonitoringTargetIn(**item)))
         except Exception:
@@ -7879,7 +10466,7 @@ def create_service_availability_observation(
     message = clean_limited_text(payload.message, 600).strip()
     observed_at = payload.observedAt.strip() if payload.observedAt else utc_now_iso()
     if parse_dt(observed_at) is None:
-        raise HTTPException(status_code=400, detail="observedAt must be an ISO datetime.")
+        raise HTTPException(status_code=400, detail="observedAt должен быть ISO datetime.")
     details = sanitize_monitoring_details(payload.details)
     try:
         details_json = json.dumps(details, ensure_ascii=False)
@@ -7893,7 +10480,7 @@ def create_service_availability_observation(
             (target_id,),
         ).fetchone()
         if target is None:
-            raise HTTPException(status_code=404, detail="Monitoring target not found.")
+            raise HTTPException(status_code=404, detail="Цель мониторинга не найдена.")
         cursor = conn.execute(
             """
             INSERT INTO service_availability_observations(
@@ -7948,6 +10535,1260 @@ def list_service_availability_observations(
     with db() as conn:
         rows = conn.execute(sql, tuple(params)).fetchall()
     return [service_availability_observation_payload(row) for row in rows]
+
+
+def normalize_resilience_route_status(value: Optional[str], ok: Optional[bool] = None) -> str:
+    candidate = clean_limited_text(value, 40).strip().lower()
+    if candidate in {"healthy"}:
+        candidate = "green"
+    elif candidate in {"degraded"}:
+        candidate = "yellow"
+    elif candidate in {"down", "failed"}:
+        candidate = "red"
+    if not candidate:
+        if ok is True:
+            candidate = "green"
+        elif ok is False:
+            candidate = "red"
+        else:
+            candidate = "unknown"
+    if candidate not in RESILIENCE_ROUTE_STATUSES:
+        raise HTTPException(status_code=400, detail="Неизвестный статус route-проверки.")
+    return candidate
+
+
+def resilience_route_observation_payload(row: sqlite3.Row) -> dict:
+    try:
+        details = json.loads(row["details_json"] or "{}")
+    except Exception:
+        details = {}
+    details = sanitize_monitoring_details(details)
+    return {
+        "id": int(row["id"]),
+        "endpointId": row["endpoint_id"],
+        "protocol": row["protocol"],
+        "transport": row["transport"] or "",
+        "targetId": row["target_id"],
+        "service": row["service"] or "",
+        "probeId": row["probe_id"] or "",
+        "probeRegion": row["probe_region"] or "",
+        "ok": bool(row["ok"]),
+        "status": row["status"],
+        "latencyMs": int(row["latency_ms"]) if row["latency_ms"] is not None else None,
+        "errorCode": row["error_code"] or "",
+        "message": row["message"] or "",
+        "details": details,
+        "observedAt": row["observed_at"],
+        "createdAt": row["created_at"],
+    }
+
+
+def create_resilience_route_observation(
+    payload: AdminResilienceRouteObservationIn,
+) -> dict:
+    endpoint_id = normalize_server_health_endpoint_id(payload.endpointId or "global")
+    protocol = normalize_server_catalog_protocol(payload.protocol)
+    transport = clean_limited_text(payload.transport, 40).strip().lower()
+    target_id = normalize_monitoring_target_id(payload.targetId)
+    ok = bool(payload.ok) if payload.ok is not None else False
+    status = normalize_resilience_route_status(payload.status, ok)
+    probe_id = clean_limited_text(payload.probeId, 80).strip()
+    probe_region = clean_limited_text(payload.probeRegion, 80).strip()
+    latency_ms = normalize_latency_ms(payload.latencyMs)
+    error_code = clean_limited_text(payload.errorCode, 80).strip()
+    message = clean_limited_text(payload.message, 600).strip()
+    observed_at = payload.observedAt.strip() if payload.observedAt else utc_now_iso()
+    if parse_dt(observed_at) is None:
+        raise HTTPException(status_code=400, detail="observedAt должен быть ISO datetime.")
+    details = sanitize_monitoring_details(payload.details)
+    try:
+        details_json = json.dumps(details, ensure_ascii=False)
+    except Exception:
+        details_json = "{}"
+    now = utc_now_iso()
+
+    with db() as conn:
+        target = conn.execute(
+            "SELECT target_id, service FROM monitoring_targets WHERE target_id = ?",
+            (target_id,),
+        ).fetchone()
+        if target is None:
+            raise HTTPException(status_code=404, detail="Цель мониторинга не найдена.")
+        service = (
+            clean_limited_text(payload.service, 80).strip().lower()
+            or str(target["service"] or "").strip().lower()
+        )
+        cursor = conn.execute(
+            """
+            INSERT INTO resilience_route_observations(
+                endpoint_id, protocol, transport, target_id, service, probe_id,
+                probe_region, ok, status, latency_ms, error_code, message,
+                details_json, observed_at, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                endpoint_id,
+                protocol,
+                transport or None,
+                target_id,
+                service or None,
+                probe_id,
+                probe_region,
+                1 if ok else 0,
+                status,
+                latency_ms,
+                error_code,
+                message,
+                details_json,
+                observed_at,
+                now,
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM resilience_route_observations WHERE id = ?",
+            (int(cursor.lastrowid),),
+        ).fetchone()
+    observation = resilience_route_observation_payload(row)
+    sync_resilience_route_observation_incident(observation)
+    return observation
+
+
+def sync_resilience_route_observation_incident(observation: dict) -> None:
+    endpoint_id = clean_limited_text(observation.get("endpointId"), 120).strip()
+    protocol = normalize_server_catalog_protocol(observation.get("protocol") or "wireguard_udp")
+    target_id = normalize_monitoring_target_id(observation.get("targetId"))
+    status = str(observation.get("status") or "unknown").strip().lower()
+    key = f"resilience-route:{protocol}:{endpoint_id}:{target_id}"
+    if status in {"red", "yellow"} or observation.get("ok") is False:
+        severity = "high" if status == "red" else "medium"
+        upsert_admin_incident(
+            key,
+            f"Маршрут {SERVER_PROTOCOL_TITLES.get(protocol, protocol)} для {target_id}: {status}",
+            severity,
+            "resilience_route_observation",
+            affected_service=target_id,
+            affected_endpoint=endpoint_id,
+            summary=(
+                observation.get("message")
+                or f"Route-health observation for {protocol}/{target_id} is {status}."
+            ),
+            details={
+                "observation": observation,
+                "routeAutomation": {
+                    "lightestFirst": True,
+                    "heavierOnlyAfterFailure": True,
+                    "plannedTransportsStayGuarded": True,
+                },
+            },
+        )
+    elif status == "green":
+        resolve_admin_incident_by_key(
+            key,
+            f"Маршрут {SERVER_PROTOCOL_TITLES.get(protocol, protocol)} для {target_id} снова зелёный.",
+        )
+
+
+def list_resilience_route_observations(
+    protocol: Optional[str] = None,
+    target_id: Optional[str] = None,
+    endpoint_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 200,
+) -> list[dict]:
+    where = []
+    params: list[object] = []
+    if protocol and protocol != "all":
+        where.append("protocol = ?")
+        params.append(normalize_server_catalog_protocol(protocol))
+    if target_id:
+        where.append("target_id = ?")
+        params.append(normalize_monitoring_target_id(target_id))
+    if endpoint_id:
+        where.append("endpoint_id = ?")
+        params.append(normalize_server_health_endpoint_id(endpoint_id))
+    if status and status != "all":
+        where.append("status = ?")
+        params.append(normalize_resilience_route_status(status))
+    sql = "SELECT * FROM resilience_route_observations"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY observed_at DESC, id DESC LIMIT ?"
+    params.append(max(1, min(int(limit or 200), 1000)))
+    with db() as conn:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+    return [resilience_route_observation_payload(row) for row in rows]
+
+
+def normalize_client_route_stage(value: Optional[str]) -> str:
+    stage = clean_limited_text(value, 40).strip().lower()
+    if stage in {"wg_config", "config", "provision"}:
+        stage = "config_fetch"
+    elif stage in {"vpn_connect", "tunnel_start"}:
+        stage = "connect"
+    elif stage in {"wg_handshake", "traffic"}:
+        stage = "handshake"
+    if stage not in CLIENT_ROUTE_EVENT_STAGES:
+        raise HTTPException(status_code=400, detail="Неизвестный этап route-события.")
+    return stage
+
+
+def client_route_event_payload(row: sqlite3.Row) -> dict:
+    try:
+        details = json.loads(row["details_json"] or "{}")
+    except Exception:
+        details = {}
+    details = sanitize_monitoring_details(details)
+    return {
+        "id": int(row["id"]),
+        "userId": int(row["user_id"]),
+        "deviceUid": row["device_uid"],
+        "serverId": row["server_id"] or "",
+        "protocol": row["protocol"],
+        "transport": row["transport"] or "",
+        "stage": row["stage"],
+        "ok": bool(row["ok"]),
+        "latencyMs": int(row["latency_ms"]) if row["latency_ms"] is not None else None,
+        "errorCode": row["error_code"] or "",
+        "message": row["message"] or "",
+        "details": details,
+        "appVersion": row["app_version"] or "",
+        "createdAt": row["created_at"],
+    }
+
+
+def client_route_event_score(stage: str, ok: bool) -> int:
+    if not ok:
+        return 0
+    if stage == "connected":
+        return 100
+    if stage == "handshake":
+        return 95
+    if stage == "connect":
+        return 85
+    if stage == "config_fetch":
+        return 65
+    if stage == "bootstrap":
+        return 55
+    if stage == "network_probe":
+        return 75
+    if stage == "network_probe_final_failure":
+        return 0
+    if stage == "disconnect":
+        return 50
+    return 50
+
+
+def create_client_route_event(
+    payload: ClientRouteEventIn,
+    user: sqlite3.Row,
+) -> dict:
+    device_uid = clean_limited_text(payload.deviceUid, 128).strip()
+    if not device_uid:
+        raise HTTPException(status_code=400, detail="deviceUid обязателен.")
+    with db() as conn:
+        device = conn.execute(
+            "SELECT user_id FROM devices WHERE device_uid = ?",
+            (device_uid,),
+        ).fetchone()
+        if device is None:
+            raise HTTPException(status_code=404, detail="Устройство не найдено.")
+        if int(device["user_id"]) != int(user["id"]):
+            raise HTTPException(status_code=403, detail="Устройство принадлежит другому аккаунту.")
+
+    protocol = normalize_server_catalog_protocol(payload.protocol)
+    transport = clean_limited_text(payload.transport, 40).strip().lower()
+    server_id = clean_limited_text(payload.serverId, 80).strip()
+    stage = normalize_client_route_stage(payload.stage)
+    latency_ms = normalize_latency_ms(payload.latencyMs)
+    error_code = clean_limited_text(payload.errorCode, 80).strip()
+    message = clean_limited_text(payload.message, 600).strip()
+    app_version = clean_limited_text(payload.appVersion, 80).strip()
+    details = sanitize_monitoring_details(payload.details)
+    try:
+        details_json = json.dumps(details, ensure_ascii=False)
+    except Exception:
+        details_json = "{}"
+    now = utc_now_iso()
+
+    with db() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO client_route_events(
+                user_id, device_uid, server_id, protocol, transport, stage, ok,
+                latency_ms, error_code, message, details_json, app_version, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(user["id"]),
+                device_uid,
+                server_id or None,
+                protocol,
+                transport or None,
+                stage,
+                1 if payload.ok else 0,
+                latency_ms,
+                error_code,
+                message,
+                details_json,
+                app_version,
+                now,
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM client_route_events WHERE id = ?",
+            (int(cursor.lastrowid),),
+        ).fetchone()
+    return client_route_event_payload(row)
+
+
+def list_client_route_events(
+    protocol: Optional[str] = None,
+    server_id: Optional[str] = None,
+    stage: Optional[str] = None,
+    ok: Optional[bool] = None,
+    limit: int = 200,
+) -> list[dict]:
+    where = []
+    params: list[object] = []
+    if protocol and protocol != "all":
+        where.append("protocol = ?")
+        params.append(normalize_server_catalog_protocol(protocol))
+    if server_id:
+        where.append("server_id = ?")
+        params.append(clean_limited_text(server_id, 80).strip())
+    if stage and stage != "all":
+        where.append("stage = ?")
+        params.append(normalize_client_route_stage(stage))
+    if ok is not None:
+        where.append("ok = ?")
+        params.append(1 if ok else 0)
+    sql = "SELECT * FROM client_route_events"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY created_at DESC, id DESC LIMIT ?"
+    params.append(max(1, min(int(limit or 200), 1000)))
+    with db() as conn:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+    return [client_route_event_payload(row) for row in rows]
+
+
+def client_route_event_summary(
+    protocol: Optional[str] = None,
+    server_id: Optional[str] = None,
+) -> dict:
+    cutoff = (utc_now() - timedelta(seconds=CLIENT_ROUTE_EVENT_WINDOW_SECONDS)).isoformat()
+    where = ["created_at >= ?"]
+    params: list[object] = [cutoff]
+    if protocol and protocol != "all":
+        where.append("protocol = ?")
+        params.append(normalize_server_catalog_protocol(protocol))
+    if server_id:
+        where.append("server_id = ?")
+        params.append(clean_limited_text(server_id, 80).strip())
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM client_route_events
+            WHERE """ + " AND ".join(where) + """
+            ORDER BY created_at DESC, id DESC
+            LIMIT 2000
+            """,
+            tuple(params),
+        ).fetchall()
+    events = [client_route_event_payload(row) for row in rows]
+    if not events:
+        return {
+            "score": 0,
+            "confidence": "missing_client_feedback",
+            "observed": 0,
+            "ok": 0,
+            "failed": 0,
+            "windowSeconds": CLIENT_ROUTE_EVENT_WINDOW_SECONDS,
+            "recent": [],
+        }
+    scores = [client_route_event_score(item["stage"], bool(item["ok"])) for item in events]
+    return {
+        "score": round(sum(scores) / len(scores)),
+        "confidence": "client_feedback",
+        "observed": len(events),
+        "ok": len([item for item in events if item["ok"]]),
+        "failed": len([item for item in events if not item["ok"]]),
+        "windowSeconds": CLIENT_ROUTE_EVENT_WINDOW_SECONDS,
+        "recent": [
+            {
+                "serverId": item["serverId"],
+                "protocol": item["protocol"],
+                "stage": item["stage"],
+                "ok": item["ok"],
+                "latencyMs": item["latencyMs"],
+                "errorCode": item["errorCode"],
+                "createdAt": item["createdAt"],
+            }
+            for item in events[:12]
+        ],
+    }
+
+
+def latest_resilience_route_observations(limit: int = 5000) -> list[dict]:
+    cutoff = (utc_now() - timedelta(seconds=RESILIENCE_ROUTE_STALE_AFTER_SECONDS)).isoformat()
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM resilience_route_observations
+            WHERE observed_at >= ?
+            ORDER BY observed_at DESC, id DESC
+            LIMIT ?
+            """,
+            (cutoff, max(1, min(int(limit or 5000), 10000))),
+        ).fetchall()
+    return [resilience_route_observation_payload(row) for row in rows]
+
+
+def route_layer_definitions() -> list[dict]:
+    layers: list[dict] = []
+    for item in RESILIENCE_ROUTE_LAYERS:
+        code = str(item["code"])
+        layers.append(
+            {
+                **item,
+                "clientReady": code in SERVER_CLIENT_READY_PROTOCOLS,
+                "serverReady": code == "wireguard_udp",
+                "publicReady": code in SERVER_CLIENT_READY_PROTOCOLS,
+                "status": "ready" if code in SERVER_CLIENT_READY_PROTOCOLS else "planned",
+            }
+        )
+    return layers
+
+
+def transport_rollout_profile(code: str) -> dict:
+    clean_code = normalize_server_catalog_protocol(code)
+    profile = dict(RESILIENCE_TRANSPORT_ROLLOUT_PROFILES.get(clean_code) or {})
+    return {
+        "code": clean_code,
+        "title": SERVER_PROTOCOL_TITLES.get(clean_code, clean_code),
+        "engine": profile.get("engine") or "Не выбран",
+        "windowsWork": profile.get("windowsWork") or "Нужно добавить клиентский engine.",
+        "serverWork": profile.get("serverWork") or "Нужно развернуть отдельный server endpoint.",
+        "probeWork": profile.get("probeWork") or "Нужны route-health probes.",
+        "risk": profile.get("risk") or "unknown",
+        "canaryScript": profile.get("canaryScript") or "",
+        "validationScript": profile.get("validationScript") or "",
+        "ownerInput": list(profile.get("ownerInput") or []),
+    }
+
+
+def rollout_check(code: str, title: str, ok: bool, detail: str, required: bool = True) -> dict:
+    return {
+        "code": code,
+        "title": title,
+        "ok": bool(ok),
+        "required": bool(required),
+        "detail": detail,
+    }
+
+
+def build_resilience_transport_rollout_readiness(
+    route_decision: Optional[dict] = None,
+    servers: Optional[list[dict]] = None,
+) -> dict:
+    catalog = build_server_catalog() if servers is None else {"servers": servers}
+    public_servers = catalog.get("servers") or servers or [builtin_server_catalog_entry()]
+    route_decision = route_decision or build_resilience_route_decision(public_servers)
+    layer_by_code = {
+        item.get("code"): item
+        for item in route_decision.get("fallbackChain") or route_layer_definitions()
+        if item.get("code")
+    }
+    profiles: list[dict] = []
+    for code in SERVER_PROTOCOL_ROLLOUT_ORDER:
+        profile = transport_rollout_profile(code)
+        layer = layer_by_code.get(code) or {}
+        catalog_item = protocol_catalog_item(code)
+        client_ready = bool(catalog_item.get("clientReady"))
+        server_ready = bool(catalog_item.get("serverReady") or layer.get("serverReady"))
+        public_ready = bool(catalog_item.get("publicReady") and layer.get("publicEndpointReady"))
+        endpoint_ready = bool(layer.get("publicEndpointReady"))
+        score = int(layer.get("score") or 0)
+        observed_targets = int(layer.get("observedTargets") or 0)
+        required_targets = int(layer.get("requiredTargets") or 0)
+        route_probe_ready = (
+            observed_targets >= max(1, required_targets)
+            and score >= RESILIENCE_ROUTE_MIN_SCORE
+            and (layer.get("signalSource") or "") != "missing_route_probe"
+        )
+        checks = [
+            rollout_check(
+                "client_engine_ready",
+                "Windows-клиент умеет этот слой",
+                client_ready,
+                "Готово." if client_ready else profile["windowsWork"],
+            ),
+            rollout_check(
+                "server_daemon_ready",
+                "Server daemon поднят",
+                server_ready,
+                "Готово." if server_ready else profile["serverWork"],
+            ),
+            rollout_check(
+                "public_endpoint_ready",
+                "Есть безопасный публичный endpoint",
+                endpoint_ready,
+                "Готово." if endpoint_ready else "Нет endpoint, прошедшего catalog/publication gate.",
+            ),
+            rollout_check(
+                "route_probe_ready",
+                "Есть свежие route-health проверки",
+                route_probe_ready,
+                (
+                    f"Наблюдений {observed_targets}/{required_targets}, score {score}/100."
+                    if route_probe_ready
+                    else profile["probeWork"]
+                ),
+            ),
+            rollout_check(
+                "planned_protocol_guard",
+                "Неготовый слой не выдаётся пользователям",
+                code == "wireguard_udp" or not public_ready,
+                "Guard работает: planned protocol остаётся скрытым."
+                if code != "wireguard_udp"
+                else "Основной слой разрешён.",
+                required=False,
+            ),
+        ]
+        blockers = [item for item in checks if item["required"] and not item["ok"]]
+        rollout_allowed = not blockers and client_ready and server_ready and endpoint_ready and route_probe_ready
+        profiles.append(
+            {
+                **profile,
+                "status": "ready" if rollout_allowed else ("current" if code == "wireguard_udp" else "planned"),
+                "rolloutAllowed": rollout_allowed,
+                "autoEligible": bool(layer.get("autoEligible")),
+                "score": score,
+                "confidence": layer.get("confidence") or "none",
+                "signalSource": layer.get("signalSource") or "",
+                "observedTargets": observed_targets,
+                "requiredTargets": required_targets,
+                "checks": checks,
+                "blockers": blockers,
+                "nextAction": blockers[0]["detail"] if blockers else "Можно держать в canary/auto-selection.",
+            }
+        )
+
+    current_ready = [item for item in profiles if item.get("rolloutAllowed")]
+    next_candidate = next(
+        (item for item in profiles if item.get("code") != "wireguard_udp" and item.get("blockers")),
+        None,
+    )
+    return {
+        "mode": "guarded_transport_rollout",
+        "generatedAt": utc_now_iso(),
+        "safeToExposePlannedTransports": False,
+        "currentPublicTransports": [item["code"] for item in current_ready],
+        "nextCandidate": next_candidate,
+        "profiles": profiles,
+        "summary": {
+            "total": len(profiles),
+            "ready": len(current_ready),
+            "planned": len([item for item in profiles if not item.get("rolloutAllowed")]),
+            "message": (
+                "Пользователям выдаются только слои, где готовы клиент, сервер, endpoint и route-health."
+            ),
+        },
+        "operatorPolicy": {
+            "lightestFirst": True,
+            "heavierOnlyAfterFailure": True,
+            "noManualUserProtocolSelection": True,
+            "doNotPublishWithoutClientEngine": True,
+            "doNotPublishWithoutServerDaemon": True,
+            "doNotPublishWithoutRouteProbe": True,
+        },
+    }
+
+
+def route_status_score(status: str, ok: bool) -> int:
+    if status == "green" and ok:
+        return 100
+    if status == "yellow":
+        return 55
+    if status == "unknown":
+        return 35
+    return 0
+
+
+def public_endpoint_protocol_map(servers: Optional[list[dict]]) -> dict[str, dict]:
+    mapping: dict[str, dict] = {}
+    for server in servers or []:
+        if not server.get("available") or not server.get("clientConfigReady"):
+            continue
+        protocols = server.get("protocols") or []
+        primary = next((item for item in protocols if item.get("primary")), None)
+        primary = primary or (protocols[0] if protocols else None)
+        if not isinstance(primary, dict):
+            continue
+        code = str(primary.get("code") or "").strip().lower()
+        if not code:
+            continue
+        selection_score = int(server.get("selectionScore") or endpoint_selection_score(server))
+        current = mapping.get(code)
+        if current is not None and selection_score <= int(current.get("selectionScore") or 0):
+            continue
+        endpoint = server.get("endpoint") if isinstance(server.get("endpoint"), dict) else {}
+        mapping[code] = {
+            "serverId": server.get("id") or "",
+            "endpointId": server.get("id") or "",
+            "host": endpoint.get("host") or "",
+            "port": endpoint.get("port"),
+            "healthScore": int(server.get("healthScore") or 0),
+            "latencyMs": server.get("latencyMs"),
+            "capacity": server.get("capacity") or {},
+            "selectionScore": selection_score,
+            "protocol": code,
+        }
+    return mapping
+
+
+def required_public_target_ids(targets: list[dict]) -> list[str]:
+    ids = [
+        str(target.get("targetId") or "")
+        for target in targets
+        if target.get("publicImpact") and target.get("status") == "active"
+    ]
+    preferred = [item for item in SERVICE_PROBE_REQUIRED_TARGET_IDS if item in ids]
+    return preferred or ids[:8]
+
+
+def latest_service_status_score(target_ids: list[str]) -> dict:
+    summary = build_service_availability_observation_summary()
+    latest_by_target = {
+        item.get("targetId"): item
+        for item in summary.get("latestByTarget") or []
+        if item.get("targetId")
+    }
+    considered = [latest_by_target.get(target_id) for target_id in target_ids]
+    considered = [item for item in considered if item]
+    if not considered:
+        return {
+            "score": 0,
+            "confidence": "missing_service_probe",
+            "green": 0,
+            "yellow": 0,
+            "red": 0,
+            "observed": 0,
+            "summary": summary.get("probeReadiness", {}).get("summary", {}),
+        }
+    score = round(
+        sum(route_status_score(item.get("status") or "unknown", bool(item.get("ok"))) for item in considered)
+        / len(considered)
+    )
+    return {
+        "score": score,
+        "confidence": "service_probe",
+        "green": len([item for item in considered if item.get("status") == "green" and item.get("ok")]),
+        "yellow": len([item for item in considered if item.get("status") == "yellow"]),
+        "red": len([item for item in considered if item.get("status") == "red" or item.get("ok") is False]),
+        "observed": len(considered),
+        "summary": summary.get("probeReadiness", {}).get("summary", {}),
+    }
+
+
+def build_resilience_route_decision(servers: Optional[list[dict]] = None) -> dict:
+    servers = servers or [builtin_server_catalog_entry()]
+    endpoint_by_protocol = public_endpoint_protocol_map(servers)
+    targets = list_monitoring_targets(status="active", service="all", limit=500)
+    target_ids = required_public_target_ids(targets)
+    route_observations = latest_resilience_route_observations()
+    service_score = latest_service_status_score(target_ids)
+    latest_by_protocol_target: dict[tuple[str, str], dict] = {}
+    for observation in route_observations:
+        key = (observation.get("protocol") or "", observation.get("targetId") or "")
+        latest_by_protocol_target.setdefault(key, observation)
+
+    layer_states: list[dict] = []
+    for layer in route_layer_definitions():
+        code = layer["code"]
+        endpoint = endpoint_by_protocol.get(code)
+        client_signal = {
+            "score": 0,
+            "confidence": "disabled_client_route_feedback",
+            "observed": 0,
+            "ok": 0,
+            "failed": 0,
+            "windowSeconds": CLIENT_ROUTE_EVENT_WINDOW_SECONDS,
+            "recent": [],
+        }
+        observations = [
+            latest_by_protocol_target.get((code, target_id))
+            for target_id in target_ids
+            if latest_by_protocol_target.get((code, target_id))
+        ]
+        if observations:
+            route_score = round(
+                sum(
+                    route_status_score(
+                        item.get("status") or "unknown",
+                        bool(item.get("ok")),
+                    )
+                    for item in observations
+                )
+                / len(observations)
+            )
+            signal_source = "route_probe"
+            confidence = "high" if len(observations) >= max(1, len(target_ids)) else "medium"
+        elif code == "wireguard_udp" and endpoint:
+            route_score = round(
+                (int(endpoint.get("healthScore") or 0) * 0.45)
+                + (int((endpoint.get("capacity") or {}).get("capacityScore") or 100) * 0.20)
+                + (int(service_score.get("score") or 0) * 0.35)
+            )
+            signal_source = "endpoint_health_plus_service_probe"
+            confidence = "medium" if service_score.get("observed") else "low"
+        else:
+            route_score = 0
+            signal_source = "missing_route_probe"
+            confidence = "none"
+
+        client_ready = bool(layer.get("clientReady"))
+        public_endpoint_ready = bool(endpoint)
+        auto_eligible = (
+            client_ready
+            and public_endpoint_ready
+            and route_score >= RESILIENCE_ROUTE_MIN_SCORE
+        )
+        layer_states.append(
+            {
+                **layer,
+                "score": route_score,
+                "signalSource": signal_source,
+                "confidence": confidence,
+                "autoEligible": auto_eligible,
+                "publicEndpointReady": public_endpoint_ready,
+                "endpoint": endpoint or {},
+                "capacity": (endpoint or {}).get("capacity") or {},
+                "selectionScore": (endpoint or {}).get("selectionScore") or route_score,
+                "observedTargets": len(observations),
+                "requiredTargets": len(target_ids),
+                "clientFeedback": client_signal,
+                "latestStatuses": [
+                    {
+                        "targetId": item.get("targetId"),
+                        "status": item.get("status"),
+                        "latencyMs": item.get("latencyMs"),
+                        "observedAt": item.get("observedAt"),
+                    }
+                    for item in observations[:12]
+                ],
+            }
+        )
+
+    fallback_chain = sorted(layer_states, key=lambda item: (int(item.get("weight") or 999), -int(item.get("score") or 0)))
+    selected = next((item for item in fallback_chain if item.get("autoEligible")), None)
+    if selected is None:
+        selected = next(
+            (
+                item
+                for item in fallback_chain
+                if item.get("code") == "wireguard_udp" and item.get("publicEndpointReady")
+            ),
+            fallback_chain[0] if fallback_chain else {},
+        )
+    selected_summary = {
+        "protocol": selected.get("code") or "wireguard_udp",
+        "title": selected.get("title") or "WireGuard UDP",
+        "serverId": (selected.get("endpoint") or {}).get("serverId") or "intelligent_smew",
+        "endpoint": selected.get("endpoint") or {},
+        "capacity": selected.get("capacity") or {},
+        "selectionScore": selected.get("selectionScore") or selected.get("score") or 0,
+        "score": selected.get("score") or 0,
+        "confidence": selected.get("confidence") or "none",
+        "signalSource": selected.get("signalSource") or "",
+        "reason": (
+            "Выбран самый лёгкий доступный слой с достаточным живым сигналом."
+            if selected.get("autoEligible")
+            else "Оставлен текущий безопасный слой; остальные режимы ждут серверной и клиентской готовности."
+        ),
+    }
+    return {
+        "mode": "server_side_adaptive_routing",
+        "generatedAt": utc_now_iso(),
+        "autoSwitch": True,
+        "selectionPolicy": "lightest_healthy_client_ready_layer",
+        "minScore": RESILIENCE_ROUTE_MIN_SCORE,
+        "staleAfterSeconds": RESILIENCE_ROUTE_STALE_AFTER_SECONDS,
+        "selected": selected_summary,
+        "fallbackChain": fallback_chain,
+        "requiredTargetIds": target_ids,
+        "serviceProbeSignal": service_score,
+        "routeObservationSignal": {
+            "freshObservations": len(route_observations),
+            "statuses": {
+                status: len([item for item in route_observations if item.get("status") == status])
+                for status in RESILIENCE_ROUTE_STATUSES
+            },
+        },
+        "clientFeedbackSignal": {
+            "windowSeconds": CLIENT_ROUTE_EVENT_WINDOW_SECONDS,
+            "enabled": False,
+            "usedInSelection": False,
+            "reason": "client_route_feedback_disabled_2026_06_01",
+        },
+        "automation": {
+            "clientReceivesOnlyClientReadyProtocols": True,
+            "plannedProtocolsStayHiddenUntilReady": True,
+            "heavierLayersUsedOnlyWhenLighterLayerFails": True,
+            "manualUserProtocolSelectionRequired": False,
+            "targetSpecificRouteAwareness": True,
+        },
+    }
+
+
+def public_server_lookup(catalog: dict) -> dict[str, dict]:
+    return {
+        str(server.get("id") or ""): server
+        for server in catalog.get("servers") or []
+        if str(server.get("id") or "").strip()
+    }
+
+
+def server_auto_capacity_ok(server: dict) -> bool:
+    capacity = server.get("capacity") if isinstance(server.get("capacity"), dict) else {}
+    return (
+        bool(server.get("available"))
+        and bool(server.get("clientConfigReady"))
+        and capacity.get("capacityStatus") != "red"
+    )
+
+
+def select_best_capacity_server(catalog: dict) -> dict:
+    servers = [
+        server
+        for server in catalog.get("servers") or []
+        if server_auto_capacity_ok(server)
+    ]
+    if not servers:
+        servers = [
+            server
+            for server in catalog.get("servers") or []
+            if bool(server.get("available")) and bool(server.get("clientConfigReady"))
+        ]
+    if not servers:
+        return builtin_server_catalog_entry()
+    return sorted(
+        servers,
+        key=lambda item: (
+            -int(item.get("selectionScore") or endpoint_selection_score(item)),
+            int(item.get("priority") or 100),
+            -int((item.get("capacity") or {}).get("capacityScore") or 0),
+        ),
+    )[0]
+
+
+def selected_server_client_ready(server: Optional[dict]) -> bool:
+    if not server:
+        return False
+    return bool(server.get("available")) and bool(server.get("clientConfigReady"))
+
+
+def select_fallback_client_server_or_503(catalog: dict) -> dict:
+    selected = select_best_capacity_server(catalog)
+    if selected_server_client_ready(selected):
+        return selected
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "code": "no_available_vpn_nodes",
+            "message": "Нет доступных VPN-узлов для выдачи конфига.",
+        },
+    )
+
+
+def get_sticky_endpoint_assignment(
+    conn: sqlite3.Connection,
+    user_id: int,
+    device_uid: str,
+) -> Optional[dict]:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM client_endpoint_assignments
+        WHERE user_id = ? AND device_uid = ?
+        """,
+        (user_id, device_uid),
+    ).fetchone()
+    if row is None:
+        return None
+    sticky_until = parse_dt(row["sticky_until_at"])
+    if sticky_until is None or sticky_until <= utc_now():
+        return None
+    return {
+        "serverId": row["server_id"],
+        "protocol": row["protocol"],
+        "selectedBy": row["selected_by"],
+        "reason": row["assignment_reason"] or "",
+        "stickyUntilAt": sticky_until.isoformat(),
+    }
+
+
+def upsert_sticky_endpoint_assignment(
+    conn: sqlite3.Connection,
+    user_id: int,
+    device_uid: str,
+    server_id: str,
+    protocol: str,
+    selected_by: str,
+    reason: str,
+) -> dict:
+    now = utc_now()
+    sticky_until = now + timedelta(hours=CLIENT_ENDPOINT_STICKY_HOURS)
+    previous = conn.execute(
+        """
+        SELECT server_id, protocol, selected_by, assignment_reason, sticky_until_at
+        FROM client_endpoint_assignments
+        WHERE user_id = ? AND device_uid = ?
+        """,
+        (user_id, device_uid),
+    ).fetchone()
+    conn.execute(
+        """
+        INSERT INTO client_endpoint_assignments(
+            user_id, device_uid, server_id, protocol, selected_by,
+            assignment_reason, sticky_until_at, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(user_id, device_uid) DO UPDATE SET
+            server_id = excluded.server_id,
+            protocol = excluded.protocol,
+            selected_by = excluded.selected_by,
+            assignment_reason = excluded.assignment_reason,
+            sticky_until_at = excluded.sticky_until_at,
+            updated_at = excluded.updated_at
+        """,
+        (
+            user_id,
+            device_uid,
+            server_id,
+            protocol,
+            selected_by,
+            reason,
+            sticky_until.isoformat(),
+            now.isoformat(),
+            now.isoformat(),
+        ),
+    )
+    return {
+        "serverId": server_id,
+        "protocol": protocol,
+        "selectedBy": selected_by,
+        "reason": reason,
+        "stickyUntilAt": sticky_until.isoformat(),
+        "stickyHours": CLIENT_ENDPOINT_STICKY_HOURS,
+        "previousServerId": previous["server_id"] if previous else "",
+        "previousProtocol": previous["protocol"] if previous else "",
+        "serverChanged": bool(previous and previous["server_id"] != server_id),
+    }
+
+
+def select_client_server_for_device(
+    catalog: dict,
+    user_id: int,
+    device_uid: str,
+    requested_server_id: Optional[str] = None,
+) -> tuple[dict, dict]:
+    lookup = public_server_lookup(catalog)
+    request = str(requested_server_id or "auto").strip() or "auto"
+    if request != "auto":
+        selected = lookup.get(request)
+        fallback_reason = ""
+        if selected is None:
+            fallback_reason = "requested_server_unknown"
+        elif not selected_server_client_ready(selected):
+            fallback_reason = "requested_server_unavailable"
+
+        if fallback_reason:
+            selected = select_fallback_client_server_or_503(catalog)
+            with db() as conn:
+                assignment = upsert_sticky_endpoint_assignment(
+                    conn,
+                    user_id=user_id,
+                    device_uid=device_uid,
+                    server_id=str(selected.get("id") or catalog.get("defaultServerId") or "auto"),
+                    protocol=str(((selected.get("protocols") or [{}])[0] or {}).get("code") or "wireguard_udp"),
+                    selected_by="fallback",
+                    reason=f"{fallback_reason}:{request}",
+                )
+                conn.commit()
+            return selected, {
+                **assignment,
+                "requestedServerId": request,
+                "fallbackReason": fallback_reason,
+            }
+        with db() as conn:
+            assignment = upsert_sticky_endpoint_assignment(
+                conn,
+                user_id=user_id,
+                device_uid=device_uid,
+                server_id=str(selected.get("id") or request),
+                protocol=str(((selected.get("protocols") or [{}])[0] or {}).get("code") or "wireguard_udp"),
+                selected_by="manual",
+                reason="manual_public_catalog_request",
+            )
+            conn.commit()
+        return selected, assignment
+
+    with db() as conn:
+        sticky = get_sticky_endpoint_assignment(conn, user_id, device_uid)
+        if sticky:
+            sticky_server = lookup.get(str(sticky["serverId"]))
+            if (
+                str(sticky.get("selectedBy") or "") != "manual"
+                and sticky_server is not None
+                and server_auto_capacity_ok(sticky_server)
+            ):
+                return sticky_server, {**sticky, "selectedBy": "sticky", "stickyHours": CLIENT_ENDPOINT_STICKY_HOURS}
+
+        selected = select_fallback_client_server_or_503(catalog)
+        assignment = upsert_sticky_endpoint_assignment(
+            conn,
+            user_id=user_id,
+            device_uid=device_uid,
+            server_id=str(selected.get("id") or catalog.get("defaultServerId") or "intelligent_smew"),
+            protocol=str(((selected.get("protocols") or [{}])[0] or {}).get("code") or "wireguard_udp"),
+            selected_by="auto",
+            reason="capacity_aware_best_public_endpoint",
+        )
+        conn.commit()
+    return selected, assignment
+
+
+def build_wg_peer_rate_limit_plan(server_id: Optional[str] = None) -> dict:
+    requested_server_id = clean_limited_text(server_id or "", 120).strip()
+    peers: list[dict] = []
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                d.user_id,
+                d.device_uid,
+                d.assigned_ip,
+                d.is_enabled,
+                u.email,
+                s.plan_code,
+                s.plan_name,
+                s.is_active,
+                s.expires_at,
+                s.selection_json,
+                cea.server_id AS assigned_server_id,
+                cea.protocol AS assigned_protocol
+            FROM devices d
+            JOIN users u ON u.id = d.user_id
+            LEFT JOIN subscriptions s ON s.id = (
+                SELECT id
+                FROM subscriptions
+                WHERE user_id = d.user_id
+                ORDER BY id DESC
+                LIMIT 1
+            )
+            LEFT JOIN client_endpoint_assignments cea
+                ON cea.user_id = d.user_id AND cea.device_uid = d.device_uid
+            WHERE d.assigned_ip IS NOT NULL AND d.assigned_ip != ''
+            ORDER BY d.user_id ASC, d.id ASC
+            """
+        ).fetchall()
+
+    for row in rows:
+        assigned_server_id = str(row["assigned_server_id"] or "intelligent_smew").strip()
+        if requested_server_id and assigned_server_id != requested_server_id:
+            continue
+        assigned_ip = str(row["assigned_ip"] or "").split("/", 1)[0].strip()
+        try:
+            ipaddress.ip_address(assigned_ip)
+        except ValueError:
+            continue
+
+        selection = {}
+        raw_selection = row["selection_json"]
+        if raw_selection:
+            try:
+                parsed = json.loads(raw_selection)
+                if isinstance(parsed, dict):
+                    selection = parsed
+            except Exception:
+                selection = {}
+
+        is_enabled = bool(row["is_enabled"])
+        expires_at = parse_dt(row["expires_at"])
+        sub_active = bool(row["is_active"]) and (expires_at is None or expires_at > utc_now())
+        if is_enabled and sub_active and selection:
+            try:
+                quote = quote_tariff(selection)
+            except Exception:
+                quote = {}
+            priority_class = str(quote.get("priorityClass") or "paid_light")
+            sustained = int(quote.get("speedSustainedMbps") or 25)
+            burst = int(quote.get("speedBurstMbps") or 100)
+        elif is_enabled and sub_active:
+            priority_class = "paid_light"
+            sustained = 25
+            burst = 100
+        else:
+            priority_class = "free_ad"
+            sustained = 5
+            burst = 20
+
+        traffic_usage = subscription_traffic_usage_status(
+            int(row["user_id"]),
+            subscription_status(get_subscription_row(int(row["user_id"]))),
+        )
+        if is_enabled and sub_active and traffic_usage.get("overLimit"):
+            priority_class = "bulk_heavy"
+            sustained = min(sustained, 10)
+            burst = min(burst, 30)
+
+        peers.append(
+            {
+                "userId": int(row["user_id"]),
+                "deviceUid": row["device_uid"],
+                "assignedIp": assigned_ip,
+                "serverId": assigned_server_id,
+                "protocol": row["assigned_protocol"] or "wireguard_udp",
+                "planCode": row["plan_code"] or "none",
+                "planName": row["plan_name"] or "Нет активного тарифа",
+                "priorityClass": priority_class,
+                "speedSustainedMbps": sustained,
+                "speedBurstMbps": burst,
+                "enabled": is_enabled,
+                "subscriptionActive": sub_active,
+                "trafficUsage": {
+                    "periodKey": traffic_usage.get("periodKey"),
+                    "usedGb": traffic_usage.get("usedGb"),
+                    "trafficLimitGb": traffic_usage.get("trafficLimitGb"),
+                    "usedPercent": traffic_usage.get("usedPercent"),
+                    "overLimit": traffic_usage.get("overLimit"),
+                },
+                "scriptLine": f"{assigned_ip}={priority_class}",
+            }
+        )
+
+    return {
+        "version": APP_VERSION,
+        "generatedAt": utc_now_iso(),
+        "serverId": requested_server_id or "all",
+        "interface": WG_INTERFACE,
+        "rootBandwidthMbps": SERVER_DEFAULT_BANDWIDTH_MBPS,
+        "reservedBandwidthMbps": SERVER_DEFAULT_RESERVED_MBPS,
+        "scriptPath": "scripts/server/apply_wg_peer_rate_limits.sh",
+        "serverTargetFile": "/etc/greenvpn/peer-rate-limits.txt",
+        "dryRunCommand": (
+            f"bash scripts/server/apply_wg_peer_rate_limits.sh --iface {WG_INTERFACE} "
+            f"--root-mbps {SERVER_DEFAULT_BANDWIDTH_MBPS} "
+            f"--reserved-mbps {SERVER_DEFAULT_RESERVED_MBPS} "
+            "--file /etc/greenvpn/peer-rate-limits.txt"
+        ),
+        "applyCommand": (
+            f"bash scripts/server/apply_wg_peer_rate_limits.sh --apply --iface {WG_INTERFACE} "
+            f"--root-mbps {SERVER_DEFAULT_BANDWIDTH_MBPS} "
+            f"--reserved-mbps {SERVER_DEFAULT_RESERVED_MBPS} "
+            "--file /etc/greenvpn/peer-rate-limits.txt"
+        ),
+        "peerLines": [peer["scriptLine"] for peer in peers],
+        "peers": peers,
+        "peerCount": len(peers),
+    }
+
+
+def build_resilience_target_route_matrix(route_decision: Optional[dict] = None) -> dict:
+    route_decision = route_decision or build_resilience_route_decision()
+    target_ids = [
+        str(item or "")
+        for item in route_decision.get("requiredTargetIds") or []
+        if str(item or "").strip()
+    ]
+    targets_by_id = {
+        target.get("targetId"): target
+        for target in list_monitoring_targets(status="active", service="all", limit=500)
+        if target.get("targetId")
+    }
+    selected_protocol = ((route_decision.get("selected") or {}).get("protocol") or "wireguard_udp").strip()
+    layers = route_decision.get("fallbackChain") or route_layer_definitions()
+    rows: list[dict] = []
+    for target_id in target_ids:
+        target = targets_by_id.get(target_id) or {"targetId": target_id}
+        candidates: list[dict] = []
+        for layer in layers:
+            latest = next(
+                (
+                    item
+                    for item in layer.get("latestStatuses") or []
+                    if item.get("targetId") == target_id
+                ),
+                None,
+            )
+            status = (latest or {}).get("status") or "no_signal"
+            ok = status == "green"
+            candidates.append(
+                {
+                    "protocol": layer.get("code") or "",
+                    "title": layer.get("title") or SERVER_PROTOCOL_TITLES.get(layer.get("code"), ""),
+                    "status": status,
+                    "ok": ok,
+                    "score": int(layer.get("score") or 0),
+                    "latencyMs": (latest or {}).get("latencyMs"),
+                    "observedAt": (latest or {}).get("observedAt"),
+                    "autoEligible": bool(layer.get("autoEligible")),
+                    "clientReady": bool(layer.get("clientReady")),
+                    "publicEndpointReady": bool(layer.get("publicEndpointReady")),
+                    "signalSource": layer.get("signalSource") or "",
+                }
+            )
+        preferred = next(
+            (
+                item
+                for item in candidates
+                if item["protocol"] == selected_protocol and item["ok"]
+            ),
+            None,
+        )
+        preferred = preferred or next(
+            (
+                item
+                for item in candidates
+                if item["ok"] and item["autoEligible"]
+            ),
+            None,
+        )
+        rows.append(
+            {
+                "targetId": target_id,
+                "title": target.get("title") or target_id,
+                "service": target.get("service") or "",
+                "publicImpact": bool(target.get("publicImpact")),
+                "selectedProtocol": (preferred or {}).get("protocol") or selected_protocol,
+                "selectedStatus": (preferred or {}).get("status") or "no_signal",
+                "covered": bool(preferred),
+                "candidates": candidates,
+            }
+        )
+    covered = len([item for item in rows if item.get("covered")])
+    return {
+        "mode": "target_specific_route_matrix",
+        "generatedAt": utc_now_iso(),
+        "selectedProtocol": selected_protocol,
+        "targetsTotal": len(rows),
+        "targetsCovered": covered,
+        "targetsMissingSignal": len(rows) - covered,
+        "rows": rows,
+        "policy": {
+            "lightestFirst": True,
+            "targetAware": True,
+            "requiresRealRouteSignalForCanary": True,
+            "plannedTransportsDoNotUnlockWithoutRolloutGate": True,
+        },
+    }
 
 
 def list_service_monitoring_probes(limit: int = 100) -> list[dict]:
@@ -8045,11 +11886,18 @@ def service_monitoring_probe_readiness(summary: dict) -> dict:
     }
     probe_agents = summary.get("probeAgents") or []
     stale_probe_agents = [item for item in probe_agents if item.get("isStale")]
-    problem_probe_agents = [
+    active_probe_agents = [
+        item for item in probe_agents if not item.get("isStale")
+    ]
+    problem_probe_agents_current = [
+        item
+        for item in probe_agents
+        if item.get("lastStatus") in {"yellow", "red"}
+    ]
+    problem_probe_agents_24h = [
         item
         for item in probe_agents
         if int(item.get("problems24h") or 0) > 0
-        or item.get("lastStatus") in {"yellow", "red"}
     ]
     max_age_hours = SERVICE_PROBE_STALE_AFTER_SECONDS / 3600.0
     missing_targets: list[str] = []
@@ -8084,11 +11932,11 @@ def service_monitoring_probe_readiness(summary: dict) -> dict:
 
     add_check(
         "targets_configured",
-        "Monitoring targets",
+        "Цели мониторинга",
         int(summary.get("activeTargets") or 0) > 0,
         "Есть активные цели мониторинга."
         if int(summary.get("activeTargets") or 0) > 0
-        else "Нет активных целей мониторинга для probes.",
+        else "Нет активных целей мониторинга для внешних проверок.",
         {
             "targetTotal": int(summary.get("targetTotal") or 0),
             "activeTargets": int(summary.get("activeTargets") or 0),
@@ -8096,7 +11944,7 @@ def service_monitoring_probe_readiness(summary: dict) -> dict:
     )
     add_check(
         "probe_agent_seen",
-        "Probe agent",
+        "Агент внешней проверки",
         len(probe_agents) > 0,
         "Backend уже видел controlled monitoring probe."
         if probe_agents
@@ -8105,34 +11953,41 @@ def service_monitoring_probe_readiness(summary: dict) -> dict:
     )
     add_check(
         "probe_agent_fresh",
-        "Fresh probe signal",
-        len(probe_agents) > 0 and len(stale_probe_agents) == 0,
-        "Все известные probe agents присылали свежие observations."
-        if probe_agents and not stale_probe_agents
-        else "Один или несколько probe agents молчат или ещё не установлены.",
+        "Свежий сигнал внешней проверки",
+        len(active_probe_agents) > 0,
+        "Есть свежий сигнал от активного probe agent."
+        if active_probe_agents
+        else "Нет свежего сигнала от активного probe agent.",
         {
             "staleAfterSeconds": SERVICE_PROBE_STALE_AFTER_SECONDS,
+            "activeProbeAgents": [
+                item.get("probeId") for item in active_probe_agents[:10]
+            ],
             "staleProbeAgents": [
                 item.get("probeId") for item in stale_probe_agents[:10]
             ],
+            "staleAgentsAreWarnings": True,
         },
     )
     add_check(
         "probe_agent_clean_24h",
-        "Probe health 24h",
-        len(problem_probe_agents) == 0,
-        "За последние 24 часа у probe agents нет жёлтых/красных наблюдений."
-        if not problem_probe_agents
-        else "Есть жёлтые/красные observations за последние 24 часа.",
+        "Текущее здоровье внешней проверки",
+        len(problem_probe_agents_current) == 0,
+        "Последний сигнал probe agents зелёный."
+        if not problem_probe_agents_current
+        else "Последний сигнал одного или нескольких probe agents не зелёный.",
         {
-            "problemProbeAgents": [
-                item.get("probeId") for item in problem_probe_agents[:10]
+            "currentProblemProbeAgents": [
+                item.get("probeId") for item in problem_probe_agents_current[:10]
+            ],
+            "problemProbeAgents24h": [
+                item.get("probeId") for item in problem_probe_agents_24h[:10]
             ],
         },
     )
     add_check(
         "required_targets_covered",
-        "Required target coverage",
+        "Покрытие обязательных сервисов",
         not missing_targets,
         "Обязательные сервисы покрыты observations."
         if not missing_targets
@@ -8145,7 +12000,7 @@ def service_monitoring_probe_readiness(summary: dict) -> dict:
     )
     add_check(
         "required_targets_fresh",
-        "Required target freshness",
+        "Свежесть обязательных сервисов",
         not stale_targets and not missing_targets,
         "Обязательные observations свежие."
         if not stale_targets and not missing_targets
@@ -8154,7 +12009,7 @@ def service_monitoring_probe_readiness(summary: dict) -> dict:
     )
     add_check(
         "required_targets_green",
-        "Required target status",
+        "Статус обязательных сервисов",
         not failed_targets and not missing_targets,
         "Обязательные сервисы зелёные."
         if not failed_targets and not missing_targets
@@ -8172,9 +12027,10 @@ def service_monitoring_probe_readiness(summary: dict) -> dict:
         "staleRequiredTargets": stale_targets,
         "failedRequiredTargets": failed_targets,
         "probeAgentsTotal": len(probe_agents),
-        "activeProbeAgents": len(probe_agents) - len(stale_probe_agents),
+        "activeProbeAgents": len(active_probe_agents),
         "staleProbeAgents": len(stale_probe_agents),
-        "problemProbeAgents": len(problem_probe_agents),
+        "problemProbeAgents": len(problem_probe_agents_current),
+        "problemProbeAgents24h": len(problem_probe_agents_24h),
         "checks": checks,
         "installBundle": service_monitoring_probe_install_bundle(summary),
         "summary": {
@@ -8182,7 +12038,7 @@ def service_monitoring_probe_readiness(summary: dict) -> dict:
             "yellow": len(missing),
             "red": 0,
             "message": (
-                "Controlled monitoring probes готовы."
+                "Контролируемые внешние проверки готовы."
                 if not missing
                 else "Нужен внешний monitoring probe и свежие зелёные observations."
             ),
@@ -8216,41 +12072,48 @@ def service_monitoring_probe_install_bundle(summary: dict) -> dict:
             "--probe-region eu "
             f"--interval {interval_seconds} "
             "--server-health "
+            "--route-health "
+            "--route-candidate endpointId=intelligent_smew,protocol=wireguard_udp,transport=udp "
             "--token-stdin"
         ),
         "tokenPath": "/etc/greenvpn-monitoring/admin_token",
         "tokenPolicy": (
-            "Admin token is entered only on the monitoring VPS through stdin/file and stored "
-            "at /etc/greenvpn-monitoring/admin_token with mode 600. Do not put it in repo, "
-            "systemd unit text, shell history, docs, or chat."
+            "Admin token вводится только на monitoring VPS через stdin/file и хранится "
+            "в /etc/greenvpn-monitoring/admin_token с mode 600. Не класть его в repo, "
+            "systemd unit, shell history, docs или чат."
         ),
         "ownerInputs": [
-            {"name": "Monitoring VPS host/IP", "secret": False},
-            {"name": "SSH user/access method", "secret": True},
-            {"name": "Probe id", "secret": False, "example": "probe-eu-1"},
-            {"name": "Probe region", "secret": False, "example": "eu"},
-            {"name": "Admin token handoff method", "secret": True, "example": "--token-stdin"},
+            {"name": "Host/IP monitoring VPS", "secret": False},
+            {"name": "SSH-пользователь/способ доступа", "secret": True},
+            {"name": "ID внешней проверки", "secret": False, "example": "probe-eu-1"},
+            {"name": "Регион внешней проверки", "secret": False, "example": "eu"},
+            {"name": "Способ передачи admin token", "secret": True, "example": "--token-stdin"},
         ],
         "applySteps": [
-            "Copy service_probe.py and install_probe_systemd.sh to the monitoring VPS.",
-            "Run install_probe_systemd.sh as root with --token-stdin or --token-file.",
-            "Leave --server-health enabled so the probe sends endpoint health observations too.",
-            "Keep the probe VPS separate from the main backend/VPN server.",
-            "Do not change user VPN routing or Windows installer while installing the probe.",
+            "Скопировать service_probe.py и install_probe_systemd.sh на monitoring VPS.",
+            "Запустить install_probe_systemd.sh от root с --token-stdin или --token-file.",
+            "Оставить --server-health включенным, чтобы probe отправлял еще и здоровье VPN-узлов.",
+            "Оставить --route-health включенным, чтобы backend получал сигналы для автоматического выбора маршрута.",
+            "Для canary-слоёв добавлять отдельный --route-candidate только после того, как probe реально направляет проверки через этот tunnel/proxy path.",
+            "Держать probe VPS отдельно от основного backend/VPN-сервера.",
+            "Во время установки probe не менять маршрутизацию пользователей и Windows installer.",
         ],
         "verifySteps": [
             "systemctl status greenvpn-service-probe.timer --no-pager",
             "journalctl -u greenvpn-service-probe.service -n 80 --no-pager",
             "GET /api/v1/admin/monitoring/probes",
             "GET /api/v1/admin/server-health",
+            "GET /api/v1/admin/resilience/routes",
+            "GET /api/v1/admin/resilience/target-matrix",
             "GET /api/v1/admin/monitoring/readiness",
-            "Confirm required targets and current_wg0 have fresh green/healthy observations.",
+            "Проверить, что обязательные targets и current_wg0 имеют свежие green/healthy observations.",
+            "Проверить, что routeDecision.selected остаётся самым лёгким здоровым client-ready слоем.",
         ],
         "safeToRunWithoutOwner": False,
         "blockedUntilOwnerProvides": [
-            "monitoring VPS host/IP",
-            "SSH access to that VPS",
-            "admin token entered only into the probe host",
+            "host/IP monitoring VPS",
+            "SSH-доступ к этому VPS",
+            "admin token введен только на probe-сервере",
         ],
         "currentState": {
             "activeTargets": int(summary.get("activeTargets") or 0),
@@ -8264,6 +12127,81 @@ def service_monitoring_probe_install_bundle(summary: dict) -> dict:
                 }
             ),
         },
+    }
+
+
+def service_quality_signal_payload(observation: dict) -> Optional[dict]:
+    details = observation.get("details") or {}
+    if not isinstance(details, dict):
+        return None
+    probe_kind = str(details.get("probeKind") or "")
+    target_id = str(observation.get("targetId") or "")
+    if "media_throughput" not in probe_kind and target_id != "youtube_media":
+        return None
+    throughput = details.get("throughputMbps")
+    try:
+        throughput_value = None if throughput is None else round(float(throughput), 3)
+    except Exception:
+        throughput_value = None
+    return {
+        "targetId": target_id,
+        "status": observation.get("status") or "unknown",
+        "ok": bool(observation.get("ok")),
+        "observedAt": observation.get("observedAt") or "",
+        "probeId": observation.get("probeId") or "",
+        "probeRegion": observation.get("probeRegion") or "",
+        "throughputMbps": throughput_value,
+        "minGreenMbps": details.get("minGreenMbps"),
+        "minYellowMbps": details.get("minYellowMbps"),
+        "bytesRead": details.get("bytesRead"),
+        "requestedBytes": details.get("requestedBytes") or details.get("probeBytes"),
+        "failureMode": details.get("failureMode") or "",
+        "severity": details.get("severity") or "",
+        "mediaHost": details.get("mediaHost") or (details.get("media") or {}).get("mediaHost") or "",
+        "message": observation.get("message") or "",
+    }
+
+
+def build_service_quality_summary(latest: list[dict]) -> dict:
+    signals = [
+        signal
+        for signal in (service_quality_signal_payload(item) for item in latest)
+        if signal is not None
+    ]
+    youtube_media = next(
+        (item for item in signals if item.get("targetId") == "youtube_media"),
+        None,
+    )
+    return {
+        "mode": "reachability_plus_media_quality",
+        "description": (
+            "Web/TLS checks catch hard blocking. Media throughput checks catch cases "
+            "where the page opens but video CDN is degraded."
+        ),
+        "signals": signals,
+        "youtubeMedia": youtube_media,
+        "examples": [
+            {
+                "targetId": "youtube_web",
+                "type": "reachability",
+                "purpose": "YouTube page/HTTP availability.",
+            },
+            {
+                "targetId": "youtube_media",
+                "type": "media_throughput",
+                "purpose": "YouTube video CDN slowdown/degradation.",
+            },
+            {
+                "targetId": "discord_web",
+                "type": "hard_block_or_api",
+                "purpose": "Realtime/service API availability as a hard-block example.",
+            },
+            {
+                "targetId": "x_tls",
+                "type": "hard_block_tls",
+                "purpose": "Optional TLS-level hard-block example for X/Twitter.",
+            },
+        ],
     }
 
 
@@ -8366,6 +12304,7 @@ def build_service_availability_observation_summary() -> dict:
             ),
         },
     }
+    summary["serviceQuality"] = build_service_quality_summary(latest)
     summary["probeReadiness"] = service_monitoring_probe_readiness(summary)
     return summary
 
@@ -8406,21 +12345,21 @@ def normalize_control_key(value: Optional[str], field_name: str) -> str:
 def normalize_feature_flag_scope(value: Optional[str], fallback: str = "global") -> str:
     scope = clean_limited_text(value, 40).strip().lower() or fallback
     if scope not in FEATURE_FLAG_SCOPES:
-        raise HTTPException(status_code=400, detail="Unknown feature flag scope.")
+        raise HTTPException(status_code=400, detail="Неизвестная область переключателя функции.")
     return scope
 
 
 def normalize_runbook_category(value: Optional[str], fallback: str = "general") -> str:
     category = clean_limited_text(value, 40).strip().lower() or fallback
     if category not in RUNBOOK_CATEGORIES:
-        raise HTTPException(status_code=400, detail="Unknown runbook category.")
+        raise HTTPException(status_code=400, detail="Неизвестная категория инструкции.")
     return category
 
 
 def normalize_runbook_severity(value: Optional[str], fallback: str = "normal") -> str:
     severity = clean_limited_text(value, 40).strip().lower() or fallback
     if severity not in RUNBOOK_SEVERITIES:
-        raise HTTPException(status_code=400, detail="Unknown runbook severity.")
+        raise HTTPException(status_code=400, detail="Неизвестная важность инструкции.")
     return severity
 
 
@@ -8430,9 +12369,9 @@ def safe_control_json(value: Any, default: Any = None, max_len: int = 12000) -> 
     try:
         encoded = json.dumps(value, ensure_ascii=False, sort_keys=True)
     except Exception:
-        raise HTTPException(status_code=400, detail="value must be JSON serializable.")
+        raise HTTPException(status_code=400, detail="value должен сериализоваться в JSON.")
     if len(encoded) > max_len:
-        raise HTTPException(status_code=400, detail="value JSON is too large.")
+        raise HTTPException(status_code=400, detail="value JSON слишком большой.")
     return encoded
 
 
@@ -8539,7 +12478,7 @@ def upsert_admin_feature_flag(
     flag_key = normalize_control_key(payload.key, "key")
     title = clean_limited_text(payload.title, 160).strip()
     if not title:
-        raise HTTPException(status_code=400, detail="title is required.")
+        raise HTTPException(status_code=400, detail="Название обязательно.")
     scope = normalize_feature_flag_scope(payload.scope)
     rollout_percent = normalize_percentish(payload.rolloutPercent, 0)
     is_enabled = 1 if payload.isEnabled else 0
@@ -8555,13 +12494,13 @@ def upsert_admin_feature_flag(
                 (flag_id,),
             ).fetchone()
             if row is None:
-                raise HTTPException(status_code=404, detail="Feature flag not found.")
+                raise HTTPException(status_code=404, detail="Переключатель функции не найден.")
             duplicate = conn.execute(
                 "SELECT id FROM admin_feature_flags WHERE flag_key = ? AND id != ?",
                 (flag_key, flag_id),
             ).fetchone()
             if duplicate is not None:
-                raise HTTPException(status_code=409, detail="Feature flag key already exists.")
+                raise HTTPException(status_code=409, detail="Ключ переключателя функции уже существует.")
             conn.execute(
                 """
                 UPDATE admin_feature_flags
@@ -8591,7 +12530,7 @@ def upsert_admin_feature_flag(
                 (flag_key,),
             ).fetchone()
             if existing is not None:
-                raise HTTPException(status_code=409, detail="Feature flag key already exists.")
+                raise HTTPException(status_code=409, detail="Ключ переключателя функции уже существует.")
             cursor = conn.execute(
                 """
                 INSERT INTO admin_feature_flags(
@@ -8668,16 +12607,16 @@ def upsert_admin_runbook(
     runbook_key = normalize_control_key(payload.key, "key")
     title = clean_limited_text(payload.title, 180).strip()
     if not title:
-        raise HTTPException(status_code=400, detail="title is required.")
+        raise HTTPException(status_code=400, detail="Название обязательно.")
     category = normalize_runbook_category(payload.category)
     severity = normalize_runbook_severity(payload.severity)
     summary = clean_limited_text(payload.summary, 1800).strip()
     steps = sanitize_runbook_steps(payload.steps)
     if not steps:
-        raise HTTPException(status_code=400, detail="at least one step is required.")
+        raise HTTPException(status_code=400, detail="Нужен хотя бы один шаг.")
     owner_role = clean_limited_text(payload.ownerRole, 80).strip().lower()
     if owner_role and owner_role not in ADMIN_ROLE_MATRIX:
-        raise HTTPException(status_code=400, detail="Unknown ownerRole.")
+        raise HTTPException(status_code=400, detail="Неизвестная роль владельца.")
     is_active = 1 if payload.isActive is not False else 0
     steps_json = json.dumps(steps, ensure_ascii=False)
 
@@ -8688,13 +12627,13 @@ def upsert_admin_runbook(
                 (runbook_id,),
             ).fetchone()
             if row is None:
-                raise HTTPException(status_code=404, detail="Runbook not found.")
+                raise HTTPException(status_code=404, detail="Инструкция не найдена.")
             duplicate = conn.execute(
                 "SELECT id FROM admin_runbooks WHERE runbook_key = ? AND id != ?",
                 (runbook_key, runbook_id),
             ).fetchone()
             if duplicate is not None:
-                raise HTTPException(status_code=409, detail="Runbook key already exists.")
+                raise HTTPException(status_code=409, detail="Ключ инструкции уже существует.")
             conn.execute(
                 """
                 UPDATE admin_runbooks
@@ -8722,7 +12661,7 @@ def upsert_admin_runbook(
                 (runbook_key,),
             ).fetchone()
             if existing is not None:
-                raise HTTPException(status_code=409, detail="Runbook key already exists.")
+                raise HTTPException(status_code=409, detail="Ключ инструкции уже существует.")
             cursor = conn.execute(
                 """
                 INSERT INTO admin_runbooks(
@@ -8758,8 +12697,8 @@ def seed_default_feature_flags_and_runbooks() -> None:
     default_flags = [
         {
             "key": "payments.production_enabled",
-            "title": "Production payments",
-            "description": "Включение production-платежей после домена, HTTPS и YooKassa keys.",
+            "title": "Боевые платежи",
+            "description": "Включение боевых платежей после домена, HTTPS и ключей YooKassa.",
             "value": {"provider": "yookassa", "mode": "manual_until_keys"},
             "scope": "payments",
             "enabled": False,
@@ -8767,7 +12706,7 @@ def seed_default_feature_flags_and_runbooks() -> None:
         },
         {
             "key": "auth.email_codes_enabled",
-            "title": "Email code login",
+            "title": "Вход по коду на почту",
             "description": "Одноразовые коды на email как запасной вход и регистрация.",
             "value": True,
             "scope": "auth",
@@ -8776,8 +12715,8 @@ def seed_default_feature_flags_and_runbooks() -> None:
         },
         {
             "key": "auth.sms_codes_enabled",
-            "title": "SMS code login",
-            "description": "Вход и регистрация по телефону после подключения SMS provider.",
+            "title": "Вход по SMS-коду",
+            "description": "Вход и регистрация по телефону после подключения SMS-провайдера.",
             "value": {"provider": "sms.ru", "ready": False},
             "scope": "auth",
             "enabled": False,
@@ -8785,7 +12724,7 @@ def seed_default_feature_flags_and_runbooks() -> None:
         },
         {
             "key": "support.auto_triage_enabled",
-            "title": "Support auto triage",
+            "title": "Авторазбор поддержки",
             "description": "Автоматическая категоризация отчётов поддержки.",
             "value": True,
             "scope": "support",
@@ -8794,7 +12733,7 @@ def seed_default_feature_flags_and_runbooks() -> None:
         },
         {
             "key": "updates.required_updates_enabled",
-            "title": "Required updates",
+            "title": "Обязательные обновления",
             "description": "Принудительные обновления клиента перед подключением.",
             "value": False,
             "scope": "updates",
@@ -8803,8 +12742,8 @@ def seed_default_feature_flags_and_runbooks() -> None:
         },
         {
             "key": "catalog.managed_endpoints_enabled",
-            "title": "Managed endpoint catalog",
-            "description": "Выдача управляемых endpoint клиенту после provisioning и safe rollout.",
+            "title": "Управляемый каталог VPN-узлов",
+            "description": "Выдача управляемых VPN-узлов клиенту после подготовки конфигов и безопасного rollout.",
             "value": {"mode": "admin_preparation"},
             "scope": "vpn",
             "enabled": False,
@@ -8812,7 +12751,7 @@ def seed_default_feature_flags_and_runbooks() -> None:
         },
         {
             "key": "vpn.guard_other_vpn_enabled",
-            "title": "Other VPN guard",
+            "title": "Защита от других VPN",
             "description": "Пользовательский клиент предупреждает/не конфликтует с Amnezia/WARP/WireGuard.",
             "value": True,
             "scope": "vpn",
@@ -8821,7 +12760,7 @@ def seed_default_feature_flags_and_runbooks() -> None:
         },
         {
             "key": "monitoring.service_alerts_enabled",
-            "title": "Service availability alerts",
+            "title": "Оповещения о доступности сервисов",
             "description": "Инциденты и alert hooks по YouTube/Discord/Telegram/API/update targets.",
             "value": True,
             "scope": "monitoring",
@@ -8883,7 +12822,7 @@ def seed_default_feature_flags_and_runbooks() -> None:
                 "Проверить /healthz по IP и домену.",
                 "Проверить systemd-сервис backend на сервере.",
                 "Проверить DNS A api.greenvpn.pro -> 37.220.85.211.",
-                "Если домен недоступен, временно использовать IP bootstrap и открыть incident.",
+                "Если домен недоступен, временно использовать IP bootstrap и открыть инцидент.",
             ],
             "ownerRole": "admin",
         },
@@ -8911,7 +12850,7 @@ def seed_default_feature_flags_and_runbooks() -> None:
                 "provisioning, health observations, staged rollout и rollback."
             ),
             "steps": [
-                "Открыть Server Catalog и проверить publication readiness.",
+                "Открыть каталог серверов и проверить publication readiness.",
                 "Убедиться, что публичный /api/v1/catalog/servers всё ещё выдаёт только безопасные endpoint.",
                 "Проверить fresh healthy observations за 24 часа и отсутствие recent failures.",
                 "Проверить, что для endpoint есть безопасная выдача WireGuard peer/config по serverId.",
@@ -8999,21 +12938,21 @@ def seed_default_feature_flags_and_runbooks() -> None:
 def normalize_app_release_platform(value: Optional[str], fallback: str = "windows") -> str:
     candidate = clean_limited_text(value, 40).strip().lower() or fallback
     if candidate not in APP_RELEASE_PLATFORMS:
-        raise HTTPException(status_code=400, detail="Unknown release platform.")
+        raise HTTPException(status_code=400, detail="Неизвестная платформа релиза.")
     return candidate
 
 
 def normalize_app_release_channel(value: Optional[str], fallback: str = "stable") -> str:
     candidate = clean_limited_text(value, 40).strip().lower() or fallback
     if candidate not in APP_RELEASE_CHANNELS:
-        raise HTTPException(status_code=400, detail="Unknown release channel.")
+        raise HTTPException(status_code=400, detail="Неизвестный канал релиза.")
     return candidate
 
 
 def normalize_app_release_status(value: Optional[str], fallback: str = "draft") -> str:
     candidate = clean_limited_text(value, 40).strip().lower() or fallback
     if candidate not in APP_RELEASE_STATUSES:
-        raise HTTPException(status_code=400, detail="Unknown release status.")
+        raise HTTPException(status_code=400, detail="Неизвестный статус релиза.")
     return candidate
 
 
@@ -9048,7 +12987,7 @@ def validate_release_download_url(value: Optional[str]) -> str:
         return ""
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise HTTPException(status_code=400, detail="downloadUrl must be http or https URL.")
+        raise HTTPException(status_code=400, detail="downloadUrl должен быть http или https URL.")
     return url
 
 
@@ -9057,7 +12996,7 @@ def validate_release_sha256(value: Optional[str]) -> str:
     if not sha:
         return ""
     if not re.fullmatch(r"[0-9a-f]{64}", sha):
-        raise HTTPException(status_code=400, detail="sha256 must be 64 hex characters.")
+        raise HTTPException(status_code=400, detail="sha256 должен состоять из 64 hex-символов.")
     return sha.upper()
 
 
@@ -9246,7 +13185,7 @@ def app_release_rollback_readiness(release: dict) -> dict:
             "Run bluevpn_release_gate.ps1 -StrictPaymentGate and admin updates readiness after rollback.",
         ],
         "summary": (
-            "Rollback artifact is ready for full/required rollout."
+            "Rollback artifact готов для full/required rollout."
             if ready
             else "Rollback artifact is missing; keep stable rollout staged until a public HTTPS rollback artifact and SHA256 exist."
         ),
@@ -9291,9 +13230,9 @@ def app_release_publication_readiness(release: dict) -> dict:
         "warnings": warnings,
         "rollbackReadiness": rollback,
         "summary": (
-            "Release can be published."
+            "Релиз можно публиковать."
             if not blockers
-            else "Release is blocked until artifact/publication requirements are fixed."
+            else "Релиз заблокирован до исправления требований по artifact/publication."
         ),
     }
 
@@ -9349,7 +13288,10 @@ def release_rollout_decision(
 ) -> dict:
     current = clean_limited_text(current_version, 120).strip()
     latest = clean_limited_text(latest_version, 120).strip()
-    base_update_available = bool(current) and bool(latest) and compare_versions(current, latest) < 0
+    if not current and latest and required:
+        base_update_available = True
+    else:
+        base_update_available = bool(current) and bool(latest) and compare_versions(current, latest) < 0
     safe_rollout = normalize_release_rollout_percent(rollout_percent)
     if not base_update_available:
         return {
@@ -9486,7 +13428,7 @@ def upsert_app_release(payload: AdminAppReleaseIn, release_id: Optional[int] = N
                 (release_id,),
             ).fetchone()
             if not existing:
-                raise HTTPException(status_code=404, detail="Release not found.")
+                raise HTTPException(status_code=404, detail="Релиз не найден.")
 
         platform = normalize_app_release_platform(
             payload.platform if payload.platform is not None else (existing["platform"] if existing else "windows")
@@ -9499,7 +13441,7 @@ def upsert_app_release(payload: AdminAppReleaseIn, release_id: Optional[int] = N
             120,
         ).strip()
         if not version:
-            raise HTTPException(status_code=400, detail="Release version is required.")
+            raise HTTPException(status_code=400, detail="Версия релиза обязательна.")
         build_number = clean_limited_text(
             payload.buildNumber if payload.buildNumber is not None else (existing["build_number"] if existing else ""),
             120,
@@ -9633,7 +13575,7 @@ def upsert_app_release(payload: AdminAppReleaseIn, release_id: Optional[int] = N
             conn.commit()
             row = conn.execute("SELECT * FROM app_releases WHERE id = ?", (release_pk,)).fetchone()
         except sqlite3.IntegrityError:
-            raise HTTPException(status_code=409, detail="Release with this platform/channel/version already exists.")
+            raise HTTPException(status_code=409, detail="Релиз с такой платформой, каналом и версией уже существует.")
 
     return app_release_payload(row)
 
@@ -9678,6 +13620,7 @@ def build_update_manifest(
     platform = normalize_app_release_platform(platform)
     channel = normalize_app_release_channel(channel)
     current = clean_limited_text(current_version, 120).strip()
+    current_marker = current.lower()
     row = latest_published_app_release(platform, channel)
     if row:
         release = app_release_payload(row)
@@ -9715,12 +13658,38 @@ def build_update_manifest(
         }
         return apply_update_artifact_guard(manifest, configured_required)
 
-    latest = UPDATE_LATEST_VERSION or (current or "0.2.1-windows-mvp")
+    android_preview = (
+        platform == "android"
+        and ANDROID_PREVIEW_UPDATE_DOWNLOAD_URL
+        and ("adgate" in current_marker or "preview" in current_marker)
+    )
+    if android_preview:
+        latest = ANDROID_PREVIEW_UPDATE_LATEST_VERSION or (current or APP_VERSION)
+        download_url = ANDROID_PREVIEW_UPDATE_DOWNLOAD_URL
+        sha256 = ANDROID_PREVIEW_UPDATE_SHA256
+        required = ANDROID_PREVIEW_UPDATE_REQUIRED
+        released_at = ANDROID_PREVIEW_UPDATE_RELEASED_AT
+        changelog = ANDROID_PREVIEW_UPDATE_CHANGELOG
+    elif platform == "android":
+        latest = ANDROID_UPDATE_LATEST_VERSION or (current or APP_VERSION)
+        download_url = ANDROID_UPDATE_DOWNLOAD_URL
+        sha256 = ANDROID_UPDATE_SHA256
+        required = ANDROID_UPDATE_REQUIRED
+        released_at = ANDROID_UPDATE_RELEASED_AT
+        changelog = ANDROID_UPDATE_CHANGELOG
+    else:
+        latest = UPDATE_LATEST_VERSION or (current or "0.2.1-windows-mvp")
+        download_url = UPDATE_DOWNLOAD_URL
+        sha256 = UPDATE_SHA256
+        required = UPDATE_REQUIRED
+        released_at = UPDATE_RELEASED_AT
+        changelog = UPDATE_CHANGELOG
+
     rollout = release_rollout_decision(
         current_version=current,
         latest_version=latest,
         rollout_percent=100,
-        required=UPDATE_REQUIRED,
+        required=required,
         client_id=client_id,
     )
     manifest = {
@@ -9729,19 +13698,19 @@ def build_update_manifest(
         "currentVersion": current,
         "latestVersion": latest,
         "buildNumber": "",
-        "downloadUrl": UPDATE_DOWNLOAD_URL,
-        "sha256": UPDATE_SHA256,
+        "downloadUrl": download_url,
+        "sha256": sha256,
         "sizeBytes": None,
-        "required": UPDATE_REQUIRED,
+        "required": required,
         "minSupportedVersion": "",
         "rolloutPercent": 100,
         "updateAvailable": bool(rollout["baseUpdateAvailable"]) and bool(rollout["rolloutEligible"]),
         **rollout,
-        "releasedAt": UPDATE_RELEASED_AT,
-        "changelog": UPDATE_CHANGELOG,
+        "releasedAt": released_at,
+        "changelog": changelog,
         "source": "environment",
     }
-    return apply_update_artifact_guard(manifest, UPDATE_REQUIRED)
+    return apply_update_artifact_guard(manifest, required)
 
 
 def build_windows_update_manifest(
@@ -9754,6 +13723,108 @@ def build_windows_update_manifest(
         current_version=current_version,
         client_id=client_id,
     )
+
+
+def update_manifest_platform_for_client_id(client_id: Optional[str]) -> Optional[str]:
+    device_uid = clean_limited_text(client_id, 128).strip()
+    if not device_uid:
+        return None
+    try:
+        with db() as conn:
+            row = conn.execute(
+                "SELECT platform FROM devices WHERE device_uid = ? LIMIT 1",
+                (device_uid,),
+            ).fetchone()
+    except Exception:
+        return None
+    platform = clean_limited_text(row["platform"] if row else "", 40).strip().lower()
+    return platform if platform in APP_RELEASE_PLATFORMS else None
+
+
+def update_manifest_platform_for_legacy_endpoint(
+    *,
+    request: Request,
+    client_id: Optional[str],
+    current_version: Optional[str],
+) -> str:
+    registered_platform = update_manifest_platform_for_client_id(client_id)
+    if registered_platform:
+        return registered_platform
+
+    user_agent = clean_limited_text(request.headers.get("user-agent", ""), 300).lower()
+    platform_header = clean_limited_text(
+        request.headers.get("x-greenvpn-platform", ""),
+        40,
+    ).lower()
+    marker = clean_limited_text(current_version, 120).lower()
+    if platform_header == "android":
+        return "android"
+    if "android" in user_agent or "dalvik" in user_agent:
+        return "android"
+    legacy_android_markers = (
+        "android",
+        "apk",
+        "adgate",
+        "routefix",
+        "routeprobe",
+        "client-routeprobe",
+        "tunnel-dns",
+        "server-sync",
+        "yandex-rewarded",
+        "rustore",
+    )
+    if any(item in marker for item in legacy_android_markers):
+        return "android"
+    if not marker:
+        if "windows" in user_agent or "win64" in user_agent or "win32" in user_agent:
+            return "windows"
+        if "dart" in user_agent or "flutter" in user_agent or "okhttp" in user_agent:
+            return "android"
+    return "windows"
+
+
+def is_legacy_android_route_probe_client(platform: Optional[str], app_version: Optional[str]) -> bool:
+    platform_marker = clean_limited_text(platform, 40).strip().lower()
+    version_marker = clean_limited_text(app_version, 160).strip().lower()
+    if platform_marker != "android":
+        return False
+    legacy_markers = (
+        "routefix",
+        "routeprobe",
+        "server-sync",
+        "tunnel-dns",
+        "diagnostics",
+        "youtube",
+    )
+    return any(item in version_marker for item in legacy_markers)
+
+
+def client_route_probe_safe_resilience(
+    resilience: dict,
+    *,
+    platform: Optional[str],
+    app_version: Optional[str],
+) -> dict:
+    if not isinstance(resilience, dict):
+        return resilience
+    safe = dict(resilience)
+    safe["clientRouteProbe"] = {
+        "enabled": False,
+        "reason": "legacy_android_probe_disabled_by_backend",
+    }
+    safe["clientSideQualityGate"] = {
+        "enabled": False,
+        "reason": "do_not_disconnect_tunnel_on_client_youtube_probe",
+    }
+    if is_legacy_android_route_probe_client(platform, app_version):
+        safe["autoSwitch"] = False
+        safe["legacyAndroidRouteProbeBypass"] = True
+    route_decision = safe.get("routeDecision")
+    if isinstance(route_decision, dict):
+        safe_route_decision = dict(route_decision)
+        safe_route_decision["clientRouteProbe"] = {"enabled": False}
+        safe["routeDecision"] = safe_route_decision
+    return safe
 
 
 def build_update_release_readiness(
@@ -9781,77 +13852,77 @@ def build_update_release_readiness(
         "blockers": ["published_release_missing"],
         "warnings": [],
         "steps": [
-            "Create a published database release after the final installer artifact exists.",
-            "Configure a previous published release or GREENVPN_ROLLBACK_* artifact before full/required stable rollout.",
+            "Создать опубликованную запись релиза в базе после появления финального установщика.",
+            "Настроить предыдущий опубликованный релиз или GREENVPN_ROLLBACK_* перед полным/обязательным stable rollout.",
         ],
-        "summary": "No published release exists yet, so rollback readiness cannot be proven.",
+        "summary": "Опубликованного релиза пока нет, поэтому готовность отката нельзя доказать.",
     }
     checks = [
         {
             "code": "published_release",
-            "title": "Published release record",
+            "title": "Запись опубликованного релиза",
             "ok": latest_release is not None,
             "message": (
-                "Updater uses a controlled database release record."
+                "Обновлятор использует контролируемую запись релиза в базе."
                 if latest_release
-                else "No published database release; manifest falls back to environment defaults."
+                else "Опубликованного релиза в базе нет; манифест берёт значения из env по умолчанию."
             ),
         },
         {
             "code": "download_artifact",
-            "title": "Download artifact",
+            "title": "Файл для скачивания",
             "ok": bool(manifest.get("fileReady")),
             "message": (
-                "downloadUrl and SHA256 are both present and parseable."
+                "downloadUrl и SHA256 заданы и корректно читаются."
                 if manifest.get("fileReady")
-                else "Publish a final installer URL and 64-character SHA256 before user rollout."
+                else "Перед выкладкой пользователям укажи URL финального установщика и SHA256 из 64 символов."
             ),
         },
         {
             "code": "public_https_download",
-            "title": "Public HTTPS download",
+            "title": "Публичное HTTPS-скачивание",
             "ok": bool(manifest.get("publicHttpsReady")),
             "message": (
-                "Release download is served over public HTTPS."
+                "Релиз скачивается по публичному HTTPS."
                 if manifest.get("publicHttpsReady")
-                else "Stable public releases must use an HTTPS download URL, not localhost or plain HTTP."
+                else "Публичные stable-релизы должны скачиваться по HTTPS, а не через localhost или HTTP."
             ),
         },
         {
             "code": "required_update_guard",
-            "title": "Required update guard",
+            "title": "Защита обязательного обновления",
             "ok": not bool(manifest.get("releaseBlocked")),
             "message": (
-                "Required-update flag is safe for the current artifact state."
+                "Флаг обязательного обновления безопасен для текущего состояния файла."
                 if not manifest.get("releaseBlocked")
-                else "Required update was configured without a ready artifact and is suppressed in the client manifest."
+                else "Обязательное обновление настроено без готового файла и подавлено в клиентском манифесте."
             ),
         },
         {
             "code": "release_publication_gate",
-            "title": "Release publication gate",
+            "title": "Проверка публикации релиза",
             "ok": bool(latest_release_readiness.get("canPublish")) if latest_release else False,
             "message": (
                 latest_release_readiness.get("summary")
                 if latest_release
-                else "No published release is available for publication gate checks."
+                else "Нет опубликованного релиза для проверки публикации."
             ),
         },
         {
             "code": "rollback_plan",
-            "title": "Rollback plan",
+            "title": "План отката",
             "ok": bool(rollback_readiness.get("rollbackReady")) if latest_release else False,
             "message": (
                 rollback_readiness.get("summary")
                 if latest_release
-                else "No published release is available for rollback readiness checks."
+                else "Нет опубликованного релиза для проверки отката."
             ),
         },
         {
             "code": "installer_cadence",
-            "title": "Final-only installer cadence",
+            "title": "Установщик только на финальном handoff",
             "ok": True,
-            "message": "Do not rebuild or clean-install Green VPN until the final handoff/test installer.",
+            "message": "Не пересобирать и не переустанавливать Green VPN до финального handoff или явной команды тестировать.",
         },
     ]
     missing = [check for check in checks if not check["ok"]]
@@ -9867,9 +13938,9 @@ def build_update_release_readiness(
             "yellow": len(missing),
             "red": 0,
             "message": (
-                "Windows updater release path is ready."
+                "Контур обновлений Windows готов."
                 if not missing
-                else "Windows updater is staged but needs final artifact/release data."
+                else "Контур обновлений Windows подготовлен, но ждёт финальный файл установщика и данные релиза."
             ),
         },
         "checks": checks,
@@ -9878,6 +13949,130 @@ def build_update_release_readiness(
         "latestPublishedRelease": latest_release,
         "latestReleaseReadiness": latest_release_readiness,
         "rollbackReadiness": rollback_readiness,
+    }
+
+
+def windows_distribution_trust_readiness(
+    update_readiness: Optional[dict] = None,
+) -> dict:
+    update_readiness = update_readiness or build_update_release_readiness()
+    signed_url = WINDOWS_SIGNED_INSTALLER_URL or UPDATE_DOWNLOAD_URL
+    signed_sha256 = WINDOWS_SIGNED_INSTALLER_SHA256 or re.sub(
+        r"\s+",
+        "",
+        UPDATE_SHA256 or "",
+    ).upper()
+    public_download = PUBLIC_WINDOWS_DOWNLOAD_URL or UPDATE_DOWNLOAD_URL
+    public_download_lower = public_download.lower()
+    looks_like_temporary_unsigned = any(
+        marker in public_download_lower
+        for marker in (
+            "hiddeninstaller_20260509",
+            "unsigned",
+            "demo",
+            "mvp",
+        )
+    )
+    thumbprint_ready = bool(
+        WINDOWS_CODE_SIGNING_CERT_THUMBPRINT
+        and re.fullmatch(r"[0-9A-F]{40}", WINDOWS_CODE_SIGNING_CERT_THUMBPRINT)
+    )
+    signing_identity_ready = bool(
+        WINDOWS_CODE_SIGNING_PROVIDER
+        and WINDOWS_CODE_SIGNING_PUBLISHER
+        and thumbprint_ready
+    )
+    signed_metadata_ready = bool(
+        _is_https_url(signed_url)
+        and re.fullmatch(r"[0-9A-Fa-f]{64}", signed_sha256 or "")
+    )
+    checks = [
+        {
+            "code": "code_signing_identity",
+            "title": "Подпись издателя",
+            "ok": signing_identity_ready,
+            "message": (
+                "Издатель и сертификат подписи кода заданы для финального Windows-релиза."
+                if signing_identity_ready
+                else "Нужен OV/EV Code Signing certificate или Microsoft Trusted Signing; SSL-сертификат сайта не подходит для .exe."
+            ),
+            "value": {
+                "providerConfigured": bool(WINDOWS_CODE_SIGNING_PROVIDER),
+                "publisherConfigured": bool(WINDOWS_CODE_SIGNING_PUBLISHER),
+                "certificateThumbprintConfigured": thumbprint_ready,
+            },
+        },
+        {
+            "code": "signed_installer_metadata",
+            "title": "Подписанный установщик",
+            "ok": signed_metadata_ready,
+            "message": (
+                "HTTPS-ссылка и SHA256 финального подписанного установщика заданы."
+                if signed_metadata_ready
+                else "После подписи нужно задать HTTPS-ссылку и SHA256 финального установщика."
+            ),
+            "value": {
+                "urlConfigured": _is_https_url(signed_url),
+                "sha256Configured": bool(re.fullmatch(r"[0-9A-Fa-f]{64}", signed_sha256 or "")),
+            },
+        },
+        {
+            "code": "public_download_trusted",
+            "title": "Публичная кнопка скачивания",
+            "ok": bool(public_download) and not looks_like_temporary_unsigned and signed_metadata_ready,
+            "message": (
+                "Публичная кнопка скачивания ведет на финальный trusted-релиз."
+                if bool(public_download) and not looks_like_temporary_unsigned and signed_metadata_ready
+                else "Публичная кнопка сейчас считается временной: для рекламы нужен подписанный trusted-релиз."
+            ),
+            "value": {
+                "publicDownloadConfigured": bool(public_download),
+                "temporaryUnsignedMarkerDetected": looks_like_temporary_unsigned,
+            },
+        },
+        {
+            "code": "update_release_ready",
+            "title": "Обновления и откат",
+            "ok": bool(update_readiness.get("productionReady")),
+            "message": (
+                "Release/rollback контур готов."
+                if update_readiness.get("productionReady")
+                else "Нужны финальная release-запись, HTTPS-артефакт, SHA256 и rollback-план."
+            ),
+        },
+    ]
+    failed = [check for check in checks if not check["ok"]]
+    warnings = []
+    if not (WINDOWS_DEFENDER_SUBMISSION_ID or WINDOWS_YANDEX_SUBMISSION_ID):
+        warnings.append(
+            "После подписанного релиза отправлять возможные false positive в Microsoft/Yandex, а не просить пользователей отключать защиту."
+        )
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "generatedAt": utc_now_iso(),
+        "productionReady": not failed,
+        "summary": {
+            "green": len(checks) - len(failed),
+            "yellow": len(failed),
+            "red": 0,
+            "warnings": len(warnings),
+            "message": (
+                "Windows-релиз готов для холодной аудитории."
+                if not failed
+                else "Windows-релиз пока временный: нужен Code Signing и финальный trusted-установщик."
+            ),
+        },
+        "checks": checks,
+        "requiredActions": [check["message"] for check in failed],
+        "warnings": warnings,
+        "policy": {
+            "sslCertificatesDoNotSignExe": True,
+            "signEveryWindowsBinary": True,
+            "submitFalsePositivesInsteadOfDisablingProtection": True,
+            "currentUnsignedBuildIsTemporary": looks_like_temporary_unsigned,
+            "secretPolicy": "Private key/token material для подписи нельзя помещать в repo, docs или чат.",
+        },
     }
 
 
@@ -9906,7 +14101,7 @@ def allocate_ip() -> str:
         if ip not in used:
             return ip
 
-    raise HTTPException(status_code=500, detail="No free client IPs left.")
+    raise HTTPException(status_code=500, detail="Не осталось свободных клиентских IP.")
 
 
 def device_status(device_row) -> dict:
@@ -9971,7 +14166,7 @@ def set_device_enabled(device_uid: str, enabled: bool, reason: Optional[str]) ->
             (device_uid,),
         ).fetchone()
         if row is None:
-            raise HTTPException(status_code=404, detail="Device not found.")
+            raise HTTPException(status_code=404, detail="Устройство не найдено.")
 
         conn.execute(
             """
@@ -10164,7 +14359,9 @@ def get_admin_user_detail(user_id: int) -> dict:
             (int(user_id),),
         ).fetchone()
     if row is None:
-        raise HTTPException(status_code=404, detail="User not found.")
+        raise HTTPException(status_code=404, detail="Пользователь не найден.")
+    subscription = subscription_status(get_subscription_row(user_id))
+    traffic_usage = subscription_traffic_usage_status(user_id, subscription)
     user = {
         "id": row["id"],
         "email": row["email"],
@@ -10180,7 +14377,8 @@ def get_admin_user_detail(user_id: int) -> dict:
         ),
         "lastSeenAt": row["last_seen_at"],
         "lastConfigAt": row["last_config_at"],
-        "subscription": subscription_status(get_subscription_row(user_id)),
+        "subscription": subscription,
+        "trafficUsage": traffic_usage,
     }
     return {
         "user": user,
@@ -10188,7 +14386,70 @@ def get_admin_user_detail(user_id: int) -> dict:
         "orders": list_billing_orders_for_user(user_id),
         "supportReports": list_support_reports(user_id=user_id, limit=50),
         "supportActions": list_admin_support_actions(user_id=user_id, limit=50),
-        "subscription": subscription_status(get_subscription_row(user_id)),
+        "subscription": subscription,
+        "trafficUsage": traffic_usage,
+    }
+
+
+def delete_admin_user_record(user_id: int, payload: AdminUserDeleteIn) -> dict:
+    reason = clean_limited_text(payload.reason, 1000).strip()
+    if len(reason) < 8:
+        raise HTTPException(status_code=400, detail="Причина удаления должна содержать минимум 8 символов.")
+
+    with db() as conn:
+        user_row = conn.execute(
+            "SELECT id, email, phone, created_at FROM users WHERE id = ?",
+            (int(user_id),),
+        ).fetchone()
+        if user_row is None:
+            raise HTTPException(status_code=404, detail="Пользователь не найден.")
+
+        confirm_email = clean_limited_text(payload.confirmEmail, 320).strip().lower()
+        user_email = (user_row["email"] or "").strip().lower()
+        if user_email and confirm_email != user_email:
+            raise HTTPException(status_code=400, detail="confirmEmail не совпадает с email пользователя.")
+
+        deleted: dict[str, int] = {}
+
+        def delete_from(table: str, where_sql: str, args: tuple) -> None:
+            cursor = conn.execute(f"DELETE FROM {table} WHERE {where_sql}", args)
+            deleted[table] = max(0, int(cursor.rowcount or 0))
+
+        delete_from(
+            "support_report_comments",
+            "report_id IN (SELECT id FROM support_reports WHERE user_id = ?)",
+            (int(user_id),),
+        )
+        for table in [
+            "admin_support_actions",
+            "subscription_expiry_reviews",
+            "promo_redemptions",
+            "billing_orders",
+            "subscriptions",
+            "device_traffic_usage",
+            "devices",
+            "sms_outbox",
+            "email_login_codes",
+            "phone_confirmations",
+            "email_confirmations",
+            "email_outbox",
+            "tokens",
+            "auth_events",
+            "support_reports",
+        ]:
+            delete_from(table, "user_id = ?", (int(user_id),))
+
+        cursor = conn.execute("DELETE FROM users WHERE id = ?", (int(user_id),))
+        deleted["users"] = max(0, int(cursor.rowcount or 0))
+        conn.commit()
+
+    return {
+        "userId": int(user_id),
+        "email": user_row["email"],
+        "phone": user_row["phone"],
+        "createdAt": user_row["created_at"],
+        "reason": reason,
+        "deleted": deleted,
     }
 
 
@@ -10641,28 +14902,28 @@ def api_vpn_endpoint_separation_readiness() -> dict:
         {
             "code": "public_api_https",
             "ok": bool(api_urls) and all(_is_https_url(url) for url in api_urls),
-            "message": "All public API/site URLs must be HTTPS.",
+            "message": "Все публичные API/сайт URL должны использовать HTTPS.",
             "value": api_urls,
         },
         {
             "code": "public_api_dns_resolves",
             "ok": bool(api_hosts) and not unresolved_hosts,
-            "message": "Public API/site hostnames must resolve in DNS.",
+            "message": "Публичные hostnames API/сайта должны резолвиться в DNS.",
             "value": api_host_ips,
             "unresolvedHosts": unresolved_hosts,
         },
         {
             "code": "vpn_endpoint_resolves",
             "ok": bool(vpn_ips),
-            "message": "VPN endpoint host must resolve before public rollout.",
+            "message": "Hostname VPN-узла должен резолвиться перед публичной раскаткой.",
             "value": vpn_ips,
         },
         {
             "code": "api_vpn_ip_split",
             "ok": bool(api_ip_set) and bool(vpn_ips) and not overlap,
             "message": (
-                "Public API/site must not share an IP with the VPN endpoint; full-tunnel "
-                "clients can block access to their own control plane."
+                "Публичный API/сайт не должен делить IP с VPN endpoint: full-tunnel "
+                "клиенты могут заблокировать доступ к собственному контуру управления."
             ),
             "overlap": overlap,
         },
@@ -10713,36 +14974,36 @@ def yookassa_payment_readiness() -> dict:
             "code": "yookassa_keys",
             "ok": yookassa_configured(),
             "message": (
-                "YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY are configured."
+                "YOOKASSA_SHOP_ID и YOOKASSA_SECRET_KEY настроены."
                 if yookassa_configured()
-                else "Set YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY."
+                else "Задай YOOKASSA_SHOP_ID и YOOKASSA_SECRET_KEY."
             ),
         },
         {
             "code": "return_url_https",
             "ok": _is_https_url(YOOKASSA_RETURN_URL)
             and return_host not in {"bluevpn.local", "localhost", "127.0.0.1"},
-            "message": "YOOKASSA_RETURN_URL must be a real HTTPS URL.",
+            "message": "YOOKASSA_RETURN_URL должен быть настоящим HTTPS URL.",
             "value": YOOKASSA_RETURN_URL,
         },
         {
             "code": "webhook_url_https",
             "ok": _is_https_url(webhook_url)
             and webhook_host not in {"bluevpn.local", "localhost", "127.0.0.1"},
-            "message": "YOOKASSA_WEBHOOK_URL or GREENVPN_PUBLIC_BASE_URL must point to real HTTPS.",
+            "message": "YOOKASSA_WEBHOOK_URL или GREENVPN_PUBLIC_BASE_URL должны указывать на настоящий HTTPS.",
             "value": webhook_url,
         },
         {
             "code": "public_base_url_https",
             "ok": _is_https_url(PUBLIC_BASE_URL)
             and public_host not in {"bluevpn.local", "localhost", "127.0.0.1"},
-            "message": "Set GREENVPN_PUBLIC_BASE_URL to the production HTTPS API origin.",
+            "message": "Задай GREENVPN_PUBLIC_BASE_URL как боевой HTTPS origin API.",
             "value": PUBLIC_BASE_URL,
         },
         {
             "code": "yookassa_api_https",
             "ok": _is_https_url(YOOKASSA_API_BASE),
-            "message": "YOOKASSA_API_BASE must use HTTPS.",
+            "message": "YOOKASSA_API_BASE должен использовать HTTPS.",
             "value": YOOKASSA_API_BASE,
         },
     ]
@@ -10843,25 +15104,25 @@ def public_site_readiness() -> dict:
     checks = [
         {
             "code": "public_routes_registered",
-            "title": "Public routes",
+            "title": "Публичные маршруты",
             "ok": not missing_routes and not render_errors,
-            "message": "Public site, download, legal and payment return routes must exist and render.",
+            "message": "Публичный сайт, скачивание, юридические страницы и возврат оплаты должны существовать и открываться.",
             "missingPaths": [item["path"] for item in missing_routes],
             "renderErrors": render_errors,
         },
         {
             "code": "public_site_https",
-            "title": "Public site HTTPS",
+            "title": "HTTPS публичного сайта",
             "ok": _is_https_url(PUBLIC_SITE_URL)
             and _url_host(PUBLIC_SITE_URL) not in local_hosts,
-            "message": "GREENVPN_PUBLIC_SITE_URL must point to a real HTTPS public origin.",
+            "message": "GREENVPN_PUBLIC_SITE_URL должен вести на реальный публичный HTTPS-origin.",
             "value": PUBLIC_SITE_URL,
         },
         {
             "code": "legal_requisites_configured",
-            "title": "Legal requisites",
+            "title": "Реквизиты",
             "ok": legal_configured,
-            "message": "Owner name, INN and support email must be configured server-side for requisites.",
+            "message": "Для реквизитов на сервере должны быть указаны имя владельца, ИНН и почта поддержки.",
             "value": {
                 "ownerNameConfigured": bool(LEGAL_OWNER_NAME)
                 and LEGAL_OWNER_NAME != "Владелец Green VPN",
@@ -10872,9 +15133,9 @@ def public_site_readiness() -> dict:
         },
         {
             "code": "download_buttons",
-            "title": "Download buttons",
+            "title": "Кнопки скачивания",
             "ok": not missing_landing_links,
-            "message": "Landing must expose Windows, Android, iOS download cards and pricing navigation.",
+            "message": "Главная страница должна показывать скачивание Windows, тарифы, старт и поддержку.",
             "missing": [
                 {"code": item["code"], "label": item["label"]}
                 for item in missing_landing_links
@@ -10882,9 +15143,9 @@ def public_site_readiness() -> dict:
         },
         {
             "code": "pricing_visible",
-            "title": "Pricing",
+            "title": "Тарифы",
             "ok": not missing_pricing_markers,
-            "message": "Landing must show current public pricing and trial plan.",
+            "message": "Главная страница должна показывать актуальный публичный тариф и бесплатный старт.",
             "missing": [
                 {"code": item["code"], "label": item["label"]}
                 for item in missing_pricing_markers
@@ -10892,9 +15153,9 @@ def public_site_readiness() -> dict:
         },
         {
             "code": "safe_public_wording",
-            "title": "Safe public wording",
+            "title": "Безопасные публичные формулировки",
             "ok": not banned_matches,
-            "message": "Public pages must not use banned VPN marketing phrases.",
+            "message": "Публичные страницы не должны использовать запрещённые VPN-маркетинговые фразы.",
             "bannedMatches": banned_matches,
         },
         {
@@ -10913,7 +15174,7 @@ def public_site_readiness() -> dict:
                     or return_host == _url_host(PUBLIC_SITE_URL)
                 )
             ),
-            "message": "YooKassa return and webhook URLs must be public HTTPS Green VPN URLs.",
+            "message": "Return/webhook URL для YooKassa должны быть публичными HTTPS-адресами Green VPN.",
             "value": {
                 "returnUrl": YOOKASSA_RETURN_URL,
                 "webhookUrl": webhook_url,
@@ -10935,9 +15196,9 @@ def public_site_readiness() -> dict:
             "yellow": len(failed),
             "red": 0,
             "message": (
-                "Public site readiness is green."
+                "Готовность публичного сайта зелёная."
                 if not failed
-                else "Public site still has launch/review blockers."
+                else "У публичного сайта ещё есть блокеры запуска/проверки."
             ),
         },
         "siteUrl": PUBLIC_SITE_URL,
@@ -11003,7 +15264,7 @@ def yookassa_request(path: str, payload: dict, idempotence_key: str) -> dict:
 def yookassa_get_payment(payment_id: str) -> dict:
     payment_id = payment_id.strip()
     if not payment_id:
-        raise HTTPException(status_code=400, detail="YooKassa payment id is empty.")
+        raise HTTPException(status_code=400, detail="YooKassa payment id пустой.")
     return yookassa_http_request("GET", f"/payments/{payment_id}")
 
 
@@ -11020,7 +15281,7 @@ def authoritative_yookassa_payment_for_webhook(payment: dict) -> dict:
 
     payment_id = str(payment.get("id") or "").strip()
     if not payment_id:
-        raise HTTPException(status_code=400, detail="YooKassa payment id is missing.")
+        raise HTTPException(status_code=400, detail="YooKassa payment id отсутствует.")
 
     # Webhook payloads are treated as a signal only. In production mode the
     # payment state used for tariff activation must come from YooKassa API.
@@ -11168,22 +15429,22 @@ def validate_yookassa_payment_for_order(row, payment: dict) -> None:
     payment_id = str(payment.get("id") or "").strip()
     saved_payment_id = str(row["provider_payment_id"] or "").strip()
     if saved_payment_id and payment_id and payment_id != saved_payment_id:
-        raise HTTPException(status_code=409, detail="YooKassa payment id mismatch.")
+        raise HTTPException(status_code=409, detail="YooKassa payment id не совпадает.")
 
     metadata = payment.get("metadata") if isinstance(payment.get("metadata"), dict) else {}
     metadata_order_id = str(
         metadata.get("bluevpn_order_id") or metadata.get("orderId") or ""
     ).strip()
     if metadata_order_id and metadata_order_id != public_id:
-        raise HTTPException(status_code=409, detail="YooKassa order metadata mismatch.")
+        raise HTTPException(status_code=409, detail="Метаданные заказа YooKassa не совпадают.")
 
     amount = payment.get("amount") if isinstance(payment.get("amount"), dict) else {}
     currency = str(amount.get("currency") or "").upper()
     actual_amount_rub = _payment_amount_rub(payment)
     if currency and currency != str(row["currency"]).upper():
-        raise HTTPException(status_code=409, detail="YooKassa payment currency mismatch.")
+        raise HTTPException(status_code=409, detail="Валюта платежа YooKassa не совпадает.")
     if actual_amount_rub is not None and actual_amount_rub != int(row["amount_rub"]):
-        raise HTTPException(status_code=409, detail="YooKassa payment amount mismatch.")
+        raise HTTPException(status_code=409, detail="Сумма платежа YooKassa не совпадает.")
 
 
 def mark_billing_order_canceled(public_id: str, provider_payment_id: Optional[str] = None) -> dict:
@@ -11203,7 +15464,7 @@ def mark_billing_order_canceled(public_id: str, provider_payment_id: Optional[st
             (public_id,),
         ).fetchone()
     if row is None:
-        raise HTTPException(status_code=404, detail="Billing order not found.")
+        raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
     return {"order": billing_order_status(row)}
 
 
@@ -11214,7 +15475,7 @@ def apply_yookassa_payment_update(
 ) -> dict:
     row = get_billing_order_row(public_id, user_id=user_id)
     if row is None:
-        raise HTTPException(status_code=404, detail="Billing order not found.")
+        raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
 
     validate_yookassa_payment_for_order(row, payment)
 
@@ -11227,7 +15488,7 @@ def apply_yookassa_payment_update(
     if paid or status == "succeeded":
         amount = payment.get("amount") if isinstance(payment.get("amount"), dict) else {}
         if not amount or _payment_amount_rub(payment) is None:
-            raise HTTPException(status_code=409, detail="YooKassa payment amount is missing.")
+            raise HTTPException(status_code=409, detail="Сумма платежа YooKassa отсутствует.")
         return mark_billing_order_paid_and_activate(
             public_id,
             provider_payment_id=payment_id,
@@ -11259,7 +15520,7 @@ def apply_yookassa_payment_update(
 def sync_billing_order_with_provider_for_user(user_id: int, public_id: str) -> dict:
     row = get_billing_order_row(public_id, user_id=user_id)
     if row is None:
-        raise HTTPException(status_code=404, detail="Billing order not found.")
+        raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
 
     provider = str(row["provider"] or "")
     payment_id = str(row["provider_payment_id"] or "")
@@ -11363,7 +15624,7 @@ def billing_order_requires_attention(row, now: datetime) -> list[dict]:
         add_issue(
             "yookassa_payment_not_created",
             "high",
-            "YooKassa is configured, but this pending order has no provider payment id or payment URL.",
+            "YooKassa настроена, но у pending-заказа нет provider payment id или payment URL.",
         )
     if status in {"failed", "canceled", "cancelled"} and (paid_at or activated_at):
         add_issue(
@@ -11500,50 +15761,50 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
     checks = [
         {
             "code": "payment_production_ready",
-            "title": "YooKassa production readiness",
+            "title": "Готовность боевой ЮKassa",
             "ok": bool(payment.get("productionReady")),
             "message": (
-                "YooKassa keys and production URLs are configured."
+                "Ключи YooKassa и production URL настроены."
                 if payment.get("productionReady")
-                else "Apply YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY through the safe server env script first."
+                else "Сначала применить YOOKASSA_SHOP_ID и YOOKASSA_SECRET_KEY через безопасный server env script."
             ),
         },
         {
             "code": "site_payment_urls_ready",
-            "title": "Return/webhook public URLs",
+            "title": "Публичные return/webhook URL",
             "ok": bool(site.get("productionReady")),
             "message": (
-                "Public site and YooKassa URLs are green."
+                "Публичный сайт и YooKassa URL зелёные."
                 if site.get("productionReady")
-                else "Public site readiness must be green before payment smoke."
+                else "Готовность публичного сайта должна быть зелёной до payment-smoke."
             ),
         },
         {
             "code": "manual_activation_guard",
-            "title": "Manual activation guard",
+            "title": "Защита от ручной активации",
             "ok": True,
             "message": (
-                "Direct tariff activation is disabled; admin mark-paid is audited and must stay manual-only."
+                "Прямая активация тарифа выключена; admin mark-paid аудируется и должен оставаться только ручным."
             ),
         },
         {
             "code": "hosted_payment_url_observed",
-            "title": "Hosted payment URL observed",
+            "title": "Платёжная ссылка получена",
             "ok": bool(pending_orders_with_url or successful_orders),
             "message": (
-                "At least one YooKassa order has a hosted payment URL."
+                "Хотя бы один заказ YooKassa получил hosted payment URL."
                 if pending_orders_with_url or successful_orders
-                else "Create a minimal owner-approved order after YooKassa keys are configured."
+                else "Создать минимальный заказ после настройки ключей YooKassa и подтверждения владельца."
             ),
         },
         {
             "code": "confirmed_payment_activation_observed",
-            "title": "Confirmed payment activation observed",
+            "title": "Активация после подтверждения оплаты",
             "ok": bool(successful_orders),
             "message": (
-                "At least one YooKassa order was activated after provider confirmation."
+                "Хотя бы один заказ YooKassa был активирован после подтверждения провайдера."
                 if successful_orders
-                else "Complete a smoke payment and confirm the tariff activates only after provider confirmation."
+                else "Провести smoke-платёж и подтвердить, что тариф активируется только после подтверждения провайдера."
             ),
         },
     ]
@@ -11560,7 +15821,7 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
     smoke_steps = [
         {
             "code": "apply_yookassa_env",
-            "title": "Apply YooKassa env",
+            "title": "Применить env ЮKassa",
             "actor": "owner_or_ops",
             "status": "done" if payment.get("productionReady") else "blocked",
             "details": (
@@ -11571,7 +15832,7 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
         },
         {
             "code": "verify_urls",
-            "title": "Verify return and webhook URLs",
+            "title": "Проверить return и webhook URLs",
             "actor": "ops",
             "status": "done" if site.get("productionReady") else "pending",
             "details": (
@@ -11582,34 +15843,34 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
         },
         {
             "code": "create_minimal_order",
-            "title": "Create a minimal owner-approved order",
+            "title": "Создать минимальный заказ с подтверждением владельца",
             "actor": "owner_or_ops",
             "status": "pending" if safe_to_run_smoke else "blocked",
             "details": (
-                "Use an owner test account and the lowest practical paid tariff. "
-                "Do not use admin mark-paid for the provider smoke."
+                "Использовать тестовый аккаунт владельца и минимальный практичный платный тариф. "
+                "Не использовать admin mark-paid для provider-smoke."
             ),
             "secret": False,
         },
         {
             "code": "open_hosted_payment_url",
-            "title": "Open hosted YooKassa payment URL",
+            "title": "Открыть hosted payment URL YooKassa",
             "actor": "owner",
             "status": "done" if pending_orders_with_url or successful_orders else "pending",
             "details": (
-                "The order should stay pending until YooKassa confirms payment; "
-                "Green VPN must not activate the tariff from local return alone."
+                "Заказ должен оставаться pending до подтверждения YooKassa; "
+                "Green VPN не должен активировать тариф только по локальному return."
             ),
             "secret": False,
         },
         {
             "code": "confirm_activation",
-            "title": "Confirm provider-backed activation",
+            "title": "Подтвердить provider-backed активацию",
             "actor": "ops",
             "status": "done" if smoke_complete else "pending",
             "details": (
-                "Verify order status/subscription only changes after YooKassa confirmation "
-                "via webhook or authoritative payment fetch."
+                "Проверить, что статус заказа/подписка меняются только после подтверждения YooKassa "
+                "через webhook или authoritative payment fetch."
             ),
             "secret": False,
         },
@@ -11633,12 +15894,12 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
                 else ("yellow" if safe_to_run_smoke else "blocked")
             ),
             "message": (
-                "Payment smoke is complete."
+                "Payment-smoke завершён."
                 if smoke_complete
                 else (
-                    "YooKassa is configured; run an owner-approved minimal payment smoke."
+                    "YooKassa настроена; нужно провести минимальный payment-smoke с подтверждением владельца."
                     if safe_to_run_smoke
-                    else "Payment smoke is blocked until YooKassa production env is configured."
+                    else "Payment-smoke заблокирован до настройки production env YooKassa."
                 )
             ),
             "yookassaOrdersTotal": int(yookassa_orders_total),
@@ -11770,7 +16031,7 @@ def renewal_candidate_payload(
             renewal_issue(
                 "pending_billing_order_exists",
                 "medium",
-                "User already has a pending auto-renew billing order; avoid duplicate renewal attempts.",
+                "У пользователя уже есть pending auto-renew заказ; не создавать дубль автопродления.",
             )
         )
     if not payment_readiness.get("productionReady"):
@@ -11942,12 +16203,12 @@ def billing_renewal_readiness_payload(limit: int = 25) -> dict:
             "medium": int(severity_counts.get("medium") or 0),
             "low": int(severity_counts.get("low") or 0),
             "message": (
-                "Auto-renewal readiness is clean for the current due window."
+                "Готовность автопродлений чистая для текущего окна списаний."
                 if safe_to_enable_charges
                 else (
-                    "Auto-renewal charges must stay disabled until payment smoke is clean."
+                    "Автоматические списания должны оставаться выключенными до чистого payment-smoke."
                     if requires_payment_smoke
-                    else "Auto-renewal charges must stay disabled until blockers are cleared."
+                    else "Автоматические списания должны оставаться выключенными до снятия блокеров."
                 )
             ),
         },
@@ -11967,7 +16228,7 @@ def billing_renewal_readiness_payload(limit: int = 25) -> dict:
 def normalize_subscription_expiry_review_status(value: Optional[str]) -> str:
     status = clean_limited_text(value, 40).strip().lower() or "reviewed"
     if status not in SUBSCRIPTION_EXPIRY_REVIEW_STATUSES:
-        raise HTTPException(status_code=400, detail="Invalid subscription expiry review status.")
+        raise HTTPException(status_code=400, detail="Некорректный статус проверки окончания подписки.")
     return status
 
 
@@ -12015,14 +16276,14 @@ def create_subscription_expiry_review(
     status = normalize_subscription_expiry_review_status(payload.status)
     reason = clean_limited_text(payload.reason, 2000).strip()
     if len(reason) < 8:
-        raise HTTPException(status_code=400, detail="reason is required for expiry review.")
+        raise HTTPException(status_code=400, detail="Для проверки окончания подписки нужна причина.")
     secret_findings = owner_action_note_secret_findings(reason)
     if secret_findings:
         raise HTTPException(
             status_code=400,
             detail=(
-                "Expiry review reason appears to contain secret material "
-                f"({', '.join(secret_findings[:5])}). Remove secret values and keep only the review note."
+                "Причина проверки окончания подписки похожа на секретные данные "
+                f"({', '.join(secret_findings[:5])}). Удали секреты и оставь только заметку."
             ),
         )
     actor = admin_actor_from_context(request)
@@ -12042,7 +16303,7 @@ def create_subscription_expiry_review(
             (int(subscription_id),),
         ).fetchone()
         if subscription is None:
-            raise HTTPException(status_code=404, detail="Subscription not found.")
+            raise HTTPException(status_code=404, detail="Подписка не найдена.")
         cursor = conn.execute(
             """
             INSERT INTO subscription_expiry_reviews(
@@ -12162,7 +16423,7 @@ def subscription_expiry_candidate_payload(
             renewal_issue(
                 "auto_renew_pending_order_conflict",
                 "medium",
-                "A pending auto-renew order already exists for this user.",
+                "Для этого пользователя уже есть pending auto-renew заказ.",
             )
         )
     if expiring_within_window and billable and auto_renew and not payment_readiness.get("productionReady"):
@@ -12364,12 +16625,12 @@ def subscription_expiry_readiness_payload(limit: int = 25) -> dict:
             "medium": int(severity_counts.get("medium") or 0),
             "low": int(severity_counts.get("low") or 0),
             "message": (
-                "Subscription expiry readiness is clean for the current window."
+                "Готовность контроля истечения подписок чистая для текущего окна."
                 if safe_to_enable_expiry_enforcement
                 else (
-                    "Subscription expiry enforcement should stay off until payment smoke is clean."
+                    "Жёсткое ограничение по истечению подписки должно оставаться выключенным до чистого payment-smoke."
                     if requires_payment_smoke
-                    else "Subscription expiry enforcement should stay off until blockers are cleared."
+                    else "Жёсткое ограничение по истечению подписки должно оставаться выключенным до снятия блокеров."
                 )
             ),
         },
@@ -12451,7 +16712,7 @@ def mark_billing_order_paid_and_activate(
         ).fetchone()
 
     if row is None:
-        raise HTTPException(status_code=404, detail="Billing order not found.")
+        raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
 
     if row["status"] == "activated":
         return {
@@ -12461,13 +16722,13 @@ def mark_billing_order_paid_and_activate(
     if str(row["status"] or "").strip().lower() in {"failed", "canceled", "cancelled"}:
         raise HTTPException(
             status_code=409,
-            detail="Failed or canceled billing order cannot be activated manually.",
+            detail="Ошибочный или отменённый платёжный заказ нельзя активировать вручную.",
         )
 
     try:
         selection = json.loads(row["selection_json"])
     except Exception:
-        raise HTTPException(status_code=500, detail="Billing order selection is broken.")
+        raise HTTPException(status_code=500, detail="Выбор тарифа в платёжном заказе повреждён.")
     try:
         order_quote = json.loads(row["quote_json"])
     except Exception:
@@ -12748,6 +17009,27 @@ def upsert_peer_block_in_wg0(device_uid: str, public_key: str, psk: str, ip: str
     WG_CONFIG_PATH.write_text(text, encoding="utf-8")
 
 
+def best_effort_remove_peer_block_in_wg0(device_uid: str) -> bool:
+    safe_uid = clean_limited_text(device_uid, 128).strip()
+    if not safe_uid or not WG_CONFIG_PATH.exists():
+        return False
+    begin = f"# BEGIN BLUEVPN MANAGED PEER {safe_uid}"
+    end = f"# END BLUEVPN MANAGED PEER {safe_uid}"
+    try:
+        text = WG_CONFIG_PATH.read_text(encoding="utf-8")
+        pattern = re.compile(
+            rf"{re.escape(begin)}.*?{re.escape(end)}\n?",
+            flags=re.DOTALL,
+        )
+        updated = pattern.sub("", text)
+        if updated != text:
+            WG_CONFIG_PATH.write_text(updated, encoding="utf-8")
+            return True
+    except Exception:
+        return False
+    return False
+
+
 def apply_peer_live(public_key: str, psk: str, ip: str) -> None:
     with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as tmp:
         tmp.write(psk)
@@ -12794,24 +17076,518 @@ def best_effort_remove_peer_live(public_key: str) -> bool:
         return False
 
 
+REMOTE_WG_UPSERT_SCRIPT = r"""
+import json
+import os
+import re
+import subprocess
+import tempfile
+
+payload = json.load(open(0, encoding="utf-8"))
+device_uid = str(payload.get("device_uid") or "").strip()
+public_key = str(payload.get("public_key") or "").strip()
+preshared_key = str(payload.get("preshared_key") or "").strip()
+ip = str(payload.get("ip") or "").strip().split("/", 1)[0]
+iface = str(payload.get("interface") or "wg0").strip()
+config_path = str(payload.get("config_path") or "/etc/wireguard/wg0.conf").strip()
+
+if not device_uid or not public_key or not preshared_key or not ip or not iface or not config_path:
+    raise SystemExit("missing required peer payload fields")
+
+safe_uid = re.sub(r"[^A-Za-z0-9_.:@-]", "_", device_uid)[:120]
+begin = f"# BEGIN GREENVPN MANAGED PEER {safe_uid}"
+end = f"# END GREENVPN MANAGED PEER {safe_uid}"
+block = (
+    f"{begin}\n"
+    "[Peer]\n"
+    f"PublicKey = {public_key}\n"
+    f"PresharedKey = {preshared_key}\n"
+    f"AllowedIPs = {ip}/32\n"
+    f"{end}\n"
+)
+
+with open(config_path, "r", encoding="utf-8") as fh:
+    text = fh.read()
+pattern = re.compile(re.escape(begin) + r".*?" + re.escape(end) + r"\n?", re.S)
+if pattern.search(text):
+    text = pattern.sub(block, text)
+else:
+    if not text.endswith("\n"):
+        text += "\n"
+    text += "\n" + block
+with open(config_path, "w", encoding="utf-8") as fh:
+    fh.write(text)
+
+tmp_path = None
+try:
+    with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as tmp:
+        tmp.write(preshared_key)
+        tmp_path = tmp.name
+    subprocess.run(
+        ["wg", "set", iface, "peer", public_key, "preshared-key", tmp_path, "allowed-ips", f"{ip}/32"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+finally:
+    if tmp_path:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+
+print(json.dumps({"ok": True, "peer": public_key[-8:], "ip": ip}, ensure_ascii=False))
+"""
+
+
+REMOTE_WG_REMOVE_SCRIPT = r"""
+import json
+import re
+import subprocess
+
+payload = json.load(open(0, encoding="utf-8"))
+device_uid = str(payload.get("device_uid") or "").strip()
+public_key = str(payload.get("public_key") or "").strip()
+iface = str(payload.get("interface") or "wg0").strip()
+config_path = str(payload.get("config_path") or "/etc/wireguard/wg0.conf").strip()
+
+if public_key and iface:
+    subprocess.run(
+        ["wg", "set", iface, "peer", public_key, "remove"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+if device_uid and config_path:
+    safe_uid = re.sub(r"[^A-Za-z0-9_.:@-]", "_", device_uid)[:120]
+    begin = f"# BEGIN GREENVPN MANAGED PEER {safe_uid}"
+    end = f"# END GREENVPN MANAGED PEER {safe_uid}"
+    try:
+        with open(config_path, "r", encoding="utf-8") as fh:
+            text = fh.read()
+        pattern = re.compile(re.escape(begin) + r".*?" + re.escape(end) + r"\n?", re.S)
+        text = pattern.sub("", text)
+        with open(config_path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+    except FileNotFoundError:
+        pass
+
+print(json.dumps({"ok": True}, ensure_ascii=False))
+"""
+
+
+REMOTE_WG_PROBE_SCRIPT = r"""
+import json
+import subprocess
+
+payload = json.load(open(0, encoding="utf-8"))
+iface = str(payload.get("interface") or "wg0").strip()
+expected_public_key = str(payload.get("expected_public_key") or "").strip()
+current_public_key = subprocess.run(
+    ["wg", "show", iface, "public-key"],
+    check=True,
+    capture_output=True,
+    text=True,
+).stdout.strip()
+subprocess.run(
+    ["ip", "link", "show", iface],
+    check=True,
+    capture_output=True,
+    text=True,
+)
+print(json.dumps({
+    "ok": current_public_key == expected_public_key,
+    "interface": iface,
+    "publicKeyMatches": current_public_key == expected_public_key,
+}, ensure_ascii=False))
+"""
+
+
+REMOTE_WG_PEER_STATUS_SCRIPT = r"""
+import json
+import subprocess
+
+payload = json.load(open(0, encoding="utf-8"))
+iface = str(payload.get("interface") or "wg0").strip()
+public_key = str(payload.get("public_key") or "").strip()
+if not iface or not public_key:
+    raise SystemExit("missing interface or public_key")
+
+peers = subprocess.run(
+    ["wg", "show", iface, "peers"],
+    check=True,
+    capture_output=True,
+    text=True,
+).stdout.splitlines()
+
+print(json.dumps({
+    "ok": True,
+    "exists": public_key in {item.strip() for item in peers if item.strip()},
+    "peerCount": len([item for item in peers if item.strip()]),
+}, ensure_ascii=False))
+"""
+
+
+def run_remote_vpn_node_script(config: dict, script: str, payload: dict) -> dict:
+    encoded_script = base64.b64encode(script.encode("utf-8")).decode("ascii")
+    wrapper = f'import base64; exec(base64.b64decode("{encoded_script}").decode("utf-8"))'
+    remote_command = "python3 -c " + shlex.quote(wrapper)
+    args = [
+        "ssh",
+        "-i",
+        str(config["sshKeyPath"]),
+        "-p",
+        str(int(config.get("sshPort") or 22)),
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        f"ConnectTimeout={VPN_NODE_SSH_TIMEOUT_SECONDS}",
+        "-o",
+        "ServerAliveInterval=5",
+        "-o",
+        "ServerAliveCountMax=1",
+        f"{config.get('sshUser') or 'root'}@{config['sshHost']}",
+        remote_command,
+    ]
+    try:
+        res = subprocess.run(
+            args,
+            input=json.dumps(payload, ensure_ascii=False),
+            text=True,
+            capture_output=True,
+            timeout=VPN_NODE_SSH_TIMEOUT_SECONDS + 8,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(
+            status_code=504,
+            detail="Удалённый VPN-узел не ответил на SSH-команду вовремя.",
+        ) from exc
+
+    if res.returncode != 0:
+        raise HTTPException(
+            status_code=502,
+            detail="Не удалось применить команду на удалённом VPN-узле.",
+        )
+
+    stdout = (res.stdout or "").strip().splitlines()
+    if not stdout:
+        return {"ok": True}
+    try:
+        parsed = json.loads(stdout[-1])
+        return parsed if isinstance(parsed, dict) else {"ok": bool(parsed)}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Удалённый VPN-узел вернул некорректный ответ.",
+        ) from exc
+
+
+def apply_remote_peer_live(
+    config: dict,
+    device_uid: str,
+    public_key: str,
+    psk: str,
+    ip: str,
+) -> None:
+    run_remote_vpn_node_script(
+        config,
+        REMOTE_WG_UPSERT_SCRIPT,
+        {
+            "device_uid": device_uid,
+            "public_key": public_key,
+            "preshared_key": psk,
+            "ip": ip,
+            "interface": config["interface"],
+            "config_path": config["wgConfig"],
+        },
+    )
+
+
+def best_effort_remove_remote_peer_live(config: dict, device_uid: str, public_key: str) -> bool:
+    public_key = clean_limited_text(public_key, 120).strip()
+    if not public_key:
+        return False
+    try:
+        run_remote_vpn_node_script(
+            config,
+            REMOTE_WG_REMOVE_SCRIPT,
+            {
+                "device_uid": device_uid,
+                "public_key": public_key,
+                "interface": config["interface"],
+                "config_path": config["wgConfig"],
+            },
+        )
+        return True
+    except Exception:
+        return False
+
+
+def remote_vpn_node_probe(config: dict) -> dict:
+    return run_remote_vpn_node_script(
+        config,
+        REMOTE_WG_PROBE_SCRIPT,
+        {
+            "interface": config["interface"],
+            "expected_public_key": config["wgPublicKey"],
+        },
+    )
+
+
+def remote_vpn_node_peer_status(config: dict, public_key: str) -> dict:
+    return run_remote_vpn_node_script(
+        config,
+        REMOTE_WG_PEER_STATUS_SCRIPT,
+        {
+            "interface": config["interface"],
+            "public_key": public_key,
+        },
+    )
+
+
+def get_managed_server_catalog_row_by_server_id(server_id: str) -> Optional[sqlite3.Row]:
+    with db() as conn:
+        return conn.execute(
+            "SELECT * FROM server_catalog_entries WHERE server_id = ?",
+            (server_id,),
+        ).fetchone()
+
+
+def best_effort_remove_peer_from_server(
+    server_id: Optional[str],
+    *,
+    device_uid: str,
+    public_key: Optional[str],
+) -> bool:
+    normalized_server_id = str(server_id or "").strip()
+    if not normalized_server_id or not public_key:
+        return False
+
+    if normalized_server_id in {"intelligent_smew", "current_wg0"}:
+        removed_live = best_effort_remove_peer_live(public_key)
+        removed_config = best_effort_remove_peer_block_in_wg0(device_uid)
+        return bool(removed_live or removed_config)
+
+    row = get_managed_server_catalog_row_by_server_id(normalized_server_id)
+    if row is None:
+        return False
+    readiness = server_client_config_readiness(row)
+    profile = readiness.get("profile")
+    try:
+        if profile == "builtin_wg0":
+            removed_live = best_effort_remove_peer_live(public_key)
+            removed_config = best_effort_remove_peer_block_in_wg0(device_uid)
+            return bool(removed_live or removed_config)
+        if profile == "remote_ssh_wg0" and readiness.get("ready"):
+            remote_config = load_remote_vpn_node_config(normalized_server_id)
+            return best_effort_remove_remote_peer_live(
+                remote_config,
+                device_uid,
+                public_key,
+            )
+    except Exception:
+        return False
+    return False
+
+
+def same_wireguard_target_server_id(first: Optional[str], second: Optional[str]) -> bool:
+    first_id = str(first or "").strip()
+    second_id = str(second or "").strip()
+    if first_id == second_id:
+        return True
+    local_aliases = {"intelligent_smew", "current_wg0"}
+    return bool(first_id in local_aliases and second_id in local_aliases)
+
+
+def provision_wireguard_peer_for_selected_server(
+    selected_server: dict,
+    *,
+    device_uid: str,
+    public_key: str,
+    psk: str,
+    ip: str,
+    old_public_key: Optional[str] = None,
+    previous_server_id: Optional[str] = None,
+) -> dict:
+    server_id = str((selected_server or {}).get("id") or "intelligent_smew")
+    endpoint = (selected_server or {}).get("endpoint") or {}
+    endpoint_host = str(endpoint.get("host") or WG_ENDPOINT_HOST)
+    endpoint_port = int(endpoint.get("port") or WG_ENDPOINT_PORT)
+
+    if server_id == "intelligent_smew":
+        upsert_peer_block_in_wg0(device_uid=device_uid, public_key=public_key, psk=psk, ip=ip)
+        apply_peer_live(public_key=public_key, psk=psk, ip=ip)
+        if old_public_key and old_public_key != public_key:
+            best_effort_remove_peer_live(old_public_key)
+        if previous_server_id and not same_wireguard_target_server_id(previous_server_id, server_id):
+            best_effort_remove_peer_from_server(
+                previous_server_id,
+                device_uid=device_uid,
+                public_key=public_key,
+            )
+            if old_public_key and old_public_key != public_key:
+                best_effort_remove_peer_from_server(
+                    previous_server_id,
+                    device_uid=device_uid,
+                    public_key=old_public_key,
+                )
+        return {
+            "serverPublicKey": get_server_public_key(),
+            "profile": "builtin_wg0",
+            "endpointHost": endpoint_host,
+            "endpointPort": endpoint_port,
+            "clientMtu": WG_CLIENT_MTU,
+        }
+
+    row = get_managed_server_catalog_row_by_server_id(server_id)
+    if row is None:
+        raise HTTPException(status_code=409, detail="Managed VPN-узел не найден в каталоге.")
+    readiness = server_client_config_readiness(row)
+    if not readiness["ready"]:
+        raise HTTPException(
+            status_code=409,
+            detail="Managed VPN-узел пока не готов к выдаче клиентского конфига.",
+        )
+
+    profile = readiness["profile"]
+    if profile == "builtin_wg0":
+        upsert_peer_block_in_wg0(device_uid=device_uid, public_key=public_key, psk=psk, ip=ip)
+        apply_peer_live(public_key=public_key, psk=psk, ip=ip)
+        if old_public_key and old_public_key != public_key:
+            best_effort_remove_peer_live(old_public_key)
+        if previous_server_id and not same_wireguard_target_server_id(previous_server_id, server_id):
+            best_effort_remove_peer_from_server(
+                previous_server_id,
+                device_uid=device_uid,
+                public_key=public_key,
+            )
+            if old_public_key and old_public_key != public_key:
+                best_effort_remove_peer_from_server(
+                    previous_server_id,
+                    device_uid=device_uid,
+                    public_key=old_public_key,
+                )
+        return {
+            "serverPublicKey": get_server_public_key(),
+            "profile": profile,
+            "endpointHost": endpoint_host,
+            "endpointPort": endpoint_port,
+            "clientMtu": WG_CLIENT_MTU,
+        }
+
+    if profile == "remote_ssh_wg0":
+        remote_config = load_remote_vpn_node_config(server_id)
+        apply_remote_peer_live(
+            remote_config,
+            device_uid=device_uid,
+            public_key=public_key,
+            psk=psk,
+            ip=ip,
+        )
+        if old_public_key and old_public_key != public_key:
+            best_effort_remove_remote_peer_live(remote_config, device_uid, old_public_key)
+        if previous_server_id and not same_wireguard_target_server_id(previous_server_id, server_id):
+            best_effort_remove_peer_from_server(
+                previous_server_id,
+                device_uid=device_uid,
+                public_key=public_key,
+            )
+            if old_public_key and old_public_key != public_key:
+                best_effort_remove_peer_from_server(
+                    previous_server_id,
+                    device_uid=device_uid,
+                    public_key=old_public_key,
+                )
+        return {
+            "serverPublicKey": remote_config["wgPublicKey"],
+            "profile": profile,
+            "endpointHost": endpoint_host,
+            "endpointPort": endpoint_port,
+            "clientMtu": remote_config.get("clientMtu") or WG_CLIENT_MTU,
+        }
+
+    raise HTTPException(
+        status_code=409,
+        detail="Для выбранного VPN-узла нет поддерживаемого профиля выдачи конфига.",
+    )
+
+
 def build_client_config(
     client_private_key: str,
     preshared_key: str,
     server_public_key: str,
     client_ip: str,
+    endpoint_host: Optional[str] = None,
+    endpoint_port: Optional[int] = None,
+    client_mtu: Optional[int] = None,
 ) -> str:
+    host = (endpoint_host or WG_ENDPOINT_HOST).strip() or WG_ENDPOINT_HOST
+    port = int(endpoint_port or WG_ENDPOINT_PORT)
+    try:
+        mtu = int(client_mtu or WG_CLIENT_MTU)
+    except Exception:
+        mtu = WG_CLIENT_MTU
+    mtu = max(576, min(1420, mtu))
+    keepalive_line = (
+        f"PersistentKeepalive = {WG_PERSISTENT_KEEPALIVE}\n"
+        if WG_PERSISTENT_KEEPALIVE > 0
+        else ""
+    )
     return (
         "[Interface]\n"
         f"PrivateKey = {client_private_key}\n"
         f"Address = {client_ip}/32\n"
-        f"DNS = {WG_DNS}\n\n"
+        f"DNS = {WG_DNS}\n"
+        f"MTU = {mtu}\n\n"
         "[Peer]\n"
         f"PublicKey = {server_public_key}\n"
         f"PresharedKey = {preshared_key}\n"
-        f"Endpoint = {WG_ENDPOINT_HOST}:{WG_ENDPOINT_PORT}\n"
+        f"Endpoint = {host}:{port}\n"
         f"AllowedIPs = {WG_ALLOWED_IPS}\n"
-        "PersistentKeepalive = 25\n"
+        f"{keepalive_line}"
     )
+
+
+def split_wireguard_dns_servers(value: str) -> list[str]:
+    return [
+        item.strip()
+        for item in re.split(r"\s*,\s*|\s*;\s*|\r?\n", value or "")
+        if item.strip()
+    ]
+
+
+def allowed_ips_cover_address(address: str, allowed_ips: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(address.strip("[] "))
+    except ValueError:
+        return False
+
+    for item in split_env_list(allowed_ips):
+        try:
+            if ip in ipaddress.ip_network(item, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def wireguard_dns_route_ready(dns_value: str, allowed_ips: str) -> bool:
+    servers = split_wireguard_dns_servers(dns_value)
+    if not servers:
+        return False
+
+    for server in servers:
+        try:
+            ip = ipaddress.ip_address(server.strip("[] "))
+        except ValueError:
+            continue
+
+        if ip.is_private and not allowed_ips_cover_address(str(ip), allowed_ips):
+            return False
+    return True
 
 
 def monitoring_check(code: str, title: str, status: str, message: str, **extra) -> dict:
@@ -12940,7 +17716,7 @@ def build_service_availability_status() -> dict:
             "type": "vpn_server_egress",
             "serverId": "intelligent_smew",
             "endpoint": f"{WG_ENDPOINT_HOST}:{WG_ENDPOINT_PORT}",
-            "note": "MVP-проверка идёт с backend/VPN-сервера. Позже добавим agents, которые подключаются через Green VPN как реальные клиенты.",
+            "note": "Проверка сейчас идет с backend/VPN-сервера. Позже добавим агенты, которые подключаются через Green VPN как реальные клиенты.",
         },
         "summary": {
             "state": state,
@@ -12959,7 +17735,7 @@ def build_monitoring_status() -> dict:
     checks.append(
         monitoring_check(
             "backend",
-            "Backend API",
+            "Сервер API",
             "green",
             f"{APP_TITLE} {APP_VERSION} отвечает.",
             version=APP_VERSION,
@@ -12973,7 +17749,7 @@ def build_monitoring_status() -> dict:
         checks.append(
             monitoring_check(
                 "database",
-                "Database",
+                "База данных",
                 "green",
                 "SQLite доступна.",
                 users=int(user_count),
@@ -12984,12 +17760,18 @@ def build_monitoring_status() -> dict:
         checks.append(
             monitoring_check(
                 "database",
-                "Database",
+                "База данных",
                 "red",
                 f"Ошибка БД: {exc}",
             )
         )
 
+    catalog = build_server_catalog()
+    healthy_servers = [
+        s
+        for s in catalog["servers"]
+        if s.get("available") is True and s.get("status") == "healthy"
+    ]
     try:
         public_key = get_server_public_key()
         checks.append(
@@ -13001,32 +17783,44 @@ def build_monitoring_status() -> dict:
                 interface=WG_INTERFACE,
                 endpoint=f"{WG_ENDPOINT_HOST}:{WG_ENDPOINT_PORT}",
                 publicKeyPrefix=public_key[:10],
+                mode="local_interface",
             )
         )
     except Exception as exc:
-        checks.append(
-            monitoring_check(
-                "wireguard",
-                "WireGuard",
-                "red",
-                f"Не удалось прочитать WireGuard: {exc}",
-                interface=WG_INTERFACE,
-                endpoint=f"{WG_ENDPOINT_HOST}:{WG_ENDPOINT_PORT}",
+        if healthy_servers:
+            checks.append(
+                monitoring_check(
+                    "wireguard",
+                    "WireGuard",
+                    "green",
+                    "WireGuard проверяется через управляемый каталог VPN-узлов; локальный wg0 на API-сервере не обязателен.",
+                    interface=WG_INTERFACE,
+                    endpoint=f"{WG_ENDPOINT_HOST}:{WG_ENDPOINT_PORT}",
+                    mode="managed_catalog",
+                    managedHealthy=len(healthy_servers),
+                    managedTotal=len(catalog["servers"]),
+                    localInterfaceMessage=str(exc),
+                )
             )
-        )
+        else:
+            checks.append(
+                monitoring_check(
+                    "wireguard",
+                    "WireGuard",
+                    "red",
+                    f"Не удалось прочитать WireGuard: {exc}",
+                    interface=WG_INTERFACE,
+                    endpoint=f"{WG_ENDPOINT_HOST}:{WG_ENDPOINT_PORT}",
+                    mode="local_interface",
+                )
+            )
 
-    catalog = build_server_catalog()
-    healthy_servers = [
-        s
-        for s in catalog["servers"]
-        if s.get("available") is True and s.get("status") == "healthy"
-    ]
     checks.append(
         monitoring_check(
             "server_catalog",
-            "Server Catalog",
+            "Каталог серверов",
             "green" if healthy_servers else "yellow",
-            f"Доступно endpoint: {len(healthy_servers)} из {len(catalog['servers'])}.",
+            f"Доступно VPN-узлов: {len(healthy_servers)} из {len(catalog['servers'])}.",
             version=catalog["version"],
             healthy=len(healthy_servers),
             total=len(catalog["servers"]),
@@ -13037,10 +17831,10 @@ def build_monitoring_status() -> dict:
     checks.append(
         monitoring_check(
             "updates",
-            "Updates",
+            "Обновления",
             "green" if update_manifest.get("latestVersion") else "yellow",
             (
-                "Update manifest настроен."
+                "Манифест обновления настроен."
                 if update_manifest.get("latestVersion")
                 else "latestVersion не задан."
             ),
@@ -13056,11 +17850,11 @@ def build_monitoring_status() -> dict:
     checks.append(
         monitoring_check(
             "payments",
-            "Payments",
+            "Платежи",
             "green" if payment_readiness["productionReady"] else "yellow",
-            "Production-платежи готовы."
+            "Боевые платежи готовы."
             if payment_readiness["productionReady"]
-            else "Пока ручной MVP-режим оплаты или не настроен production HTTPS/YooKassa.",
+            else "Пока ручной режим оплаты или не настроен боевой HTTPS/YooKassa.",
             provider=payment_readiness["provider"],
             productionReady=payment_readiness["productionReady"],
         )
@@ -13073,7 +17867,7 @@ def build_monitoring_status() -> dict:
         "Есть критичные проблемы."
         if state == "red"
         else (
-            "Есть предупреждения MVP-режима."
+            "Есть предупреждения стартового режима."
             if state == "yellow"
             else "Все базовые проверки зелёные."
         )
@@ -13105,26 +17899,32 @@ def build_product_readiness() -> dict:
     api_split = api_vpn_endpoint_separation_readiness()
     update_manifest = build_windows_update_manifest()
     update_readiness = build_update_release_readiness()
+    windows_trust = windows_distribution_trust_readiness(update_readiness)
     catalog = build_server_catalog()
     catalog_provisioning = build_server_provisioning_readiness(catalog)
     monitoring = build_monitoring_status()
     service_monitoring = build_service_availability_observation_summary()
     monitoring_probes = service_monitoring.get("probeReadiness") or {}
+    sms_required = (user_auth_flow.get("primaryMethod") or "") in {
+        "phone_code",
+        "phone_sms",
+    }
+    sms_ok_for_current_auth = bool(sms.get("productionReady")) or not sms_required
 
     checks = [
         {
             "code": "public_api",
-            "title": "Production API",
+            "title": "Боевой API",
             "ok": _is_https_url(PUBLIC_API_BASE_URL)
             and _url_host(PUBLIC_API_BASE_URL) not in {"localhost", "127.0.0.1", ""},
-            "message": "GREENVPN_PUBLIC_API_BASE_URL/GREENVPN_PUBLIC_BASE_URL should point to https://api.greenvpn.pro.",
+            "message": "GREENVPN_PUBLIC_API_BASE_URL/GREENVPN_PUBLIC_BASE_URL должны вести на https://api.greenvpn.pro.",
             "value": PUBLIC_API_BASE_URL,
         },
         {
             "code": "public_site",
-            "title": "Public site and legal pages",
+            "title": "Публичный сайт и юридические страницы",
             "ok": bool(public_site.get("productionReady")),
-            "message": "Public site must expose legal pages, pricing/download buttons, safe wording and YooKassa URLs.",
+            "message": "Публичный сайт должен показывать юридические страницы, кнопки тарифа/скачивания, безопасные формулировки и YooKassa URL.",
             "value": {
                 "siteUrl": public_site.get("siteUrl"),
                 "summary": public_site.get("summary"),
@@ -13132,11 +17932,10 @@ def build_product_readiness() -> dict:
         },
         {
             "code": "api_vpn_endpoint_split",
-            "title": "API and VPN endpoint split",
+            "title": "Разделение API и VPN endpoint",
             "ok": bool(api_split.get("productionReady")),
             "message": (
-                "Move public API/site to an IP that is not used as a VPN endpoint before "
-                "public rollout."
+                "Перед публичным запуском API/сайт должны быть на IP, который не используется как VPN endpoint."
             ),
             "value": {
                 "publicApiUrls": api_split.get("publicApiUrls"),
@@ -13146,64 +17945,80 @@ def build_product_readiness() -> dict:
         },
         {
             "code": "email",
-            "title": "Email delivery",
+            "title": "Доставка email-кодов",
             "ok": bool(email.get("productionReady")),
-            "message": "SMTP/Yandex 360 must be configured for real email codes.",
+            "message": "SMTP/Yandex 360 должен быть настроен для реальных email-кодов.",
         },
         {
             "code": "sms",
-            "title": "SMS delivery",
-            "ok": bool(sms.get("productionReady")),
-            "message": "SMS.ru must be configured for phone login codes.",
+            "title": "Доставка SMS-кодов",
+            "ok": sms_ok_for_current_auth,
+            "message": (
+                "SMS.ru должен быть настроен для кодов входа по телефону."
+                if sms_required
+                else "SMS-вход сейчас optional; публичный MVP использует email-код как основной канал."
+            ),
+            "optional": not sms_required,
+            "available": bool(sms.get("productionReady")),
         },
         {
             "code": "user_auth_flow",
-            "title": "User auth flow",
+            "title": "Пользовательский вход",
             "ok": bool(user_auth_flow.get("productionReady")),
-            "message": "Code-first login/register contract should be ready: phone primary, email fallback, safe code policy and no dev-code exposure.",
+            "message": "Вход и регистрация по email-коду должны быть готовы: email основной, пароль запасной, SMS optional, лимиты безопасны, dev-коды не выдаются.",
         },
         {
             "code": "payments",
-            "title": "Payments",
+            "title": "Платежи",
             "ok": bool(payment.get("productionReady")),
-            "message": "YooKassa production keys and HTTPS webhook must be configured.",
+            "message": "Боевые ключи YooKassa и HTTPS webhook должны быть настроены.",
         },
         {
             "code": "updates",
-            "title": "Updates",
+            "title": "Обновления",
             "ok": bool(update_readiness.get("productionReady")),
-            "message": "Publish final HTTPS installer artifact, SHA256 and database release before public rollout.",
+            "message": "Перед публичным rollout нужно опубликовать финальный HTTPS-установщик, SHA256 и запись релиза в базе.",
+        },
+        {
+            "code": "windows_trust",
+            "title": "Доверие Windows-установщика",
+            "ok": bool(windows_trust.get("productionReady")),
+            "message": "Для рекламы нужен подписанный Windows-релиз: Code Signing, HTTPS-артефакт, SHA256 и rollback/update контур.",
+            "value": {
+                "summary": windows_trust.get("summary"),
+                "policy": windows_trust.get("policy"),
+            },
         },
         {
             "code": "server_catalog",
-            "title": "Server catalog",
+            "title": "Каталог серверов",
             "ok": bool(catalog.get("servers"))
             and bool(catalog_provisioning.get("safeForCurrentClient")),
-            "message": "Public catalog and client config serverId gate must stay safe.",
+            "message": "Публичный каталог и проверка serverId для клиентских конфигов должны оставаться безопасными.",
         },
         {
             "code": "monitoring",
-            "title": "Monitoring",
+            "title": "Мониторинг",
             "ok": bool(monitoring.get("ok")),
-            "message": "Backend/WireGuard monitoring should be green.",
+            "message": "Мониторинг backend/WireGuard должен быть зелёным.",
         },
         {
             "code": "monitoring_probes",
-            "title": "Controlled service probes",
+            "title": "Контролируемые внешние проверки",
             "ok": bool(monitoring_probes.get("productionReady")),
-            "message": "Install a separate monitoring VPS probe for YouTube/Discord/Telegram/API checks.",
+            "message": "Нужен отдельный monitoring VPS/probe для проверок YouTube/Discord/Telegram/API.",
         },
         {
             "code": "admin_alerts",
-            "title": "Admin alerts",
+            "title": "Оповещения админов",
             "ok": bool(alerts.get("productionReady")),
-            "message": "Telegram incident alerts should be configured for support/ops.",
+            "message": "Telegram-оповещения об инцидентах должны быть настроены для поддержки/операций.",
         },
         {
             "code": "admin_2fa",
-            "title": "Staff 2FA",
+            "title": "2FA сотрудников",
             "ok": bool(admin_2fa.get("productionReady")),
-            "message": "Email 2FA for staff sessions is ready when enabled or required.",
+            "message": "Email-2FA для сотрудников готова, когда включена вручную или обязательна политикой.",
         },
     ]
     missing = [check for check in checks if not check["ok"]]
@@ -13233,6 +18048,7 @@ def build_product_readiness() -> dict:
         "adminTwoFactorReadiness": admin_2fa,
         "apiVpnEndpointSeparationReadiness": api_split,
         "updateReadiness": update_readiness,
+        "windowsTrustReadiness": windows_trust,
         "monitoringProbeReadiness": monitoring_probes,
         "serviceMonitoring": service_monitoring,
         "updateManifest": update_manifest,
@@ -13248,6 +18064,7 @@ LAUNCH_GATE_SEVERITY = {
     "server_catalog": "critical",
     "payments": "critical",
     "updates": "critical",
+    "windows_trust": "critical",
     "sms": "warning",
     "email": "warning",
     "user_auth_flow": "warning",
@@ -13265,6 +18082,7 @@ LAUNCH_GATE_TITLES_RU = {
     "server_catalog": "Каталог серверов",
     "payments": "Платежи",
     "updates": "Финальный установщик и обновления",
+    "windows_trust": "Доверенный Windows-релиз",
     "sms": "SMS-коды",
     "email": "Email-коды",
     "user_auth_flow": "Пользовательский вход",
@@ -13282,6 +18100,7 @@ LAUNCH_GATE_NEXT_ACTION_RU = {
     "server_catalog": "Не публиковать новые managed-серверы, пока каталог безопасен для текущего Windows-клиента.",
     "payments": "Дождаться активного статуса самозанятого/ЮKassa и применить production-ключи только через серверный env.",
     "updates": "Собрать финальный Windows-установщик только в конце, опубликовать HTTPS-ссылку, SHA256 и rollback.",
+    "windows_trust": "Получить Code Signing/Trusted Signing, подписать финальный установщик и бинарники, затем опубликовать trusted download.",
     "sms": "Держать SMS.ru в рабочем режиме или явно оставить email как основной канал входа.",
     "email": "Держать Yandex 360 SMTP рабочим для кодов входа, уведомлений и 2FA админки.",
     "user_auth_flow": "Держать вход code-first: телефон как основной канал, email как запасной, dev-коды выключены.",
@@ -13337,6 +18156,7 @@ def build_launch_readiness() -> dict:
         "server_catalog",
         "payments",
         "updates",
+        "windows_trust",
         "sms",
         "email",
         "user_auth_flow",
@@ -13534,24 +18354,197 @@ def build_launch_readiness() -> dict:
     }
 
 
+PUBLIC_ADVERTISING_REQUIRED_CODES = {
+    "public_api",
+    "public_site",
+    "api_vpn_endpoint_split",
+    "server_catalog",
+    "payments",
+    "updates",
+    "windows_trust",
+    "user_auth_flow",
+}
+
+
+PAID_TRAFFIC_REQUIRED_CODES = {
+    "public_api",
+    "public_site",
+    "api_vpn_endpoint_split",
+    "server_catalog",
+    "payments",
+    "updates",
+    "windows_trust",
+    "billing_renewals",
+    "subscription_expiry",
+}
+
+
+PRIVATE_DEMO_ALLOWED_MISSING_CODES = {
+    "updates",
+    "windows_trust",
+    "sms",
+    "monitoring",
+    "monitoring_probes",
+    "admin_alerts",
+    "admin_2fa",
+    "promo_campaign",
+    "billing_renewals",
+    "subscription_expiry",
+    "support_sla",
+    "owner_actions",
+}
+
+
+def build_advertising_readiness() -> dict:
+    launch = build_launch_readiness()
+    gates = list(launch.get("gates") or [])
+    gate_by_code = {
+        clean_limited_text(gate.get("code"), 80): gate
+        for gate in gates
+        if gate.get("code")
+    }
+
+    public_ad_blockers = [
+        gate
+        for code, gate in gate_by_code.items()
+        if code in PUBLIC_ADVERTISING_REQUIRED_CODES and not gate.get("ready")
+    ]
+    paid_traffic_blockers = [
+        gate
+        for code, gate in gate_by_code.items()
+        if code in PAID_TRAFFIC_REQUIRED_CODES and not gate.get("ready")
+    ]
+    critical_blockers = list(launch.get("criticalBlockers") or [])
+    warnings = list(launch.get("warnings") or [])
+    private_demo_blockers = [
+        gate
+        for gate in [*critical_blockers, *warnings]
+        if gate.get("code") not in PRIVATE_DEMO_ALLOWED_MISSING_CODES
+    ]
+
+    public_advertising_ready = not public_ad_blockers and not critical_blockers
+    paid_traffic_ready = public_advertising_ready and not paid_traffic_blockers
+    private_demo_ready = not private_demo_blockers
+
+    if paid_traffic_ready and not warnings:
+        state = "green"
+        mode = "public_paid_ads"
+        message = "Можно запускать публичную рекламу и принимать платных пользователей."
+    elif public_advertising_ready:
+        state = "yellow"
+        mode = "limited_public_ads"
+        message = "Критичных блокеров рекламы нет, но перед масштабированием остались предупреждения."
+    elif private_demo_ready:
+        state = "yellow"
+        mode = "private_demo_only"
+        message = "Подходит для личного показа и закрытого теста, но публичную рекламу запускать рано."
+    else:
+        state = "red"
+        mode = "do_not_advertise"
+        message = "Публичную рекламу и платный трафик запускать нельзя: есть базовые блокеры."
+
+    first_blocker = (
+        public_ad_blockers[0]
+        if public_ad_blockers
+        else (
+            paid_traffic_blockers[0]
+            if paid_traffic_blockers
+            else (
+                private_demo_blockers[0]
+                if private_demo_blockers
+                else (warnings[0] if warnings else {})
+            )
+        )
+    )
+
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "generatedAt": utc_now_iso(),
+        "state": state,
+        "mode": mode,
+        "publicAdvertisingReady": public_advertising_ready,
+        "paidTrafficReady": paid_traffic_ready,
+        "privateDemoReady": private_demo_ready,
+        "cashCollectionReady": paid_traffic_ready,
+        "summary": {
+            "message": message,
+            "nextAction": first_blocker.get("nextAction")
+            or first_blocker.get("message")
+            or "",
+            "publicAdBlockers": len(public_ad_blockers),
+            "paidTrafficBlockers": len(paid_traffic_blockers),
+            "privateDemoBlockers": len(private_demo_blockers),
+            "critical": len(critical_blockers),
+            "warnings": len(warnings),
+        },
+        "recommendation": {
+            "ownerFacing": (
+                "Не покупай трафик и не веди массовых пользователей на скачивание, "
+                "пока Windows-релиз не подписан и публичный installer не проходит "
+                "проверку браузеров/Defender без красных блокировок."
+            ),
+            "allowedNow": (
+                "Личный показ, закрытый тест и запись демонстрации."
+                if private_demo_ready and not public_advertising_ready
+                else (
+                    "Ограниченная реклама с ручным контролем саппорта."
+                    if public_advertising_ready and not paid_traffic_ready
+                    else (
+                        "Публичная реклама и платный трафик."
+                        if paid_traffic_ready
+                        else "Только внутренняя разработка."
+                    )
+                )
+            ),
+            "mustNotDo": [
+                "Не просить пользователей отключать Defender, браузерную защиту или антивирус.",
+                "Не публиковать неподписанный installer как финальный рекламный релиз.",
+                "Не включать массовый платный трафик без платежей, rollback/update и чистого installer trust gate.",
+            ],
+        },
+        "publicAdBlockers": public_ad_blockers,
+        "paidTrafficBlockers": paid_traffic_blockers,
+        "privateDemoBlockers": private_demo_blockers,
+        "warnings": warnings,
+        "launchReadiness": {
+            "state": launch.get("state"),
+            "publicLaunchReady": launch.get("publicLaunchReady"),
+            "productionReady": launch.get("productionReady"),
+            "summary": launch.get("summary") or {},
+        },
+        "requiredGateCodes": {
+            "publicAdvertising": sorted(PUBLIC_ADVERTISING_REQUIRED_CODES),
+            "paidTraffic": sorted(PAID_TRAFFIC_REQUIRED_CODES),
+            "allowedMissingForPrivateDemo": sorted(PRIVATE_DEMO_ALLOWED_MISSING_CODES),
+        },
+        "policy": {
+            "mode": "readiness_only",
+            "mobileAppPolicy": "Мобильные приложения намеренно вынесены из этого gate, пока backend, Windows-клиент, публичный сайт и админка не стабилизированы.",
+            "installerTrustPolicy": "Для публичной рекламы Windows-установщик должен быть подписан через Code Signing/Trusted Signing и опубликован с HTTPS-ссылкой плюс SHA256.",
+            "paymentPolicy": "Приём денег с широкой публичной рекламы требует production YooKassa, доверенного установщика и готового контура обновления/отката.",
+        },
+    }
+
+
 LAUNCH_CLOSURE_ACTION_SPECS = {
     "public_api": {
         "category": "network",
         "ownerRequired": False,
         "autonomousCodeWork": False,
-        "operatorAction": "Keep public API URLs on HTTPS greenvpn.pro origins.",
+        "operatorAction": "Держать публичные API-ссылки на HTTPS-адресах greenvpn.pro.",
     },
     "public_site": {
         "category": "public_site",
         "ownerRequired": False,
         "autonomousCodeWork": False,
-        "operatorAction": "Keep public site, legal, download and YooKassa public URLs green.",
+        "operatorAction": "Держать публичный сайт, юридические страницы, скачивание и публичные YooKassa URL зелёными.",
     },
     "api_vpn_endpoint_split": {
         "category": "network",
         "ownerRequired": True,
         "autonomousCodeWork": False,
-        "ownerInput": "Separate public API/site IP or reverse proxy target, plus DNS decision for api.greenvpn.pro and VPN endpoint host.",
+        "ownerInput": "Отдельный IP или reverse proxy для публичного API/сайта, плюс DNS-решение для api.greenvpn.pro и VPN endpoint host.",
         "secret": False,
         "safeWithoutOwner": False,
     },
@@ -13559,13 +18552,13 @@ LAUNCH_CLOSURE_ACTION_SPECS = {
         "category": "servers",
         "ownerRequired": False,
         "autonomousCodeWork": True,
-        "operatorAction": "Keep future VPN endpoints as internal drafts until provisioning/health/canary gates are green.",
+        "operatorAction": "Держать будущие VPN endpoints внутренними черновиками, пока provisioning, health и canary gates не станут зелёными.",
     },
     "payments": {
         "category": "payments",
         "ownerRequired": True,
         "autonomousCodeWork": False,
-        "ownerInput": "YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY through scripts\\windows\\configure_backend_env_wsl.ps1 only.",
+        "ownerInput": "YOOKASSA_SHOP_ID и YOOKASSA_SECRET_KEY только через scripts\\windows\\configure_backend_env_wsl.ps1.",
         "secret": True,
         "safeWithoutOwner": False,
     },
@@ -13574,46 +18567,55 @@ LAUNCH_CLOSURE_ACTION_SPECS = {
         "ownerRequired": False,
         "autonomousCodeWork": False,
         "finalHandoffOnly": True,
-        "operatorAction": "Build final installer and publish update/rollback metadata only at final handoff or explicit owner stop-and-test request.",
+        "operatorAction": "Собирать финальный установщик и публиковать update/rollback metadata только на финальном handoff или по явной команде владельца остановиться и тестировать.",
+    },
+    "windows_trust": {
+        "category": "release",
+        "ownerRequired": True,
+        "autonomousCodeWork": False,
+        "dependsOn": ["updates"],
+        "ownerInput": "OV/EV Code Signing certificate или Microsoft Trusted Signing setup; имя издателя и certificate thumbprint/Trusted Signing profile для финального Windows-релиза.",
+        "secret": True,
+        "safeWithoutOwner": False,
     },
     "sms": {
         "category": "auth",
         "ownerRequired": True,
         "autonomousCodeWork": False,
-        "ownerInput": "SMS.ru api_id and sender decision through server-only env when SMS readiness is not green.",
+        "ownerInput": "SMS.ru api_id и решение по sender через server-only env, если SMS readiness не зелёный.",
         "secret": True,
     },
     "email": {
         "category": "auth",
         "ownerRequired": True,
         "autonomousCodeWork": False,
-        "ownerInput": "SMTP mailbox/app password and DNS mail records through server-only env/provider panels when email readiness is not green.",
+        "ownerInput": "SMTP mailbox/app password и DNS-почтовые записи через server-only env/provider panels, если email readiness не зелёный.",
         "secret": True,
     },
     "user_auth_flow": {
         "category": "auth",
         "ownerRequired": False,
         "autonomousCodeWork": False,
-        "operatorAction": "Watch auth events for real-world UX errors; backend readiness is code-first.",
+        "operatorAction": "Следить за событиями входа и реальными UX-ошибками; backend readiness уже закрыт кодом.",
     },
     "monitoring": {
         "category": "monitoring",
         "ownerRequired": False,
         "autonomousCodeWork": True,
-        "operatorAction": "Keep backend/WireGuard monitoring green and incidents synced.",
+        "operatorAction": "Держать backend/WireGuard monitoring зелёным и синхронизировать инциденты.",
     },
     "monitoring_probes": {
         "category": "monitoring",
         "ownerRequired": True,
         "autonomousCodeWork": False,
-        "ownerInput": "Separate monitoring VPS/probe host and token placement through controlled probe install flow.",
+        "ownerInput": "Отдельный monitoring VPS/probe host и размещение token через контролируемый probe install flow.",
         "secret": True,
     },
     "admin_alerts": {
         "category": "ops",
         "ownerRequired": True,
         "autonomousCodeWork": False,
-        "ownerInput": "Telegram bot token and chat id through server-only env.",
+        "ownerInput": "Telegram bot token и chat id через server-only env.",
         "secret": True,
     },
     "admin_2fa": {
@@ -13621,43 +18623,43 @@ LAUNCH_CLOSURE_ACTION_SPECS = {
         "ownerRequired": False,
         "autonomousCodeWork": False,
         "operationalReview": True,
-        "operatorAction": "Enable/verify 2FA for owner and key staff before public launch.",
+        "operatorAction": "Включить/проверить 2FA для владельца и ключевых сотрудников перед публичным запуском.",
     },
     "billing_renewals": {
         "category": "payments",
         "ownerRequired": False,
-        "autonomousCodeWork": True,
+        "autonomousCodeWork": False,
         "operationalReview": True,
         "dependsOn": ["payments"],
-        "operatorAction": "Keep auto-renewal charges disabled until payment production smoke is clean.",
+        "operatorAction": "Держать автосписания выключенными до чистого production payment-smoke.",
     },
     "subscription_expiry": {
         "category": "billing",
         "ownerRequired": False,
-        "autonomousCodeWork": True,
+        "autonomousCodeWork": False,
         "operationalReview": True,
         "dependsOn": ["payments"],
-        "operatorAction": "Review expiring users and missing retention contacts before enabling strict expiry enforcement.",
+        "operatorAction": "Проверить истекающие подписки и контакты удержания перед включением жёсткого ограничения по сроку.",
     },
     "promo_campaign": {
         "category": "growth",
         "ownerRequired": False,
         "autonomousCodeWork": False,
         "operationalReview": True,
-        "operatorAction": "Create an inactive START20 draft if missing; activate it only after payment/release readiness is green.",
+        "operatorAction": "Создать неактивный черновик START20, если его нет; включать только после зелёного payment/release readiness.",
     },
     "support_sla": {
         "category": "support",
         "ownerRequired": False,
         "autonomousCodeWork": True,
         "operationalReview": True,
-        "operatorAction": "Clear support queue items that are overdue, review-pending or missing first response.",
+        "operatorAction": "Закрыть обращения поддержки, где просрочен срок, нужен review или отсутствует первый ответ.",
     },
     "owner_actions": {
         "category": "owner_actions",
         "ownerRequired": True,
         "autonomousCodeWork": False,
-        "ownerInput": "Complete the pending external-service owner actions without pasting secrets into repo/docs/chat.",
+        "ownerInput": "Закрыть ожидающие внешние действия без вставки секретов в repo/docs/chat.",
         "secret": True,
     },
 }
@@ -13837,9 +18839,9 @@ def build_launch_closure_plan() -> dict:
         "manualModes": launch.get("manualModes") or {},
         "policy": {
             "mode": "closure_plan_readiness_only",
-            "secretPolicy": "Secret values are never returned. This endpoint may name required env keys, but not their values.",
-            "installerPolicy": "Do not build a new public Windows installer until final handoff or explicit owner stop-and-test request.",
-            "ownerBlockedMeans": "Work is prepared in code, but applying it requires owner/provider input outside the repository.",
+            "secretPolicy": "Секретные значения никогда не возвращаются. Endpoint может назвать нужные env keys, но не их значения.",
+            "installerPolicy": "Не собирать новый публичный Windows-установщик до финального handoff или явной команды владельца остановиться и тестировать.",
+            "ownerBlockedMeans": "Работа подготовлена в коде, но применение требует действия владельца/провайдера вне репозитория.",
         },
     }
 
@@ -13874,9 +18876,9 @@ def owner_launch_packet_action_item(action: dict) -> dict:
         "verifySteps": list(action.get("verifySteps") or []),
         "blocks": list(action.get("blocks") or []),
         "safeHandling": (
-            "Enter secret values only through server-side env/provider dashboards; never paste them into repo, docs, owner notes or chat."
+            "Вводить секреты только через server-side env/provider dashboards; не вставлять их в repo, docs, owner notes или чат."
             if secret_expected
-            else "Non-secret values may be discussed, but provider/admin panels stay authoritative."
+            else "Несекретные значения можно обсуждать, но provider/admin panels остаются источником истины."
         ),
     }
 
@@ -13888,11 +18890,11 @@ def owner_launch_packet_commands(setup_bundle: dict, split_plan: dict) -> list[d
         commands.append(
             {
                 "code": "apply_server_env",
-                "title": "Apply server-only env",
+                "title": "Применить server-only env",
                 "command": apply_command,
                 "secret": True,
                 "mutationFree": False,
-                "when": "Run only when the owner is ready to enter YooKassa/SMTP/SMS/Telegram secrets into the terminal.",
+                "when": "Запускать только когда владелец готов ввести YooKassa/SMTP/SMS/Telegram секреты в терминал.",
             }
         )
     preflight = (
@@ -13904,38 +18906,38 @@ def owner_launch_packet_commands(setup_bundle: dict, split_plan: dict) -> list[d
         commands.append(
             {
                 "code": "api_vpn_split_preflight",
-                "title": "API/VPN split preflight",
+                "title": "Предпроверка разделения API и VPN",
                 "command": preflight.get("command"),
                 "secret": False,
                 "mutationFree": True,
                 "when": preflight.get("when")
-                or "Run after the candidate API/site IP or reverse proxy exists.",
+                or "Запускать после появления нового IP для API/сайта или reverse proxy.",
             }
         )
     commands.append(
         {
             "code": "payment_launch_safety",
-            "title": "Payment launch safety",
+            "title": "Безопасность запуска платежей",
             "command": (
                 r"powershell -NoProfile -ExecutionPolicy Bypass -File "
                 r"C:\Users\gekto\projects\bluevpn\scripts\windows\check_payment_launch_safety.ps1"
             ),
             "secret": False,
             "mutationFree": True,
-            "when": "Run after YooKassa env changes and before enabling auto-renewal or strict expiry enforcement.",
+            "when": "Запускать после env-изменений YooKassa и перед включением автопродлений или жёсткого ограничения по сроку.",
         }
     )
     commands.append(
         {
             "code": "monitoring_probe_plan",
-            "title": "Monitoring probe plan",
+            "title": "План внешней проверки мониторинга",
             "command": (
                 r"powershell -NoProfile -ExecutionPolicy Bypass -File "
                 r"C:\Users\gekto\projects\bluevpn\scripts\windows\get_monitoring_probe_plan.ps1"
             ),
             "secret": False,
             "mutationFree": True,
-            "when": "Run before installing the external monitoring probe; admin token still belongs only on the probe host.",
+            "when": "Запускать перед установкой внешней проверки; admin token должен храниться только на probe-сервере.",
         }
     )
     readiness_command = setup_bundle.get("readinessCommand")
@@ -13943,11 +18945,11 @@ def owner_launch_packet_commands(setup_bundle: dict, split_plan: dict) -> list[d
         commands.append(
             {
                 "code": "readiness_self_check",
-                "title": "Protected readiness self-check",
+                "title": "Защищенная проверка готовности",
                 "command": readiness_command,
                 "secret": False,
                 "mutationFree": True,
-                "when": "Run after env/DNS/provider changes to verify launch readiness.",
+                "when": "Запускать после изменений env/DNS/провайдеров, чтобы проверить готовность к запуску.",
             }
         )
     return commands
@@ -13985,7 +18987,7 @@ def build_owner_launch_packet() -> dict:
         "canContinueAutonomously": bool(closure_plan.get("canContinueAutonomously")),
         "safeNoSecretExposure": True,
         "summary": {
-            "message": "Owner launch packet is ready. It names required inputs and commands without returning secret values.",
+            "message": "Пакет запуска для владельца готов: он показывает нужные данные и команды без вывода секретов.",
             "state": closure_plan.get("state"),
             "ready": (closure_plan.get("summary") or {}).get("ready"),
             "pending": (closure_plan.get("summary") or {}).get("pending"),
@@ -14015,9 +19017,9 @@ def build_owner_launch_packet() -> dict:
         "policy": {
             "mode": "owner_launch_packet_readiness_only",
             "noSecretValues": True,
-            "secretPolicy": "This endpoint may name secret env keys and provider fields, but never returns their values.",
-            "mutationPolicy": "Commands are labelled with mutationFree. The env apply command is intentionally not mutation-free and must be run only with the owner present.",
-            "installerPolicy": "Do not build a new public Windows installer until final handoff or an explicit owner stop-and-test request.",
+            "secretPolicy": "Endpoint может называть секретные env keys и поля провайдера, но никогда не возвращает их значения.",
+            "mutationPolicy": "Commands помечены mutationFree. Env apply command намеренно не mutation-free и запускается только при владельце.",
+            "installerPolicy": "Не собирать новый публичный Windows-установщик до финального handoff или явной команды владельца остановиться и тестировать.",
         },
     }
 
@@ -14031,13 +19033,13 @@ def external_owner_setup_bundle() -> dict:
         "serverHost": "37.220.85.211",
         "apiBase": "https://api.greenvpn.pro",
         "vpnEndpointHost": "37.220.85.211",
-        "secretPolicy": "Secrets are entered only into the server env or provider dashboards; never into repo docs, owner notes, audit text, or chat transcripts.",
+        "secretPolicy": "Секреты вводятся только в server-only env или кабинеты провайдеров; не вставлять их в repo, docs, заметки владельца, audit-тексты или чат.",
         "dnsRecords": [
             {
                 "code": "api_a",
                 "type": "A",
                 "host": "api.greenvpn.pro",
-                "valueHint": "Public API/site IP. Before production it must be different from VPN endpoint 37.220.85.211.",
+                "valueHint": "Публичный IP для API/сайта. Для production он должен отличаться от VPN endpoint 37.220.85.211.",
                 "secret": False,
                 "verifyWith": "check_external_services_readiness.ps1",
             },
@@ -14069,7 +19071,7 @@ def external_owner_setup_bundle() -> dict:
                 "code": "mail_dkim",
                 "type": "TXT",
                 "host": "mail._domainkey.greenvpn.pro",
-                "valueHint": "DKIM value from Yandex 360",
+                "valueHint": "DKIM-значение из Яндекс 360",
                 "secret": False,
                 "verifyWith": "check_external_services_readiness.ps1",
             },
@@ -14124,20 +19126,20 @@ def external_action_specs() -> list[dict]:
     return [
         {
             "code": "public_api",
-            "title": "Домен и HTTPS для backend",
-            "ownerAction": "Направить api.greenvpn.pro на публичный API/site reverse proxy, не совпадающий по IP с VPN endpoint, и задать HTTPS public base URLs.",
+            "title": "Домен и HTTPS для API",
+            "ownerAction": "Направить api.greenvpn.pro на публичный API/site reverse proxy, который не совпадает по IP с VPN endpoint, и задать публичные HTTPS base URLs.",
             "envKeys": ["GREENVPN_PUBLIC_API_BASE_URL", "GREENVPN_PUBLIC_BASE_URL", "GREENVPN_EMAIL_PUBLIC_BASE_URL", "GREENVPN_API_BASE_URLS", "BLUEVPN_ENDPOINT_HOST"],
             "ownerInputs": [
-                {"name": "api.greenvpn.pro DNS A", "secret": False, "example": "separate public API/site IP, not 37.220.85.211 for production"},
-                {"name": "VPN endpoint host/IP", "secret": False, "example": "37.220.85.211"},
-                {"name": "HTTPS certificate/reverse proxy", "secret": False, "example": "api.greenvpn.pro"},
+                {"name": "DNS A для api.greenvpn.pro", "secret": False, "example": "отдельный публичный IP API/сайта, не 37.220.85.211 для production"},
+                {"name": "Хост/IP VPN endpoint", "secret": False, "example": "37.220.85.211"},
+                {"name": "HTTPS-сертификат/reverse proxy", "secret": False, "example": "api.greenvpn.pro"},
             ],
             "applySteps": [
-                "DNS/proxy changes are made in provider panels; backend env is applied with configure_backend_env_wsl.ps1.",
-                "Keep GREENVPN_API_BASE_URLS on HTTPS public origins only; do not publish the raw VPN endpoint IP as a client bootstrap URL.",
+                "DNS/proxy меняются в кабинетах провайдеров; backend env применяется через configure_backend_env_wsl.ps1.",
+                "GREENVPN_API_BASE_URLS должен содержать только публичные HTTPS origins; не публиковать сырой IP VPN endpoint как bootstrap URL клиента.",
             ],
             "verifySteps": [
-                "Run check_api_vpn_split_preflight.ps1 with the candidate API/site IP.",
+                "Запустить check_api_vpn_split_preflight.ps1 с новым IP API/сайта.",
                 "GET https://api.greenvpn.pro/healthz",
                 "GET /api/v1/admin/network/readiness",
                 "GET /api/v1/admin/network/split-plan",
@@ -14149,7 +19151,7 @@ def external_action_specs() -> list[dict]:
         {
             "code": "email",
             "title": "Почта Green VPN",
-            "ownerAction": "Создать no-reply@greenvpn.pro/support@greenvpn.pro, включить SMTP/app password, настроить MX/SPF/DKIM/DMARC.",
+            "ownerAction": "Создать no-reply@greenvpn.pro/support@greenvpn.pro, включить SMTP/пароль приложения, настроить MX/SPF/DKIM/DMARC.",
             "envKeys": [
                 "GREENVPN_SMTP_HOST",
                 "GREENVPN_SMTP_PORT",
@@ -14158,19 +19160,19 @@ def external_action_specs() -> list[dict]:
                 "GREENVPN_SMTP_FROM",
             ],
             "ownerInputs": [
-                {"name": "SMTP mailbox", "envKey": "GREENVPN_SMTP_USERNAME", "secret": False, "example": "no-reply@greenvpn.pro"},
-                {"name": "SMTP app password", "envKey": "GREENVPN_SMTP_PASSWORD", "secret": True},
-                {"name": "Support mailbox/alias", "secret": False, "example": "support@greenvpn.pro"},
-                {"name": "Postmaster mailbox/alias", "secret": False, "example": "postmaster@greenvpn.pro"},
+                {"name": "SMTP-ящик", "envKey": "GREENVPN_SMTP_USERNAME", "secret": False, "example": "no-reply@greenvpn.pro"},
+                {"name": "SMTP-пароль приложения", "envKey": "GREENVPN_SMTP_PASSWORD", "secret": True},
+                {"name": "Ящик/алиас поддержки", "secret": False, "example": "support@greenvpn.pro"},
+                {"name": "Ящик/алиас postmaster", "secret": False, "example": "postmaster@greenvpn.pro"},
                 {"name": "DMARC TXT", "secret": False, "example": "v=DMARC1; p=none; rua=mailto:postmaster@greenvpn.pro; adkim=s; aspf=s"},
             ],
             "applySteps": [
-                "Run configure_backend_env_wsl.ps1 and answer the Yandex 360 SMTP prompts.",
-                "Add or verify MX/SPF/DKIM/DMARC records in DNS provider panel.",
+                "Запустить configure_backend_env_wsl.ps1 и ответить на вопросы по SMTP Яндекс 360.",
+                "Добавить или проверить MX/SPF/DKIM/DMARC записи в DNS-панели.",
             ],
             "verifySteps": [
                 "GET /api/v1/admin/email/readiness",
-                "Start and verify an email-code login after SMTP is configured.",
+                "После настройки SMTP запустить и проверить вход по email-коду.",
                 "check_external_services_readiness.ps1 -ServerAdminSelfCheck",
             ],
             "secret": True,
@@ -14183,40 +19185,40 @@ def external_action_specs() -> list[dict]:
             "envKeys": ["GREENVPN_SMS_PROVIDER", "GREENVPN_SMS_RU_API_ID", "GREENVPN_SMS_FROM"],
             "ownerInputs": [
                 {"name": "SMS.ru api_id", "envKey": "GREENVPN_SMS_RU_API_ID", "secret": True},
-                {"name": "Approved sender name", "envKey": "GREENVPN_SMS_FROM", "secret": False, "optional": True, "example": "GreenVPN"},
-                {"name": "Test-mode decision", "envKey": "GREENVPN_SMS_RU_TEST_MODE", "secret": False, "example": "0"},
+                {"name": "Согласованное имя отправителя", "envKey": "GREENVPN_SMS_FROM", "secret": False, "optional": True, "example": "GreenVPN"},
+                {"name": "Режим SMS.ru test-mode", "envKey": "GREENVPN_SMS_RU_TEST_MODE", "secret": False, "example": "0"},
             ],
             "applySteps": [
-                "Run configure_backend_env_wsl.ps1 and answer the SMS.ru prompts.",
-                "Keep GREENVPN_SMS_RU_TEST_MODE=1 only for provider sandbox checks; production needs 0.",
+                "Запустить configure_backend_env_wsl.ps1 и ответить на вопросы по SMS.ru.",
+                "GREENVPN_SMS_RU_TEST_MODE=1 оставлять только для sandbox-проверок провайдера; для production нужно 0.",
             ],
             "verifySteps": [
                 "GET /api/v1/admin/sms/readiness",
-                "Start and verify a phone-code login on an owner-approved test number.",
+                "Запустить и проверить вход по SMS-коду на тестовом номере, одобренном владельцем.",
             ],
             "secret": True,
             "blocks": ["phone_login_codes"],
         },
         {
             "code": "payments",
-            "title": "ЮKassa production",
-            "ownerAction": "Получить shop_id/secret_key, указать returnUrl/webhook URL в кабинете ЮKassa и передать ключи только в серверный env.",
+            "title": "ЮKassa в боевом режиме",
+            "ownerAction": "Получить shop_id/secret_key, указать returnUrl/webhook URL в кабинете ЮKassa и передать ключи только в server-only env.",
             "envKeys": ["YOOKASSA_SHOP_ID", "YOOKASSA_SECRET_KEY", "YOOKASSA_RETURN_URL", "YOOKASSA_WEBHOOK_URL"],
             "ownerInputs": [
                 {"name": "YOOKASSA_SHOP_ID", "envKey": "YOOKASSA_SHOP_ID", "secret": False},
                 {"name": "YOOKASSA_SECRET_KEY", "envKey": "YOOKASSA_SECRET_KEY", "secret": True},
-                {"name": "Webhook URL", "envKey": "YOOKASSA_WEBHOOK_URL", "secret": False, "example": "https://api.greenvpn.pro/api/v1/billing/yookassa/webhook"},
-                {"name": "Return URL", "envKey": "YOOKASSA_RETURN_URL", "secret": False, "example": "https://api.greenvpn.pro/payment/return"},
+                {"name": "Webhook URL ЮKassa", "envKey": "YOOKASSA_WEBHOOK_URL", "secret": False, "example": "https://api.greenvpn.pro/api/v1/billing/yookassa/webhook"},
+                {"name": "Return URL после оплаты", "envKey": "YOOKASSA_RETURN_URL", "secret": False, "example": "https://api.greenvpn.pro/payment/return"},
             ],
             "applySteps": [
-                "Run configure_backend_env_wsl.ps1 and answer the YooKassa prompts.",
-                "Enable payment.succeeded and payment.canceled webhook events in YooKassa dashboard.",
+                "Запустить configure_backend_env_wsl.ps1 и ответить на вопросы по ЮKassa.",
+                "В кабинете ЮKassa включить webhook-события payment.succeeded и payment.canceled.",
             ],
             "verifySteps": [
                 "GET /api/v1/admin/billing/readiness",
                 "GET /api/v1/admin/billing/payment-smoke/readiness",
-                "Create a test/production order only when owner confirms provider mode.",
-                "Confirm tariff activation happens only after YooKassa confirmation.",
+                "Создавать test/production заказ только после подтверждения владельцем режима провайдера.",
+                "Проверить, что тариф активируется только после подтверждения ЮKassa.",
             ],
             "secret": True,
             "blocks": ["paid_activation", "auto_renew"],
@@ -14224,7 +19226,7 @@ def external_action_specs() -> list[dict]:
         {
             "code": "updates",
             "title": "Файлы обновлений",
-            "ownerAction": "Опубликовать GreenVPN_Setup.exe на updates.greenvpn.pro или другом storage, прописать downloadUrl, SHA256 и rollback artifact.",
+            "ownerAction": "Опубликовать GreenVPN_Setup.exe на updates.greenvpn.pro или другом хранилище, прописать downloadUrl, SHA256 и rollback artifact.",
             "envKeys": [
                 "GREENVPN_UPDATE_URL",
                 "GREENVPN_UPDATE_SHA256",
@@ -14234,17 +19236,17 @@ def external_action_specs() -> list[dict]:
                 "GREENVPN_ROLLBACK_VERSION",
             ],
             "ownerInputs": [
-                {"name": "Final installer HTTPS URL", "envKey": "GREENVPN_UPDATE_URL", "secret": False},
-                {"name": "Final installer SHA256", "envKey": "GREENVPN_UPDATE_SHA256", "secret": False},
-                {"name": "Latest version", "envKey": "GREENVPN_LATEST_VERSION", "secret": False},
-                {"name": "Rollback installer HTTPS URL", "envKey": "GREENVPN_ROLLBACK_URL", "secret": False},
-                {"name": "Rollback installer SHA256", "envKey": "GREENVPN_ROLLBACK_SHA256", "secret": False},
-                {"name": "Rollback version", "envKey": "GREENVPN_ROLLBACK_VERSION", "secret": False},
+                {"name": "HTTPS URL финального установщика", "envKey": "GREENVPN_UPDATE_URL", "secret": False},
+                {"name": "SHA256 финального установщика", "envKey": "GREENVPN_UPDATE_SHA256", "secret": False},
+                {"name": "Последняя версия", "envKey": "GREENVPN_LATEST_VERSION", "secret": False},
+                {"name": "HTTPS URL rollback-установщика", "envKey": "GREENVPN_ROLLBACK_URL", "secret": False},
+                {"name": "SHA256 rollback-установщика", "envKey": "GREENVPN_ROLLBACK_SHA256", "secret": False},
+                {"name": "Rollback-версия", "envKey": "GREENVPN_ROLLBACK_VERSION", "secret": False},
             ],
             "applySteps": [
-                "Do not build a new installer until final handoff or explicit test request.",
-                "Create or update an admin release record only after the final artifact exists.",
-                "Keep stable full rollout or required update disabled until rollback readiness is green.",
+                "Не собирать новый установщик до финального handoff или явного запроса на тест.",
+                "Создавать или обновлять запись релиза в админке только после появления финального артефакта.",
+                "Держать stable full rollout или required update выключенными до зеленой rollback readiness.",
             ],
             "verifySteps": [
                 "GET /api/v1/admin/updates/readiness",
@@ -14255,51 +19257,87 @@ def external_action_specs() -> list[dict]:
             "blocks": ["client_updates"],
         },
         {
+            "code": "windows_trust",
+            "title": "Подписанный Windows-релиз",
+            "ownerAction": "Выпустить OV/EV Code Signing certificate или настроить Microsoft Trusted Signing, подписать финальный installer/app/service/DLL и публиковать только доверенную сборку.",
+            "envKeys": [
+                "GREENVPN_WINDOWS_CODE_SIGNING_PROVIDER",
+                "GREENVPN_WINDOWS_CODE_SIGNING_PUBLISHER",
+                "GREENVPN_WINDOWS_CODE_SIGNING_CERT_THUMBPRINT",
+                "GREENVPN_WINDOWS_SIGNED_INSTALLER_URL",
+                "GREENVPN_WINDOWS_SIGNED_INSTALLER_SHA256",
+                "GREENVPN_DEFENDER_SUBMISSION_ID",
+                "GREENVPN_YANDEX_AV_SUBMISSION_ID",
+            ],
+            "ownerInputs": [
+                {"name": "Провайдер Code Signing", "envKey": "GREENVPN_WINDOWS_CODE_SIGNING_PROVIDER", "secret": False, "example": "OV Code Signing / Microsoft Trusted Signing"},
+                {"name": "Имя издателя", "envKey": "GREENVPN_WINDOWS_CODE_SIGNING_PUBLISHER", "secret": False, "example": "Green VPN"},
+                {"name": "Отпечаток сертификата", "envKey": "GREENVPN_WINDOWS_CODE_SIGNING_CERT_THUMBPRINT", "secret": False},
+                {"name": "Приватный ключ подписи / доступ к cloud signing", "secret": True},
+                {"name": "URL подписанного установщика", "envKey": "GREENVPN_WINDOWS_SIGNED_INSTALLER_URL", "secret": False, "example": "https://greenvpn.pro/downloads/GreenVPN_Setup.exe"},
+                {"name": "SHA256 подписанного установщика", "envKey": "GREENVPN_WINDOWS_SIGNED_INSTALLER_SHA256", "secret": False},
+            ],
+            "applySteps": [
+                "Не покупать SSL-сертификаты для подписи .exe; для этого нужен Code Signing или Microsoft Trusted Signing.",
+                "Запускать scripts/windows/sign_release_artifacts.ps1 только после финальной сборки и готового сертификата/профиля подписи.",
+                "Перед публикацией проверить Authenticode у installer, Flutter app exe, Windows service exe и DLL.",
+                "Если браузер или Defender все еще блокирует доверенную сборку, отправить подписанный false positive в Microsoft/Yandex.",
+            ],
+            "verifySteps": [
+                "powershell Get-AuthenticodeSignature для каждого опубликованного Windows artifact.",
+                "GET /api/v1/admin/windows/trust-readiness",
+                "GET /api/v1/admin/updates/readiness",
+                "Скачать публичный установщик и сравнить SHA256 с записью подписанного релиза.",
+            ],
+            "secret": True,
+            "blocks": ["public_windows_advertising", "trusted_download"],
+        },
+        {
             "code": "server_catalog",
-            "title": "Server catalog",
+            "title": "Каталог серверов",
             "ownerAction": "Готовить будущие VPN endpoints только как внутренние draft-записи; публичная выдача включается позже после отдельного provisioning/health/canary gate.",
             "envKeys": ["GREENVPN_SERVER_CATALOG_VERSION", "GREENVPN_API_BASE_URLS", "GREENVPN_EMERGENCY_CATALOG_URL"],
             "ownerInputs": [
-                {"name": "Provider and tariff", "secret": False, "example": "Timeweb Amsterdam 1 Gbit/s"},
-                {"name": "Production endpoint host/IP", "secret": False, "example": "nl1.vpn.greenvpn.pro / public IPv4"},
-                {"name": "WireGuard public endpoint port", "secret": False, "example": "51820"},
-                {"name": "Planned bandwidth and monthly cost", "secret": False, "example": "1000 Mbps / monthly RUB cost"},
-                {"name": "Client config profile decision", "secret": False, "example": "none until server-specific provisioning is ready"},
+                {"name": "Провайдер и тариф", "secret": False, "example": "Timeweb Amsterdam 1 Гбит/с"},
+                {"name": "Боевой host/IP VPN endpoint", "secret": False, "example": "nl1.vpn.greenvpn.pro / публичный IPv4"},
+                {"name": "Публичный порт WireGuard endpoint", "secret": False, "example": "51820"},
+                {"name": "Планируемая скорость и стоимость в месяц", "secret": False, "example": "1000 Мбит/с / стоимость в рублях за месяц"},
+                {"name": "Решение по профилю клиентского конфига", "secret": False, "example": "none до готовности server-specific provisioning"},
             ],
             "applySteps": [
-                "Use newServerOnboardingPlan from /api/v1/admin/server-catalog/provisioning-readiness.",
-                "Prepare managed endpoints through /api/v1/admin/server-catalog/draft-from-plan so draft/isPublic=false/clientConfigProfile=none is enforced.",
-                "Do not publish them before DNS, health, external probe, server-specific config provisioning, canary and rollback gates are green.",
+                "Использовать newServerOnboardingPlan из /api/v1/admin/server-catalog/provisioning-readiness.",
+                "Готовить managed endpoints через /api/v1/admin/server-catalog/draft-from-plan, чтобы draft/isPublic=false/clientConfigProfile=none применялись автоматически.",
+                "Не публиковать их, пока DNS, health, external probe, server-specific config provisioning, canary и rollback gates не станут зелеными.",
             ],
             "verifySteps": [
                 "GET /api/v1/admin/server-catalog/publication-readiness",
                 "GET /api/v1/admin/server-catalog/provisioning-readiness",
-                "POST /api/v1/admin/server-catalog/draft-from-plan only for internal non-secret drafts.",
-                "Check newServerOnboardingPlan.safeToCreateInternalDraft before adding a new VPS.",
-                "GET /api/v1/catalog/servers must keep internal endpoints hidden until rollout.",
+                "POST /api/v1/admin/server-catalog/draft-from-plan использовать только для внутренних non-secret draft-записей.",
+                "Перед добавлением нового VPS проверить newServerOnboardingPlan.safeToCreateInternalDraft.",
+                "GET /api/v1/catalog/servers должен скрывать внутренние endpoints до rollout.",
             ],
             "secret": False,
             "blocks": ["auto_server_selection", "fallback"],
         },
         {
             "code": "monitoring",
-            "title": "Monitoring probes",
+            "title": "Внешние проверки мониторинга",
             "ownerAction": "Поставить controlled probe-agent на отдельный VPS и выдать ему admin token через /etc/greenvpn-monitoring/admin_token.",
             "envKeys": ["GREENVPN_SERVICE_CHECK_TIMEOUT"],
             "ownerInputs": [
-                {"name": "Monitoring VPS host/IP", "secret": False},
-                {"name": "SSH user/access method", "secret": True},
-                {"name": "Probe id", "secret": False, "example": "probe-eu-1"},
-                {"name": "Probe region", "secret": False, "example": "eu"},
+                {"name": "Host/IP VPS для мониторинга", "secret": False},
+                {"name": "SSH-пользователь/способ доступа", "secret": True},
+                {"name": "ID внешней проверки", "secret": False, "example": "probe-eu-1"},
+                {"name": "Регион внешней проверки", "secret": False, "example": "eu"},
             ],
             "applySteps": [
-                "Install scripts/monitoring/service_probe.py on a separate VPS via install_probe_systemd.sh.",
-                "Store admin token only on the probe host in /etc/greenvpn-monitoring/admin_token with mode 600.",
+                "Установить scripts/monitoring/service_probe.py на отдельный VPS через install_probe_systemd.sh.",
+                "Хранить admin token только на probe-сервере в /etc/greenvpn-monitoring/admin_token с mode 600.",
             ],
             "verifySteps": [
                 "GET /api/v1/admin/monitoring/readiness",
                 "GET /api/v1/admin/monitoring/service-observations",
-                "Confirm required targets are fresh and covered by the external probe.",
+                "Проверить, что обязательные targets свежие и покрыты внешней проверкой.",
             ],
             "secret": True,
             "blocks": ["service_availability_alerts", "server_health_score"],
@@ -14317,16 +19355,16 @@ def external_action_specs() -> list[dict]:
             "ownerInputs": [
                 {"name": "Telegram bot token", "envKey": "GREENVPN_TELEGRAM_ALERT_BOT_TOKEN", "secret": True},
                 {"name": "Telegram chat id", "envKey": "GREENVPN_TELEGRAM_ALERT_CHAT_ID", "secret": True},
-                {"name": "Minimum alert severity", "envKey": "GREENVPN_ADMIN_ALERT_MIN_SEVERITY", "secret": False, "example": "high"},
+                {"name": "Минимальная важность алерта", "envKey": "GREENVPN_ADMIN_ALERT_MIN_SEVERITY", "secret": False, "example": "high"},
             ],
             "applySteps": [
-                "Run configure_backend_env_wsl.ps1 and answer the Telegram alert prompts.",
-                "Keep the bot token only in backend server env.",
+                "Запустить configure_backend_env_wsl.ps1 и ответить на вопросы по Telegram-алертам.",
+                "Хранить bot token только в backend server env.",
             ],
             "verifySteps": [
                 "GET /api/v1/admin/alerts/readiness",
-                "POST /api/v1/admin/alerts/test from the admin app.",
-                "Review /api/v1/admin/alerts/events for sent/failed/skipped history.",
+                "POST /api/v1/admin/alerts/test из админки.",
+                "Проверить /api/v1/admin/alerts/events: история sent/failed/skipped должна быть понятной.",
             ],
             "secret": True,
             "blocks": ["incident_notifications"],
@@ -14339,7 +19377,7 @@ def normalize_owner_action_status(value: Optional[str], fallback: str = "todo") 
     if not normalized:
         normalized = fallback
     if normalized not in OWNER_ACTION_STATUSES:
-        raise HTTPException(status_code=400, detail="Invalid owner action status.")
+        raise HTTPException(status_code=400, detail="Некорректный статус внешнего действия владельца.")
     return normalized
 
 
@@ -14354,7 +19392,7 @@ def owner_action_workflow_options() -> dict:
             "noteRequiredStatuses": sorted(OWNER_ACTION_NOTE_REQUIRED_STATUSES),
             "noteRequiredWhenDoneBeforeReady": True,
             "noteMaxLength": 3000,
-            "secretPolicy": "Owner notes must describe status and next step only; never paste secrets, admin tokens, passwords or provider keys.",
+            "secretPolicy": "Заметки владельца должны описывать только статус и следующий шаг; нельзя вставлять секреты, admin tokens, пароли или ключи провайдеров.",
             "serverEnforced": True,
             "blockedNotePatternCodes": [
                 code for code, _pattern in OWNER_ACTION_NOTE_SECRET_PATTERNS
@@ -14436,7 +19474,7 @@ def upsert_owner_action_status(
     code = clean_limited_text(action_code, 80).strip().lower()
     known_codes = {item["code"] for item in external_action_specs()}
     if code not in known_codes:
-        raise HTTPException(status_code=404, detail="External owner action not found.")
+        raise HTTPException(status_code=404, detail="Внешнее действие владельца не найдено.")
     status = normalize_owner_action_status(payload.status)
     note = clean_limited_text(payload.note, 3000).strip()
     secret_findings = owner_action_note_secret_findings(note)
@@ -14444,8 +19482,8 @@ def upsert_owner_action_status(
         raise HTTPException(
             status_code=400,
             detail=(
-                "Owner note appears to contain secret material "
-                f"({', '.join(secret_findings[:5])}). Remove secret values and describe status only."
+                "Заметка владельца похожа на секретные данные "
+                f"({', '.join(secret_findings[:5])}). Удали секреты и опиши только статус."
             ),
         )
     readiness = build_product_readiness()
@@ -14457,7 +19495,7 @@ def upsert_owner_action_status(
     if note_required and not note:
         raise HTTPException(
             status_code=400,
-            detail="Owner note is required for this external action status. Do not include secrets.",
+            detail="Для этого статуса нужна заметка владельца. Не добавляй в нее секреты.",
         )
     updated_by = clean_limited_text(actor, 160).strip()
     now = utc_now_iso()
@@ -14824,7 +19862,7 @@ def get_support_report(report_id: int) -> dict:
             (report_id,),
         ).fetchone()
     if row is None:
-        raise HTTPException(status_code=404, detail="Support report not found.")
+        raise HTTPException(status_code=404, detail="Обращение поддержки не найдено.")
     return support_report_payload(row, include_report=True)
 
 
@@ -14836,7 +19874,7 @@ def update_support_report_status(
     existing = get_support_report(report_id)
     status = clean_limited_text(payload.status, 40).strip().lower()
     if status not in SUPPORT_STATUSES:
-        raise HTTPException(status_code=400, detail="Invalid support report status.")
+        raise HTTPException(status_code=400, detail="Некорректный статус обращения поддержки.")
     note = (
         existing.get("adminNote") or ""
         if payload.note is None
@@ -14904,7 +19942,7 @@ def review_support_report(
 ) -> dict:
     existing = get_support_report(report_id)
     if existing.get("status") in {"resolved", "closed"}:
-        raise HTTPException(status_code=409, detail="Support report is already closed.")
+        raise HTTPException(status_code=409, detail="Обращение поддержки уже закрыто.")
     actor = admin_actor_from_context(request)
     assigned_to = clean_limited_text(
         payload.assignedTo if payload is not None else None,
@@ -14979,7 +20017,7 @@ def add_support_report_comment(
     get_support_report(report_id)
     body = clean_limited_text(payload.body, 4000).strip()
     if not body:
-        raise HTTPException(status_code=400, detail="Comment body is required.")
+        raise HTTPException(status_code=400, detail="Текст комментария обязателен.")
     author = clean_limited_text(payload.author, 120).strip() or "support"
     request_ip = ""
     user_agent = ""
@@ -15015,7 +20053,7 @@ def add_support_report_comment(
 def normalize_support_action(action: Optional[str]) -> str:
     normalized = clean_limited_text(action, 80).strip().lower()
     if normalized not in SUPPORT_ACTION_TYPES:
-        raise HTTPException(status_code=400, detail="Unknown support action.")
+        raise HTTPException(status_code=400, detail="Неизвестное действие поддержки.")
     return normalized
 
 
@@ -15074,16 +20112,16 @@ def support_action_workflow_options() -> dict:
             },
             {
                 "code": "grant_support_trial_3d",
-                "title": "Выдать support trial на 3 дня",
+                "title": "Выдать пробный доступ поддержки на 3 дня",
                 "requiresDevice": False,
                 "requiresReason": True,
                 "danger": False,
-                "confirmationText": "Выдать пользователю временный support trial на 3 дня?",
+                "confirmationText": "Выдать пользователю временный пробный доступ на 3 дня?",
                 "description": "Продлевает trial/support_trial на 3 дня, но не перезаписывает активную платную подписку.",
             },
         ],
         "statuses": list(SUPPORT_ACTION_STATUSES),
-        "secretPolicy": "Support actions never expose passwords, tokens or WireGuard private keys.",
+        "secretPolicy": "Действия поддержки никогда не раскрывают пароли, токены или WireGuard private keys.",
     }
 
 
@@ -15128,7 +20166,7 @@ def list_admin_support_actions(
     if status and status != "all":
         normalized_status = clean_limited_text(status, 40).strip().lower()
         if normalized_status not in SUPPORT_ACTION_STATUSES:
-            raise HTTPException(status_code=400, detail="Unknown support action status.")
+            raise HTTPException(status_code=400, detail="Неизвестный статус действия поддержки.")
         filters.append("status = ?")
         args.append(normalized_status)
     if filters:
@@ -15647,17 +20685,17 @@ def admin_alert_readiness() -> dict:
         {
             "code": "alerts_enabled",
             "ok": bool(ADMIN_ALERTS_ENABLED),
-            "message": "Set GREENVPN_ADMIN_ALERTS_ENABLED=1 for incident notifications.",
+            "message": "Укажи GREENVPN_ADMIN_ALERTS_ENABLED=1 для оповещений об инцидентах.",
         },
         {
             "code": "telegram_bot_token",
             "ok": bool(TELEGRAM_ALERT_BOT_TOKEN),
-            "message": "Set GREENVPN_TELEGRAM_ALERT_BOT_TOKEN on the backend host.",
+            "message": "Укажи GREENVPN_TELEGRAM_ALERT_BOT_TOKEN на backend-сервере.",
         },
         {
             "code": "telegram_chat_id",
             "ok": bool(TELEGRAM_ALERT_CHAT_ID),
-            "message": "Set GREENVPN_TELEGRAM_ALERT_CHAT_ID for the admin/support chat.",
+            "message": "Укажи GREENVPN_TELEGRAM_ALERT_CHAT_ID для чата админов/поддержки.",
         },
     ]
     production_ready = all(check["ok"] for check in checks)
@@ -15671,9 +20709,9 @@ def admin_alert_readiness() -> dict:
             "green": sum(1 for check in checks if check["ok"]),
             "yellow": sum(1 for check in checks if not check["ok"]),
             "message": (
-                "Admin alerts are ready."
+                "Админские оповещения готовы."
                 if production_ready
-                else "Configure Telegram bot token and chat id for automatic incident alerts."
+                else "Настрой Telegram bot token и chat id для автоматических оповещений об инцидентах."
             ),
         },
     }
@@ -16410,9 +21448,9 @@ def get_incident_assignee_staff(staff_id: int):
             (int(staff_id),),
         ).fetchone()
     if row is None:
-        raise HTTPException(status_code=404, detail="Incident assignee staff member not found.")
+        raise HTTPException(status_code=404, detail="Назначенный сотрудник по инциденту не найден.")
     if not staff_can_handle_incidents(row):
-        raise HTTPException(status_code=400, detail="Incident assignee must be active and allowed to manage incidents.")
+        raise HTTPException(status_code=400, detail="Назначенный сотрудник должен быть активен и иметь доступ к инцидентам.")
     return row
 
 
@@ -16424,7 +21462,7 @@ def incident_assignee_label(row) -> str:
 def upsert_admin_staff(payload: AdminStaffIn) -> dict:
     email = clean_limited_text(payload.email, 180).strip().lower()
     if not email or "@" not in email or "." not in email.rsplit("@", 1)[-1]:
-        raise HTTPException(status_code=400, detail="Valid staff email is required.")
+        raise HTTPException(status_code=400, detail="Нужен корректный email сотрудника.")
     role = normalize_admin_role(payload.role)
     display_name = clean_limited_text(payload.displayName, 120).strip() or email.split("@", 1)[0]
     is_active = 1 if payload.isActive else 0
@@ -16519,7 +21557,7 @@ def update_admin_staff(staff_id: int, payload: AdminStaffUpdateIn) -> dict:
             (staff_id,),
         ).fetchone()
         if row is None:
-            raise HTTPException(status_code=404, detail="Staff member not found.")
+            raise HTTPException(status_code=404, detail="Сотрудник не найден.")
 
         display_name = (
             clean_limited_text(payload.displayName, 120).strip()
@@ -16602,7 +21640,7 @@ def create_admin_2fa_challenge(row, request: Request, actor: Optional[str] = Non
         )
         raise HTTPException(
             status_code=503,
-            detail="Admin email code delivery is not configured.",
+            detail="Отправка email-кода администратора не настроена.",
         )
 
     code = f"{secrets.randbelow(1000000):06d}"
@@ -16678,7 +21716,7 @@ def create_admin_2fa_challenge(row, request: Request, actor: Optional[str] = Non
             request=request,
             actor=clean_limited_text(actor, 120).strip() or row["email"],
         )
-        raise HTTPException(status_code=503, detail="Admin email code could not be sent.")
+        raise HTTPException(status_code=503, detail="Email-код администратора не удалось отправить.")
 
     write_admin_audit(
         "admin_staff_2fa_challenge_created",
@@ -16704,7 +21742,7 @@ def verify_admin_2fa_challenge(payload: AdminTwoFactorVerifyIn, request: Request
     challenge_id = clean_limited_text(payload.challengeId, 120).strip()
     clean_code = re.sub(r"\D+", "", str(payload.code or ""))
     if not email or not challenge_id or len(clean_code) != 6:
-        raise HTTPException(status_code=400, detail="Email, challenge and 6-digit code are required.")
+        raise HTTPException(status_code=400, detail="Нужны email, challenge и 6-значный код.")
 
     now = utc_now()
     with db() as conn:
@@ -16730,19 +21768,19 @@ def verify_admin_2fa_challenge(payload: AdminTwoFactorVerifyIn, request: Request
                 request=request,
                 actor=email or "unknown_admin_2fa",
             )
-            raise HTTPException(status_code=401, detail="Invalid admin email code.")
+            raise HTTPException(status_code=401, detail="Некорректный email-код администратора.")
 
         expires_at = parse_dt(row["expires_at"])
         locked_until = parse_dt(row["locked_until"]) if row["locked_until"] else None
         if locked_until and locked_until > now:
-            raise HTTPException(status_code=429, detail="Too many attempts. Try later.")
+            raise HTTPException(status_code=429, detail="Слишком много попыток. Попробуйте позже.")
         if expires_at is None or expires_at <= now:
             conn.execute(
                 "UPDATE admin_2fa_challenges SET status = 'expired', failed_at = ? WHERE id = ?",
                 (now.isoformat(), int(row["id"])),
             )
             conn.commit()
-            raise HTTPException(status_code=401, detail="Admin email code expired.")
+            raise HTTPException(status_code=401, detail="Email-код администратора истёк.")
 
         expected = row["code_hash"]
         provided = admin_2fa_code_hash(int(row["staff_id"]), challenge_id, clean_code)
@@ -16772,7 +21810,7 @@ def verify_admin_2fa_challenge(payload: AdminTwoFactorVerifyIn, request: Request
                 request=request,
                 actor=clean_limited_text(payload.actor, 120).strip() or row["email"],
             )
-            raise HTTPException(status_code=401, detail="Invalid admin email code.")
+            raise HTTPException(status_code=401, detail="Некорректный email-код администратора.")
 
         conn.execute(
             """
@@ -16804,7 +21842,7 @@ def login_admin_staff(payload: AdminLoginIn, request: Request) -> dict:
     email = clean_limited_text(payload.email, 180).strip().lower()
     password = str(payload.password or "")
     if not email or not password:
-        raise HTTPException(status_code=400, detail="Email and password are required.")
+        raise HTTPException(status_code=400, detail="Нужны email и пароль.")
 
     with db() as conn:
         row = conn.execute(
@@ -16825,7 +21863,7 @@ def login_admin_staff(payload: AdminLoginIn, request: Request) -> dict:
             request=request,
             actor=email or "unknown_admin_login",
         )
-        raise HTTPException(status_code=401, detail="Invalid admin credentials.")
+        raise HTTPException(status_code=401, detail="Некорректные данные администратора.")
 
     actor = clean_limited_text(payload.actor, 120).strip() or row["email"]
     if admin_staff_requires_2fa(row):
@@ -16853,7 +21891,7 @@ def revoke_admin_session(token_hash: Optional[str]) -> bool:
 
 def require_staff_session_context(context: dict) -> dict:
     if context.get("authType") != "staff_session" or not context.get("staff"):
-        raise HTTPException(status_code=403, detail="Staff session required.")
+        raise HTTPException(status_code=403, detail="Нужна сессия сотрудника.")
     return context
 
 
@@ -16930,7 +21968,7 @@ def revoke_staff_admin_session_by_public_id(
     staff = get_admin_staff_row(staff_id)
     session_id = clean_limited_text(payload.sessionId, 64).strip().lower()
     if len(session_id) < 8 or any(char not in "0123456789abcdef" for char in session_id):
-        raise HTTPException(status_code=400, detail="Invalid session id.")
+        raise HTTPException(status_code=400, detail="Некорректный id сессии.")
 
     with db() as conn:
         rows = conn.execute(
@@ -16943,12 +21981,12 @@ def revoke_staff_admin_session_by_public_id(
         ).fetchall()
         active_rows = [row for row in rows if not row["revoked_at"]]
         if not active_rows:
-            raise HTTPException(status_code=404, detail="Active staff session not found.")
+            raise HTTPException(status_code=404, detail="Активная сессия сотрудника не найдена.")
         if len(active_rows) > 1:
-            raise HTTPException(status_code=409, detail="Session id is ambiguous.")
+            raise HTTPException(status_code=409, detail="id сессии неоднозначен.")
         row = active_rows[0]
         if row["token_hash"] == context.get("sessionHash"):
-            raise HTTPException(status_code=400, detail="Use logout to revoke the current session.")
+            raise HTTPException(status_code=400, detail="Для текущей сессии используй выход.")
         revoked_at = utc_now_iso()
         cursor = conn.execute(
             """
@@ -17048,9 +22086,9 @@ def change_current_admin_password(
     current_password = str(payload.currentPassword or "")
     new_password = str(payload.newPassword or "")
     if not current_password or not new_password:
-        raise HTTPException(status_code=400, detail="Current and new password are required.")
+        raise HTTPException(status_code=400, detail="Нужны текущий и новый пароль.")
     if hmac.compare_digest(current_password, new_password):
-        raise HTTPException(status_code=400, detail="New password must be different.")
+        raise HTTPException(status_code=400, detail="Новый пароль должен отличаться от текущего.")
 
     with db() as conn:
         row = conn.execute(
@@ -17058,7 +22096,7 @@ def change_current_admin_password(
             (staff_id,),
         ).fetchone()
         if row is None or not bool(row["is_active"]):
-            raise HTTPException(status_code=403, detail="Admin staff member is disabled.")
+            raise HTTPException(status_code=403, detail="Аккаунт сотрудника отключён.")
         if not verify_admin_password(current_password, row["password_hash"]):
             write_admin_audit(
                 "admin_password_change_failed",
@@ -17068,7 +22106,7 @@ def change_current_admin_password(
                 request=request,
                 actor=context.get("actor") or row["email"],
             )
-            raise HTTPException(status_code=401, detail="Current password is invalid.")
+            raise HTTPException(status_code=401, detail="Текущий пароль неверный.")
 
         password_hash = admin_password_hash(new_password)
         password_set_at = utc_now_iso()
@@ -17115,7 +22153,7 @@ def revoke_current_admin_session_by_public_id(
     staff_id = int(context["staff"]["id"])
     session_id = clean_limited_text(payload.sessionId, 64).strip().lower()
     if len(session_id) < 8 or any(char not in "0123456789abcdef" for char in session_id):
-        raise HTTPException(status_code=400, detail="Invalid session id.")
+        raise HTTPException(status_code=400, detail="Некорректный id сессии.")
 
     with db() as conn:
         rows = conn.execute(
@@ -17128,12 +22166,12 @@ def revoke_current_admin_session_by_public_id(
         ).fetchall()
         active_rows = [row for row in rows if not row["revoked_at"]]
         if not active_rows:
-            raise HTTPException(status_code=404, detail="Active session not found.")
+            raise HTTPException(status_code=404, detail="Активная сессия не найдена.")
         if len(active_rows) > 1:
-            raise HTTPException(status_code=409, detail="Session id is ambiguous.")
+            raise HTTPException(status_code=409, detail="id сессии неоднозначен.")
         row = active_rows[0]
         if row["token_hash"] == context.get("sessionHash"):
-            raise HTTPException(status_code=400, detail="Use logout to revoke the current session.")
+            raise HTTPException(status_code=400, detail="Для текущей сессии используй выход.")
         revoked_at = utc_now_iso()
         cursor = conn.execute(
             """
@@ -17306,10 +22344,26 @@ def api_meta():
 
 
 @app.get("/api/v1/bootstrap/windows")
-def windows_public_bootstrap(currentVersion: Optional[str] = None):
+def windows_public_bootstrap(
+    request: Request,
+    currentVersion: Optional[str] = None,
+    clientId: Optional[str] = None,
+):
     catalog = build_server_catalog()
-    update_manifest = build_windows_update_manifest(currentVersion)
+    platform = update_manifest_platform_for_legacy_endpoint(
+        request=request,
+        client_id=clientId,
+        current_version=currentVersion,
+    )
+    update_manifest = build_update_manifest(
+        platform=platform,
+        channel="stable",
+        current_version=currentVersion,
+        client_id=clientId,
+    )
     auth_codes = auth_code_readiness()
+    sms_ready = sms_confirmation_readiness()
+    email_ready = email_confirmation_readiness()
     return {
         "ok": True,
         "serverTime": utc_now_iso(),
@@ -17319,26 +22373,19 @@ def windows_public_bootstrap(currentVersion: Optional[str] = None):
             "platform": "windows",
         },
         "auth": {
-            "primaryMethod": "phone_code",
-            "fallbackMethod": "email_code",
+            "primaryMethod": "email_code",
+            "fallbackMethod": "email_password",
             "challengeEndpoints": {
                 "start": "/api/v1/auth/challenge/start",
                 "verify": "/api/v1/auth/challenge/verify",
             },
             "methods": [
                 {
-                    "code": "phone_code",
-                    "title": "Телефон",
-                    "subtitle": "Вход или регистрация по одноразовому SMS-коду.",
-                    "available": sms_sender_configured() or DEV_AUTH_CODES,
-                    "productionReady": sms_confirmation_readiness()["productionReady"],
-                },
-                {
                     "code": "email_code",
                     "title": "Email",
-                    "subtitle": "Запасной вход или регистрация по одноразовому коду из письма.",
-                    "available": email_sender_configured() or DEV_AUTH_CODES,
-                    "productionReady": email_confirmation_readiness()["productionReady"],
+                    "subtitle": "Вход или регистрация по одноразовому коду из письма.",
+                    "available": email_ready["productionReady"] or DEV_AUTH_CODES,
+                    "productionReady": email_ready["productionReady"],
                 },
                 {
                     "code": "email_password",
@@ -17347,9 +22394,17 @@ def windows_public_bootstrap(currentVersion: Optional[str] = None):
                     "available": True,
                     "productionReady": True,
                 },
+                {
+                    "code": "phone_code",
+                    "title": "Телефон",
+                    "subtitle": "SMS-вход временно недоступен; используйте email-код.",
+                    "available": sms_ready["productionReady"] or DEV_AUTH_CODES,
+                    "productionReady": sms_ready["productionReady"],
+                },
             ],
             "codeTtlMinutes": auth_codes["ttlMinutes"],
             "resendCooldownSeconds": auth_codes["resendCooldownSeconds"],
+            "codeDigits": auth_codes["codeDigits"],
         },
         "update": update_manifest,
         "serverCatalog": catalog,
@@ -17686,8 +22741,6 @@ def _download_card(platform: str, title: str, text: str, href: str, ready: bool)
 
 def _public_download_cards() -> str:
     windows_ready = bool(_public_download_target(PUBLIC_WINDOWS_DOWNLOAD_URL))
-    android_ready = bool(_public_download_target(PUBLIC_ANDROID_DOWNLOAD_URL))
-    ios_ready = bool(_public_download_target(PUBLIC_IOS_DOWNLOAD_URL))
     return "".join(
         [
             _download_card(
@@ -17701,28 +22754,6 @@ def _public_download_cards() -> str:
                 "/download/windows",
                 True,
             ),
-            _download_card(
-                "Скачать для Android",
-                "Android",
-                (
-                    "Мобильное приложение подключается к той же учетной записи Green VPN."
-                    if android_ready
-                    else "Android-версия запланирована и будет опубликована на этой странице."
-                ),
-                "/download/android",
-                android_ready,
-            ),
-            _download_card(
-                "Скачать для iPhone и iPad",
-                "iPhone и iPad",
-                (
-                    "Версия для iPhone и iPad подключается к той же учетной записи Green VPN."
-                    if ios_ready
-                    else "Версия для iPhone и iPad запланирована и будет опубликована на этой странице."
-                ),
-                "/download/ios",
-                ios_ready,
-            ),
         ]
     )
 
@@ -17733,16 +22764,18 @@ def public_landing_page():
   <section class="hero">
     <div class="wrap">
       <h1>Green VPN</h1>
-      <p>Приложение для защищенного и стабильного сетевого подключения. Green VPN шифрует соединение, помогает защищать данные в публичных сетях и повышать стабильность маршрута до поддерживаемых онлайн-сервисов, когда обычный путь провайдера работает нестабильно.</p>
+      <p>Установите приложение, войдите в аккаунт и включите защищенное подключение бесплатно. Платный режим можно выбрать позже, если потребуется работа без рекламы и с повышенным приоритетом.</p>
       <div class="badges">
-        <span class="badge">Защищенное подключение</span>
-        <span class="badge">Windows-приложение</span>
-        <span class="badge">Подписка от 149 ₽/мес</span>
-        <span class="badge">Поддержка внутри сервиса</span>
+        <span class="badge">Бесплатный старт</span>
+        <span class="badge">Режим без привязки карты</span>
+        <span class="badge">Тариф без рекламы</span>
+        <span class="badge">Windows и Android</span>
       </div>
       <div class="actions">
         <a class="button" href="/download/windows">Скачать для Windows</a>
-        <a class="button secondary" href="/#plans">Посмотреть тарифы</a>
+        <a class="button secondary" href="/downloads/GreenVPN_Android.apk">Скачать для Android</a>
+        <a class="button secondary" href="/#setup">Как начать</a>
+        <a class="button secondary" href="/#support">Поддержка</a>
       </div>
     </div>
   </section>
@@ -17764,24 +22797,27 @@ def public_landing_page():
       </div>
     </section>
     <section id="plans">
-      <h2>Тарифы</h2>
+      <h2>Бесплатно или без рекламы</h2>
       <div class="grid">
-        <div class="card"><h3>Пробный</h3><div class="price">0 ₽</div><p>1-3 дня или небольшой лимит трафика для проверки установки и подключения.</p></div>
-        <div class="card"><h3>Старт</h3><div class="price">149 ₽/мес</div><p>20 ГБ, 1 устройство. Для редкого использования и проверки сервиса.</p></div>
-        <div class="card"><h3>Стандарт</h3><div class="price">299 ₽/мес</div><p>100 ГБ, 1 устройство. Основной тариф для повседневной защиты и стабильности подключения.</p></div>
-        <div class="card"><h3>Плюс</h3><div class="price">449 ₽/мес</div><p>250 ГБ, 2 устройства. Для активного использования.</p></div>
-        <div class="card"><h3>Максимум</h3><div class="price">699 ₽/мес</div><p>500 ГБ по правилам добросовестного использования, до 3 устройств.</p></div>
+        <div class="card"><h3>Бесплатный старт</h3><div class="price">0 ₽</div><p>Можно попробовать защищенное подключение без оплаты и без привязки карты.</p></div>
+        <div class="card"><h3>Тариф без рекламы</h3><div class="price">от 99 ₽</div><p>Выберите подходящий объем в приложении. Оплата убирает рекламу и повышает приоритет.</p></div>
+        <div class="card"><h3>Больше стабильности</h3><div class="price">до 299 ₽</div><p>Максимальный режим рассчитан на ежедневное использование и высокую нагрузку.</p></div>
       </div>
-      <p class="note">Платежи обрабатываются через подключенный платежный провайдер. После успешной оплаты тариф активируется автоматически по подтверждению платежа. Банковские карты не хранятся в Green VPN.</p>
+      <p class="note">Бесплатный режим помогает познакомиться с сервисом. Платный тариф убирает рекламу, повышает приоритет и дает больше стабильности при нагрузке. Банковские карты не хранятся в Green VPN.</p>
     </section>
-    <section>
+    <section id="setup">
       <h2>Как пользователь получает услугу</h2>
       <ul>
         <li>Скачивает и устанавливает приложение Green VPN.</li>
         <li>Регистрируется или входит в аккаунт.</li>
-        <li>Выбирает тариф и оплачивает подписку.</li>
-        <li>После подтверждения оплаты приложение получает рабочую конфигурацию и пользователь подключается к защищенному соединению.</li>
+        <li>Начинает бесплатно через рекламу или настраивает тариф без ожидания.</li>
+        <li>После выбора режима приложение получает рабочую конфигурацию и пользователь подключается к защищенному соединению.</li>
       </ul>
+    </section>
+    <section id="support">
+      <h2>Поддержка</h2>
+      <p>В приложении есть безопасный отчет для поддержки: он помогает быстрее понять проблему и не включает пароли, токены или приватные ключи.</p>
+      <p><a class="button secondary" href="mailto:{_legal_escape(LEGAL_CONTACT_EMAIL)}">{_legal_escape(LEGAL_CONTACT_EMAIL)}</a></p>
     </section>
     <section>
       <h2>Ограничения использования</h2>
@@ -17962,12 +22998,20 @@ def legal_refunds_page():
 
 @app.get("/api/v1/updates/windows")
 def windows_update_manifest(
+    request: Request,
     currentVersion: Optional[str] = None,
     clientId: Optional[str] = None,
 ):
+    platform = update_manifest_platform_for_legacy_endpoint(
+        request=request,
+        client_id=clientId,
+        current_version=currentVersion,
+    )
     return {
         "ok": True,
-        "manifest": build_windows_update_manifest(
+        "manifest": build_update_manifest(
+            platform=platform,
+            channel="stable",
             current_version=currentVersion,
             client_id=clientId,
         ),
@@ -18000,6 +23044,15 @@ def server_catalog():
     }
 
 
+@app.get("/api/v1/catalog/resilience")
+def catalog_resilience():
+    catalog = build_server_catalog()
+    return {
+        "ok": True,
+        "resilience": catalog.get("resilience"),
+    }
+
+
 @app.get("/api/v1/monitoring/status")
 def monitoring_status():
     return build_monitoring_status()
@@ -18024,9 +23077,9 @@ def auth_register(payload: RegisterIn):
     password = payload.password
 
     if "@" not in email:
-        raise HTTPException(status_code=400, detail="Invalid email.")
+        raise HTTPException(status_code=400, detail="Некорректный email.")
     if len(password) < 6:
-        raise HTTPException(status_code=400, detail="Password too short.")
+        raise HTTPException(status_code=400, detail="Пароль слишком короткий.")
 
     with db() as conn:
         exists = conn.execute(
@@ -18035,7 +23088,7 @@ def auth_register(payload: RegisterIn):
         ).fetchone()
 
         if exists is not None:
-            raise HTTPException(status_code=409, detail="User already exists.")
+            raise HTTPException(status_code=409, detail="Пользователь уже существует.")
 
         conn.execute(
             "INSERT INTO users(email, password_hash, created_at) VALUES (?, ?, ?)",
@@ -18096,7 +23149,7 @@ def auth_login(payload: LoginIn):
         ).fetchone()
 
     if user is None or not verify_password(password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid credentials.")
+        raise HTTPException(status_code=401, detail="Некорректные данные входа.")
 
     token = issue_token(user["id"])
     return auth_session_payload(user, token)
@@ -18116,7 +23169,7 @@ def normalize_auth_challenge_method(
         return "phone_sms"
     if email and str(email).strip():
         return "email_code"
-    raise HTTPException(status_code=400, detail="Challenge method is required.")
+    raise HTTPException(status_code=400, detail="Нужен способ подтверждения входа.")
 
 
 @app.post("/api/v1/auth/challenge/start")
@@ -18128,7 +23181,7 @@ def auth_challenge_start(payload: AuthChallengeStartIn, request: Request):
             request,
         )
         result["challengeMethod"] = "phone_sms"
-        result["primary"] = True
+        result["primary"] = False
         result["channel"] = "sms"
         return result
 
@@ -18137,7 +23190,7 @@ def auth_challenge_start(payload: AuthChallengeStartIn, request: Request):
         request,
     )
     result["challengeMethod"] = "email_code"
-    result["primary"] = False
+    result["primary"] = True
     result["channel"] = "email"
     return result
 
@@ -18158,7 +23211,7 @@ def auth_challenge_verify(payload: AuthChallengeVerifyIn, request: Request):
             request,
         )
         result["challengeMethod"] = "phone_sms"
-        result["primary"] = True
+        result["primary"] = False
         return result
 
     result = auth_email_code_verify(
@@ -18173,7 +23226,7 @@ def auth_challenge_verify(payload: AuthChallengeVerifyIn, request: Request):
         request,
     )
     result["challengeMethod"] = "email_code"
-    result["primary"] = False
+    result["primary"] = True
     return result
 
 
@@ -18186,7 +23239,7 @@ def auth_email_code_start(payload: EmailCodeStartIn, request: Request):
     delivery = send_or_queue_email_login_code(int(user["id"]), email, code_id, code)
     log_auth_event(
         "email_code_start",
-        "created",
+        "created" if delivery["deliveryStatus"] == "sent" else "delivery_failed",
         request=request,
         user_id=int(user["id"]),
         email=email,
@@ -18196,12 +23249,18 @@ def auth_email_code_start(payload: EmailCodeStartIn, request: Request):
             "outboxId": delivery.get("outboxId"),
         },
     )
+    if delivery["deliveryStatus"] != "sent" and not DEV_AUTH_CODES:
+        raise HTTPException(
+            status_code=503,
+            detail="Не удалось отправить email-код. Попробуйте ещё раз.",
+        )
     response = {
         "ok": True,
         "email": email,
         "createdUser": created,
         "deliveryStatus": delivery["deliveryStatus"],
         "deliveryReady": email_sender_configured(),
+        "codeDigits": AUTH_CODE_DIGITS,
         "ttlMinutes": AUTH_CODE_TTL_MINUTES,
         "resendCooldownSeconds": AUTH_CODE_RESEND_COOLDOWN_SECONDS,
         "message": "Код входа отправлен на email.",
@@ -18267,16 +23326,23 @@ def auth_phone_login_start(payload: PhoneLoginStartIn, request: Request):
             "outboxId": delivery.get("outboxId"),
         },
     )
+    delivery_status = delivery["deliveryStatus"]
+    message = "Код входа отправлен на телефон."
+    if delivery_status == "failed":
+        message = "SMS-провайдер не отправил код. Используй email-код или повтори позже."
+    elif delivery_status == "not_configured":
+        message = "SMS-вход пока не настроен. Используй вход по email-коду."
     response = {
         "ok": True,
         "phone": phone,
         "createdUser": created,
-        "deliveryStatus": delivery["deliveryStatus"],
+        "deliveryStatus": delivery_status,
         "deliveryReady": sms_sender_configured(),
         "provider": SMS_PROVIDER,
+        "codeDigits": AUTH_CODE_DIGITS,
         "ttlMinutes": SMS_CONFIRMATION_TTL_MINUTES,
         "resendCooldownSeconds": SMS_RESEND_COOLDOWN_SECONDS,
-        "message": "Код входа отправлен на телефон.",
+        "message": message,
     }
     if DEV_AUTH_CODES:
         response["devCode"] = code
@@ -18545,6 +23611,7 @@ def auth_phone_verify(
 def subscription_me(authorization: Optional[str] = Header(default=None)):
     user = get_user_by_token(authorization)
     sub = subscription_status(get_subscription_row(user["id"]))
+    traffic_usage = subscription_traffic_usage_status(int(user["id"]), sub)
 
     return {
         "email": user["email"],
@@ -18558,6 +23625,7 @@ def subscription_me(authorization: Optional[str] = Header(default=None)):
         "paymentMethodSaved": sub["paymentMethodSaved"],
         "selection": sub["selection"],
         "includedFeatures": sub["includedFeatures"],
+        "trafficUsage": traffic_usage,
     }
 
 
@@ -18621,7 +23689,7 @@ def subscription_cancel_auto_renew(
     return {
         "ok": True,
         "subscription": sub,
-        "message": "Auto-renewal disabled for this account.",
+        "message": "Автопродление для этого аккаунта выключено.",
     }
 
 
@@ -18663,7 +23731,7 @@ def subscription_apply(
     get_user_by_token(authorization)
     raise HTTPException(
         status_code=402,
-        detail="Direct tariff activation is disabled. Create a billing order and activate it after payment confirmation.",
+        detail="Прямая активация тарифа выключена. Создайте billing order и активируйте его только после подтверждения оплаты.",
     )
 
 
@@ -18684,6 +23752,7 @@ def client_bootstrap(
     touch_device(device["device_uid"], config_issued=False)
 
     sub = subscription_status(get_subscription_row(user["id"]))
+    traffic_usage = subscription_traffic_usage_status(int(user["id"]), sub)
 
     with db() as conn:
         count = enforce_device_limit_for_current_device(
@@ -18696,7 +23765,19 @@ def client_bootstrap(
 
     device_enabled = bool(device["is_enabled"])
     subscription_ok = sub["isActive"] or not ENFORCE_SUBSCRIPTION_ACCESS
-    can_connect = subscription_ok and count <= sub["maxDevices"] and device_enabled
+    ad_gate = free_ad_gate_policy(
+        int(user["id"]),
+        device["device_uid"],
+        device["platform"],
+        sub,
+        app_version=device["app_version"],
+    )
+    can_connect = (
+        subscription_ok
+        and count <= sub["maxDevices"]
+        and device_enabled
+        and not ad_gate["required"]
+    )
 
     reason = None
     if not subscription_ok:
@@ -18705,6 +23786,24 @@ def client_bootstrap(
         reason = "device_limit_exceeded"
     elif not device_enabled:
         reason = "device_disabled"
+    elif ad_gate["required"]:
+        reason = "ad_reward_required"
+
+    catalog = build_server_catalog()
+    resilience = catalog.get("resilience") or build_resilience_policy(catalog.get("servers"))
+    route_decision = resilience.get("routeDecision") if isinstance(resilience, dict) else {}
+    selected_server, endpoint_assignment = select_client_server_for_device(
+        catalog,
+        user_id=int(user["id"]),
+        device_uid=device["device_uid"],
+        requested_server_id="auto",
+    )
+    selected_endpoint = selected_server.get("endpoint") or {}
+    client_resilience = client_route_probe_safe_resilience(
+        resilience,
+        platform=device["platform"],
+        app_version=device["app_version"],
+    )
 
     return {
         "ok": True,
@@ -18717,11 +23816,20 @@ def client_bootstrap(
             "appVersion": device["app_version"],
         },
         "subscription": sub,
+        "trafficUsage": traffic_usage,
         "server": {
-            "id": "ams-1",
-            "name": "Amsterdam #1",
-            "endpoint": f"{WG_ENDPOINT_HOST}:{WG_ENDPOINT_PORT}",
+            "id": selected_server.get("id") or "intelligent_smew",
+            "name": selected_server.get("title") or "Green VPN",
+            "endpoint": (
+                f"{selected_endpoint.get('host') or WG_ENDPOINT_HOST}:"
+                f"{selected_endpoint.get('port') or WG_ENDPOINT_PORT}"
+            ),
         },
+        "resilience": client_resilience,
+        "endpointAssignment": endpoint_assignment,
+        "rateLimitPolicy": sub.get("rateLimitPolicy"),
+        "fairUsePolicy": sub.get("fairUsePolicy"),
+        "adGate": ad_gate,
     }
 
 
@@ -18732,6 +23840,7 @@ def client_config(
 ):
     user = get_user_by_token(authorization)
     sub = require_active_subscription(user["id"])
+    traffic_usage = subscription_traffic_usage_status(int(user["id"]), sub)
 
     with db() as conn:
         device = conn.execute(
@@ -18760,12 +23869,34 @@ def client_config(
     if count > sub["maxDevices"]:
         raise HTTPException(status_code=403, detail="Device limit exceeded.")
 
-    selected_server = find_catalog_server(payload.serverId)
-    if payload.serverId and payload.serverId != "auto":
-        if selected_server is None:
-            raise HTTPException(status_code=400, detail="Unknown serverId.")
-        if selected_server.get("available") is not True:
-            raise HTTPException(status_code=409, detail="Selected server is unavailable.")
+    ad_gate = free_ad_gate_policy(
+        int(user["id"]),
+        payload.deviceUid.strip(),
+        device["platform"],
+        sub,
+        app_version=device["app_version"],
+    )
+    consumed_ad_grant = None
+    if ad_gate["required"]:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "ad_reward_required",
+                "message": "Нужно посмотреть рекламу перед подключением бесплатного режима.",
+                "adGate": ad_gate,
+            },
+        )
+
+    catalog = build_server_catalog()
+    resilience = catalog.get("resilience") or build_resilience_policy(catalog.get("servers"))
+    route_decision = resilience.get("routeDecision") if isinstance(resilience, dict) else {}
+    selected_route = route_decision.get("selected") if isinstance(route_decision, dict) else {}
+    selected_server, endpoint_assignment = select_client_server_for_device(
+        catalog,
+        user_id=int(user["id"]),
+        device_uid=payload.deviceUid.strip(),
+        requested_server_id=payload.serverId,
+    )
 
     support_refresh_requested = bool(device["support_config_refresh_requested_at"])
     refresh_result: Optional[dict] = None
@@ -18780,22 +23911,34 @@ def client_config(
     preshared_key = device["preshared_key"]
     assigned_ip = device["assigned_ip"]
 
-    upsert_peer_block_in_wg0(
-        device_uid=device["device_uid"],
-        public_key=client_public_key,
-        psk=preshared_key,
-        ip=assigned_ip,
+    old_public_key = (
+        clean_limited_text(refresh_result.get("oldPublicKey"), 120).strip()
+        if refresh_result is not None
+        else ""
     )
-    apply_peer_live(
-        public_key=client_public_key,
-        psk=preshared_key,
-        ip=assigned_ip,
-    )
+    try:
+        provisioning = provision_wireguard_peer_for_selected_server(
+            selected_server,
+            device_uid=device["device_uid"],
+            public_key=client_public_key,
+            psk=preshared_key,
+            ip=assigned_ip,
+            old_public_key=old_public_key,
+            previous_server_id=endpoint_assignment.get("previousServerId"),
+        )
+    except HTTPException:
+        raise
+    except (subprocess.CalledProcessError, OSError, TimeoutError):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "vpn_node_provisioning_failed",
+                "message": "VPN-узел временно недоступен. Попробуйте другой сервер или авто-подбор.",
+                "serverId": selected_server.get("id") or "intelligent_smew",
+            },
+        )
     support_refresh_applied = refresh_result is not None
     if support_refresh_applied:
-        old_public_key = clean_limited_text(refresh_result.get("oldPublicKey"), 120).strip()
-        if old_public_key and old_public_key != client_public_key:
-            best_effort_remove_peer_live(old_public_key)
         refresh_reason = clean_limited_text(refresh_result.get("reason"), 500).strip()
         clear_support_config_refresh_after_issue(device["device_uid"], refresh_reason)
         write_admin_audit(
@@ -18812,24 +23955,227 @@ def client_config(
             actor="backend_config_fetch",
         )
 
-    server_public_key = get_server_public_key()
     config_text = build_client_config(
         client_private_key=client_private_key,
         preshared_key=preshared_key,
-        server_public_key=server_public_key,
+        server_public_key=provisioning["serverPublicKey"],
         client_ip=assigned_ip,
+        endpoint_host=provisioning["endpointHost"],
+        endpoint_port=provisioning["endpointPort"],
+        client_mtu=provisioning.get("clientMtu"),
     )
     touch_device(device["device_uid"], config_issued=True)
+    if FREE_AD_GATE_ENABLED and free_ad_gate_required_for(
+        sub,
+        device["platform"],
+        device["app_version"],
+    ):
+        consumed_ad_grant = consume_free_access_grant(int(user["id"]), device["device_uid"])
+
+    config_resilience = client_route_probe_safe_resilience(
+        {
+            "selectedBy": endpoint_assignment.get("selectedBy") or "auto",
+            "strategy": "capacity_aware_sticky_endpoint",
+            "selectedProtocol": (selected_route or {}).get("protocol") or "wireguard_udp",
+            "routeDecision": route_decision,
+            "clientReadyProtocols": sorted(SERVER_CLIENT_READY_PROTOCOLS),
+        },
+        platform=device["platform"],
+        app_version=device["app_version"],
+    )
 
     return {
         "ok": True,
         "configText": config_text,
         "deviceUid": device["device_uid"],
         "assignedIp": assigned_ip,
-        "endpoint": f"{WG_ENDPOINT_HOST}:{WG_ENDPOINT_PORT}",
+        "endpoint": (
+            f"{(selected_server.get('endpoint') or {}).get('host') or WG_ENDPOINT_HOST}:"
+            f"{(selected_server.get('endpoint') or {}).get('port') or WG_ENDPOINT_PORT}"
+        ),
         "serverId": selected_server["id"] if selected_server else "intelligent_smew",
+        "clientConfigProfile": provisioning["profile"],
+        "resilience": config_resilience,
+        "endpointAssignment": endpoint_assignment,
+        "rateLimitPolicy": sub.get("rateLimitPolicy"),
+        "fairUsePolicy": sub.get("fairUsePolicy"),
+        "trafficUsage": traffic_usage,
         "supportConfigRefreshApplied": support_refresh_applied,
         "subscription": sub,
+        "adGate": {
+            **ad_gate,
+            "grantConsumed": consumed_ad_grant is not None,
+            "consumedGrant": consumed_ad_grant,
+        },
+    }
+
+
+@app.post("/api/v1/ads/challenges/start")
+def ad_challenge_start(
+    payload: AdChallengeStartIn,
+    authorization: Optional[str] = Header(default=None),
+):
+    user = get_user_by_token(authorization)
+    return create_free_ad_challenge(user, payload)
+
+
+@app.get("/api/v1/ads/challenges/{challenge_id}")
+def ad_challenge_get(
+    challenge_id: str,
+    authorization: Optional[str] = Header(default=None),
+):
+    user = get_user_by_token(authorization)
+    return get_ad_challenge_for_user(challenge_id, int(user["id"]))
+
+
+@app.post("/api/v1/ads/challenges/{challenge_id}/complete")
+def ad_challenge_complete(challenge_id: str, payload: AdChallengeCompleteIn):
+    return complete_ad_challenge(challenge_id, payload.token)
+
+
+@app.get("/api/v1/ads/free-access/me")
+def ad_free_access_me(
+    deviceUid: str,
+    platform: Optional[str] = None,
+    appVersion: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None),
+):
+    user = get_user_by_token(authorization)
+    device_uid = deviceUid.strip()
+    if not device_uid:
+        raise HTTPException(status_code=400, detail="deviceUid пустой.")
+    sub = subscription_status(get_subscription_row(int(user["id"])))
+    return {
+        "ok": True,
+        "adGate": free_ad_gate_policy(
+            int(user["id"]),
+            device_uid,
+            platform or "",
+            sub,
+            app_version=appVersion,
+        ),
+        "subscription": sub,
+    }
+
+
+@app.get("/ads/reward/{challenge_id}", response_class=HTMLResponse)
+def ad_reward_page(challenge_id: str, t: str = ""):
+    safe_id = html.escape(challenge_id.strip())
+    safe_token = html.escape(t.strip())
+    if not safe_id or not safe_token:
+        return HTMLResponse(
+            "<!doctype html><meta charset='utf-8'><title>Green VPN</title>"
+            "<body><h1>Ссылка недействительна</h1><p>Вернитесь в Green VPN и запросите рекламу ещё раз.</p></body>",
+            status_code=400,
+        )
+
+    return HTMLResponse(
+        f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Green VPN — рекламный доступ</title>
+  <style>
+    :root {{ color-scheme: light dark; }}
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      font-family: system-ui, -apple-system, Segoe UI, sans-serif;
+      background: #f4f7f3;
+      color: #14231a;
+    }}
+    main {{
+      width: min(520px, calc(100vw - 32px));
+      padding: 28px;
+      border: 1px solid rgba(20, 35, 26, 0.12);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 24px 80px rgba(31, 53, 39, 0.14);
+    }}
+    h1 {{ margin: 0 0 12px; font-size: 28px; line-height: 1.1; }}
+    p {{ color: #526458; line-height: 1.5; }}
+    button {{
+      width: 100%;
+      min-height: 48px;
+      margin-top: 18px;
+      border: 0;
+      border-radius: 8px;
+      background: #12a36f;
+      color: #fff;
+      font-size: 16px;
+      font-weight: 800;
+    }}
+    .status {{ min-height: 24px; font-weight: 700; }}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Green VPN</h1>
+    <p>Закрытый тест рекламного доступа. В production здесь будет рекламный блок провайдера, а сейчас эта кнопка имитирует событие reward granted для проверки Windows и Android flow.</p>
+    <p class="status" id="status">Нажмите кнопку и вернитесь в приложение.</p>
+    <button id="complete">Засчитать просмотр</button>
+  </main>
+  <script>
+    const challengeId = "{safe_id}";
+    const token = "{safe_token}";
+    const statusEl = document.getElementById("status");
+    const button = document.getElementById("complete");
+    button.addEventListener("click", async () => {{
+      button.disabled = true;
+      statusEl.textContent = "Засчитываем просмотр...";
+      try {{
+        const response = await fetch(`/api/v1/ads/challenges/${{encodeURIComponent(challengeId)}}/complete`, {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify({{ token }})
+        }});
+        if (!response.ok) {{
+          const text = await response.text();
+          throw new Error(text || `HTTP ${{response.status}}`);
+        }}
+        statusEl.textContent = "Готово. Вернитесь в Green VPN и нажмите подключение ещё раз.";
+        button.textContent = "Просмотр засчитан";
+      }} catch (error) {{
+        statusEl.textContent = "Не удалось засчитать просмотр. Запросите рекламу в приложении ещё раз.";
+        button.disabled = false;
+      }}
+    }});
+  </script>
+</body>
+</html>"""
+    )
+
+
+@app.post("/api/v1/client/route-events")
+def client_route_event_create(
+    payload: ClientRouteEventIn,
+    authorization: Optional[str] = Header(default=None),
+):
+    user = get_user_by_token(authorization)
+    server_id = clean_limited_text(payload.serverId, 80).strip()
+    protocol = normalize_server_catalog_protocol(payload.protocol)
+    stage = normalize_client_route_stage(payload.stage)
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "ignored": True,
+        "reason": "client_route_feedback_disabled_2026_06_01",
+        "event": {
+            "id": None,
+            "serverId": server_id,
+            "protocol": protocol,
+            "stage": stage,
+            "ok": bool(payload.ok),
+            "createdAt": utc_now_iso(),
+        },
+        "summary": client_route_event_summary(
+            protocol=protocol,
+            server_id=server_id or None,
+        ),
     }
 
 
@@ -19310,6 +24656,187 @@ def build_admin_analytics_summary() -> dict:
         }
 
 
+def rub_break_even_users(monthly_cost_rub: int, price_rub: int) -> int:
+    net_per_user = max(1, (int(price_rub) * UNIT_ECONOMICS_NET_REVENUE_RATIO_BPS) // 10000)
+    return max(1, (int(monthly_cost_rub) + net_per_user - 1) // net_per_user)
+
+
+def build_capacity_economics_summary() -> dict:
+    now = utc_now()
+    now_iso = now.isoformat()
+    since_30d = (now - timedelta(days=30)).isoformat()
+    current_period_key = traffic_period_key(now)
+    paid_status_where = "status IN ('paid', 'activated')"
+    active_sub_where = "is_active = 1 AND (expires_at IS NULL OR expires_at > ?)"
+
+    builtin_capacity = endpoint_capacity_payload(
+        SERVER_DEFAULT_BANDWIDTH_MBPS,
+        SERVER_DEFAULT_RESERVED_MBPS,
+        0,
+        0,
+        0,
+        "",
+    )
+    with db() as conn:
+        active_users = db_count(conn, "users")
+        active_subscriptions = db_count(conn, "subscriptions", active_sub_where, (now_iso,))
+        paid_subscriptions = db_count(
+            conn,
+            "subscriptions",
+            f"{active_sub_where} AND COALESCE(monthly_price_rub, 0) > 0",
+            (now_iso,),
+        )
+        mrr_rub = db_sum(
+            conn,
+            "subscriptions",
+            "monthly_price_rub",
+            f"{active_sub_where} AND COALESCE(monthly_price_rub, 0) > 0",
+            (now_iso,),
+        )
+        paid_30d_rub = db_sum(
+            conn,
+            "billing_orders",
+            "amount_rub",
+            f"{paid_status_where} AND COALESCE(paid_at, activated_at, updated_at, created_at) >= ?",
+            (since_30d,),
+        )
+        traffic_used_bytes = db_sum(
+            conn,
+            "device_traffic_usage",
+            "rx_bytes + tx_bytes",
+            "period_key = ?",
+            (current_period_key,),
+        )
+        traffic_reported_users = int(
+            db_scalar(
+                conn,
+                "SELECT COUNT(DISTINCT user_id) FROM device_traffic_usage WHERE period_key = ?",
+                (current_period_key,),
+                0,
+            )
+        )
+        managed_entries = list_managed_server_catalog_entries(
+            status="all",
+            active="all",
+            public="all",
+            limit=500,
+            offset=0,
+        )
+
+    server_rows = [
+        {
+            "serverId": "intelligent_smew",
+            "title": "Netherlands #1",
+            "managed": False,
+            "isActive": True,
+            "isPublic": True,
+            "status": "healthy",
+            "capacity": builtin_capacity,
+        }
+    ]
+    server_rows.extend(
+        {
+            "serverId": item.get("serverId") or "",
+            "title": item.get("title") or "",
+            "managed": True,
+            "isActive": bool(item.get("isActive")),
+            "isPublic": bool(item.get("isPublic")),
+            "status": item.get("status") or "unknown",
+            "capacity": item.get("capacity") or {},
+        }
+        for item in managed_entries
+    )
+    public_or_active = [
+        item
+        for item in server_rows
+        if bool(item.get("isActive")) or not bool(item.get("managed"))
+    ]
+    total_planned_mbps = sum(int((item.get("capacity") or {}).get("plannedBandwidthMbps") or 0) for item in public_or_active)
+    total_usable_mbps = sum(int((item.get("capacity") or {}).get("usableBandwidthMbps") or 0) for item in public_or_active)
+    total_load_mbps = sum(int((item.get("capacity") or {}).get("currentLoadMbps") or 0) for item in public_or_active)
+    public_ready_nodes = len(
+        [
+            item
+            for item in server_rows
+            if (not item.get("managed")) or (item.get("isActive") and item.get("isPublic") and item.get("status") == "healthy")
+        ]
+    )
+    gbps_equivalent = max(1, round(total_planned_mbps / 1000)) if total_planned_mbps else 1
+    target_paid_capacity = gbps_equivalent * UNIT_ECONOMICS_TARGET_USERS_PER_GBPS_NODE
+    stretch_paid_capacity = gbps_equivalent * UNIT_ECONOMICS_STRETCH_USERS_PER_GBPS_NODE
+
+    main_plan_price = int((TRAFFIC_PACK_BASE.get("gb150") or {}).get("priceRub") or 349)
+    break_even_main = rub_break_even_users(UNIT_ECONOMICS_DEFAULT_FIXED_COST_RUB, main_plan_price)
+    net_mrr_rub = (int(mrr_rub) * UNIT_ECONOMICS_NET_REVENUE_RATIO_BPS) // 10000
+    estimated_profit_rub = net_mrr_rub - UNIT_ECONOMICS_DEFAULT_FIXED_COST_RUB
+    load_percent = round((total_load_mbps / total_usable_mbps) * 100) if total_usable_mbps else 0
+
+    if paid_subscriptions >= stretch_paid_capacity or load_percent >= SERVER_CAPACITY_RED_MIN_PERCENT:
+        growth_status = "red"
+        next_action = "Срочно добавить VPN-узел или снизить выдачу новых подключений на перегруженный endpoint."
+    elif paid_subscriptions >= target_paid_capacity or load_percent > SERVER_CAPACITY_GREEN_MAX_PERCENT:
+        growth_status = "yellow"
+        next_action = "Готовить следующий VPN-узел: текущая ёмкость близко к рабочему пределу."
+    else:
+        growth_status = "green"
+        next_action = "Текущей ёмкости достаточно; смотреть вечерние пики и жалобы на скорость."
+
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "generatedAt": now_iso,
+        "policyVersion": TARIFF_POLICY_VERSION,
+        "costAssumptions": {
+            "fixedMonthlyCostRub": UNIT_ECONOMICS_DEFAULT_FIXED_COST_RUB,
+            "netRevenueRatioPercent": round(UNIT_ECONOMICS_NET_REVENUE_RATIO_BPS / 100, 1),
+            "mainPlanPriceRub": main_plan_price,
+            "breakEvenPaidUsersOnMainPlan": break_even_main,
+            "source": "env_or_default_estimate",
+        },
+        "revenue": {
+            "activeUsers": active_users,
+            "activeSubscriptions": active_subscriptions,
+            "paidSubscriptions": paid_subscriptions,
+            "mrrRub": int(mrr_rub),
+            "estimatedNetMrrRub": net_mrr_rub,
+            "estimatedProfitAfterFixedCostsRub": estimated_profit_rub,
+            "paid30dRub": int(paid_30d_rub),
+        },
+        "capacity": {
+            "publicReadyNodes": public_ready_nodes,
+            "plannedBandwidthMbps": total_planned_mbps,
+            "usableBandwidthMbps": total_usable_mbps,
+            "currentLoadMbps": total_load_mbps,
+            "loadPercent": load_percent,
+            "targetPaidUsersCapacity": target_paid_capacity,
+            "stretchPaidUsersCapacity": stretch_paid_capacity,
+            "greenMaxLoadPercent": SERVER_CAPACITY_GREEN_MAX_PERCENT,
+            "redMinLoadPercent": SERVER_CAPACITY_RED_MIN_PERCENT,
+            "growthStatus": growth_status,
+            "nextAction": next_action,
+            "servers": server_rows,
+        },
+        "traffic": {
+            "periodKey": current_period_key,
+            "accountingEnabled": True,
+            "reportedUsers": traffic_reported_users,
+            "usedBytes": int(traffic_used_bytes),
+            "usedGb": bytes_to_gb(int(traffic_used_bytes)),
+            "source": "wireguard_peer_counter_deltas",
+        },
+        "tariffPolicy": {
+            "freeMode": {
+                "enabled": True,
+                "priorityClass": "free_ad",
+                "speedSustainedMbps": 5,
+                "speedBurstMbps": 20,
+            },
+            "packs": TRAFFIC_PACK_BASE,
+            "speedProfiles": TARIFF_SPEED_PROFILES,
+        },
+    }
+
+
 @app.get("/api/v1/admin/analytics/summary")
 def admin_analytics_summary(
     x_admin_token: Optional[str] = Header(default=None),
@@ -19321,6 +24848,15 @@ def admin_analytics_summary(
         services=build_service_availability_status(),
     )
     return build_admin_analytics_summary()
+
+
+@app.get("/api/v1/admin/business/capacity-economics")
+def admin_capacity_economics_summary(
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "analytics.read")
+    return build_capacity_economics_summary()
 
 
 @app.get("/api/v1/admin/overview")
@@ -19425,6 +24961,15 @@ def admin_launch_readiness(
     return build_launch_readiness()
 
 
+@app.get("/api/v1/admin/launch/advertising-readiness")
+def admin_launch_advertising_readiness(
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "readiness.read")
+    return build_advertising_readiness()
+
+
 @app.get("/api/v1/admin/launch/closure-plan")
 def admin_launch_closure_plan(
     x_admin_token: Optional[str] = Header(default=None),
@@ -19450,6 +24995,15 @@ def admin_site_readiness(
 ):
     require_admin(x_admin_token, authorization, "readiness.read")
     return public_site_readiness()
+
+
+@app.get("/api/v1/admin/windows/trust-readiness")
+def admin_windows_trust_readiness(
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "readiness.read")
+    return windows_distribution_trust_readiness()
 
 
 @app.get("/api/v1/admin/auth/user-flow/readiness")
@@ -19745,6 +25299,495 @@ def admin_server_catalog_provisioning_readiness(
     return build_server_provisioning_readiness(public_catalog, managed_entries)
 
 
+@app.get("/api/v1/admin/server-catalog/{server_id}/remote-provisioning-check")
+def admin_server_catalog_remote_provisioning_check(
+    server_id: str,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "servers.read")
+    normalized_server_id = clean_limited_text(server_id, 80).strip().lower()
+    row = get_managed_server_catalog_row_by_server_id(normalized_server_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Managed VPN-узел не найден.")
+    profile = server_row_client_config_profile(row)
+    if profile != "remote_ssh_wg0":
+        raise HTTPException(
+            status_code=409,
+            detail="Проверка доступна только для профиля remote_ssh_wg0.",
+        )
+    config, blockers = remote_vpn_node_config_check(
+        normalized_server_id,
+        row_host=str(row["host"] or "").strip().lower(),
+        row_port=int(row["port"] or 0),
+    )
+    if blockers:
+        return {
+            "ok": False,
+            "version": APP_VERSION,
+            "serverId": normalized_server_id,
+            "profile": profile,
+            "blockers": blockers,
+            "sshReachable": False,
+            "wireGuardReady": False,
+        }
+    try:
+        probe = remote_vpn_node_probe(config)
+    except HTTPException as exc:
+        return {
+            "ok": False,
+            "version": APP_VERSION,
+            "serverId": normalized_server_id,
+            "profile": profile,
+            "blockers": [{"code": "remote_node_probe_failed", "message": str(exc.detail)}],
+            "sshReachable": False,
+            "wireGuardReady": False,
+        }
+    return {
+        "ok": bool(probe.get("ok")),
+        "version": APP_VERSION,
+        "serverId": normalized_server_id,
+        "profile": profile,
+        "blockers": [] if probe.get("ok") else [
+            {
+                "code": "remote_node_public_key_mismatch",
+                "message": "Удалённый wg0 отвечает, но публичный ключ не совпал с server-only env.",
+            }
+        ],
+        "sshReachable": True,
+        "wireGuardReady": bool(probe.get("ok")),
+        "interface": config.get("interface") or WG_INTERFACE,
+        "endpoint": f"{config.get('publicHost')}:{config.get('publicPort')}",
+    }
+
+
+@app.post("/api/v1/admin/server-catalog/{server_id}/remote-peer-smoke")
+def admin_server_catalog_remote_peer_smoke(
+    server_id: str,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "servers.manage", request=request)
+    normalized_server_id = clean_limited_text(server_id, 80).strip().lower()
+    row = get_managed_server_catalog_row_by_server_id(normalized_server_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Managed VPN-узел не найден.")
+    profile = server_row_client_config_profile(row)
+    if profile != "remote_ssh_wg0":
+        raise HTTPException(
+            status_code=409,
+            detail="Smoke-проверка доступна только для профиля remote_ssh_wg0.",
+        )
+    config, blockers = remote_vpn_node_config_check(
+        normalized_server_id,
+        row_host=str(row["host"] or "").strip().lower(),
+        row_port=int(row["port"] or 0),
+    )
+    if blockers:
+        return {
+            "ok": False,
+            "version": APP_VERSION,
+            "serverId": normalized_server_id,
+            "profile": profile,
+            "blockers": blockers,
+            "applied": False,
+            "removed": False,
+        }
+
+    smoke_ip = REMOTE_NODE_SMOKE_PEER_IP.strip()
+    try:
+        ipaddress.ip_address(smoke_ip)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="GREENVPN_REMOTE_NODE_SMOKE_PEER_IP должен быть корректным IP.",
+        ) from exc
+
+    smoke_device_uid = f"admin-smoke-{normalized_server_id}-{int(time.time())}"
+    _, smoke_public_key = wg_genkeypair()
+    smoke_psk = wg_genpsk()
+    applied = False
+    exists_after_apply = False
+    removed = False
+    exists_after_remove = None
+    error_code = ""
+    error_message = ""
+    try:
+        apply_remote_peer_live(
+            config,
+            device_uid=smoke_device_uid,
+            public_key=smoke_public_key,
+            psk=smoke_psk,
+            ip=smoke_ip,
+        )
+        applied = True
+        apply_status = remote_vpn_node_peer_status(config, smoke_public_key)
+        exists_after_apply = bool(apply_status.get("exists"))
+    except HTTPException as exc:
+        error_code = "remote_smoke_failed"
+        error_message = str(exc.detail)
+    except Exception as exc:
+        error_code = type(exc).__name__
+        error_message = "Не удалось выполнить удалённую smoke-проверку."
+    finally:
+        removed = best_effort_remove_remote_peer_live(
+            config,
+            smoke_device_uid,
+            smoke_public_key,
+        )
+        try:
+            remove_status = remote_vpn_node_peer_status(config, smoke_public_key)
+            exists_after_remove = bool(remove_status.get("exists"))
+        except Exception:
+            exists_after_remove = None
+
+    ok = (
+        not error_code
+        and applied
+        and exists_after_apply
+        and removed
+        and exists_after_remove is False
+    )
+    write_admin_audit(
+        "server_catalog_remote_peer_smoke",
+        "server_catalog_entry",
+        str(row["id"]),
+        {
+            "serverId": normalized_server_id,
+            "endpoint": f"{config.get('publicHost')}:{config.get('publicPort')}",
+            "smokeIp": smoke_ip,
+            "applied": applied,
+            "existsAfterApply": exists_after_apply,
+            "removed": removed,
+            "existsAfterRemove": exists_after_remove,
+            "errorCode": error_code,
+            "ok": ok,
+        },
+        request=request,
+    )
+    return {
+        "ok": ok,
+        "version": APP_VERSION,
+        "serverId": normalized_server_id,
+        "profile": profile,
+        "endpoint": f"{config.get('publicHost')}:{config.get('publicPort')}",
+        "interface": config.get("interface") or WG_INTERFACE,
+        "smokeIp": smoke_ip,
+        "applied": applied,
+        "existsAfterApply": exists_after_apply,
+        "removed": removed,
+        "existsAfterRemove": exists_after_remove,
+        "errorCode": error_code,
+        "message": error_message,
+        "secretPolicy": "Smoke-проверка не возвращает private key, preshared key или полный public key.",
+    }
+
+
+@app.post("/api/v1/admin/server-catalog/{server_id}/client-config-smoke")
+def admin_server_catalog_client_config_smoke(
+    server_id: str,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "servers.manage", request=request)
+    normalized_server_id = clean_limited_text(server_id, 80).strip().lower()
+    row = get_managed_server_catalog_row_by_server_id(normalized_server_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Managed VPN-узел не найден.")
+
+    entry = server_catalog_entry_payload(row)
+    profile = entry.get("clientConfigProfile") or "none"
+    if profile != "remote_ssh_wg0":
+        raise HTTPException(
+            status_code=409,
+            detail="Smoke-проверка клиентского конфига доступна только для профиля remote_ssh_wg0.",
+        )
+
+    readiness = entry.get("clientConfigReadiness") or {}
+    if not readiness.get("ready"):
+        return {
+            "ok": False,
+            "version": APP_VERSION,
+            "serverId": normalized_server_id,
+            "profile": profile,
+            "blockers": readiness.get("blockers") or [
+                {
+                    "code": "client_config_not_ready",
+                    "message": "Managed VPN-узел пока не готов к выдаче клиентского конфига.",
+                }
+            ],
+            "applied": False,
+            "configShapeOk": False,
+            "removed": False,
+        }
+
+    smoke_ip = REMOTE_NODE_CLIENT_CONFIG_SMOKE_PEER_IP.strip()
+    try:
+        ipaddress.ip_address(smoke_ip)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="GREENVPN_REMOTE_NODE_CLIENT_CONFIG_SMOKE_PEER_IP должен быть корректным IP.",
+        ) from exc
+
+    remote_config = load_remote_vpn_node_config(normalized_server_id)
+    selected_server = managed_catalog_entry_to_public_server(entry)
+    smoke_device_uid = f"admin-client-smoke-{normalized_server_id}-{int(time.time())}"
+    client_private_key, client_public_key = wg_genkeypair()
+    smoke_psk = wg_genpsk()
+
+    applied = False
+    exists_after_apply = False
+    removed = False
+    exists_after_remove = None
+    config_shape_ok = False
+    config_checks: list[dict] = []
+    config_text_bytes = 0
+    endpoint = ""
+    error_code = ""
+    error_message = ""
+
+    try:
+        provisioning = provision_wireguard_peer_for_selected_server(
+            selected_server,
+            device_uid=smoke_device_uid,
+            public_key=client_public_key,
+            psk=smoke_psk,
+            ip=smoke_ip,
+        )
+        applied = True
+        endpoint = f"{provisioning['endpointHost']}:{provisioning['endpointPort']}"
+        apply_status = remote_vpn_node_peer_status(remote_config, client_public_key)
+        exists_after_apply = bool(apply_status.get("exists"))
+        config_text = build_client_config(
+            client_private_key=client_private_key,
+            preshared_key=smoke_psk,
+            server_public_key=provisioning["serverPublicKey"],
+            client_ip=smoke_ip,
+            endpoint_host=provisioning["endpointHost"],
+            endpoint_port=provisioning["endpointPort"],
+            client_mtu=provisioning.get("clientMtu"),
+        )
+        config_text_bytes = len(config_text.encode("utf-8"))
+        expected_mtu = int(provisioning.get("clientMtu") or WG_CLIENT_MTU)
+        config_checks = [
+            {
+                "code": "endpoint",
+                "ok": f"Endpoint = {endpoint}" in config_text,
+                "message": "Endpoint в клиентском конфиге совпадает с выбранным VPN-узлом.",
+            },
+            {
+                "code": "address",
+                "ok": f"Address = {smoke_ip}/32" in config_text,
+                "message": "Smoke IP записан в Interface Address.",
+            },
+            {
+                "code": "dns",
+                "ok": f"DNS = {WG_DNS}" in config_text,
+                "message": "Клиентский конфиг использует туннельный DNS VPN-узла.",
+            },
+            {
+                "code": "mtu",
+                "ok": f"MTU = {expected_mtu}" in config_text,
+                "message": "Клиентский конфиг содержит согласованный MTU.",
+            },
+            {
+                "code": "server_public_key",
+                "ok": f"PublicKey = {provisioning['serverPublicKey']}" in config_text,
+                "message": "Публичный ключ сервера подставлен в Peer.",
+            },
+            {
+                "code": "client_private_key",
+                "ok": "PrivateKey = " in config_text,
+                "message": "Клиентский приватный ключ присутствует, но не возвращается из smoke endpoint.",
+            },
+            {
+                "code": "preshared_key",
+                "ok": "PresharedKey = " in config_text,
+                "message": "Preshared key присутствует, но не возвращается из smoke endpoint.",
+            },
+            {
+                "code": "allowed_ips",
+                "ok": f"AllowedIPs = {WG_ALLOWED_IPS}" in config_text,
+                "message": "Клиентский конфиг содержит ожидаемый маршрут по умолчанию.",
+            },
+            {
+                "code": "tunnel_dns_route",
+                "ok": wireguard_dns_route_ready(WG_DNS, WG_ALLOWED_IPS),
+                "message": "DNS из клиентского конфига либо публичный и маршрутизируется split-default, либо private DNS покрыт AllowedIPs.",
+            },
+            {
+                "code": "persistent_keepalive",
+                "ok": (
+                    WG_PERSISTENT_KEEPALIVE <= 0
+                    or f"PersistentKeepalive = {WG_PERSISTENT_KEEPALIVE}" in config_text
+                ),
+                "message": "Клиентский конфиг содержит keepalive для мобильных сетей.",
+            },
+        ]
+        config_shape_ok = all(bool(check.get("ok")) for check in config_checks)
+    except HTTPException as exc:
+        error_code = "client_config_smoke_failed"
+        error_message = str(exc.detail)
+    except Exception as exc:
+        error_code = type(exc).__name__
+        error_message = "Не удалось выполнить smoke-проверку клиентского конфига."
+    finally:
+        removed = best_effort_remove_remote_peer_live(
+            remote_config,
+            smoke_device_uid,
+            client_public_key,
+        )
+        try:
+            remove_status = remote_vpn_node_peer_status(remote_config, client_public_key)
+            exists_after_remove = bool(remove_status.get("exists"))
+        except Exception:
+            exists_after_remove = None
+
+    ok = (
+        not error_code
+        and applied
+        and exists_after_apply
+        and config_shape_ok
+        and removed
+        and exists_after_remove is False
+    )
+    write_admin_audit(
+        "server_catalog_client_config_smoke",
+        "server_catalog_entry",
+        str(row["id"]),
+        {
+            "serverId": normalized_server_id,
+            "endpoint": endpoint or f"{entry.get('host')}:{entry.get('port')}",
+            "profile": profile,
+            "smokeIp": smoke_ip,
+            "applied": applied,
+            "existsAfterApply": exists_after_apply,
+            "configShapeOk": config_shape_ok,
+            "removed": removed,
+            "existsAfterRemove": exists_after_remove,
+            "errorCode": error_code,
+            "ok": ok,
+        },
+        request=request,
+    )
+    return {
+        "ok": ok,
+        "version": APP_VERSION,
+        "serverId": normalized_server_id,
+        "profile": profile,
+        "endpoint": endpoint or f"{entry.get('host')}:{entry.get('port')}",
+        "interface": remote_config.get("interface") or WG_INTERFACE,
+        "smokeIp": smoke_ip,
+        "applied": applied,
+        "existsAfterApply": exists_after_apply,
+        "configShapeOk": config_shape_ok,
+        "configTextBytes": config_text_bytes,
+        "configChecks": config_checks,
+        "removed": removed,
+        "existsAfterRemove": exists_after_remove,
+        "errorCode": error_code,
+        "message": error_message,
+        "secretPolicy": "Smoke-проверка не возвращает configText, private key, preshared key или полный public key.",
+    }
+
+
+@app.get("/api/v1/admin/server-catalog/{server_id}/publication-gate")
+def admin_server_catalog_publication_gate(
+    server_id: str,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "servers.read")
+    return build_server_publication_gate_preview(server_id)
+
+
+@app.post("/api/v1/admin/server-catalog/{server_id}/publish")
+def admin_server_catalog_publish(
+    server_id: str,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "servers.manage", request=request)
+    entry = publish_managed_server_catalog_entry(server_id)
+    write_admin_audit(
+        "server_catalog_entry_published",
+        "server_catalog_entry",
+        str(entry["id"]),
+        {
+            "serverId": entry["serverId"],
+            "host": entry["host"],
+            "port": entry["port"],
+            "status": entry["status"],
+            "healthScore": entry["healthScore"],
+            "clientConfigProfile": entry["clientConfigProfile"],
+            "publicEligible": entry["publicEligible"],
+        },
+        request=request,
+    )
+    public_catalog = build_server_catalog()
+    managed_entries = list_managed_server_catalog_entries(
+        status="all",
+        active="all",
+        public="all",
+        limit=500,
+        offset=0,
+    )
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "entry": entry,
+        "publicCatalog": public_catalog,
+        "summary": build_server_catalog_admin_summary(public_catalog, managed_entries),
+        "publicationReadiness": build_server_publication_readiness(public_catalog, managed_entries),
+        "message": "VPN-узел прошёл publication gate и открыт для клиентского каталога.",
+    }
+
+
+@app.post("/api/v1/admin/server-catalog/{server_id}/unpublish")
+def admin_server_catalog_unpublish(
+    server_id: str,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "servers.manage", request=request)
+    entry = unpublish_managed_server_catalog_entry(server_id)
+    write_admin_audit(
+        "server_catalog_entry_unpublished",
+        "server_catalog_entry",
+        str(entry["id"]),
+        {
+            "serverId": entry["serverId"],
+            "host": entry["host"],
+            "port": entry["port"],
+            "isActive": entry["isActive"],
+            "isPublic": entry["isPublic"],
+        },
+        request=request,
+    )
+    public_catalog = build_server_catalog()
+    managed_entries = list_managed_server_catalog_entries(
+        status="all",
+        active="all",
+        public="all",
+        limit=500,
+        offset=0,
+    )
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "entry": entry,
+        "publicCatalog": public_catalog,
+        "summary": build_server_catalog_admin_summary(public_catalog, managed_entries),
+        "publicationReadiness": build_server_publication_readiness(public_catalog, managed_entries),
+        "message": "VPN-узел скрыт из клиентского каталога. Рабочий текущий VPN не затронут.",
+    }
+
+
 @app.post("/api/v1/admin/server-catalog")
 def admin_server_catalog_upsert(
     payload: AdminServerCatalogEntryIn,
@@ -19800,7 +25843,7 @@ def admin_server_catalog_create_draft_from_plan(
     if not onboarding_plan.get("safeToCreateInternalDraft"):
         raise HTTPException(
             status_code=409,
-            detail="New VPS draft creation is blocked until the current public catalog is safe.",
+            detail="Создание draft-записи нового VPS заблокировано, пока текущий публичный каталог не безопасен.",
         )
 
     entry_input = safe_new_server_draft_entry_input(payload)
@@ -19916,6 +25959,145 @@ def admin_server_catalog_update(
     }
 
 
+@app.post("/api/v1/admin/server-catalog/{entry_id}/capacity")
+def admin_server_catalog_capacity_update(
+    entry_id: int,
+    payload: AdminServerCapacityIn,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "servers.manage", request=request)
+    entry = update_managed_server_capacity_entry(entry_id, payload)
+    write_admin_audit(
+        "server_catalog_capacity_updated",
+        "server_catalog_entry",
+        str(entry["id"]),
+        {
+            "serverId": entry["serverId"],
+            "capacityStatus": (entry.get("capacity") or {}).get("capacityStatus"),
+            "capacityScore": (entry.get("capacity") or {}).get("capacityScore"),
+            "currentLoadMbps": (entry.get("capacity") or {}).get("currentLoadMbps"),
+            "activeClients": (entry.get("capacity") or {}).get("activeClients"),
+            "assignedUsers": (entry.get("capacity") or {}).get("assignedUsers"),
+        },
+        request=request,
+    )
+    public_catalog = build_server_catalog()
+    managed_entries = list_managed_server_catalog_entries()
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "entry": entry,
+        "publicCatalog": public_catalog,
+        "summary": build_server_catalog_admin_summary(public_catalog, managed_entries),
+        "message": (
+            "Нагрузка VPN-узла обновлена. Автовыдача клиентам будет учитывать "
+            "новую ёмкость и sticky-назначения устройств."
+        ),
+    }
+
+
+@app.post("/api/v1/admin/server-catalog/server-id/{server_id}/capacity")
+def admin_server_catalog_capacity_update_by_server_id(
+    server_id: str,
+    payload: AdminServerCapacityIn,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "servers.manage", request=request)
+    entry = update_managed_server_capacity_by_server_id(server_id, payload)
+    write_admin_audit(
+        "server_catalog_capacity_updated",
+        "server_catalog_entry",
+        str(entry["id"]),
+        {
+            "serverId": entry["serverId"],
+            "capacityStatus": (entry.get("capacity") or {}).get("capacityStatus"),
+            "capacityScore": (entry.get("capacity") or {}).get("capacityScore"),
+            "currentLoadMbps": (entry.get("capacity") or {}).get("currentLoadMbps"),
+            "activeClients": (entry.get("capacity") or {}).get("activeClients"),
+            "assignedUsers": (entry.get("capacity") or {}).get("assignedUsers"),
+            "updatedBy": "server_id",
+        },
+        request=request,
+    )
+    public_catalog = build_server_catalog()
+    managed_entries = list_managed_server_catalog_entries()
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "entry": entry,
+        "publicCatalog": public_catalog,
+        "summary": build_server_catalog_admin_summary(public_catalog, managed_entries),
+        "message": (
+            "Нагрузка VPN-узла обновлена по serverId. Автовыдача клиентам будет "
+            "учитывать новую ёмкость и sticky-назначения устройств."
+        ),
+    }
+
+
+@app.post("/api/v1/admin/traffic/wireguard-report")
+def admin_wireguard_traffic_report(
+    payload: AdminPeerTrafficReportIn,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "servers.manage", request=request)
+    result = apply_peer_traffic_report(payload)
+    write_admin_audit(
+        "wireguard_traffic_report_received",
+        "server",
+        result["serverId"],
+        {
+            "iface": result["iface"],
+            "periodKey": result["periodKey"],
+            "matchedPeers": result["matchedPeers"],
+            "unknownPeerCount": result["unknownPeerCount"],
+            "baselineOnlyPeers": result["baselineOnlyPeers"],
+            "deltaBytes": result["deltaBytes"],
+            "counterResets": result["counterResets"],
+        },
+        request=request,
+    )
+    return result
+
+
+@app.get("/api/v1/admin/traffic/usage")
+def admin_traffic_usage(
+    periodKey: Optional[str] = None,
+    limit: int = 100,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "analytics.read")
+    return list_admin_traffic_usage(period_key=periodKey, limit=limit)
+
+
+@app.get("/api/v1/admin/users/{user_id}/traffic")
+def admin_user_traffic_usage(
+    user_id: int,
+    periodKey: Optional[str] = None,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, ["users.read", "analytics.read"])
+    subscription = subscription_status(get_subscription_row(user_id))
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "userId": int(user_id),
+        "subscription": subscription,
+        "trafficUsage": subscription_traffic_usage_status(
+            user_id,
+            subscription,
+            period_key=periodKey,
+        ),
+    }
+
+
 @app.get("/api/v1/admin/server-health")
 def admin_server_health(
     endpointId: Optional[str] = None,
@@ -20006,6 +26188,25 @@ def admin_server_health_probe_current(
         "publicationReadiness": build_server_publication_readiness(
             public_catalog,
             managed_entries,
+        ),
+    }
+
+
+@app.get("/api/v1/admin/server-rate-limits/plan")
+def admin_server_rate_limits_plan(
+    serverId: Optional[str] = None,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "servers.read")
+    plan = build_wg_peer_rate_limit_plan(server_id=serverId)
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "plan": plan,
+        "message": (
+            "Это только безопасный план лимитов для WireGuard peers. "
+            "Backend не применяет tc сам: скрипт надо запускать на VPN-сервере отдельно."
         ),
     }
 
@@ -20159,10 +26360,16 @@ def admin_service_monitoring_readiness(
 ):
     require_admin(x_admin_token, authorization, "monitoring.read")
     summary = build_service_availability_observation_summary()
+    readiness = summary.get("probeReadiness") or {}
     return {
         "ok": True,
         "version": APP_VERSION,
-        "readiness": summary.get("probeReadiness"),
+        "productionReady": bool(readiness.get("productionReady")),
+        "monitoringProductionReady": bool(readiness.get("productionReady")),
+        "checks": readiness.get("checks") or [],
+        "activeProbeAgents": readiness.get("activeProbeAgents"),
+        "staleProbeAgents": readiness.get("staleProbeAgents"),
+        "readiness": readiness,
         "summary": summary,
     }
 
@@ -20194,6 +26401,153 @@ def admin_service_availability_observation_create(
         "version": APP_VERSION,
         "observation": observation,
         "summary": build_service_availability_observation_summary(),
+    }
+
+
+@app.get("/api/v1/admin/resilience/routes")
+def admin_resilience_routes(
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "monitoring.read")
+    catalog = build_server_catalog()
+    resilience = catalog.get("resilience") or {}
+    route_decision = resilience.get("routeDecision") or {}
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "resilience": resilience,
+        "routeDecision": route_decision,
+        "layers": route_decision.get("fallbackChain") or route_layer_definitions(),
+        "catalog": {
+            "defaultServerId": catalog.get("defaultServerId"),
+            "servers": catalog.get("servers", []),
+            "managedCatalog": catalog.get("managedCatalog", {}),
+        },
+        "clientFeedbackSummary": client_route_event_summary(),
+        "recentObservations": list_resilience_route_observations(limit=80),
+        "targetRouteMatrix": build_resilience_target_route_matrix(route_decision),
+    }
+
+
+@app.get("/api/v1/admin/resilience/route-observations")
+def admin_resilience_route_observations(
+    protocol: Optional[str] = None,
+    targetId: Optional[str] = None,
+    endpointId: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 200,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "monitoring.read")
+    catalog = build_server_catalog()
+    route_decision = (catalog.get("resilience") or {}).get("routeDecision") or {}
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "routeDecision": route_decision,
+        "observations": list_resilience_route_observations(
+            protocol=protocol,
+            target_id=targetId,
+            endpoint_id=endpointId,
+            status=status,
+            limit=limit,
+        ),
+    }
+
+
+@app.post("/api/v1/admin/resilience/route-observations")
+def admin_resilience_route_observation_create(
+    payload: AdminResilienceRouteObservationIn,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "monitoring.manage", request=request)
+    observation = create_resilience_route_observation(payload)
+    write_admin_audit(
+        "resilience_route_observation_created",
+        "resilience_route_observation",
+        str(observation["id"]),
+        {
+            "endpointId": observation["endpointId"],
+            "protocol": observation["protocol"],
+            "targetId": observation["targetId"],
+            "probeId": observation["probeId"],
+            "probeRegion": observation["probeRegion"],
+            "status": observation["status"],
+            "latencyMs": observation["latencyMs"],
+        },
+        request=request,
+    )
+    catalog = build_server_catalog()
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "observation": observation,
+        "routeDecision": (catalog.get("resilience") or {}).get("routeDecision") or {},
+    }
+
+
+@app.get("/api/v1/admin/resilience/client-route-events")
+def admin_resilience_client_route_events(
+    protocol: Optional[str] = None,
+    serverId: Optional[str] = None,
+    stage: Optional[str] = None,
+    ok: Optional[bool] = None,
+    limit: int = 200,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "monitoring.read")
+    events = list_client_route_events(
+        protocol=protocol,
+        server_id=serverId,
+        stage=stage,
+        ok=ok,
+        limit=limit,
+    )
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "summary": client_route_event_summary(protocol=protocol, server_id=serverId),
+        "events": events,
+        "routeDecision": (build_server_catalog().get("resilience") or {}).get("routeDecision") or {},
+    }
+
+
+@app.get("/api/v1/admin/resilience/target-matrix")
+def admin_resilience_target_matrix(
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "monitoring.read")
+    route_decision = (build_server_catalog().get("resilience") or {}).get("routeDecision") or {}
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "routeDecision": route_decision,
+        "targetRouteMatrix": build_resilience_target_route_matrix(route_decision),
+    }
+
+
+@app.get("/api/v1/admin/resilience/transport-rollout")
+def admin_resilience_transport_rollout(
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "monitoring.read")
+    catalog = build_server_catalog()
+    route_decision = (catalog.get("resilience") or {}).get("routeDecision") or {}
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "routeDecision": route_decision,
+        "rollout": build_resilience_transport_rollout_readiness(
+            route_decision=route_decision,
+            servers=catalog.get("servers") or [],
+        ),
     }
 
 
@@ -20941,7 +27295,7 @@ def admin_alerts_test(
     if not readiness.get("productionReady"):
         raise HTTPException(
             status_code=409,
-            detail=readiness.get("message") or "Admin alerts are not configured.",
+            detail=readiness.get("message") or "Админские оповещения не настроены.",
         )
 
     result = send_telegram_admin_alert(
@@ -20961,7 +27315,7 @@ def admin_alerts_test(
     if not result.get("ok"):
         raise HTTPException(
             status_code=502,
-            detail=result.get("error") or "Telegram alert delivery failed.",
+            detail=result.get("error") or "Не удалось доставить Telegram-оповещение.",
         )
     return {
         "ok": True,
@@ -21014,6 +27368,35 @@ def admin_user_support_action(
         "version": APP_VERSION,
         "action": action,
         **get_admin_user_detail(user_id),
+    }
+
+
+@app.post("/api/v1/admin/users/{user_id}/delete")
+def admin_user_delete(
+    user_id: int,
+    payload: AdminUserDeleteIn,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "users.manage", request=request)
+    result = delete_admin_user_record(user_id, payload)
+    write_admin_audit(
+        "user_deleted",
+        "user",
+        str(user_id),
+        {
+            "email": result.get("email"),
+            "phone": result.get("phone"),
+            "reason": result.get("reason"),
+            "deleted": result.get("deleted"),
+        },
+        request=request,
+    )
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        **result,
     }
 
 
@@ -21108,7 +27491,7 @@ def admin_create_launch_promo_draft(
         "promo": promo,
         "promos": list_promo_codes(),
         "readiness": billing_promo_launch_readiness_payload(),
-        "message": "START20 draft was created inactive. Review and activate it manually only after release/payment readiness is green.",
+        "message": "Черновик START20 создан неактивным. Проверьте и включайте его вручную только после зелёного release/payment readiness.",
     }
 
 

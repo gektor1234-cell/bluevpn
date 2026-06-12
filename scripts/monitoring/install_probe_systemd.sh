@@ -13,6 +13,9 @@ SOURCE_SCRIPT=""
 TOKEN_FROM_STDIN="0"
 DRY_RUN="0"
 SERVER_HEALTH="1"
+ROUTE_HEALTH="1"
+ROUTE_CANDIDATES=()
+SERVER_HEALTH_SERVER_IDS=()
 
 usage() {
   cat <<USAGE
@@ -29,6 +32,14 @@ Options:
   --token-stdin              Read admin_token from stdin and save only on this machine.
   --server-health            Also post VPN endpoint health observations. Default: on.
   --no-server-health         Post only service availability observations.
+  --server-health-server-id ID
+                             Also probe this managed server id even if it is still
+                             draft/inactive. Repeat for pre-publication canaries.
+  --route-health             Also post adaptive route observations. Default: on.
+  --no-route-health          Do not post adaptive route observations.
+  --route-candidate VALUE    Candidate for adaptive route observations. Repeat for canary
+                             transports after the probe host actually uses that path.
+                             Format: endpointId=...,protocol=...,transport=...
   --dry-run                  Print actions without writing systemd files.
   -h, --help                 Show this help.
 
@@ -75,6 +86,23 @@ while [[ $# -gt 0 ]]; do
       SERVER_HEALTH="0"
       shift
       ;;
+    --server-health-server-id)
+      SERVER_HEALTH_SERVER_IDS+=("${2:-}")
+      SERVER_HEALTH="1"
+      shift 2
+      ;;
+    --route-health)
+      ROUTE_HEALTH="1"
+      shift
+      ;;
+    --no-route-health)
+      ROUTE_HEALTH="0"
+      shift
+      ;;
+    --route-candidate)
+      ROUTE_CANDIDATES+=("${2:-}")
+      shift 2
+      ;;
     --dry-run)
       DRY_RUN="1"
       shift
@@ -117,6 +145,9 @@ probe_region=${PROBE_REGION}
 interval_seconds=${INTERVAL_SECONDS}
 source_script=${SOURCE_SCRIPT}
 server_health=${SERVER_HEALTH}
+server_health_server_ids=${SERVER_HEALTH_SERVER_IDS[*]:-(none)}
+route_health=${ROUTE_HEALTH}
+route_candidates=${ROUTE_CANDIDATES[*]:-(default current route)}
 service=${SERVICE_NAME}.service
 timer=${SERVICE_NAME}.timer
 DRYRUN
@@ -155,6 +186,34 @@ SERVER_HEALTH_ARGS=""
 if [[ "${SERVER_HEALTH}" == "1" ]]; then
   SERVER_HEALTH_ARGS="--server-health"
 fi
+ROUTE_HEALTH_ARGS=""
+if [[ "${ROUTE_HEALTH}" == "1" ]]; then
+  ROUTE_HEALTH_ARGS="--route-health"
+fi
+ROUTE_CANDIDATE_ARGS=""
+for candidate in "${ROUTE_CANDIDATES[@]}"; do
+  if [[ -z "${candidate}" ]]; then
+    echo "--route-candidate value cannot be empty." >&2
+    exit 2
+  fi
+  if [[ "${candidate}" =~ [[:space:]] ]]; then
+    echo "--route-candidate cannot contain whitespace; use comma-separated key=value pairs." >&2
+    exit 2
+  fi
+  ROUTE_CANDIDATE_ARGS="${ROUTE_CANDIDATE_ARGS} --route-candidate ${candidate}"
+done
+SERVER_HEALTH_SERVER_ID_ARGS=""
+for server_id in "${SERVER_HEALTH_SERVER_IDS[@]}"; do
+  if [[ -z "${server_id}" ]]; then
+    echo "--server-health-server-id value cannot be empty." >&2
+    exit 2
+  fi
+  if [[ "${server_id}" =~ [[:space:]] ]]; then
+    echo "--server-health-server-id cannot contain whitespace." >&2
+    exit 2
+  fi
+  SERVER_HEALTH_SERVER_ID_ARGS="${SERVER_HEALTH_SERVER_ID_ARGS} --server-health-server-id ${server_id}"
+done
 
 cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
 [Unit]
@@ -165,7 +224,7 @@ After=network-online.target
 [Service]
 Type=oneshot
 EnvironmentFile=${ENV_DIR}/probe.env
-ExecStart=/usr/bin/env python3 ${INSTALL_DIR}/service_probe.py --api-base \${GREENVPN_API_BASE} --admin-token-file \${GREENVPN_ADMIN_TOKEN_FILE} --probe-id \${GREENVPN_PROBE_ID} --probe-region \${GREENVPN_PROBE_REGION} ${SERVER_HEALTH_ARGS}
+ExecStart=/usr/bin/env python3 ${INSTALL_DIR}/service_probe.py --api-base \${GREENVPN_API_BASE} --admin-token-file \${GREENVPN_ADMIN_TOKEN_FILE} --probe-id \${GREENVPN_PROBE_ID} --probe-region \${GREENVPN_PROBE_REGION} ${SERVER_HEALTH_ARGS}${SERVER_HEALTH_SERVER_ID_ARGS} ${ROUTE_HEALTH_ARGS}${ROUTE_CANDIDATE_ARGS}
 User=root
 PrivateTmp=true
 NoNewPrivileges=true
