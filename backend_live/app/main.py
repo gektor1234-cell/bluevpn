@@ -32,7 +32,7 @@ from pydantic import BaseModel
 
 
 APP_TITLE = "Green VPN Backend"
-APP_VERSION = "0.9.102"
+APP_VERSION = "0.9.103"
 DEFAULT_PUBLIC_API_BASE_URL = "https://api.greenvpn.pro"
 
 
@@ -102,6 +102,11 @@ SERVER_CATALOG_API_BASE_URLS = split_env_list(
     os.getenv("GREENVPN_API_BASE_URLS", PUBLIC_API_BASE_URL)
 )
 SERVER_CATALOG_EMERGENCY_URL = os.getenv("GREENVPN_EMERGENCY_CATALOG_URL", "").strip()
+PREVIEW_SERVER_IDS = {
+    item.strip()
+    for item in split_env_list(os.getenv("GREENVPN_PREVIEW_SERVER_IDS", ""))
+    if item.strip()
+}
 SERVICE_CHECK_TIMEOUT_SECONDS = float(os.getenv("GREENVPN_SERVICE_CHECK_TIMEOUT", "5"))
 SERVICE_CHECK_TARGETS = [
     {
@@ -1142,12 +1147,14 @@ class BootstrapIn(BaseModel):
     deviceName: str
     platform: str = "windows"
     appVersion: str = "0.1.0"
+    releaseChannel: Optional[str] = None
 
 
 class ClientConfigIn(BaseModel):
     deviceUid: str
     mode: str = "full"
     serverId: Optional[str] = None
+    releaseChannel: Optional[str] = None
 
 
 class AdChallengeStartIn(BaseModel):
@@ -6804,10 +6811,42 @@ def build_resilience_policy(servers: Optional[list[dict]] = None) -> dict:
     }
 
 
-def managed_catalog_entry_to_public_server(entry: dict) -> dict:
+def preview_catalog_allowed(release_channel: Optional[str], app_version: Optional[str] = None) -> bool:
+    channel = clean_limited_text(release_channel, 40).strip().lower()
+    version = clean_limited_text(app_version, 120).strip().lower()
+    return bool(
+        channel in {"preview", "internal"}
+        or "preview" in version
+        or "adgate" in version
+    )
+
+
+def preview_server_ids_for_request(
+    release_channel: Optional[str],
+    app_version: Optional[str] = None,
+) -> set[str]:
+    if not PREVIEW_SERVER_IDS:
+        return set()
+    if not preview_catalog_allowed(release_channel, app_version):
+        return set()
+    return set(PREVIEW_SERVER_IDS)
+
+
+def managed_catalog_entry_to_public_server(
+    entry: dict,
+    *,
+    preview_only: bool = False,
+) -> dict:
     protocol = entry.get("protocol") or "wireguard_udp"
     transport = entry.get("transport") or "udp"
     public_capacity = public_endpoint_capacity_payload(entry.get("capacity") or {})
+    client_config_ready = bool(entry.get("clientConfigReady"))
+    preview_available = (
+        preview_only
+        and str(entry.get("status") or "").strip().lower() == "healthy"
+        and client_config_ready
+    )
+    public_available = bool(entry.get("available")) and bool(entry.get("publicEligible"))
     return {
         "id": entry.get("serverId") or "",
         "title": entry.get("title") or "VPN-узел Green VPN",
@@ -6816,7 +6855,7 @@ def managed_catalog_entry_to_public_server(entry: dict) -> dict:
         "city": entry.get("city") or "",
         "provider": entry.get("provider") or "",
         "status": entry.get("status") or "unknown",
-        "available": bool(entry.get("available")) and bool(entry.get("publicEligible")),
+        "available": bool(preview_available or public_available),
         "healthScore": int(entry.get("healthScore") or 0),
         "latencyMs": entry.get("latencyMs"),
         "priority": int(entry.get("priority") or 100),
@@ -6836,8 +6875,9 @@ def managed_catalog_entry_to_public_server(entry: dict) -> dict:
             }
         ],
         "managed": True,
-        "clientConfigReady": bool(entry.get("clientConfigReady")),
+        "clientConfigReady": client_config_ready,
         "publicEligible": bool(entry.get("publicEligible")),
+        "previewOnly": bool(preview_only),
     }
 
 
@@ -6859,17 +6899,48 @@ def list_public_client_catalog_servers() -> list[dict]:
     ]
 
 
-def build_server_catalog() -> dict:
+def list_preview_client_catalog_servers(server_ids: set[str]) -> list[dict]:
+    if not server_ids:
+        return []
+    try:
+        managed_entries = list_managed_server_catalog_entries(
+            status="healthy",
+            active="all",
+            public="all",
+            limit=500,
+            offset=0,
+        )
+    except Exception:
+        return []
+    return [
+        managed_catalog_entry_to_public_server(entry, preview_only=True)
+        for entry in managed_entries
+        if entry.get("serverId") in server_ids and entry.get("clientConfigReady")
+    ]
+
+
+def build_server_catalog(
+    *,
+    release_channel: Optional[str] = None,
+    app_version: Optional[str] = None,
+) -> dict:
     builtin = builtin_server_catalog_entry()
     managed_servers = [
         item
         for item in list_public_client_catalog_servers()
         if item.get("id") != builtin["id"]
     ]
+    preview_server_ids = preview_server_ids_for_request(release_channel, app_version)
+    existing_server_ids = {str(item.get("id") or "") for item in managed_servers}
+    preview_servers = [
+        item
+        for item in list_preview_client_catalog_servers(preview_server_ids)
+        if item.get("id") != builtin["id"] and item.get("id") not in existing_server_ids
+    ]
     builtin_client_ready = bool(builtin.get("available")) and bool(
         builtin.get("clientConfigReady")
     )
-    servers = ([builtin] if builtin_client_ready else []) + managed_servers
+    servers = ([builtin] if builtin_client_ready else []) + managed_servers + preview_servers
     default_candidates = [server for server in servers if server_auto_capacity_ok(server)]
     if not default_candidates:
         default_candidates = [
@@ -6916,6 +6987,7 @@ def build_server_catalog() -> dict:
                 "клиенту без готового профиля конфига, свежего мониторинга и rollout gate."
             ),
             "clientVisibleManagedEntries": len(managed_servers),
+            "clientVisiblePreviewEntries": len(preview_servers),
             "publicationRules": server_publication_requirements(),
         },
     }
@@ -23037,10 +23109,18 @@ def update_manifest(
 
 
 @app.get("/api/v1/catalog/servers")
-def server_catalog():
+def server_catalog(
+    channel: Optional[str] = None,
+    currentVersion: Optional[str] = None,
+    x_greenvpn_release_channel: Optional[str] = Header(default=None, alias="X-GreenVPN-Release-Channel"),
+    x_greenvpn_version: Optional[str] = Header(default=None, alias="X-GreenVPN-Version"),
+):
     return {
         "ok": True,
-        "catalog": build_server_catalog(),
+        "catalog": build_server_catalog(
+            release_channel=channel or x_greenvpn_release_channel,
+            app_version=currentVersion or x_greenvpn_version,
+        ),
     }
 
 
@@ -23789,7 +23869,10 @@ def client_bootstrap(
     elif ad_gate["required"]:
         reason = "ad_reward_required"
 
-    catalog = build_server_catalog()
+    catalog = build_server_catalog(
+        release_channel=payload.releaseChannel,
+        app_version=device["app_version"],
+    )
     resilience = catalog.get("resilience") or build_resilience_policy(catalog.get("servers"))
     route_decision = resilience.get("routeDecision") if isinstance(resilience, dict) else {}
     selected_server, endpoint_assignment = select_client_server_for_device(
@@ -23887,7 +23970,10 @@ def client_config(
             },
         )
 
-    catalog = build_server_catalog()
+    catalog = build_server_catalog(
+        release_channel=payload.releaseChannel,
+        app_version=device["app_version"],
+    )
     resilience = catalog.get("resilience") or build_resilience_policy(catalog.get("servers"))
     route_decision = resilience.get("routeDecision") if isinstance(resilience, dict) else {}
     selected_route = route_decision.get("selected") if isinstance(route_decision, dict) else {}

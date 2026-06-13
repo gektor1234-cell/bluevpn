@@ -3373,11 +3373,14 @@ while True:
     return ApiResult.ok(Map<String, dynamic>.from(catalog));
   }
 
-  Future<ApiResult<Map<String, dynamic>>> fetchServerCatalog() async {
-    final res = await _jsonRequest(
-      method: 'GET',
-      path: '/api/v1/catalog/servers',
-    );
+  Future<ApiResult<Map<String, dynamic>>> fetchServerCatalog({
+    String? releaseChannel,
+  }) async {
+    final channel = (releaseChannel ?? greenVpnUpdateChannel()).trim();
+    final path =
+        '/api/v1/catalog/servers?channel=${Uri.encodeQueryComponent(channel)}'
+        '&currentVersion=${Uri.encodeQueryComponent(kAppVersion)}';
+    final res = await _jsonRequest(method: 'GET', path: path);
     if (!res.ok) return ApiResult.err(res.message);
     if (res.data is! Map) {
       return const ApiResult.err('Некорректный ответ catalog/servers.');
@@ -3594,6 +3597,7 @@ while True:
     required String deviceName,
     String platform = 'windows',
     String appVersion = '0.1.0',
+    String? releaseChannel,
   }) async {
     try {
       final body = await _withHttpRetry<String>((
@@ -3611,6 +3615,7 @@ while True:
             'deviceName': deviceName,
             'platform': platform,
             'appVersion': appVersion,
+            'releaseChannel': releaseChannel ?? greenVpnUpdateChannel(),
           }),
         );
 
@@ -3640,6 +3645,7 @@ while True:
     required String accessToken,
     String? deviceId,
     String? serverId,
+    String? releaseChannel,
   }) async {
     try {
       if (deviceId == null || deviceId.trim().isEmpty) {
@@ -3658,6 +3664,7 @@ while True:
         final payload = <String, dynamic>{
           'deviceUid': deviceId,
           'mode': 'full',
+          'releaseChannel': releaseChannel ?? greenVpnUpdateChannel(),
         };
         if (serverId != null && serverId.trim().isNotEmpty) {
           payload['serverId'] = serverId.trim();
@@ -3876,6 +3883,7 @@ while True:
         );
         req.headers.set('X-GreenVPN-Platform', greenVpnClientPlatform());
         req.headers.set('X-GreenVPN-Version', kAppVersion);
+        req.headers.set('X-GreenVPN-Release-Channel', greenVpnUpdateChannel());
         if (bearerToken != null && bearerToken.trim().isNotEmpty) {
           req.headers.set('Authorization', 'Bearer $bearerToken');
         }
