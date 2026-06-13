@@ -399,7 +399,7 @@ ADMIN_CORS_ORIGINS = [
     if item.strip()
 ]
 APP_RELEASE_PLATFORMS = ["windows", "android"]
-APP_RELEASE_CHANNELS = ["stable", "beta", "internal"]
+APP_RELEASE_CHANNELS = ["stable", "beta", "internal", "preview"]
 APP_RELEASE_STATUSES = ["draft", "published", "paused", "retired"]
 SERVER_CATALOG_STATUSES = ["draft", "healthy", "degraded", "maintenance", "disabled"]
 SERVER_CATALOG_PROTOCOLS = [

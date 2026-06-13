@@ -45,6 +45,7 @@ class MainActivity : FlutterActivity() {
     private var tunnel = GreenVpnTunnel("GreenVPN")
     private var pendingConnectResult: MethodChannel.Result? = null
     private var pendingConfig: Config? = null
+    private var pendingInstallApkPath: String? = null
     private val securePrefs by lazy {
         applicationContext.getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE)
     }
@@ -63,10 +64,16 @@ class MainActivity : FlutterActivity() {
                 "secureWrite" -> handleSecureWrite(call, result)
                 "secureDelete" -> handleSecureDelete(call, result)
                 "openUrl" -> handleOpenUrl(call, result)
+                "getUpdateCacheDir" -> handleGetUpdateCacheDir(result)
                 "installApk" -> handleInstallApk(call, result)
                 else -> result.notImplemented()
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        maybeResumePendingApkInstall()
     }
 
     override fun onDestroy() {
@@ -282,6 +289,18 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun handleGetUpdateCacheDir(result: MethodChannel.Result) {
+        try {
+            val dir = File(cacheDir, "greenvpn_updates")
+            if (!dir.exists() && !dir.mkdirs()) {
+                throw IllegalStateException("Update cache directory was not created")
+            }
+            result.success(dir.canonicalPath)
+        } catch (e: Exception) {
+            result.error("GREENVPN_UPDATE_CACHE", safeError(e), null)
+        }
+    }
+
     private fun handleInstallApk(call: MethodCall, result: MethodChannel.Result) {
         val path = call.argument<String>("path").orEmpty().trim()
         if (path.isEmpty()) {
@@ -326,6 +345,7 @@ class MainActivity : FlutterActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             !packageManager.canRequestPackageInstalls()
         ) {
+            pendingInstallApkPath = apk.path
             try {
                 val settingsIntent = Intent(
                     Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
@@ -337,9 +357,9 @@ class MainActivity : FlutterActivity() {
             }
             result.success(
                 response(
-                    ok = false,
+                    ok = true,
                     connected = false,
-                    message = "Разреши установку из Green VPN и нажми обновление ещё раз."
+                    message = "Allow Green VPN to install apps. The installer will continue automatically."
                 )
             )
             return
@@ -367,6 +387,39 @@ class MainActivity : FlutterActivity() {
                 )
             )
         }
+    }
+
+    private fun maybeResumePendingApkInstall() {
+        val path = pendingInstallApkPath ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            !packageManager.canRequestPackageInstalls()
+        ) {
+            return
+        }
+
+        pendingInstallApkPath = null
+        try {
+            val apk = File(path).canonicalFile
+            if (apk.exists() && apk.isFile && apk.name.lowercase().endsWith(".apk")) {
+                launchApkInstaller(apk)
+            }
+        } catch (_: Exception) {
+            // Flutter will offer the update button again if Android cannot resume the installer.
+        }
+    }
+
+    private fun launchApkInstaller(apk: File) {
+        val apkUri = FileProvider.getUriForFile(
+            this,
+            "$packageName.fileprovider",
+            apk
+        )
+        val installIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(apkUri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        startActivity(installIntent)
     }
 
     private fun handleSecureRead(call: MethodCall, result: MethodChannel.Result) {

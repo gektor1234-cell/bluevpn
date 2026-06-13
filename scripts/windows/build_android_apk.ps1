@@ -55,8 +55,9 @@ if ($Mode -eq "release" -or $Mode -eq "both") {
     $releaseArgs += "--build-name=$releaseBuildName"
     $releaseArgs += "--build-number=$releaseBuildNumber"
     if ($EnableYandexRewardedAds -or $DeployPreview) {
-        $releaseAppVersion = "0.2.23-adgate-preview-android-vpn-takeover"
-        $releaseBuildNumber = "2026060802"
+        $releaseAppVersion = "0.2.25-adgate-preview-update-demo"
+        $releaseBuildName = "0.2.25"
+        $releaseBuildNumber = "2026061302"
         $releaseArgs[4] = "--dart-define=GREENVPN_APP_VERSION=$releaseAppVersion"
         $releaseArgs[5] = "--build-name=$releaseBuildName"
         $releaseArgs[6] = "--build-number=$releaseBuildNumber"

@@ -77,6 +77,21 @@ String greenVpnClientPlatform() {
   return Platform.operatingSystem;
 }
 
+bool greenVpnUpdateManifestMatchesCurrentPlatform(
+  GreenVpnUpdateManifest manifest,
+) {
+  final platform = manifest.platform.trim().toLowerCase();
+  return platform.isEmpty || platform == greenVpnClientPlatform();
+}
+
+String greenVpnUpdateChannel() {
+  final version = kAppVersion.toLowerCase();
+  if (version.contains('preview') || version.contains('adgate')) {
+    return 'preview';
+  }
+  return 'stable';
+}
+
 int greenVpnIntValue(Object? value) {
   if (value is int) return value;
   if (value is num) return value.toInt();
@@ -5457,6 +5472,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   bool _phoneVerified = false;
   bool _phoneStatusBusy = false;
   String? _phoneStatusMessage;
+  bool _updateCheckBusy = false;
+  bool _forcedUpdateRouteOpen = false;
 
   void goToTab(int i) => setState(() => _index = i);
 
@@ -5484,12 +5501,16 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _refreshEmailStatus(showToast: false);
     _refreshPhoneStatus(showToast: false);
     unawaited(_refreshWireGuardState());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_checkRequiredUpdateSilently());
+    });
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(_handleAppResumed());
+      unawaited(_checkRequiredUpdateSilently());
     }
   }
 
@@ -7127,7 +7148,6 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       return false;
     }
 
-    _toast(context, 'Просмотр засчитан. Подключаем Green VPN...');
     return true;
   }
 
@@ -7214,7 +7234,6 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       return false;
     }
 
-    _toast(context, 'Просмотр засчитан. Подключаем Green VPN...');
     return true;
   }
 
@@ -8188,6 +8207,57 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         }
       });
     });
+  }
+
+  Future<void> _checkRequiredUpdateSilently() async {
+    if (_updateCheckBusy || _forcedUpdateRouteOpen) return;
+    if (kIsWeb) return;
+
+    _updateCheckBusy = true;
+    try {
+      String? clientId;
+      try {
+        clientId = await _deviceStore.getOrCreate();
+      } catch (_) {
+        clientId = null;
+      }
+
+      final res = await _api.fetchUpdateManifest(
+        platform: greenVpnClientPlatform(),
+        channel: greenVpnUpdateChannel(),
+        currentVersion: kAppVersion,
+        clientId: clientId,
+      );
+      final manifest = res.data;
+      if (!mounted ||
+          !res.ok ||
+          manifest == null ||
+          !manifest.required ||
+          !manifest.hasUpdate ||
+          !greenVpnUpdateManifestMatchesCurrentPlatform(manifest)) {
+        return;
+      }
+
+      _openForcedUpdateRoute(manifest);
+    } finally {
+      _updateCheckBusy = false;
+    }
+  }
+
+  void _openForcedUpdateRoute(GreenVpnUpdateManifest manifest) {
+    if (_forcedUpdateRouteOpen || !mounted) return;
+    _forcedUpdateRouteOpen = true;
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute(
+            builder: (_) =>
+                UpdatesPage(forceRequired: true, initialManifest: manifest),
+          ),
+        )
+        .whenComplete(() {
+          _forcedUpdateRouteOpen = false;
+          if (mounted) unawaited(_checkRequiredUpdateSilently());
+        });
   }
 
   @override
@@ -10108,7 +10178,14 @@ class SettingsPage extends StatelessWidget {
 }
 
 class UpdatesPage extends StatefulWidget {
-  const UpdatesPage({super.key});
+  final bool forceRequired;
+  final GreenVpnUpdateManifest? initialManifest;
+
+  const UpdatesPage({
+    super.key,
+    this.forceRequired = false,
+    this.initialManifest,
+  });
 
   @override
   State<UpdatesPage> createState() => _UpdatesPageState();
@@ -10129,7 +10206,13 @@ class _UpdatesPageState extends State<UpdatesPage> {
   @override
   void initState() {
     super.initState();
-    _refresh();
+    final initial = widget.initialManifest;
+    if (initial != null) {
+      _loading = false;
+      _manifest = initial;
+    } else {
+      _refresh();
+    }
   }
 
   Future<void> _refresh() async {
@@ -10149,6 +10232,7 @@ class _UpdatesPageState extends State<UpdatesPage> {
 
     final res = await _api.fetchUpdateManifest(
       platform: greenVpnClientPlatform(),
+      channel: greenVpnUpdateChannel(),
       currentVersion: kAppVersion,
       clientId: clientId,
     );
@@ -10164,12 +10248,6 @@ class _UpdatesPageState extends State<UpdatesPage> {
     });
   }
 
-  Future<void> _openDownload() async {
-    final url = _manifest?.downloadUrl.trim() ?? '';
-    if (url.isEmpty) return;
-    await openExternalUrl(url);
-  }
-
   String get _platform => greenVpnClientPlatform();
 
   String get _platformTitle {
@@ -10183,6 +10261,8 @@ class _UpdatesPageState extends State<UpdatesPage> {
     if (!kIsWeb && Platform.isWindows) return '.exe';
     return '';
   }
+
+  bool get _showManualDownloadLink => false;
 
   String get _installHint {
     if (!kIsWeb && Platform.isAndroid) {
@@ -10214,8 +10294,72 @@ class _UpdatesPageState extends State<UpdatesPage> {
     return name;
   }
 
+  Future<Directory> _updateDownloadDirectory() async {
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        final path = await kAndroidPlatformChannel.invokeMethod<String>(
+          'getUpdateCacheDir',
+        );
+        if (path != null && path.trim().isNotEmpty) {
+          final dir = Directory(path.trim());
+          await dir.create(recursive: true);
+          return dir;
+        }
+      } catch (_) {
+        // Fall back to the generic temp directory; installation will still be blocked if Android cannot share it.
+      }
+    }
+
+    final dir = Directory(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}GreenVPNUpdates',
+    );
+    await dir.create(recursive: true);
+    return dir;
+  }
+
+  Future<bool> _downloadedFileMatchesManifest(
+    File file,
+    GreenVpnUpdateManifest manifest,
+  ) async {
+    if (!await file.exists()) return false;
+    final expectedSha = manifest.sha256.trim().toUpperCase();
+    if (expectedSha.isEmpty) {
+      return (await file.length()) > 0;
+    }
+    final actualSha = (await crypto.sha256.bind(file.openRead()).first)
+        .toString()
+        .toUpperCase();
+    return actualSha == expectedSha;
+  }
+
+  Future<void> _cleanupOldUpdateFiles(
+    Directory dir, {
+    required String keepPath,
+    required String tempPath,
+  }) async {
+    try {
+      await for (final entity in dir.list()) {
+        if (entity is! File) continue;
+        if (entity.path == keepPath || entity.path == tempPath) continue;
+        final lower = entity.path.toLowerCase();
+        if (lower.endsWith('.apk') ||
+            lower.endsWith('.exe') ||
+            lower.endsWith('.download')) {
+          await entity.delete();
+        }
+      }
+    } catch (_) {
+      // Cleanup is best effort; a locked stale file must not block the update.
+    }
+  }
+
   Future<File> _downloadUpdateFile(GreenVpnUpdateManifest manifest) async {
     final url = manifest.downloadUrl.trim();
+    if (!greenVpnUpdateManifestMatchesCurrentPlatform(manifest)) {
+      throw Exception(
+        'Update manifest is for ${manifest.platform}, but this device is $_platformTitle.',
+      );
+    }
     if (url.isEmpty) {
       throw Exception('Ссылка на обновление не настроена.');
     }
@@ -10230,14 +10374,24 @@ class _UpdatesPageState extends State<UpdatesPage> {
       throw Exception('Некорректная ссылка обновления.');
     }
 
-    final dir = Directory(
-      '${Directory.systemTemp.path}${Platform.pathSeparator}GreenVPNUpdates',
-    );
-    await dir.create(recursive: true);
+    final dir = await _updateDownloadDirectory();
     final file = File(
       '${dir.path}${Platform.pathSeparator}${_safeUpdateFileName(uri)}',
     );
     final temp = File('${file.path}.download');
+    await _cleanupOldUpdateFiles(dir, keepPath: file.path, tempPath: temp.path);
+    if (await _downloadedFileMatchesManifest(file, manifest)) {
+      if (mounted) {
+        setState(
+          () => _downloadStatus =
+              'Update file is already downloaded. Starting installer...',
+        );
+      }
+      return file;
+    }
+    if (await file.exists()) {
+      await file.delete();
+    }
     if (await temp.exists()) {
       await temp.delete();
     }
@@ -10373,220 +10527,230 @@ class _UpdatesPageState extends State<UpdatesPage> {
     final hasUpdate = manifest?.hasUpdate ?? false;
     final heldByRollout = manifest?.heldByRollout ?? false;
     final requiredUpdate = manifest?.required ?? false;
+    final forceLocked = widget.forceRequired && (_loading || hasUpdate);
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Обновления'),
-        actions: [
-          IconButton(
-            tooltip: 'Проверить',
-            onPressed: _loading ? null : _refresh,
-            icon: const Icon(Icons.refresh_rounded),
-          ),
-        ],
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                _PageTitle(
-                  title: hasUpdate
-                      ? (requiredUpdate
-                            ? 'Требуется обновление'
-                            : 'Есть новая версия')
-                      : 'Версия актуальна',
-                  subtitle: hasUpdate
-                      ? 'Новая версия будет установлена для $_platformTitle.'
-                      : heldByRollout
-                      ? 'Сервер обновлений работает. Новая версия будет предложена, когда дойдёт очередь этого устройства.'
-                      : 'Green VPN проверил сервер обновлений.',
-                  icon: hasUpdate
-                      ? Icons.system_update_alt_rounded
-                      : Icons.verified_rounded,
-                ),
-                const SizedBox(height: 12),
-                if (_error != null)
-                  _Card(
-                    child: Text(
-                      _error!,
-                      style: const TextStyle(
-                        color: kBrandDanger,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  )
-                else if (manifest != null) ...[
-                  _Card(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        _SupportStatusLine(
-                          title: 'Текущая версия',
-                          ok: true,
-                          value: kAppVersion,
-                        ),
-                        const SizedBox(height: 10),
-                        _SupportStatusLine(
-                          title: 'Платформа',
-                          ok: true,
-                          value: _platformTitle,
-                        ),
-                        const SizedBox(height: 10),
-                        _SupportStatusLine(
-                          title: 'Версия на сервере',
-                          ok: !hasUpdate,
-                          value: manifest.latestVersion.isEmpty
-                              ? 'не задана'
-                              : manifest.latestVersion,
-                        ),
-                        if (manifest.sha256.trim().isNotEmpty) ...[
-                          const SizedBox(height: 10),
-                          _SupportStatusLine(
-                            title: 'Проверка файла',
-                            ok: true,
-                            value: 'SHA256 получен',
-                          ),
-                        ],
-                      ],
-                    ),
+    return PopScope(
+      canPop: !forceLocked,
+      child: Scaffold(
+        appBar: AppBar(
+          automaticallyImplyLeading: !forceLocked,
+          title: const Text('Обновления'),
+          actions: [
+            IconButton(
+              tooltip: 'Проверить',
+              onPressed: _loading ? null : _refresh,
+              icon: const Icon(Icons.refresh_rounded),
+            ),
+          ],
+        ),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : ListView(
+                padding: const EdgeInsets.all(16),
+                children: [
+                  _PageTitle(
+                    title: hasUpdate
+                        ? (requiredUpdate
+                              ? 'Требуется обновление'
+                              : 'Есть новая версия')
+                        : 'Версия актуальна',
+                    subtitle: hasUpdate
+                        ? 'Новая версия будет установлена для $_platformTitle.'
+                        : heldByRollout
+                        ? 'Сервер обновлений работает. Новая версия будет предложена, когда дойдёт очередь этого устройства.'
+                        : 'Green VPN проверил сервер обновлений.',
+                    icon: hasUpdate
+                        ? Icons.system_update_alt_rounded
+                        : Icons.verified_rounded,
                   ),
-                  if (manifest.changelog.isNotEmpty) ...[
-                    const SizedBox(height: 12),
+                  const SizedBox(height: 12),
+                  if (_error != null)
+                    _Card(
+                      child: Text(
+                        _error!,
+                        style: const TextStyle(
+                          color: kBrandDanger,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    )
+                  else if (manifest != null) ...[
                     _Card(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
-                            'Что изменилось',
-                            style: TextStyle(fontWeight: FontWeight.w900),
+                          _SupportStatusLine(
+                            title: 'Текущая версия',
+                            ok: true,
+                            value: kAppVersion,
                           ),
-                          const SizedBox(height: 8),
-                          for (final item in manifest.changelog)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 6),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    '• ',
-                                    style: TextStyle(
-                                      color: kBrandPrimary,
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                  Expanded(
-                                    child: Text(
-                                      item,
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.w700,
+                          const SizedBox(height: 10),
+                          _SupportStatusLine(
+                            title: 'Платформа',
+                            ok: true,
+                            value: _platformTitle,
+                          ),
+                          const SizedBox(height: 10),
+                          _SupportStatusLine(
+                            title: 'Версия на сервере',
+                            ok: !hasUpdate,
+                            value: manifest.latestVersion.isEmpty
+                                ? 'не задана'
+                                : manifest.latestVersion,
+                          ),
+                          if (manifest.sha256.trim().isNotEmpty) ...[
+                            const SizedBox(height: 10),
+                            _SupportStatusLine(
+                              title: 'Проверка файла',
+                              ok: true,
+                              value: 'SHA256 получен',
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    if (manifest.changelog.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      _Card(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Что изменилось',
+                              style: TextStyle(fontWeight: FontWeight.w900),
+                            ),
+                            const SizedBox(height: 8),
+                            for (final item in manifest.changelog)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 6),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      '• ',
+                                      style: TextStyle(
+                                        color: kBrandPrimary,
+                                        fontWeight: FontWeight.w900,
                                       ),
                                     ),
-                                  ),
-                                ],
+                                    Expanded(
+                                      child: Text(
+                                        item,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
-                  if (hasUpdate) ...[
-                    const SizedBox(height: 12),
-                    _Card(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Text(
-                            requiredUpdate
-                                ? 'Это критическое обновление.'
-                                : 'Обновление можно установить сейчас.',
-                            style: const TextStyle(fontWeight: FontWeight.w900),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            manifest.canDownload
-                                ? _installHint
-                                : 'Ссылка на скачивание пока не настроена на сервере.',
-                            style: TextStyle(
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.onSurface.withOpacity(0.62),
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          if (!_downloadLooksPlatformSpecific(
-                            manifest.downloadUrl,
-                          )) ...[
-                            const SizedBox(height: 10),
-                            const Text(
-                              'Сервер обновлений вернул файл не для этой платформы. Установка заблокирована.',
-                              style: TextStyle(
-                                color: kBrandDanger,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ],
-                          if (_downloadProgress != null) ...[
-                            const SizedBox(height: 12),
-                            LinearProgressIndicator(value: _downloadProgress),
-                          ],
-                          if (_downloadStatus != null) ...[
-                            const SizedBox(height: 10),
+                    ],
+                    if (hasUpdate) ...[
+                      const SizedBox(height: 12),
+                      _Card(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
                             Text(
-                              _downloadStatus!,
+                              requiredUpdate
+                                  ? 'Это критическое обновление.'
+                                  : 'Обновление можно установить сейчас.',
                               style: const TextStyle(
-                                fontWeight: FontWeight.w700,
+                                fontWeight: FontWeight.w900,
                               ),
                             ),
-                          ],
-                          if (_downloadError != null) ...[
-                            const SizedBox(height: 10),
-                            Text(
-                              _downloadError!,
-                              style: const TextStyle(
-                                color: kBrandDanger,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: 14),
-                          ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: kBrandPrimary,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                            ),
-                            onPressed:
-                                manifest.canDownload &&
-                                    _downloadLooksPlatformSpecific(
-                                      manifest.downloadUrl,
-                                    ) &&
-                                    !_downloading
-                                ? _downloadAndInstall
-                                : null,
-                            child: Text(
-                              _downloading
-                                  ? 'Обновление загружается...'
-                                  : 'Обновить Green VPN',
-                            ),
-                          ),
-                          if (manifest.canDownload) ...[
                             const SizedBox(height: 8),
-                            TextButton(
-                              onPressed: _downloading ? null : _openDownload,
-                              child: const Text('Открыть ссылку вручную'),
+                            Text(
+                              manifest.canDownload
+                                  ? _installHint
+                                  : 'Ссылка на скачивание пока не настроена на сервере.',
+                              style: TextStyle(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurface.withOpacity(0.62),
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
+                            if (!_downloadLooksPlatformSpecific(
+                              manifest.downloadUrl,
+                            )) ...[
+                              const SizedBox(height: 10),
+                              const Text(
+                                'Сервер обновлений вернул файл не для этой платформы. Установка заблокирована.',
+                                style: TextStyle(
+                                  color: kBrandDanger,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ],
+                            if (_downloadProgress != null) ...[
+                              const SizedBox(height: 12),
+                              LinearProgressIndicator(value: _downloadProgress),
+                            ],
+                            if (_downloadStatus != null) ...[
+                              const SizedBox(height: 10),
+                              Text(
+                                _downloadStatus!,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                            if (_downloadError != null) ...[
+                              const SizedBox(height: 10),
+                              Text(
+                                _downloadError!,
+                                style: const TextStyle(
+                                  color: kBrandDanger,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 14),
+                            ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: kBrandPrimary,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 14,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                              ),
+                              onPressed:
+                                  manifest.canDownload &&
+                                      _downloadLooksPlatformSpecific(
+                                        manifest.downloadUrl,
+                                      ) &&
+                                      !_downloading
+                                  ? _downloadAndInstall
+                                  : null,
+                              child: Text(
+                                _downloading
+                                    ? 'Обновление загружается...'
+                                    : 'Обновить Green VPN',
+                              ),
+                            ),
+                            if (_showManualDownloadLink &&
+                                manifest.canDownload) ...[
+                              const SizedBox(height: 8),
+                              TextButton(
+                                onPressed: null,
+                                child: const Text('Открыть ссылку вручную'),
+                              ),
+                            ],
                           ],
-                        ],
+                        ),
                       ),
-                    ),
+                    ],
                   ],
                 ],
-              ],
-            ),
+              ),
+      ),
     );
   }
 }
