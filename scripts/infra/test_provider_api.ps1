@@ -4,7 +4,7 @@ param(
     [string]$Provider = "all",
 
     [Parameter(Mandatory = $false)]
-    [string]$SecretsPath = "D:\GreenVPNSecrets\provider_api.local.ps1",
+    [string]$SecretsPath = "",
 
     [Parameter(Mandatory = $false)]
     [switch]$IncludeInventory
@@ -107,17 +107,46 @@ function Test-Timeweb {
     if ($IncludeInventory) {
         $details.servers = @($servers.servers | ForEach-Object {
             $mainIp = $null
-            if ($_.main_ipv4) {
+            $propNames = @($_.PSObject.Properties.Name)
+            if ($propNames -contains "main_ipv4" -and $_.main_ipv4) {
                 $mainIp = $_.main_ipv4
-            } elseif ($_.ips -and $_.ips.Count -gt 0) {
-                $mainIp = $_.ips[0].ip
+            } elseif ($propNames -contains "ips" -and $_.ips -and @($_.ips).Count -gt 0) {
+                $firstIp = @($_.ips)[0]
+                if ($firstIp.PSObject.Properties.Name -contains "ip") {
+                    $mainIp = $firstIp.ip
+                } else {
+                    $mainIp = [string]$firstIp
+                }
+            } elseif ($propNames -contains "networks" -and $_.networks) {
+                $candidate = @($_.networks | ForEach-Object {
+                    if ($_.PSObject.Properties.Name -contains "ips") {
+                        @($_.ips)
+                    }
+                } | Select-Object -First 1)
+                if ($candidate.Count -gt 0) {
+                    $candidateValue = $candidate[0]
+                    if ($candidateValue.PSObject.Properties.Name -contains "ip") {
+                        $mainIp = $candidateValue.ip
+                    } else {
+                        $mainIp = [string]$candidateValue
+                    }
+                }
+            }
+
+            $osName = $null
+            if ($propNames -contains "os" -and $_.os) {
+                if ($_.os.PSObject.Properties.Name -contains "name") {
+                    $osName = $_.os.name
+                } else {
+                    $osName = [string]$_.os
+                }
             }
 
             [pscustomobject]@{
                 id = $_.id
                 name = $_.name
                 status = $_.status
-                os = $_.os.name
+                os = $osName
                 mainIp = $mainIp
             }
         })

@@ -6,32 +6,42 @@ $script:GreenVpnSensitiveNamePattern = '(?i)(token|secret|password|passwd|author
 function Import-GreenVpnProviderSecrets {
     param(
         [Parameter(Mandatory = $false)]
-        [string]$SecretsPath = "D:\GreenVPNSecrets\provider_api.local.ps1"
+        [string]$SecretsPath = ""
     )
 
-    if ([string]::IsNullOrWhiteSpace($SecretsPath)) {
-        return [pscustomobject]@{
-            loaded = $false
-            path = $null
-            reason = "empty_path"
-        }
+    $candidatePaths = @()
+    if (-not [string]::IsNullOrWhiteSpace($SecretsPath)) {
+        $candidatePaths += $SecretsPath
+    } else {
+        $candidatePaths += (Join-Path $PSScriptRoot "..\..\secrets\provider_api.local.ps1")
+        $candidatePaths += "D:\GreenVPN_Secrets\provider_api.local.ps1"
     }
 
-    if (-not (Test-Path -LiteralPath $SecretsPath -PathType Leaf)) {
+    foreach ($candidate in $candidatePaths) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            continue
+        }
+
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            continue
+        }
+
+        $resolved = Resolve-Path -LiteralPath $candidate
+        . $resolved.Path
+
         return [pscustomobject]@{
-            loaded = $false
-            path = $SecretsPath
-            reason = "not_found"
+            loaded = $true
+            path = $resolved.Path
+            reason = "loaded"
+            searched = @($candidatePaths)
         }
     }
-
-    $resolved = Resolve-Path -LiteralPath $SecretsPath
-    . $resolved.Path
 
     return [pscustomobject]@{
-        loaded = $true
-        path = $resolved.Path
-        reason = "loaded"
+        loaded = $false
+        path = $null
+        reason = "not_found"
+        searched = @($candidatePaths)
     }
 }
 

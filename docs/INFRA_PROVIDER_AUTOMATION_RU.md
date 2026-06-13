@@ -13,13 +13,27 @@
 
 ## Где хранить ключи
 
-Локальный файл для секретов:
+Основной локальный файл для секретов рядом с проектом:
 
 ```powershell
-D:\GreenVPNSecrets\provider_api.local.ps1
+C:\Users\gekto\projects\bluevpn\secrets\provider_api.local.ps1
 ```
 
-Шаблон лежит тут:
+Он игнорируется git через `secrets/`, поэтому не попадает в репозиторий.
+
+Внешняя папка-источник/backup:
+
+```powershell
+D:\GreenVPN_Secrets
+```
+
+Импорт существующих `*_access.txt` из внешней папки в проектный локальный файл:
+
+```powershell
+.\scripts\infra\import_existing_secrets.ps1 -Force
+```
+
+Шаблон без реальных значений лежит тут:
 
 ```powershell
 scripts\infra\provider_secrets.example.ps1

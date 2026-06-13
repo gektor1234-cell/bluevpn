@@ -4,7 +4,7 @@ param(
     [string]$Provider = "serverspace",
 
     [Parameter(Mandatory = $false)]
-    [string]$SecretsPath = "D:\GreenVPNSecrets\provider_api.local.ps1",
+    [string]$SecretsPath = "",
 
     [Parameter(Mandatory = $false)]
     [string]$Name = "greenvpn-test-node-01",
