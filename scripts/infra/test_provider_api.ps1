@@ -155,23 +155,135 @@ function Test-Timeweb {
     return New-ProviderResult -Name "timeweb" -Status "ok" -Details $details
 }
 
+function Get-JsonArrayProperty {
+    param(
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [object]$Object,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    if ($null -eq $Object) {
+        return @()
+    }
+
+    $prop = $Object.PSObject.Properties[$Name]
+    if ($null -eq $prop -or $null -eq $prop.Value) {
+        return @()
+    }
+
+    return @($prop.Value)
+}
+
+function Invoke-RuvdsApiV2 {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Token
+    )
+
+    return Invoke-GreenVpnJson `
+        -Method GET `
+        -Uri "https://api.ruvds.com$Path" `
+        -Headers @{ Authorization = "Bearer $Token" }
+}
+
 function Test-Ruvds {
     $apiKey = Get-GreenVpnSecret -Name "GREENVPN_RUVDS_API_KEY"
-    $login = Get-GreenVpnSecret -Name "GREENVPN_RUVDS_API_LOGIN"
-    $password = Get-GreenVpnSecret -Name "GREENVPN_RUVDS_API_PASSWORD"
 
-    if ([string]::IsNullOrWhiteSpace($apiKey) -and
-        ([string]::IsNullOrWhiteSpace($login) -or [string]::IsNullOrWhiteSpace($password))) {
+    if ([string]::IsNullOrWhiteSpace($apiKey)) {
         return New-ProviderResult -Name "ruvds" -Status "missing_secret" -Details @{
-            requiredEnv = "GREENVPN_RUVDS_API_KEY or GREENVPN_RUVDS_API_LOGIN + GREENVPN_RUVDS_API_PASSWORD"
-            note = "RUVDS API is provider-specific; creation script is kept in dry-run mode until tariff/datacenter IDs are pinned."
+            requiredEnv = "GREENVPN_RUVDS_API_KEY"
+            note = "Use a RUVDS API v2 bearer token from https://ruvds.com/my/settings/api."
         }
     }
 
-    return New-ProviderResult -Name "ruvds" -Status "configured_not_called" -Details @{
-        reason = "RUVDS credentials are present, but this script does not call ambiguous endpoints yet."
-        next = "Pin API v2 auth flow, datacenter id, os id, tariff id, then enable live calls."
+    $balance = Invoke-RuvdsApiV2 -Path "/v2/balance" -Token $apiKey
+    $servers = Invoke-RuvdsApiV2 -Path "/v2/servers?page=1&per_page=50" -Token $apiKey
+    $datacenters = Invoke-RuvdsApiV2 -Path "/v2/datacenters" -Token $apiKey
+    $operatingSystems = Invoke-RuvdsApiV2 -Path "/v2/os" -Token $apiKey
+    $tariffs = Invoke-RuvdsApiV2 -Path "/v2/tariffs" -Token $apiKey
+    $sshKeys = Invoke-RuvdsApiV2 -Path "/v2/ssh_keys" -Token $apiKey
+
+    $serverItems = Get-JsonArrayProperty -Object $servers -Name "servers"
+    $datacenterItems = Get-JsonArrayProperty -Object $datacenters -Name "datacenters"
+    $osItems = Get-JsonArrayProperty -Object $operatingSystems -Name "os"
+    $vpsTariffs = Get-JsonArrayProperty -Object $tariffs -Name "vps"
+    $driveTariffs = Get-JsonArrayProperty -Object $tariffs -Name "drive"
+    $sshKeyItems = Get-JsonArrayProperty -Object $sshKeys -Name "ssh_keys"
+
+    $details = @{
+        balanceAmount = $balance.amount
+        balanceCurrency = $balance.currency
+        balanceType = $balance.type
+        serverCount = @($serverItems).Count
+        datacenterCount = @($datacenterItems).Count
+        osCount = @($osItems).Count
+        vpsTariffCount = @($vpsTariffs).Count
+        driveTariffCount = @($driveTariffs).Count
+        sshKeyCount = @($sshKeyItems).Count
     }
+
+    if ($IncludeInventory) {
+        $details.servers = @($serverItems | ForEach-Object {
+            [pscustomobject]@{
+                id = $_.id
+                name = $_.name
+                status = $_.status
+                datacenter = $_.datacenter
+                paidTill = $_.paid_till
+            }
+        })
+
+        $details.targetDatacenters = @($datacenterItems |
+            Where-Object { $_.name -match 'LD|London|ZUR|Zurich|Amsterdam|Almaty|Astana' } |
+            Select-Object -First 20 |
+            ForEach-Object {
+                [pscustomobject]@{
+                    id = $_.id
+                    name = $_.name
+                    vpsTariffs = $_.vps_tariffs
+                    driveTariffs = $_.drive_tariffs
+                }
+            })
+
+        $details.linuxImages = @($osItems |
+            Where-Object { $_.type -eq "linux" -and $_.is_active -and $_.name -match 'Debian 12|Ubuntu 22\.04|Ubuntu 24\.04' } |
+            ForEach-Object {
+                [pscustomobject]@{
+                    id = $_.id
+                    name = $_.name
+                    sshKeysSupported = $_.ssh_keys_supported
+                }
+            })
+
+        $details.vpsTariffs = @($vpsTariffs |
+            Where-Object { $_.is_active } |
+            Select-Object -First 20 |
+            ForEach-Object {
+                [pscustomobject]@{
+                    id = $_.id
+                    name = $_.name
+                    cpuPrice = $_.cpu
+                    ramPrice = $_.ram
+                    ipPrice = $_.ip
+                }
+            })
+
+        $details.sshKeys = @($sshKeyItems | ForEach-Object {
+            [pscustomobject]@{
+                id = $_.ssh_key_id
+                name = $_.name
+                fingerprint = $_.sha256_fingerprint
+            }
+        })
+    }
+
+    return New-ProviderResult -Name "ruvds" -Status "ok" -Details $details
 }
 
 function Test-Hostkey {
@@ -191,7 +303,7 @@ function Test-Hostkey {
 
 $providers = @()
 if ($Provider -eq "all") {
-    $providers = @("serverspace", "timeweb", "ruvds", "hostkey")
+    $providers = @("timeweb", "ruvds", "serverspace")
 } else {
     $providers = @($Provider)
 }

@@ -28,6 +28,26 @@ param(
     [int]$BandwidthMbps = 50,
 
     [Parameter(Mandatory = $false)]
+    [ValidateRange(0, 5)]
+    [int]$PaymentPeriod = 2,
+
+    [Parameter(Mandatory = $false)]
+    [int]$RuvdsTariffId = 41,
+
+    [Parameter(Mandatory = $false)]
+    [int]$RuvdsDriveTariffId = 9,
+
+    [Parameter(Mandatory = $false)]
+    [string]$RuvdsSshKeyId = "",
+
+    [Parameter(Mandatory = $false)]
+    [ValidateRange(1, 16)]
+    [int]$IpCount = 1,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$QuotePrice,
+
+    [Parameter(Mandatory = $false)]
     [switch]$Apply,
 
     [Parameter(Mandatory = $false)]
@@ -74,6 +94,35 @@ if ([string]::IsNullOrWhiteSpace($Title)) {
     $Title = $Name
 }
 
+if ($Provider -eq "ruvds" -and $Country -eq "Netherlands" -and $City -eq "Amsterdam") {
+    switch ([string]$LocationId) {
+        "2" {
+            $Country = "Switzerland"
+            $City = "Zurich"
+        }
+        "3" {
+            $Country = "United Kingdom"
+            $City = "London"
+        }
+        "21" {
+            $Country = "Germany"
+            $City = "Frankfurt"
+        }
+        "29" {
+            $Country = "Netherlands"
+            $City = "Amsterdam"
+        }
+        "34" {
+            $Country = "Kazakhstan"
+            $City = "Almaty"
+        }
+        "36" {
+            $Country = "Kazakhstan"
+            $City = "Astana"
+        }
+    }
+}
+
 function New-ServerspacePayload {
     return [ordered]@{
         location_id = $LocationId
@@ -93,6 +142,50 @@ function New-ServerspacePayload {
         )
         name = $Name
     }
+}
+
+function New-RuvdsPayload {
+    $ramGb = [Math]::Round(($RamMb / 1024.0), 2)
+
+    $payload = [ordered]@{
+        datacenter = [int]$LocationId
+        tariff_id = $RuvdsTariffId
+        os_id = [int]$ImageId
+        payment_period = $PaymentPeriod
+        cpu = $Cpu
+        ram = $ramGb
+        drive = $DiskGb
+        drive_tariff_id = $RuvdsDriveTariffId
+        ip = $IpCount
+        computer_name = $Name
+        user_comment = "Green VPN hidden test node. Do not publish before WireGuard bootstrap and smoke tests."
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($RuvdsSshKeyId)) {
+        $payload.ssh_key_id = $RuvdsSshKeyId
+    }
+
+    return $payload
+}
+
+function Get-RuvdsDefaultSshKeyId {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Token
+    )
+
+    $keys = Invoke-GreenVpnJson `
+        -Method GET `
+        -Uri "https://api.ruvds.com/v2/ssh_keys" `
+        -Headers @{ Authorization = "Bearer $Token" }
+
+    $items = @($keys.ssh_keys)
+    $match = @($items | Where-Object { $_.name -eq "greenvpn-codex-local" } | Select-Object -First 1)
+    if ($match.Count -eq 0) {
+        return $null
+    }
+
+    return $match[0].ssh_key_id
 }
 
 function Register-GreenVpnBackendDraft {
@@ -176,18 +269,43 @@ switch ($Provider) {
         }
     }
     "ruvds" {
-        $plan.endpoint = "RUVDS API v2"
-        $plan.payload = [ordered]@{
-            name = $Name
-            datacenter = $LocationId
-            os = $ImageId
-            cpu = $Cpu
-            ramMb = $RamMb
-            diskGb = $DiskGb
-            note = "Live creation is intentionally disabled until RUVDS tariff/datacenter/os IDs are pinned."
+        $plan.endpoint = "POST https://api.ruvds.com/v2/servers"
+        $apiKey = $null
+        if ($QuotePrice -or $Apply) {
+            $apiKey = Get-GreenVpnSecret -Name "GREENVPN_RUVDS_API_KEY" -Required
+            if ([string]::IsNullOrWhiteSpace($RuvdsSshKeyId)) {
+                $RuvdsSshKeyId = Get-RuvdsDefaultSshKeyId -Token $apiKey
+            }
         }
+
+        $plan.payload = New-RuvdsPayload
+        $plan.defaults = [ordered]@{
+            recommendedFirstDatacenter = "3 / LD8 London"
+            fallbackDatacenter = "2 / ZUR1 Zurich"
+            os = "52 / Debian 12"
+            tariff = "$RuvdsTariffId / PremiumEurope"
+            driveTariff = "$RuvdsDriveTariffId"
+            paymentPeriod = "$PaymentPeriod / one month when value is 2"
+            sshKey = if ([string]::IsNullOrWhiteSpace($RuvdsSshKeyId)) { "not set" } else { "greenvpn-codex-local" }
+        }
+
+        if ($QuotePrice -and -not $Apply) {
+            $plan.dryRun = $true
+            $plan.action = "quote_test_vps_price"
+            $plan.providerResponse = Invoke-GreenVpnJson `
+                -Method POST `
+                -Uri "https://api.ruvds.com/v2/servers?get_price_only=true" `
+                -Headers @{ Authorization = "Bearer $apiKey" } `
+                -Body $plan.payload
+        }
+
         if ($Apply) {
-            throw "RUVDS live creation is not enabled in this script yet. Pin tariff/datacenter/os IDs first."
+            $plan.dryRun = $false
+            $plan.providerResponse = Invoke-GreenVpnJson `
+                -Method POST `
+                -Uri "https://api.ruvds.com/v2/servers" `
+                -Headers @{ Authorization = "Bearer $apiKey" } `
+                -Body $plan.payload
         }
     }
     "hostkey" {

@@ -45,9 +45,13 @@ scripts\infra\provider_secrets.example.ps1
 $env:GREENVPN_SERVERSPACE_API_KEY = "..."
 $env:GREENVPN_TIMEWEB_TOKEN = "..."
 $env:GREENVPN_RUVDS_API_KEY = "..."
-$env:GREENVPN_HOSTKEY_API_KEY = "..."
 $env:BLUEVPN_ADMIN_TOKEN = "..."
 ```
+
+`GREENVPN_RUVDS_API_KEY` — это RUVDS API v2 bearer token из `https://ruvds.com/my/settings/api`.
+Логин/пароль RUVDS для старого `/api/logon/` flow больше не нужен для текущей автоматизации.
+
+HOSTKEY сейчас не входит в рабочий пул. Если позже появится нормальный API-ключ, его можно добавить отдельно как `$env:GREENVPN_HOSTKEY_API_KEY`, но текущая автоматизация не должна блокироваться об него.
 
 Файл `*.local.ps1` игнорируется git.
 
@@ -65,10 +69,10 @@ $env:BLUEVPN_ADMIN_TOKEN = "..."
 
 Что сейчас делает скрипт:
 
-- Serverspace: проверяет проект через `GET https://api.serverspace.io/api/v1/project`.
 - Timeweb: проверяет список серверов через `GET https://api.timeweb.cloud/api/v1/servers`.
-- RUVDS: проверяет наличие ключей, live-вызовы пока выключены до фиксации tariff/datacenter/os IDs.
-- HOSTKEY: проверяет наличие ключа, live-вызовы пока выключены до фиксации Invapi scope/order template.
+- RUVDS: проверяет `GET https://api.ruvds.com/v2/balance`, `/v2/servers`, `/v2/datacenters`, `/v2/os`, `/v2/tariffs`.
+- Serverspace: проверяет проект через `GET https://api.serverspace.io/api/v1/project`.
+- HOSTKEY: не входит в `-Provider all`; доступен только ручной проверкой `-Provider hostkey`, пока считается запасным вариантом без live-вызовов.
 
 ## Dry-run плана VPS
 
@@ -102,6 +106,52 @@ Serverspace, без покупки:
 ```
 
 `-Apply` тратит деньги у провайдера. Без `-Apply` денег не тратит.
+
+RUVDS London, только расчет цены без создания сервера:
+
+```powershell
+.\scripts\infra\new_test_vps_plan.ps1 `
+  -Provider ruvds `
+  -Name greenvpn-ruvds-ld8-test-01 `
+  -LocationId 3 `
+  -ImageId 52 `
+  -Cpu 1 `
+  -RamMb 1024 `
+  -DiskGb 20 `
+  -PaymentPeriod 2 `
+  -RuvdsTariffId 41 `
+  -RuvdsDriveTariffId 9 `
+  -QuotePrice
+```
+
+Текущий безопасный RUVDS baseline:
+
+- `LocationId 3` — LD8 London.
+- `LocationId 2` — ZUR1 Zurich как fallback.
+- `ImageId 52` — Debian 12.
+- `RuvdsTariffId 41` — PremiumEurope.
+- `RuvdsDriveTariffId 9` — европейский drive tariff из каталога RUVDS.
+- `PaymentPeriod 2` — 1 месяц.
+- SSH public key `greenvpn-codex-local` должен быть в RUVDS. Он нужен, чтобы VPS создавался сразу доступным по SSH без вывода стартового пароля в чат.
+
+Реальное создание RUVDS VPS:
+
+```powershell
+.\scripts\infra\new_test_vps_plan.ps1 `
+  -Provider ruvds `
+  -Name greenvpn-ruvds-ld8-test-01 `
+  -LocationId 3 `
+  -ImageId 52 `
+  -Cpu 1 `
+  -RamMb 1024 `
+  -DiskGb 20 `
+  -PaymentPeriod 2 `
+  -RuvdsTariffId 41 `
+  -RuvdsDriveTariffId 9 `
+  -Apply
+```
+
+`-Apply` создает платный сервер. Созданный узел остается вне основного сайта до ручного bootstrap/smoke/promote.
 
 ## Bootstrap свежего VPN-узла
 
