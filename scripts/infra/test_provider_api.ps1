@@ -230,15 +230,101 @@ function Invoke-RuvdsApiV2 {
         -Headers @{ Authorization = "Bearer $Token" }
 }
 
-function Test-Ruvds {
-    $apiKey = Get-GreenVpnSecret -Name "GREENVPN_RUVDS_API_KEY"
+function Get-RuvdsTokenCandidates {
+    $items = [System.Collections.Generic.List[object]]::new()
+    $seen = @{}
 
-    if ([string]::IsNullOrWhiteSpace($apiKey)) {
+    function Add-RuvdsTokenCandidate {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string]$Source,
+
+            [Parameter(Mandatory = $false)]
+            [AllowNull()]
+            [string]$Token
+        )
+
+        if ([string]::IsNullOrWhiteSpace($Token) -or (Test-GreenVpnPlaceholderSecret -Value $Token)) {
+            return
+        }
+
+        $trimmed = $Token.Trim()
+        if ($seen.ContainsKey($trimmed)) {
+            return
+        }
+
+        $seen[$trimmed] = $true
+        $items.Add([pscustomobject]@{
+            source = $Source
+            token = $trimmed
+        }) | Out-Null
+    }
+
+    Add-RuvdsTokenCandidate -Source "GREENVPN_RUVDS_API_KEY" -Token (Get-GreenVpnSecret -Name "GREENVPN_RUVDS_API_KEY")
+    Add-RuvdsTokenCandidate -Source "GREENVPN_RUVDS_API_KEY_2" -Token (Get-GreenVpnSecret -Name "GREENVPN_RUVDS_API_KEY_2")
+
+    $tokenList = Get-GreenVpnSecret -Name "GREENVPN_RUVDS_API_KEYS"
+    if (-not [string]::IsNullOrWhiteSpace($tokenList)) {
+        $index = 0
+        foreach ($token in ($tokenList -split '[;,]')) {
+            $index += 1
+            Add-RuvdsTokenCandidate -Source "GREENVPN_RUVDS_API_KEYS[$index]" -Token $token
+        }
+    }
+
+    return @($items.ToArray())
+}
+
+function Test-Ruvds {
+    $candidates = @(Get-RuvdsTokenCandidates)
+
+    if ($candidates.Count -eq 0) {
         return New-ProviderResult -Name "ruvds" -Status "missing_secret" -Details @{
-            requiredEnv = "GREENVPN_RUVDS_API_KEY"
+            requiredEnv = "GREENVPN_RUVDS_API_KEY or GREENVPN_RUVDS_API_KEY_2 or GREENVPN_RUVDS_API_KEYS"
             note = "Use a RUVDS API v2 bearer token from https://ruvds.com/my/settings/api."
         }
     }
+
+    $candidateChecks = @($candidates | ForEach-Object {
+        $source = $_.source
+        try {
+            $balanceCheck = Invoke-RuvdsApiV2 -Path "/v2/balance" -Token $_.token
+            [pscustomobject]@{
+                source = $source
+                status = "ok"
+                balanceAmount = $balanceCheck.amount
+                balanceCurrency = $balanceCheck.currency
+                error = $null
+                token = $_.token
+            }
+        } catch {
+            [pscustomobject]@{
+                source = $source
+                status = "error"
+                balanceAmount = $null
+                balanceCurrency = $null
+                error = Protect-GreenVpnString -Value $_.Exception.Message
+                token = $_.token
+            }
+        }
+    })
+
+    $workingCandidates = @($candidateChecks | Where-Object { $_.status -eq "ok" })
+    if ($workingCandidates.Count -eq 0) {
+        return New-ProviderResult -Name "ruvds" -Status "error" -Details @{
+            candidateCount = $candidates.Count
+            candidates = @($candidateChecks | ForEach-Object {
+                [pscustomobject]@{
+                    source = $_.source
+                    status = $_.status
+                    error = $_.error
+                }
+            })
+        }
+    }
+
+    $selectedCandidate = @($workingCandidates | Sort-Object -Property @{ Expression = { [decimal]$_.balanceAmount }; Descending = $true } | Select-Object -First 1)[0]
+    $apiKey = $selectedCandidate.token
 
     $balance = Invoke-RuvdsApiV2 -Path "/v2/balance" -Token $apiKey
     $servers = Invoke-RuvdsApiV2 -Path "/v2/servers?page=1&per_page=50" -Token $apiKey
@@ -255,6 +341,18 @@ function Test-Ruvds {
     $sshKeyItems = Get-JsonArrayProperty -Object $sshKeys -Name "ssh_keys"
 
     $details = @{
+        selectedCredentialSource = $selectedCandidate.source
+        candidateCount = $candidates.Count
+        workingCandidateCount = $workingCandidates.Count
+        candidates = @($candidateChecks | ForEach-Object {
+            [pscustomobject]@{
+                source = $_.source
+                status = $_.status
+                balanceAmount = $_.balanceAmount
+                balanceCurrency = $_.balanceCurrency
+                error = $_.error
+            }
+        })
         balanceAmount = $balance.amount
         balanceCurrency = $balance.currency
         balanceType = $balance.type

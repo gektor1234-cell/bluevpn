@@ -66,7 +66,7 @@ Check all configured RUVDS API candidates without printing token values:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_ruvds_access_candidates.ps1
 ```
 
-RUVDS rollout scripts can use `GREENVPN_RUVDS_API_KEY`, `GREENVPN_RUVDS_API_KEY_2`, and semicolon/comma-separated `GREENVPN_RUVDS_API_KEYS`. The selected credential is reported only by source variable names, never by token value.
+RUVDS inventory and rollout scripts can use `GREENVPN_RUVDS_API_KEY`, `GREENVPN_RUVDS_API_KEY_2`, and semicolon/comma-separated `GREENVPN_RUVDS_API_KEYS`. The selected credential is reported only by source variable names, never by token value. When multiple working RUVDS credentials are present, inventory prefers the candidate with the highest visible balance.
 
 Owner-facing click/action packet:
 
