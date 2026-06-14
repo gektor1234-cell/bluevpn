@@ -281,6 +281,175 @@ function Get-RuvdsDefaultSshKeyId {
     return $match[0].ssh_key_id
 }
 
+function Get-GreenVpnEnvironmentSecretValue {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    foreach ($scope in @("Process", "User", "Machine")) {
+        $value = [Environment]::GetEnvironmentVariable($Name, $scope)
+        if (-not (Test-GreenVpnPlaceholderSecret -Value $value)) {
+            return $value
+        }
+    }
+
+    return $null
+}
+
+function Add-RuvdsCredentialCandidate {
+    param(
+        [Parameter(Mandatory = $false)]
+        [System.Collections.ArrayList]$Candidates,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Source,
+
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [string]$Token
+    )
+
+    if (Test-GreenVpnPlaceholderSecret -Value $Token) {
+        return
+    }
+
+    [void]$Candidates.Add([pscustomobject]@{
+        source = $Source
+        token = $Token.Trim()
+    })
+}
+
+function Add-RuvdsCredentialListCandidate {
+    param(
+        [Parameter(Mandatory = $false)]
+        [System.Collections.ArrayList]$Candidates,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Source,
+
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [string]$Value
+    )
+
+    if (Test-GreenVpnPlaceholderSecret -Value $Value) {
+        return
+    }
+
+    $index = 0
+    foreach ($part in ($Value -split '[,;\r\n]+')) {
+        $trimmed = $part.Trim()
+        if (Test-GreenVpnPlaceholderSecret -Value $trimmed) {
+            continue
+        }
+        $index += 1
+        Add-RuvdsCredentialCandidate -Candidates $Candidates -Source "${Source}[$index]" -Token $trimmed
+    }
+}
+
+function Get-RuvdsApiCredentialCandidates {
+    $rawCandidates = [System.Collections.ArrayList]::new()
+
+    Add-RuvdsCredentialCandidate `
+        -Candidates $rawCandidates `
+        -Source "GREENVPN_RUVDS_API_KEY" `
+        -Token (Get-GreenVpnEnvironmentSecretValue -Name "GREENVPN_RUVDS_API_KEY")
+
+    Add-RuvdsCredentialListCandidate `
+        -Candidates $rawCandidates `
+        -Source "GREENVPN_RUVDS_API_KEYS" `
+        -Value (Get-GreenVpnEnvironmentSecretValue -Name "GREENVPN_RUVDS_API_KEYS")
+
+    $processEnv = [Environment]::GetEnvironmentVariables("Process")
+    foreach ($name in @($processEnv.Keys | Sort-Object)) {
+        $nameText = [string]$name
+        if ($nameText -eq "GREENVPN_RUVDS_API_KEY" -or $nameText -eq "GREENVPN_RUVDS_API_KEYS") {
+            continue
+        }
+        if ($nameText -match '^GREENVPN_RUVDS_API_KEY_[A-Z0-9_]+$') {
+            Add-RuvdsCredentialCandidate -Candidates $rawCandidates -Source $nameText -Token ([string]$processEnv[$name])
+        }
+    }
+
+    $unique = [ordered]@{}
+    foreach ($candidate in $rawCandidates) {
+        if (Test-GreenVpnPlaceholderSecret -Value $candidate.token) {
+            continue
+        }
+
+        if (-not $unique.Contains($candidate.token)) {
+            $unique[$candidate.token] = [ordered]@{
+                sources = @()
+                token = $candidate.token
+            }
+        }
+        $unique[$candidate.token].sources += $candidate.source
+    }
+
+    return @($unique.Values | ForEach-Object {
+        [pscustomobject]@{
+            sources = @($_.sources)
+            token = $_.token
+        }
+    })
+}
+
+function Select-RuvdsApiCredential {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object[]]$Candidates
+    )
+
+    if (@($Candidates).Count -eq 0) {
+        throw "Required secret 'GREENVPN_RUVDS_API_KEY' is not configured."
+    }
+
+    $results = @()
+    foreach ($candidate in $Candidates) {
+        try {
+            $candidateBalance = Invoke-GreenVpnJson `
+                -Method GET `
+                -Uri "https://api.ruvds.com/v2/balance" `
+                -Headers @{ Authorization = "Bearer $($candidate.token)" }
+
+            $candidateSshKeyId = Get-RuvdsDefaultSshKeyId -Token $candidate.token
+
+            $results += [pscustomobject]@{
+                ok = $true
+                sources = @($candidate.sources)
+                token = $candidate.token
+                balance = $candidateBalance
+                balanceAmount = [decimal]$candidateBalance.amount
+                sshKeyId = $candidateSshKeyId
+                sshKeyPresent = (-not [string]::IsNullOrWhiteSpace($candidateSshKeyId))
+            }
+        } catch {
+            $results += [pscustomobject]@{
+                ok = $false
+                sources = @($candidate.sources)
+                token = $candidate.token
+                error = (Protect-GreenVpnString -Value $_.Exception.Message)
+                balanceAmount = [decimal]0
+                sshKeyId = $null
+                sshKeyPresent = $false
+            }
+        }
+    }
+
+    $valid = @($results | Where-Object { $_.ok })
+    if ($valid.Count -eq 0) {
+        $errors = @($results | ForEach-Object { "$($_.sources -join '+'): $($_.error)" })
+        throw "No configured RUVDS API credential passed balance/SSH checks. $($errors -join '; ')"
+    }
+
+    return @($valid |
+        Sort-Object `
+            @{ Expression = { if ($_.sshKeyPresent) { 1 } else { 0 } }; Descending = $true },
+            @{ Expression = { $_.balanceAmount }; Descending = $true } |
+        Select-Object -First 1)[0]
+}
+
 function Register-GreenVpnBackendDraft {
     if ([string]::IsNullOrWhiteSpace($AdminToken)) {
         throw "RegisterDraft requires -AdminToken or BLUEVPN_ADMIN_TOKEN."
@@ -400,18 +569,27 @@ switch ($Provider) {
         $plan.endpoint = "POST https://api.ruvds.com/v2/servers"
         $apiKey = $null
         $balance = $null
+        $selectedCredential = $null
         if ($QuotePrice -or $Apply) {
-            $apiKey = Get-GreenVpnSecret -Name "GREENVPN_RUVDS_API_KEY" -Required
-            $balance = Invoke-GreenVpnJson `
-                -Method GET `
-                -Uri "https://api.ruvds.com/v2/balance" `
-                -Headers @{ Authorization = "Bearer $apiKey" }
+            $selectedCredential = Select-RuvdsApiCredential -Candidates (Get-RuvdsApiCredentialCandidates)
+            $apiKey = $selectedCredential.token
+            $balance = $selectedCredential.balance
             if ([string]::IsNullOrWhiteSpace($RuvdsSshKeyId)) {
-                $RuvdsSshKeyId = Get-RuvdsDefaultSshKeyId -Token $apiKey
+                $RuvdsSshKeyId = $selectedCredential.sshKeyId
+            }
+            if ($Apply -and [string]::IsNullOrWhiteSpace($RuvdsSshKeyId)) {
+                throw "Selected RUVDS account does not have SSH key 'greenvpn-codex-local'. Add the SSH key before paid create."
             }
         }
 
         $plan.payload = New-RuvdsPayload
+        if ($null -ne $selectedCredential) {
+            $plan.credential = [ordered]@{
+                sources = @($selectedCredential.sources)
+                balanceRub = $selectedCredential.balanceAmount
+                requiredSshKeyPresent = $selectedCredential.sshKeyPresent
+            }
+        }
         $plan.defaults = [ordered]@{
             recommendedFirstDatacenter = "3 / LD8 London"
             fallbackDatacenter = "2 / ZUR1 Zurich"

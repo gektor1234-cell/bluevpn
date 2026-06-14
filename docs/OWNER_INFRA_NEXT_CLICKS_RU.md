@@ -30,8 +30,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_scaling_
 
 - `providers.timeweb.status=ok` - Timeweb API жив.
 - `providers.ruvds.status=ok` - RUVDS API жив.
+- `providers.ruvds.accessCandidates.readyCandidateFound=true` - найден RUVDS API-доступ, где хватает баланса и есть SSH-ключ.
 - `createOptions.ruvdsZurich.readyToCreate=true` - можно создавать RUVDS Zurich.
 - `previewSmoke.ok=true` - текущие preview-ноды проходят smoke.
+
+Отдельная безопасная проверка всех RUVDS API-кандидатов:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_ruvds_access_candidates.ps1
+```
+
+Она не печатает токены, а показывает только источник переменной, баланс, наличие SSH-ключа и готовность к созданию Zurich.
 
 ## RUVDS: что сделать владельцу
 
@@ -51,22 +60,25 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_scaling_
 D:\GreenVPN_Secrets\provider_api.local.ps1
 ```
 
-6. Замени только значение:
+6. Замени только значение основного ключа или добавь второй ключ, если старый пока нужен для сравнения:
 
 ```powershell
 $env:GREENVPN_RUVDS_API_KEY = "PASTE_RUVDS_API_V2_TOKEN_HERE"
+$env:GREENVPN_RUVDS_API_KEY_2 = "PASTE_SECOND_RUVDS_API_V2_TOKEN_HERE"
 ```
 
 7. Сохрани файл.
 8. Я проверяю:
 
 ```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_ruvds_access_candidates.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_scaling_readiness.ps1
 ```
 
 Ожидаемый признак готовности:
 
 ```text
+providers.ruvds.accessCandidates.readyCandidateFound = true
 createOptions.ruvdsZurich.readyToCreate = true
 ```
 

@@ -74,6 +74,7 @@ $providerInventory = Invoke-InfraJsonScript -ScriptName "test_provider_api.ps1" 
     IncludeInventory = $true
 }
 
+$ruvdsAccessCandidates = Invoke-InfraJsonScript -ScriptName "check_ruvds_access_candidates.ps1"
 $ruvdsGate = Invoke-InfraJsonScript -ScriptName "ruvds_zurich_gate.ps1"
 $timewebNlQuote = Get-TimewebQuote -Name "greenvpn-timeweb-nl-test-next" -PresetId $TimewebNlPresetId
 $timewebKzQuote = Get-TimewebQuote -Name "greenvpn-timeweb-kz-test-next" -PresetId $TimewebKzPresetId
@@ -116,6 +117,23 @@ $result = [ordered]@{
             status = $ruvds.status
             serverCount = $ruvds.details.serverCount
             balanceRub = $ruvds.details.balanceAmount
+            accessCandidates = [ordered]@{
+                count = $ruvdsAccessCandidates.candidateCount
+                readyCandidateFound = $ruvdsAccessCandidates.readyCandidateFound
+                requiredBalanceRub = $ruvdsAccessCandidates.requiredBalanceRub
+                requiredSshKeyName = $ruvdsAccessCandidates.requiredSshKeyName
+                candidates = @($ruvdsAccessCandidates.candidates | ForEach-Object {
+                    [ordered]@{
+                        sources = @($_.sources)
+                        status = $_.status
+                        balanceRub = if ($_.PSObject.Properties.Name -contains "balanceRub") { $_.balanceRub } else { $null }
+                        serverCount = if ($_.PSObject.Properties.Name -contains "serverCount") { $_.serverCount } else { $null }
+                        requiredSshKeyPresent = if ($_.PSObject.Properties.Name -contains "requiredSshKeyPresent") { $_.requiredSshKeyPresent } else { $false }
+                        readyForZurich = $_.readyForZurich
+                        missing = if ($_.PSObject.Properties.Name -contains "missing") { @($_.missing) } else { @("api_error") }
+                    }
+                })
+            }
             currentServers = @($ruvds.details.servers | ForEach-Object {
                 [ordered]@{
                     id = $_.id
@@ -180,7 +198,7 @@ $result = [ordered]@{
         }
     }
     nextActions = @(
-        "If RUVDS browser balance is funded, replace GREENVPN_RUVDS_API_KEY with a token from that same funded account and rerun this script.",
+        "If RUVDS browser balance is funded but accessCandidates.readyCandidateFound is false, put a token from that same funded account into GREENVPN_RUVDS_API_KEY or GREENVPN_RUVDS_API_KEY_2 and rerun this script.",
         "When ruvdsZurich.readyToCreate is true, run rollout_ruvds_zurich_preview.ps1 with -CreatePaidServer -ConfirmPaidCreate; if the API does not return IPv4, rerun it with -NodeIPv4 <public-ip> -ApplyBootstrap -ConfirmRemoteProvision -AddToPreview.",
         "Do not spend Timeweb NL balance unless the owner explicitly accepts the production-balance risk.",
         "Keep KZ out of preview/stable until repeated full smoke checks pass."

@@ -52,6 +52,14 @@ Check end-to-end scaling readiness in one safe command:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_scaling_readiness.ps1
 ```
 
+Check all configured RUVDS API candidates without printing token values:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_ruvds_access_candidates.ps1
+```
+
+RUVDS rollout scripts can use `GREENVPN_RUVDS_API_KEY`, `GREENVPN_RUVDS_API_KEY_2`, and semicolon/comma-separated `GREENVPN_RUVDS_API_KEYS`. The selected credential is reported only by source variable names, never by token value.
+
 Owner-facing click/action packet:
 
 ```text
@@ -153,7 +161,7 @@ Expected current result until the correct RUVDS account/token is visible to API:
 - `quotedCostRub=933`
 - `readyToCreate=false`
 
-If the browser panel shows a higher balance, create or copy the RUVDS API v2 token from that same funded account and place it in `D:\GreenVPN_Secrets\provider_api.local.ps1` as `GREENVPN_RUVDS_API_KEY`. Do not paste it into chat and do not commit it to the repository. Then rerun the safe gate above.
+If the browser panel shows a higher balance, create or copy the RUVDS API v2 token from that same funded account and place it in `D:\GreenVPN_Secrets\provider_api.local.ps1` as `GREENVPN_RUVDS_API_KEY` or `GREENVPN_RUVDS_API_KEY_2`. Do not paste it into chat and do not commit it to the repository. Then rerun `check_ruvds_access_candidates.ps1` and the safe gate above.
 
 After the API-visible balance is enough, create the paid Zurich test VPS with the explicit double-confirm command:
 
