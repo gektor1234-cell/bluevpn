@@ -86,13 +86,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_scaling_
 Если RUVDS готов, сухая проверка Zurich rollout:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\continue_ruvds_preview_rollout.ps1
 ```
 
-Платное создание:
+Платное создание, bootstrap WireGuard, добавление только в preview и post-checks:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 -CreatePaidServer -ConfirmPaidCreate -ApplyBootstrap -ConfirmRemoteProvision -AddToPreview
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\continue_ruvds_preview_rollout.ps1 -CreateWhenReady -ConfirmPaidCreate
 ```
 
 Дальше автоматика:

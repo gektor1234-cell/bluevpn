@@ -1,5 +1,8 @@
 param(
     [Parameter(Mandatory = $false)]
+    [string]$SecretsPath = "",
+
+    [Parameter(Mandatory = $false)]
     [string]$ServerId = "ruvds-zurich-test-01",
 
     [Parameter(Mandatory = $false)]
@@ -142,6 +145,7 @@ if (-not [string]::IsNullOrWhiteSpace($NodeIPv4)) {
 }
 
 $gateParams = @{
+    SecretsPath = $SecretsPath
     Name = $Name
     ServerId = $ServerId
     Title = $Title

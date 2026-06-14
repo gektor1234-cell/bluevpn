@@ -62,19 +62,25 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_ruvds_ac
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_scaling_readiness.ps1
 ```
 
-4. When RUVDS is ready, create Zurich preview node with:
+4. Preferred RUVDS continuation command, safe dry-run by default:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 -CreatePaidServer -ConfirmPaidCreate -ApplyBootstrap -ConfirmRemoteProvision -AddToPreview
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\continue_ruvds_preview_rollout.ps1
 ```
 
-5. If RUVDS API creates the VPS but does not return public IPv4, take the IP from the panel once and continue:
+5. When RUVDS is ready, create and provision the Zurich preview node with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\continue_ruvds_preview_rollout.ps1 -CreateWhenReady -ConfirmPaidCreate
+```
+
+6. If RUVDS API creates the VPS but does not return public IPv4, take the IP from the panel once and continue:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 -NodeIPv4 <public-ip> -ApplyBootstrap -ConfirmRemoteProvision -AddToPreview
 ```
 
-6. Before any release publish, verify Android/Windows artifacts, backend catalog, and stable/preview target separation:
+7. Before any release publish, verify Android/Windows artifacts, backend catalog, and stable/preview target separation:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ops\check_public_download_manifests.ps1
