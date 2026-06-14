@@ -18,6 +18,16 @@ Status: frozen.
 - Preview artifacts may be rebuilt and uploaded only to preview/test links.
 - Stable and preview must stay visibly separated.
 
+## Public Download Checks
+
+Safe read-only check for update manifests and public download aliases:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ops\check_public_download_manifests.ps1
+```
+
+This verifies that Android manifests/download aliases return APK files, Windows manifests/download aliases return EXE files, and the legacy Windows update endpoint does not send an EXE to Android clients.
+
 ## Backend And Catalog
 
 Verified 2026-06-12:

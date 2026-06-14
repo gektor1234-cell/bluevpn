@@ -46,6 +46,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_preview_
 
 This command SSHes to the origin, reads `/opt/bluevpn/backend/data/admin_token.txt` only on that host, runs protected admin checks, and prints only a safe status summary.
 
+Check public update manifests and download aliases without changing stable or preview:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ops\check_public_download_manifests.ps1
+```
+
+This catches Android/Windows artifact mixups: Android must receive `.apk`, Windows must receive `.exe`, including the legacy `/api/v1/updates/windows` compatibility path.
+
 Check end-to-end scaling readiness in one safe command:
 
 ```powershell
