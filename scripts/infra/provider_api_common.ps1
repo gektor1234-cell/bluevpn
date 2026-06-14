@@ -1,7 +1,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$script:GreenVpnSensitiveNamePattern = '(?i)(token|secret|password|passwd|authorization|auth|api[_-]?key|apikey|access[_-]?key|private[_-]?key|client[_-]?secret|session)'
+$script:GreenVpnSensitiveNamePattern = '(?i)(token|secret|password|passwd|(^|_)pass($|_)|authorization|auth|api[_-]?key|apikey|access[_-]?key|private[_-]?key|client[_-]?secret|session|card)'
 
 function Import-GreenVpnProviderSecrets {
     param(

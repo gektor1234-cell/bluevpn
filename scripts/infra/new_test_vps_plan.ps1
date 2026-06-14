@@ -41,6 +41,21 @@ param(
     [string]$RuvdsSshKeyId = "",
 
     [Parameter(Mandatory = $false)]
+    [int]$TimewebPresetId = 2937,
+
+    [Parameter(Mandatory = $false)]
+    [int]$TimewebOsId = 95,
+
+    [Parameter(Mandatory = $false)]
+    [int]$TimewebSshKeyId = 0,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$TimewebDdosGuard,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$TimewebLocalNetwork,
+
+    [Parameter(Mandatory = $false)]
     [ValidateRange(1, 16)]
     [int]$IpCount = 1,
 
@@ -168,6 +183,84 @@ function New-RuvdsPayload {
     return $payload
 }
 
+function New-TimewebPayload {
+    $payload = [ordered]@{
+        name = $Name
+        comment = "Green VPN hidden test node. Do not publish before WireGuard bootstrap and smoke tests."
+        preset_id = $TimewebPresetId
+        os_id = $TimewebOsId
+        bandwidth = $BandwidthMbps
+        is_ddos_guard = [bool]$TimewebDdosGuard
+        is_local_network = [bool]$TimewebLocalNetwork
+    }
+
+    if ($TimewebSshKeyId -gt 0) {
+        $payload.ssh_keys_ids = @($TimewebSshKeyId)
+    }
+
+    return $payload
+}
+
+function Get-TimewebDefaultSshKeyId {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Token
+    )
+
+    $keys = Invoke-GreenVpnJson `
+        -Method GET `
+        -Uri "https://api.timeweb.cloud/api/v1/ssh-keys" `
+        -Headers @{ Authorization = "Bearer $Token" }
+
+    $items = @($keys.ssh_keys)
+    $default = @($items | Where-Object { $_.is_default -eq $true } | Select-Object -First 1)
+    if ($default.Count -gt 0) {
+        return [int]$default[0].id
+    }
+
+    $named = @($items | Where-Object { $_.name -eq "GreenVPN Codex PC key" } | Select-Object -First 1)
+    if ($named.Count -gt 0) {
+        return [int]$named[0].id
+    }
+
+    return 0
+}
+
+function Get-TimewebPreset {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Token,
+
+        [Parameter(Mandatory = $true)]
+        [int]$PresetId
+    )
+
+    $presets = Invoke-GreenVpnJson `
+        -Method GET `
+        -Uri "https://api.timeweb.cloud/api/v1/presets/servers" `
+        -Headers @{ Authorization = "Bearer $Token" }
+
+    $items = @($presets.server_presets)
+    $match = @($items | Where-Object { [int]$_.id -eq $PresetId } | Select-Object -First 1)
+    if ($match.Count -eq 0) {
+        throw "Timeweb preset '$PresetId' was not found."
+    }
+
+    return $match[0]
+}
+
+function Get-TimewebFinances {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Token
+    )
+
+    return Invoke-GreenVpnJson `
+        -Method GET `
+        -Uri "https://api.timeweb.cloud/api/v1/account/finances" `
+        -Headers @{ Authorization = "Bearer $Token" }
+}
+
 function Get-RuvdsDefaultSshKeyId {
     param(
         [Parameter(Mandatory = $true)]
@@ -204,7 +297,7 @@ function Register-GreenVpnBackendDraft {
         provider = $Provider
         host = $NodeIPv4
         port = 443
-        protocol = "wireguard"
+        protocol = "wireguard_udp"
         transport = "udp"
         clientConfigProfile = "none"
         status = "draft"
@@ -254,18 +347,53 @@ switch ($Provider) {
         }
     }
     "timeweb" {
-        $plan.endpoint = "Timeweb Cloud API"
-        $plan.payload = [ordered]@{
-            name = $Name
-            location = $LocationId
-            image = $ImageId
-            cpu = $Cpu
-            ramMb = $RamMb
-            diskGb = $DiskGb
-            note = "Live creation is intentionally disabled until exact Timeweb configuration IDs are pinned."
+        $plan.endpoint = "POST https://api.timeweb.cloud/api/v1/servers"
+        $apiKey = $null
+        $timewebPreset = $null
+        $timewebFinances = $null
+        if ($QuotePrice -or $Apply) {
+            $apiKey = Get-GreenVpnSecret -Name "GREENVPN_TIMEWEB_TOKEN" -Required
+            if ($TimewebSshKeyId -le 0) {
+                $TimewebSshKeyId = Get-TimewebDefaultSshKeyId -Token $apiKey
+            }
+            $timewebPreset = Get-TimewebPreset -Token $apiKey -PresetId $TimewebPresetId
+            $timewebFinances = Get-TimewebFinances -Token $apiKey
         }
+
+        $plan.payload = New-TimewebPayload
+        $plan.defaults = [ordered]@{
+            recommendedFirstPreset = "2937 / Cloud KZ-40 2023 / kz-1 / 611 RUB per month"
+            stableLikeNetherlandsPreset = "3344 / Cloud NL-40 / nl-1 / 1600 RUB per month"
+            os = "$TimewebOsId / Debian 12 when value is 95"
+            sshKey = if ($TimewebSshKeyId -gt 0) { "GreenVPN Codex PC key" } else { "not set" }
+        }
+
+        if ($QuotePrice -and -not $Apply) {
+            $plan.dryRun = $true
+            $plan.action = "quote_test_vps_price"
+            $plan.currentBalanceRub = $timewebFinances.finances.balance
+            $plan.currentCurrency = $timewebFinances.finances.currency
+            $plan.quotedPreset = [ordered]@{
+                id = $timewebPreset.id
+                name = $timewebPreset.description
+                location = $timewebPreset.location
+                price = $timewebPreset.price
+                cpu = $timewebPreset.cpu
+                ram = $timewebPreset.ram
+                disk = $timewebPreset.disk
+                bandwidth = $timewebPreset.bandwidth
+            }
+            $plan.minimumTopUpRub = [Math]::Max(0, [Math]::Ceiling(([decimal]$timewebPreset.price) - ([decimal]$timewebFinances.finances.balance)))
+        }
+
         if ($Apply) {
-            throw "Timeweb live creation is not enabled in this script yet. Use the existing Timeweb panel/API flow or pin exact IDs first."
+            $plan.dryRun = $false
+            $created = Invoke-GreenVpnJson `
+                -Method POST `
+                -Uri "https://api.timeweb.cloud/api/v1/servers" `
+                -Headers @{ Authorization = "Bearer $apiKey" } `
+                -Body $plan.payload
+            $plan.providerResponse = $created
         }
     }
     "ruvds" {

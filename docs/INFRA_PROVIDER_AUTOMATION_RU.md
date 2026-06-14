@@ -157,3 +157,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\test_provider_
 - Serverspace API: https://serverspace.io/support/help/automation/
 - Serverspace panel: https://my.serverspace.io/
 - Timeweb API: https://timeweb.cloud/api-docs
+
+## Update 2026-06-14: Timeweb KZ test
+
+- `new_test_vps_plan.ps1` now supports Timeweb live-create after pinned IDs are passed explicitly.
+- Created hidden Timeweb KZ test VPS `tw-kz1-test-01`, Timeweb id `8360589`, IPv4 `94.198.221.206`.
+- WireGuard bootstrap and origin-only `remote_ssh_wg0` env are done.
+- Backend entry is hidden: `status=maintenance`, `isActive=false`, `isPublic=false`.
+- Do not add this node to `GREENVPN_PREVIEW_SERVER_IDS` yet: origin-to-node SSH is unstable and sometimes fails at SSH banner exchange.
+- Detailed note: `docs/TIMEWEB_KZ1_TEST_NODE_2026_06_14_RU.md`.

@@ -135,18 +135,32 @@ function Test-Timeweb {
             if ($propNames -contains "main_ipv4" -and $_.main_ipv4) {
                 $mainIp = $_.main_ipv4
             } elseif ($propNames -contains "ips" -and $_.ips -and @($_.ips).Count -gt 0) {
-                $firstIp = @($_.ips)[0]
-                if ($firstIp.PSObject.Properties.Name -contains "ip") {
-                    $mainIp = $firstIp.ip
-                } else {
-                    $mainIp = [string]$firstIp
+                $ipItems = @($_.ips)
+                $firstIp = @($ipItems | Where-Object {
+                    ($_.PSObject.Properties.Name -contains "type") -and $_.type -eq "ipv4"
+                } | Select-Object -First 1)
+                if ($firstIp.Count -eq 0) {
+                    $firstIp = @($ipItems | Select-Object -First 1)
+                }
+                if ($firstIp.Count -gt 0) {
+                    if ($firstIp[0].PSObject.Properties.Name -contains "ip") {
+                        $mainIp = $firstIp[0].ip
+                    } else {
+                        $mainIp = [string]$firstIp[0]
+                    }
                 }
             } elseif ($propNames -contains "networks" -and $_.networks) {
-                $candidate = @($_.networks | ForEach-Object {
+                $allNetworkIps = @($_.networks | ForEach-Object {
                     if ($_.PSObject.Properties.Name -contains "ips") {
                         @($_.ips)
                     }
+                })
+                $candidate = @($allNetworkIps | Where-Object {
+                    ($_.PSObject.Properties.Name -contains "type") -and $_.type -eq "ipv4"
                 } | Select-Object -First 1)
+                if ($candidate.Count -eq 0) {
+                    $candidate = @($allNetworkIps | Select-Object -First 1)
+                }
                 if ($candidate.Count -gt 0) {
                     $candidateValue = $candidate[0]
                     if ($candidateValue.PSObject.Properties.Name -contains "ip") {
