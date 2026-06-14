@@ -575,6 +575,128 @@ textarea:disabled {
   font-weight: 800;
 }
 
+.inline-ops-overview {
+  margin-bottom: 18px;
+}
+
+.node-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.node-card {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(18, 163, 111, 0.18);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.node-card.yellow {
+  border-color: rgba(255, 176, 32, 0.36);
+  background: rgba(255, 176, 32, 0.07);
+}
+
+.node-card.red {
+  border-color: rgba(229, 72, 77, 0.28);
+  background: rgba(229, 72, 77, 0.06);
+}
+
+.node-card-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+}
+
+.node-card-head strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 15px;
+}
+
+.node-card-head span,
+.node-card-meta,
+.node-signal small,
+.node-blockers span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.node-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.node-card-meta code {
+  padding: 4px 7px;
+  border-radius: 9px;
+  background: #f3f8f5;
+  color: #344054;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+}
+
+.node-signal-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.node-signal {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(102, 112, 133, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.node-signal span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.node-signal strong {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.node-signal small {
+  display: block;
+  margin-top: 3px;
+}
+
+.node-pill-row,
+.node-blockers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.node-blockers {
+  padding-top: 2px;
+}
+
+.node-blockers span {
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: rgba(255, 176, 32, 0.12);
+}
+
+.node-blockers.ok span {
+  background: rgba(18, 163, 111, 0.1);
+  color: var(--green-strong);
+}
+
 .external-summary {
   background: rgba(231, 247, 239, 0.72);
 }

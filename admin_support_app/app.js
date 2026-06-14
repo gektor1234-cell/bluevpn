@@ -1738,7 +1738,7 @@ function renderServerCatalogSummary() {
   const workflow = serverWorkflow();
   const routePayload = state.loaded.resilienceRoutes || {};
   const transportRollout = state.loaded.resilienceTransportRollout?.rollout || {};
-  const resilience = routePayload.resilience || catalog.resilience || {};
+  const resilience = routePayload.resilience || catalog?.resilience || {};
   const routeDecision = routePayload.routeDecision || resilience.routeDecision || {};
   const selectedRoute = routeDecision.selected || {};
   const routeChain = routeDecision.fallbackChain || [];
@@ -1964,6 +1964,233 @@ function renderServerCatalogSummary() {
       `,
     )
     .join('');
+}
+
+function parseTimeMs(value) {
+  if (!value) return 0;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function serverPublicCatalogIds() {
+  const catalogServers = state.loaded.serverCatalog?.servers || [];
+  const ids = new Set();
+  catalogServers.forEach((server) => {
+    serverIdentityValues(server).forEach((value) => {
+      if (value !== null && value !== undefined && value !== '') ids.add(String(value));
+    });
+  });
+  return ids;
+}
+
+function latestServerHealthByEndpoint() {
+  const output = new Map();
+  const summaryLatest = state.loaded.serverHealth?.summary?.latestByEndpoint || [];
+  const observations = state.loaded.serverHealth?.observations || [];
+  [...summaryLatest, ...observations].forEach((item) => {
+    const endpointId = item.endpointId || item.serverId || item.server_id;
+    if (!endpointId) return;
+    const key = String(endpointId);
+    const timestamp = parseTimeMs(item.observedAt || item.createdAt || item.created_at);
+    const current = output.get(key);
+    const currentTimestamp = parseTimeMs(current?.observedAt || current?.createdAt || current?.created_at);
+    if (!current || timestamp >= currentTimestamp) output.set(key, item);
+  });
+  return output;
+}
+
+function latestClientRouteByEndpoint() {
+  const output = new Map();
+  const events = state.loaded.clientRouteEvents?.events || [];
+  events.forEach((event) => {
+    const endpointId = event.serverId || event.server_id;
+    if (!endpointId) return;
+    const key = String(endpointId);
+    const timestamp = parseTimeMs(event.createdAt || event.created_at);
+    const current = output.get(key);
+    const currentTimestamp = parseTimeMs(current?.createdAt || current?.created_at);
+    if (!current || timestamp >= currentTimestamp) output.set(key, event);
+  });
+  return output;
+}
+
+function serverSignalFor(server, map) {
+  const identities = serverIdentityValues(server).map((value) => String(value));
+  for (const identity of identities) {
+    if (map.has(identity)) return map.get(identity);
+  }
+  return null;
+}
+
+function serverCatalogChannel(server, publicCatalogIds) {
+  const identities = serverIdentityValues(server).map((value) => String(value));
+  const isInClientCatalog = identities.some((value) => publicCatalogIds.has(value));
+  if (isInClientCatalog) {
+    return {
+      title: 'Client catalog',
+      hint: 'Visible to apps now',
+      pillClass: '',
+    };
+  }
+  if (server.isPublic) {
+    return {
+      title: 'Candidate',
+      hint: 'Prepared for publication gate',
+      pillClass: 'yellow',
+    };
+  }
+  return {
+    title: 'Internal',
+    hint: 'Hidden from client catalog',
+    pillClass: 'muted',
+  };
+}
+
+function serverOperationsStatus(server, latestHealth, latestRoute) {
+  const blockers = [];
+  if (!server.isActive) blockers.push('disabled in admin');
+  if (server.status && server.status !== 'healthy') blockers.push(`status=${server.status}`);
+  if (!server.clientConfigReady) blockers.push('client config not ready');
+  if (latestHealth?.status && latestHealth.status !== 'healthy') {
+    blockers.push(`health=${latestHealth.status}`);
+  }
+  if (latestRoute && latestRoute.ok === false) {
+    blockers.push(`client=${latestRoute.stage || 'route event failed'}`);
+  }
+  const publicBlockers = server.publicBlockers || server.publicEligibility?.blockers || [];
+  publicBlockers.slice(0, 2).forEach((blocker) => {
+    blockers.push(blocker.message || blocker.code || 'publication blocker');
+  });
+
+  const hardBlock = !server.isActive || !server.clientConfigReady || latestHealth?.status === 'down';
+  if (!blockers.length) {
+    return {
+      title: 'Ready',
+      pillClass: '',
+      blockers,
+    };
+  }
+  return {
+    title: hardBlock ? 'Blocked' : 'Attention',
+    pillClass: hardBlock ? 'red' : 'yellow',
+    blockers,
+  };
+}
+
+function renderSignalValue(label, value, hint = '') {
+  return `
+    <div class="node-signal">
+      <span>${escapeUi(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      ${hint ? `<small>${escapeUi(hint)}</small>` : ''}
+    </div>
+  `;
+}
+
+function renderServerOperationsOverview() {
+  const summaryContainer = $('serverOperationsSummary');
+  const overviewContainer = $('serverOperationsOverview');
+  if (!summaryContainer || !overviewContainer) return;
+
+  const servers = state.loaded.servers || [];
+  const healthSummary = state.loaded.serverHealth?.summary || {};
+  const clientSummary = state.loaded.clientRouteEvents?.summary || {};
+  const serviceSummary = state.loaded.serviceObservations?.summary || {};
+  const publicCatalogIds = serverPublicCatalogIds();
+  const latestHealth = latestServerHealthByEndpoint();
+  const latestRoutes = latestClientRouteByEndpoint();
+  const cards = servers.map((server) => {
+    const health = serverSignalFor(server, latestHealth);
+    const route = serverSignalFor(server, latestRoutes);
+    const channel = serverCatalogChannel(server, publicCatalogIds);
+    const status = serverOperationsStatus(server, health, route);
+    return { server, health, route, channel, status };
+  });
+  const clientVisible = cards.filter((item) => item.channel.title === 'Client catalog').length;
+  const ready = cards.filter((item) => item.status.title === 'Ready').length;
+  const attention = cards.length - ready;
+  const probeCoverage = healthSummary.externalProbeReadiness || {};
+
+  summaryContainer.innerHTML = [
+    ['Managed nodes', cards.length, `${clientVisible} in client catalog`],
+    ['Ready nodes', ready, 'Active, config-ready, no latest red signals'],
+    ['Needs attention', attention, `${healthSummary.problemEndpoints || 0} server-health problems`],
+    ['Client route failures', clientSummary.failed || 0, 'Recent Windows/Android route-events'],
+    [
+      'External probe coverage',
+      `${(probeCoverage.coveredEndpointIds || []).length}/${(probeCoverage.requiredEndpointIds || []).length}`,
+      `${probeCoverage.activeExternalProbeAgents || 0} active probe agents`,
+    ],
+    ['Service observations', serviceSummary.totalObservations || 0, `${serviceSummary.problemTargets || 0} problem targets`],
+  ]
+    .map(([label, value, hint]) => `
+      <div class="metric-card">
+        <span>${escapeUi(label)}</span>
+        <strong>${escapeHtml(value)}</strong>
+        <p>${escapeUi(hint)}</p>
+      </div>
+    `)
+    .join('');
+
+  overviewContainer.innerHTML = cards
+    .map(({ server, health, route, channel, status }) => {
+      const endpoint = `${server.host || 'host'}:${server.port || 'port'}`;
+      const latency = server.latencyMs === null || server.latencyMs === undefined
+        ? 'latency unknown'
+        : `${server.latencyMs} ms`;
+      const healthStatus = health?.status || server.latestObservationStatus || 'unknown';
+      const healthTime = health?.observedAt || health?.createdAt || server.latestObservationAt;
+      const routeStage = route?.stage ? clientRouteStageTitle(route.stage) : 'no client event';
+      const routeResult = !route ? 'unknown' : route.ok ? 'OK' : 'failed';
+      const routeClass = !route ? 'muted' : route.ok ? '' : 'red';
+      const configTitle = server.clientConfigReady ? 'ready' : 'not ready';
+      const configClass = server.clientConfigReady ? '' : 'red';
+      const capacity = server.capacity || {};
+      const activeClients = safeNumber(capacity.activeClients ?? server.activeClients, 0);
+      const assignedUsers = safeNumber(capacity.assignedUsers ?? server.assignedUsers, 0);
+      const loadMbps = safeNumber(capacity.currentLoadMbps ?? server.currentLoadMbps, 0);
+      const usableMbps = safeNumber(capacity.usableBandwidthMbps ?? server.usableBandwidthMbps, 0);
+      const capacityHint = usableMbps > 0
+        ? `${loadMbps}/${usableMbps} Mbps`
+        : `users=${assignedUsers}`;
+      const blockersHtml = status.blockers.length
+        ? `<div class="node-blockers">
+            ${status.blockers.slice(0, 5).map((item) => `<span>${escapeUi(item)}</span>`).join('')}
+          </div>`
+        : '<div class="node-blockers ok"><span>No blockers from loaded signals.</span></div>';
+      return `
+        <article class="node-card ${status.pillClass}">
+          <div class="node-card-head">
+            <div>
+              <strong>${escapeHtml(server.title || server.serverId || server.id)}</strong>
+              <span>${escapeHtml([server.country, server.city, server.provider].filter(Boolean).join(' / ') || 'location unknown')}</span>
+            </div>
+            <span class="status-pill ${status.pillClass}">${escapeUi(status.title)}</span>
+          </div>
+          <div class="node-card-meta">
+            <code>${escapeHtml(server.serverId || server.id)}</code>
+            <span>${escapeHtml(endpoint)}</span>
+            <span>${escapeHtml(serverProtocolTitle(server.protocol))}</span>
+          </div>
+          <div class="node-signal-grid">
+            ${renderSignalValue('Catalog', channel.title, channel.hint)}
+            ${renderSignalValue('Config', configTitle, server.clientConfigProfileTitle || serverClientConfigProfileTitle(server.clientConfigProfile))}
+            ${renderSignalValue('Health', serverHealthStatusTitle(healthStatus), healthTime ? shortDate(healthTime) : 'no probe yet')}
+            ${renderSignalValue('Client route', routeResult, routeStage)}
+            ${renderSignalValue('Score', `${server.healthScore ?? 0}%`, latency)}
+            ${renderSignalValue('Capacity', `${activeClients} active`, `${capacityHint}; selection=${server.selectionScore ?? 0}`)}
+          </div>
+          <div class="node-pill-row">
+            <span class="status-pill ${channel.pillClass}">${escapeUi(channel.title)}</span>
+            <span class="status-pill ${configClass}">${escapeUi(`config ${configTitle}`)}</span>
+            <span class="status-pill ${serverHealthStatusPillClass(healthStatus)}">${escapeHtml(serverHealthStatusTitle(healthStatus))}</span>
+            <span class="status-pill ${routeClass}">${escapeUi(`client ${routeResult}`)}</span>
+          </div>
+          ${blockersHtml}
+        </article>
+      `;
+    })
+    .join('') || '<p class="muted">No managed VPN nodes loaded yet.</p>';
 }
 
 function renderServersTable() {
@@ -5852,6 +6079,7 @@ function renderAll() {
   renderRunbooks();
   renderServerFilters();
   renderServerCatalogSummary();
+  renderServerOperationsOverview();
   renderServersTable();
   renderServerHealth();
   renderManagedMonitoring();
