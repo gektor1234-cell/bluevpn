@@ -1,67 +1,82 @@
-# Green VPN: automation for VPN node providers
+# Green VPN: provider automation runbook
 
-Цель: поднимать новые VPN-узлы через API провайдеров, не трогая основной сайт и текущих пользователей. Все новые узлы сначала идут только в `test/preview`.
+Goal: create and validate new VPN exit nodes through provider APIs without touching the public stable product. Every new node starts in the test/preview contour.
 
 ## Safety boundary
 
-- Основной сайт, stable APK/EXE и public catalog не менять без отдельного решения.
-- Новые узлы регистрировать сначала как скрытые draft/test nodes: `isPublic=false`, `isActive=false`, `status=draft`.
-- В preview catalog узел попадает только после WireGuard bootstrap, backend env, smoke checks и отдельного включения preview allowlist.
-- `Friendly Linnet` не трогать.
-- API keys, SMTP/SMS/YooKassa secrets, SSH private keys и WireGuard private keys не писать в repo.
+- Do not change the main public site, stable APK/EXE, stable update manifests, or stable public catalog without an explicit owner decision.
+- Register new nodes first as hidden test nodes: `isPublic=false`, `isActive=false`, or hidden by preview allowlist only.
+- A node may enter preview only after WireGuard bootstrap, origin-only env, admin smoke checks, and explicit preview allowlist.
+- `Friendly Linnet` is personal/no-touch.
+- Do not commit or print provider API keys, SMTP/SMS/YooKassa secrets, SSH private keys, or WireGuard private keys.
 
-## Secrets
+## Secret files
 
-Источник истины для локальных секретов:
+Primary local secret store:
 
 ```powershell
 D:\GreenVPN_Secrets\provider_api.local.ps1
 ```
 
-Repo хранит только пример:
+Project-local fallback secret store:
+
+```powershell
+secrets\provider_api.local.ps1
+```
+
+Committed template only:
 
 ```powershell
 scripts\infra\provider_secrets.example.ps1
 ```
 
-Импорт существующих access-файлов во внешний secrets-файл:
+Provider scripts load `D:\GreenVPN_Secrets\provider_api.local.ps1` first, then `secrets\provider_api.local.ps1`. The real secret files must stay uncommitted.
+
+Check all provider APIs without printing secret values:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\import_existing_secrets.ps1 -Force
-```
-
-Проверка, что секреты загружаются, без вывода значений:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\test_provider_api.ps1 -Provider all
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\test_provider_api.ps1 -Provider all -IncludeInventory
 ```
 
 ## Current API status, 2026-06-14
 
 ### Timeweb
 
-API работает. Видит 4 сервера:
+API works. Current inventory has 5 servers:
 
-- `Friendly Linnet` — личный/no-touch.
-- `Intelligent Smew` — origin/VPN/backend.
-- `Friendly Cetus` — site/proxy/monitoring.
-- `GreenVPN NL1 VPN 20260511` — NL VPN node.
+- `Friendly Linnet`, IP `5.129.237.163` - personal/no-touch.
+- `Intelligent Smew`, IP `37.220.85.211` - origin/backend/current node.
+- `Friendly Cetus`, IP `72.56.32.197` - site/proxy/monitoring.
+- `GreenVPN NL1 VPN 20260511`, IP `5.129.216.42` - working NL VPN node.
+- `greenvpn-tw-kz1-test-01`, IP `94.198.221.206` - hidden KZ test node, not in preview/stable.
 
-Live-create в `new_test_vps_plan.ps1` пока намеренно отключён, потому что для безопасной покупки надо зафиксировать точные Timeweb configuration IDs. Читать inventory можно.
+Timeweb live-create support exists in `scripts\infra\new_test_vps_plan.ps1` when pinned Timeweb IDs are passed. Existing working NL nodes stay unchanged.
 
 ### RUVDS
 
-API v2 работает.
+API works, but the API-visible balance is currently `267 RUB`. The owner reported topping up RUVDS, but that top-up is not visible to the currently configured API credentials yet.
 
-- Баланс на момент проверки: `267 RUB`.
-- Текущий сервер: `2584554`, backend serverId `ruvds-2584554-ld8`.
-- Доступные целевые локации из текущего API-инвентаря:
-  - `3` — LD8 London.
-  - `2` — ZUR1 Zurich.
+Current server:
+
+- Provider server id: `2584554`.
+- Backend server id: `ruvds-2584554-ld8`.
+- Location: London / LD8.
+- Endpoint: `88.218.250.86:443`.
+- Status: hidden from stable, visible only in preview.
+
+Available target locations from current API inventory:
+
+- `3` - LD8 London.
+- `2` - ZUR1 Zurich.
+
+Known image/tariff values:
+
 - Debian 12 image: `52`.
-- SSH key `greenvpn-codex-local` есть в аккаунте.
+- Europe VPS tariff: `41`.
+- Drive tariff: `9`.
+- SSH key exists in provider account: `greenvpn-codex-local`.
 
-Dry-run Zurich node:
+Zurich dry-run quote:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\new_test_vps_plan.ps1 `
@@ -82,25 +97,55 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\new_test_vps_p
   -QuotePrice
 ```
 
-Текущая цена dry-run: `933 RUB`; минимум докинуть при балансе `267 RUB`: `666 RUB`. Практичный запас: пополнить RUVDS минимум на `1500 RUB`.
+Last dry-run price: `933 RUB`. With API-visible balance `267 RUB`, live-create is intentionally blocked until the API-visible balance is enough.
 
-Ограничение: RUVDS API v2 в текущем ответе `/v2/servers/{id}` не отдаёт публичный IPv4 в server object (`network_v4=null` у существующей ноды). Если после live-create API тоже не отдаст IP, нужен либо старый/другой RUVDS endpoint для IP, либо разово взять IP из панели. Остальная цепочка после IP автоматизируема.
+Important RUVDS limitation: current RUVDS API v2 responses for existing servers may return `network_v4=null`. If live-create does not expose the public IPv4, take the IP once from the panel and continue the automated bootstrap chain from that point.
 
 ### Serverspace
 
-API работает.
-
-- Проект активен.
-- Серверов сейчас `0`.
-- Баланс на момент проверки: `0.50 EUR`.
-
-Создание через API технически доступно в `new_test_vps_plan.ps1`, но перед live-create нужен баланс. Этот провайдер держим как альтернативу, если RUVDS окажется неудобен из-за IP в API.
+API works. Current balance is `0.50 EUR`, server count is `0`. Keep it as a prepared alternative; do not create servers until funded.
 
 ### HOSTKEY
 
-Не входит в рабочий пул. API key пока не подтверждён, live calls отключены.
+Not in the working automation pool. API access was not confirmed.
 
-## Provider check commands
+## Current stable/preview split
+
+Stable catalog currently exposes only:
+
+- `intelligent_smew`
+- `tw-7879598-nl1`
+
+Preview catalog currently exposes:
+
+- `intelligent_smew`
+- `tw-7879598-nl1`
+- `ruvds-2584554-ld8`
+
+Do not add KZ or new nodes to stable. Add new nodes to preview first and test on Android/Windows before any stable decision.
+
+## Standard rollout for a new node
+
+1. Quote price with `new_test_vps_plan.ps1 -QuotePrice`.
+2. Confirm provider API-visible balance is enough.
+3. Create paid VPS with `new_test_vps_plan.ps1 -Apply`.
+4. Wait for SSH.
+5. Bootstrap WireGuard on the VPS with the server bootstrap script.
+6. Create origin-only env file under `/etc/bluevpn/vpn_nodes/<serverId>.env`.
+7. Register/update backend managed catalog entry as hidden.
+8. Run admin checks:
+   - `remote-provisioning-check`
+   - `remote-peer-smoke`
+   - `client-config-smoke`
+9. Add the node only to `GREENVPN_PREVIEW_SERVER_IDS`.
+10. Restart backend.
+11. Verify:
+   - stable catalog does not contain the new node;
+   - preview catalog contains the new node;
+   - Android preview can connect;
+   - Windows preview can obtain config and connect, if applicable.
+
+## Useful commands
 
 All providers:
 
@@ -120,49 +165,23 @@ Serverspace only:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\test_provider_api.ps1 -Provider serverspace -IncludeInventory
 ```
 
-## Standard node rollout
+Catalog check:
 
-1. Quote price with `new_test_vps_plan.ps1 -QuotePrice`.
-2. Top up provider balance if needed.
-3. Create paid VPS with `new_test_vps_plan.ps1 -Apply`.
-4. Wait for VPS to become reachable by SSH.
-5. Run WireGuard bootstrap on the VPS with `scripts/server/bootstrap_wireguard_node.sh --apply`.
-6. Create origin-only env file:
-
-```bash
-/etc/bluevpn/vpn_nodes/<serverId>.env
+```powershell
+$stable = Invoke-RestMethod -Uri 'https://api.greenvpn.pro/api/v1/catalog/servers?channel=stable&appVersion=0.2.26'
+$preview = Invoke-RestMethod -Uri 'https://api.greenvpn.pro/api/v1/catalog/servers?channel=preview&appVersion=0.2.26-adgate-preview'
+$stable.catalog.servers | Select-Object id,title
+$preview.catalog.servers | Select-Object id,title
 ```
 
-7. Register/update backend draft entry.
-8. Run admin checks:
-   - `remote-provisioning-check`
-   - `remote-peer-smoke`
-   - `client-config-smoke`
-9. Add the node only to `GREENVPN_PREVIEW_SERVER_IDS`.
-10. Restart backend and verify:
-   - stable catalog does not contain the new node;
-   - preview catalog contains the new node;
-   - Android preview can connect.
+## Links
 
-## Owner actions needed next
-
-1. Пополнить RUVDS минимум на `1500 RUB`, если хотим создать Zurich fallback.
-2. Пополнить Serverspace, если хотим проверить альтернативного провайдера.
-3. Не менять основной сайт и stable-релизы, пока preview не подтверждён реальным Android smoke.
-
-## API links
-
-- RUVDS API: https://ruvds.com/api-docs/
+- RUVDS API docs: https://ruvds.com/api-docs/
 - RUVDS API settings: https://ruvds.com/my/settings/api
-- Serverspace API: https://serverspace.io/support/help/automation/
 - Serverspace panel: https://my.serverspace.io/
-- Timeweb API: https://timeweb.cloud/api-docs
+- Serverspace API docs: https://serverspace.io/support/help/automation/
+- Timeweb API docs: https://timeweb.cloud/api-docs
 
-## Update 2026-06-14: Timeweb KZ test
+## Next owner action
 
-- `new_test_vps_plan.ps1` now supports Timeweb live-create after pinned IDs are passed explicitly.
-- Created hidden Timeweb KZ test VPS `tw-kz1-test-01`, Timeweb id `8360589`, IPv4 `94.198.221.206`.
-- WireGuard bootstrap and origin-only `remote_ssh_wg0` env are done.
-- Backend entry is hidden: `status=maintenance`, `isActive=false`, `isPublic=false`.
-- Do not add this node to `GREENVPN_PREVIEW_SERVER_IDS` yet: origin-to-node SSH is unstable and sometimes fails at SSH banner exchange.
-- Detailed note: `docs/TIMEWEB_KZ1_TEST_NODE_2026_06_14_RU.md`.
+Open RUVDS and check whether the account shown in the browser is the same account as the configured API token. The configured API currently sees only `267 RUB`; server creation can continue once this API-visible balance is at least `933 RUB` for Zurich.

@@ -1,41 +1,38 @@
-# RUVDS preview pool — 2026-06-14
+# RUVDS preview pool - 2026-06-14
 
-## Статус
+## Status
 
-- Основной публичный каталог не меняется: stable-клиенты видят только публичные рабочие узлы.
-- Preview/adgate-клиенты дополнительно видят allowlist-узлы из `GREENVPN_PREVIEW_SERVER_IDS`.
-- На origin задан allowlist: `ruvds-2584554-ld8`.
-- RUVDS London узел доступен только для preview/test канала, пока не будет отдельно принято решение выпускать его в stable.
+- The public stable catalog is unchanged.
+- Stable clients see only proven public nodes.
+- Preview/adgate clients additionally see allowlisted test nodes from `GREENVPN_PREVIEW_SERVER_IDS`.
+- Origin preview allowlist includes `ruvds-2584554-ld8`.
+- RUVDS London is preview/test only until the owner explicitly decides to promote it to stable.
 
-## Узел
+## Node
 
-- `ruvds-2584554-ld8`
-- Публичный endpoint: `88.218.250.86:443`
-- Локация: London / GB
-- Профиль: `remote_ssh_wg0`
-- Интерфейс: `wg0`
+- Backend server id: `ruvds-2584554-ld8`.
+- Provider server id: `2584554`.
+- Endpoint: `88.218.250.86:443`.
+- Location: London / United Kingdom.
+- Profile: `remote_ssh_wg0`.
+- Interface: `wg0`.
 
-## Проверки
+## Verified checks
 
-- Backend health после деплоя: `0.9.103`.
-- Stable catalog: `intelligent_smew`, `tw-7879598-nl1`; RUVDS не виден.
-- Preview catalog: `intelligent_smew`, `tw-7879598-nl1`, `ruvds-2584554-ld8`; RUVDS виден.
-- `remote-peer-smoke`: ok, peer создаётся и удаляется.
-- `client-config-smoke`: ok, клиентский WireGuard-конфиг валидный, smoke peer удаляется.
-- External probe с `72.56.32.197`: RUVDS endpoint healthy, score 100.
-- YouTube media probe: green, media throughput healthy.
+- Backend version during check: `0.9.103`.
+- `remote-provisioning-check`: `ok=true`, `sshReachable=true`, `wireGuardReady=true`.
+- `remote-peer-smoke`: `ok=true`, peer is created and removed.
+- `client-config-smoke`: `ok=true`, temporary client config is valid and smoke peer is removed.
+- Stable catalog: `intelligent_smew`, `tw-7879598-nl1`; RUVDS is not visible.
+- Preview catalog: `intelligent_smew`, `tw-7879598-nl1`, `ruvds-2584554-ld8`; RUVDS is visible.
 
 ## Android preview
 
-- Preview APK собран и опубликован:
-  - version: `0.2.26-adgate-preview-ruvds`
-  - build name: `0.2.26`
-  - build number: `2026061401`
-  - URL: `https://greenvpn.pro/downloads/GreenVPN_Android_preview_latest.apk`
-  - Preview page: `https://greenvpn.pro/release-preview-20260517-private/`
+- Preview APK URL: `https://greenvpn.pro/downloads/GreenVPN_Android_preview_latest.apk`.
+- Preview page: `https://greenvpn.pro/release-preview-20260517-private/`.
 
-## Важно
+## Important
 
-- Основной сайт и основные no-ads сборки не обновлялись.
-- Секреты, admin token, SSH keys, WireGuard private keys и provider API keys в repo не добавлялись.
-- Для выпуска RUVDS в stable нужно отдельно перевести узел из preview allowlist в обычный публичный каталог и провести реальный Android/Windows smoke.
+- Main site and no-ads stable builds were not changed.
+- Secrets, admin token, SSH keys, WireGuard private keys, and provider API keys were not added to the repo.
+- To move RUVDS to stable later, remove the preview-only assumption, explicitly publish/promote the node, and run real Android and Windows smoke tests first.
