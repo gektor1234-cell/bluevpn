@@ -121,6 +121,49 @@ This command still refuses to create anything if the API-visible balance is lowe
 
 Important RUVDS limitation: current RUVDS API v2 responses for existing servers may return `network_v4=null`. If live-create does not expose the public IPv4, take the IP once from the panel and continue the automated bootstrap chain from that point.
 
+Post-create remote node bootstrap, dry-run first:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\prepare_remote_wireguard_node.ps1 `
+  -ServerId ruvds-zurich-test-01 `
+  -NodeIPv4 <public-ip-from-provider-panel> `
+  -Title "Green VPN RUVDS Zurich Test 01" `
+  -Country CH `
+  -City Zurich `
+  -Provider ruvds
+```
+
+Apply the bootstrap, register the node as hidden, and keep it out of preview:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\prepare_remote_wireguard_node.ps1 `
+  -ServerId ruvds-zurich-test-01 `
+  -NodeIPv4 <public-ip-from-provider-panel> `
+  -Title "Green VPN RUVDS Zurich Test 01" `
+  -Country CH `
+  -City Zurich `
+  -Provider ruvds `
+  -Apply `
+  -ConfirmRemoteProvision
+```
+
+Apply the bootstrap and add the node to preview only:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\prepare_remote_wireguard_node.ps1 `
+  -ServerId ruvds-zurich-test-01 `
+  -NodeIPv4 <public-ip-from-provider-panel> `
+  -Title "Green VPN RUVDS Zurich Test 01" `
+  -Country CH `
+  -City Zurich `
+  -Provider ruvds `
+  -Apply `
+  -ConfirmRemoteProvision `
+  -AddToPreview
+```
+
+This wrapper creates only origin-side SSH/env material, bootstraps WireGuard on the node, upserts the backend catalog entry as `remote_ssh_wg0`, runs admin smoke checks, and verifies that stable catalog does not contain the new node.
+
 ### Serverspace
 
 API works. Current balance is `0.50 EUR`, server count is `0`. Keep it as a prepared alternative; do not create servers until funded.
@@ -149,17 +192,16 @@ Do not add KZ or new nodes to stable. Add new nodes to preview first and test on
 1. Quote price with `new_test_vps_plan.ps1 -QuotePrice`.
 2. Confirm provider API-visible balance is enough.
 3. Create paid VPS with `new_test_vps_plan.ps1 -Apply`.
-4. Wait for SSH.
-5. Bootstrap WireGuard on the VPS with the server bootstrap script.
-6. Create origin-only env file under `/etc/bluevpn/vpn_nodes/<serverId>.env`.
-7. Register/update backend managed catalog entry as hidden.
-8. Run admin checks:
+4. Run `scripts\infra\prepare_remote_wireguard_node.ps1` in dry-run mode with the new public IP.
+5. Run the same wrapper with `-Apply -ConfirmRemoteProvision`.
+6. Register/update backend managed catalog entry as hidden.
+7. Run admin checks:
    - `remote-provisioning-check`
    - `remote-peer-smoke`
    - `client-config-smoke`
-9. Add the node only to `GREENVPN_PREVIEW_SERVER_IDS`.
-10. Restart backend.
-11. Verify:
+8. Add the node only to `GREENVPN_PREVIEW_SERVER_IDS` with `-AddToPreview`.
+9. Restart backend.
+10. Verify:
    - stable catalog does not contain the new node;
    - preview catalog contains the new node;
    - Android preview can connect;
