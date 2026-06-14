@@ -74,7 +74,7 @@ Owner-facing click/action packet:
 docs\OWNER_INFRA_NEXT_CLICKS_RU.md
 ```
 
-## Current API status, 2026-06-14
+## Current API status, 2026-06-14 09:05-09:07 MSK
 
 ### Timeweb
 
@@ -104,7 +104,7 @@ The `-AcceptProductionBalanceRisk` switch is intentional: this Timeweb account a
 
 KZ latest full smoke, 2026-06-14: still unreliable. Non-mutating catalog/provisioning checks may pass, but full smoke can fail with remote SSH/WireGuard reachability false. Keep `tw-kz1-test-01` in maintenance and out of preview/stable until it passes repeated full smoke checks.
 
-Timeweb balance visible through API on 2026-06-14: about `1671.5 RUB`.
+Timeweb balance visible through API on 2026-06-14 09:05 MSK: about `1660.8 RUB`.
 
 Known Timeweb quotes:
 
@@ -164,6 +164,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\new_test_vps_p
 ```
 
 Last dry-run price: `933 RUB`. With API-visible balance `267 RUB`, live-create is intentionally blocked until the API-visible balance is enough.
+
+On 2026-06-14 09:07 MSK, the explicit paid wrapper command was run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\continue_ruvds_preview_rollout.ps1 -CreateWhenReady -ConfirmPaidCreate
+```
+
+Result: no paid VPS was created, because the safe gate still saw `currentBalanceRub=267` and `readyToCreate=false`.
 
 Preferred safe gate for Zurich:
 

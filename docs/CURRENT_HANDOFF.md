@@ -21,7 +21,7 @@ Last updated: 2026-06-14.
 
 ## Live Backend Snapshot
 
-Checked 2026-06-14:
+Checked 2026-06-14, 09:05-09:07 MSK:
 
 - `https://api.greenvpn.pro/healthz` returns backend version `0.9.102`.
 - Public server catalog returns Netherlands nodes only:
@@ -38,9 +38,10 @@ Checked 2026-06-14:
 
 - Timeweb Frankfurt/Germany server `8147243` and floating IP `72.56.31.142` were retired/deleted.
 - FriendlyLynet / Friendly Linnet is personal infrastructure and must not be modified.
-- Timeweb API works and currently sees 5 servers. Timeweb production balance is about `1671.5 RUB`; do not spend it on a new NL node without explicit production-balance-risk acceptance.
+- Timeweb API works and currently sees 5 servers. Timeweb production balance is about `1660.8 RUB`; do not spend it on a new NL node without explicit production-balance-risk acceptance.
 - RUVDS API works and currently sees one server, `ruvds-2584554-ld8`, which is preview-only and passes remote provisioning, peer, and client-config smoke checks.
 - RUVDS Zurich rollout wrapper exists and is dry-run safe by default, but paid create is blocked until the API-visible balance is at least `933 RUB`. Current configured RUVDS API credential still sees `267 RUB`.
+- `continue_ruvds_preview_rollout.ps1 -CreateWhenReady -ConfirmPaidCreate` was run on 2026-06-14 and correctly refused to create a paid VPS because the API-visible balance is still too low.
 - Serverspace API works but is not in the active plan right now because funding is not ready.
 - New test VPN nodes must be created outside the main public pool first and promoted only to preview/test after smoke checks.
 
