@@ -116,6 +116,44 @@ function Get-EnvironmentValue {
     return $null
 }
 
+function Get-EnvironmentValuesByPattern {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Pattern
+    )
+
+    $values = @()
+    $seenNames = @{}
+
+    foreach ($scope in @("Process", "User", "Machine")) {
+        $environment = [Environment]::GetEnvironmentVariables($scope)
+        foreach ($name in @($environment.Keys | Sort-Object)) {
+            $nameText = [string]$name
+            if ($nameText -notmatch $Pattern) {
+                continue
+            }
+
+            $value = [string]$environment[$name]
+            if (Test-GreenVpnPlaceholderSecret -Value $value) {
+                continue
+            }
+
+            $source = "${scope}:${nameText}"
+            if ($seenNames.ContainsKey($source)) {
+                continue
+            }
+            $seenNames[$source] = $true
+
+            $values += [pscustomobject]@{
+                source = $source
+                value = $value
+            }
+        }
+    }
+
+    return @($values)
+}
+
 function Invoke-RuvdsApiV2 {
     param(
         [Parameter(Mandatory = $true)]
@@ -143,15 +181,8 @@ Add-RuvdsTokenListCandidate `
     -Source "GREENVPN_RUVDS_API_KEYS" `
     -Value (Get-EnvironmentValue -Name "GREENVPN_RUVDS_API_KEYS")
 
-$processEnv = [Environment]::GetEnvironmentVariables("Process")
-foreach ($name in @($processEnv.Keys | Sort-Object)) {
-    $nameText = [string]$name
-    if ($nameText -eq "GREENVPN_RUVDS_API_KEY" -or $nameText -eq "GREENVPN_RUVDS_API_KEYS") {
-        continue
-    }
-    if ($nameText -match '^GREENVPN_RUVDS_API_KEY_[A-Z0-9_]+$') {
-        Add-RuvdsTokenCandidate -Candidates $rawCandidates -Source $nameText -Token ([string]$processEnv[$name])
-    }
+foreach ($candidate in Get-EnvironmentValuesByPattern -Pattern '^GREENVPN_RUVDS_API_KEY_[A-Z0-9_]+$') {
+    Add-RuvdsTokenCandidate -Candidates $rawCandidates -Source $candidate.source -Token $candidate.value
 }
 
 $legacyValues = Read-KeyValueFile -Path $LegacyAccessPath
