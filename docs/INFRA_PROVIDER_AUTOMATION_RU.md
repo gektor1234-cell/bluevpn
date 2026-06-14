@@ -80,6 +80,20 @@ API works. Current inventory has 5 servers:
 
 Timeweb live-create support exists in `scripts\infra\new_test_vps_plan.ps1` when pinned Timeweb IDs are passed. Existing working NL nodes stay unchanged.
 
+Protected emergency NL rollout wrapper:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_timeweb_nl_preview.ps1
+```
+
+Paid create requires all three explicit switches:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_timeweb_nl_preview.ps1 -CreatePaidServer -ConfirmPaidCreate -AcceptProductionBalanceRisk
+```
+
+The `-AcceptProductionBalanceRisk` switch is intentional: this Timeweb account also hosts production Green VPN infrastructure. The wrapper must not spend this balance by accident.
+
 KZ latest full smoke, 2026-06-14: still unreliable. Non-mutating catalog/provisioning checks may pass, but full smoke can fail with remote SSH/WireGuard reachability false. Keep `tw-kz1-test-01` in maintenance and out of preview/stable until it passes repeated full smoke checks.
 
 Timeweb balance visible through API on 2026-06-14: about `1682 RUB`.

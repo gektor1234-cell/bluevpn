@@ -126,6 +126,20 @@ Timeweb NL preset `3344` стоит примерно `1600 RUB/month`. Техн�
 
 Если понадобится emergency Timeweb NL, сначала владелец должен явно подтвердить, что можно потратить почти весь текущий Timeweb balance.
 
+Безопасная сухая проверка emergency Timeweb NL:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_timeweb_nl_preview.ps1
+```
+
+Платное создание только если владелец явно принимает риск списания почти всего Timeweb production-баланса:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_timeweb_nl_preview.ps1 -CreatePaidServer -ConfirmPaidCreate -AcceptProductionBalanceRisk
+```
+
+Дальше автоматика держит новый узел скрытым, ставит WireGuard, гоняет smoke и добавляет только в preview. Stable не трогается.
+
 ## Serverspace
 
 Прямая ссылка:
