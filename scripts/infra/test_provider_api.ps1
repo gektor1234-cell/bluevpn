@@ -260,6 +260,27 @@ function Get-RuvdsTokenCandidates {
         }) | Out-Null
     }
 
+    function Add-RuvdsTokenCandidatesByPattern {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string]$Pattern
+        )
+
+        foreach ($scope in @("Process", "User", "Machine")) {
+            $environment = [Environment]::GetEnvironmentVariables($scope)
+            foreach ($name in @($environment.Keys | Sort-Object)) {
+                $nameText = [string]$name
+                if ($nameText -notmatch $Pattern) {
+                    continue
+                }
+
+                Add-RuvdsTokenCandidate `
+                    -Source "${scope}:${nameText}" `
+                    -Token ([string]$environment[$name])
+            }
+        }
+    }
+
     Add-RuvdsTokenCandidate -Source "GREENVPN_RUVDS_API_KEY" -Token (Get-GreenVpnSecret -Name "GREENVPN_RUVDS_API_KEY")
     Add-RuvdsTokenCandidate -Source "GREENVPN_RUVDS_API_KEY_2" -Token (Get-GreenVpnSecret -Name "GREENVPN_RUVDS_API_KEY_2")
 
@@ -272,6 +293,8 @@ function Get-RuvdsTokenCandidates {
         }
     }
 
+    Add-RuvdsTokenCandidatesByPattern -Pattern '^GREENVPN_RUVDS_API_KEY_[A-Z0-9_]+$'
+
     return @($items.ToArray())
 }
 
@@ -280,7 +303,7 @@ function Test-Ruvds {
 
     if ($candidates.Count -eq 0) {
         return New-ProviderResult -Name "ruvds" -Status "missing_secret" -Details @{
-            requiredEnv = "GREENVPN_RUVDS_API_KEY or GREENVPN_RUVDS_API_KEY_2 or GREENVPN_RUVDS_API_KEYS"
+            requiredEnv = "GREENVPN_RUVDS_API_KEY, GREENVPN_RUVDS_API_KEY_*, or GREENVPN_RUVDS_API_KEYS"
             note = "Use a RUVDS API v2 bearer token from https://ruvds.com/my/settings/api."
         }
     }

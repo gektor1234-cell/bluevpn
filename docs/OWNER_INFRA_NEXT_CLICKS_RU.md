@@ -67,11 +67,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ops\check_public_dow
 D:\GreenVPN_Secrets\provider_api.local.ps1
 ```
 
-6. Замени значение основного ключа или добавь второй ключ:
+6. Замени значение основного ключа или добавь новый ключ с любым суффиксом:
 
 ```powershell
 $env:GREENVPN_RUVDS_API_KEY = "PASTE_RUVDS_API_V2_TOKEN_HERE"
 $env:GREENVPN_RUVDS_API_KEY_2 = "PASTE_SECOND_RUVDS_API_V2_TOKEN_HERE"
+$env:GREENVPN_RUVDS_API_KEY_FUNDED = "PASTE_FUNDED_ACCOUNT_TOKEN_HERE"
 ```
 
 7. Сохрани файл.

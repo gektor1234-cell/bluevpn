@@ -183,7 +183,7 @@ Expected current result until the correct RUVDS account/token is visible to API:
 - `quotedCostRub=933`
 - `readyToCreate=false`
 
-If the browser panel shows a higher balance, create or copy the RUVDS API v2 token from that same funded account and place it in `D:\GreenVPN_Secrets\provider_api.local.ps1` as `GREENVPN_RUVDS_API_KEY` or `GREENVPN_RUVDS_API_KEY_2`. Do not paste it into chat and do not commit it to the repository. Then rerun `check_ruvds_access_candidates.ps1` and the safe gate above.
+If the browser panel shows a higher balance, create or copy the RUVDS API v2 token from that same funded account and place it in `D:\GreenVPN_Secrets\provider_api.local.ps1` as `GREENVPN_RUVDS_API_KEY`, any `GREENVPN_RUVDS_API_KEY_*`, or inside `GREENVPN_RUVDS_API_KEYS`. Do not paste it into chat and do not commit it to the repository. Then rerun `check_ruvds_access_candidates.ps1` and the safe gate above.
 
 After the API-visible balance is enough, create the paid Zurich test VPS with the explicit double-confirm command:
 

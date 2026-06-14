@@ -261,6 +261,6 @@ Write-GreenVpnJson -InputObject ([pscustomobject]@{
     nextAction = if ($ready.Count -gt 0) {
         "Run scripts\infra\rollout_ruvds_zurich_preview.ps1 -CreatePaidServer -ConfirmPaidCreate -ApplyBootstrap -ConfirmRemoteProvision -AddToPreview."
     } else {
-        "Put an API v2 token from the funded RUVDS account into GREENVPN_RUVDS_API_KEY or GREENVPN_RUVDS_API_KEY_2, and ensure that account has the required SSH key."
+        "Put an API v2 token from the funded RUVDS account into GREENVPN_RUVDS_API_KEY, GREENVPN_RUVDS_API_KEY_*, or GREENVPN_RUVDS_API_KEYS, and ensure that account has the required SSH key."
     }
 })
