@@ -99,6 +99,26 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\new_test_vps_p
 
 Last dry-run price: `933 RUB`. With API-visible balance `267 RUB`, live-create is intentionally blocked until the API-visible balance is enough.
 
+Preferred safe gate for Zurich:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\ruvds_zurich_gate.ps1
+```
+
+Expected current result until the correct RUVDS account/token is visible to API:
+
+- `currentBalanceRub=267`
+- `quotedCostRub=933`
+- `readyToCreate=false`
+
+After the API-visible balance is enough, create the paid Zurich test VPS with the explicit double-confirm command:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\ruvds_zurich_gate.ps1 -ApplyWhenReady -ConfirmPaidCreate
+```
+
+This command still refuses to create anything if the API-visible balance is lower than the quoted cost.
+
 Important RUVDS limitation: current RUVDS API v2 responses for existing servers may return `network_v4=null`. If live-create does not expose the public IPv4, take the IP once from the panel and continue the automated bootstrap chain from that point.
 
 ### Serverspace
