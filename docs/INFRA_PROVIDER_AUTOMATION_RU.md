@@ -38,6 +38,14 @@ Check all provider APIs without printing secret values:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\test_provider_api.ps1 -Provider all -IncludeInventory
 ```
 
+Check current preview VPN nodes without printing admin token or private keys:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_preview_vpn_nodes.ps1
+```
+
+This command SSHes to the origin, reads `/opt/bluevpn/backend/data/admin_token.txt` only on that host, runs protected admin checks, and prints only a safe status summary.
+
 ## Current API status, 2026-06-14
 
 ### Timeweb
@@ -52,9 +60,11 @@ API works. Current inventory has 5 servers:
 
 Timeweb live-create support exists in `scripts\infra\new_test_vps_plan.ps1` when pinned Timeweb IDs are passed. Existing working NL nodes stay unchanged.
 
+KZ latest full smoke, 2026-06-14: still unreliable. Non-mutating catalog/provisioning checks may pass, but full smoke can fail with remote SSH/WireGuard reachability false. Keep `tw-kz1-test-01` in maintenance and out of preview/stable until it passes repeated full smoke checks.
+
 ### RUVDS
 
-API works, but the API-visible balance is currently `267 RUB`. The owner reported topping up RUVDS, but that top-up is not visible to the currently configured API credentials yet.
+API works, but the API-visible balance is currently `267 RUB`. The owner reported topping up RUVDS, but that top-up is not visible to the currently configured API credentials yet. Until the same browser account and API token show the funded balance, paid create commands must stay blocked.
 
 Current server:
 
@@ -63,6 +73,13 @@ Current server:
 - Location: London / LD8.
 - Endpoint: `88.218.250.86:443`.
 - Status: hidden from stable, visible only in preview.
+
+Latest protected smoke check, 2026-06-14:
+
+- `remote-provisioning-check`: ok, SSH reachable, WireGuard ready.
+- `remote-peer-smoke`: ok, temporary peer created and removed.
+- `client-config-smoke`: ok, temporary client config shape valid and smoke peer removed.
+- Public catalog split: stable does not contain `ruvds-2584554-ld8`; preview contains it.
 
 Available target locations from current API inventory:
 
@@ -110,6 +127,8 @@ Expected current result until the correct RUVDS account/token is visible to API:
 - `currentBalanceRub=267`
 - `quotedCostRub=933`
 - `readyToCreate=false`
+
+If the browser panel shows a higher balance, create or copy the RUVDS API v2 token from that same funded account and place it in `D:\GreenVPN_Secrets\provider_api.local.ps1` as `GREENVPN_RUVDS_API_KEY`. Do not paste it into chat and do not commit it to the repository. Then rerun the safe gate above.
 
 After the API-visible balance is enough, create the paid Zurich test VPS with the explicit double-confirm command:
 
@@ -186,6 +205,18 @@ Preview catalog currently exposes:
 - `ruvds-2584554-ld8`
 
 Do not add KZ or new nodes to stable. Add new nodes to preview first and test on Android/Windows before any stable decision.
+
+Latest preview-node smoke command:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_preview_vpn_nodes.ps1
+```
+
+Latest result, 2026-06-14:
+
+- `tw-7879598-nl1`: checks ok; active/public; stable and preview.
+- `ruvds-2584554-ld8`: checks ok; hidden from stable; preview only.
+- `tw-kz1-test-01`: not part of preview/stable; keep hidden/maintenance because full smoke is unreliable.
 
 ## Standard rollout for a new node
 
