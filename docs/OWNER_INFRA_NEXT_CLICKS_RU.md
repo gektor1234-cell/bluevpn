@@ -70,10 +70,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_scaling_
 createOptions.ruvdsZurich.readyToCreate = true
 ```
 
-После этого я сам запускаю платное создание:
+Сухая проверка полного Zurich rollout:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\ruvds_zurich_gate.ps1 -ApplyWhenReady -ConfirmPaidCreate
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1
+```
+
+После этого я сам запускаю единый безопасный wrapper для платного создания:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 -CreatePaidServer -ConfirmPaidCreate
 ```
 
 Дальше я сам:
@@ -85,6 +91,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\ruvds_zurich_g
 5. гоняю smoke;
 6. добавляю только в preview;
 7. проверяю stable/preview split.
+
+Если RUVDS API создаст VPS, но не вернёт публичный IPv4, владелец один раз копирует IP из панели, а я продолжаю так:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 -NodeIPv4 <public-ip> -ApplyBootstrap -ConfirmRemoteProvision -AddToPreview
+```
 
 ## Timeweb: что уже можно, но пока не делаем
 

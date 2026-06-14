@@ -137,7 +137,7 @@ $result = [ordered]@{
             currentBalanceRub = $ruvdsGate.quote.currentBalanceRub
             quotedCostRub = $ruvdsGate.quote.quotedCostRub
             minimumTopUpRub = $ruvdsGate.quote.minimumTopUpRub
-            commandWhenReady = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\ruvds_zurich_gate.ps1 -ApplyWhenReady -ConfirmPaidCreate"
+            commandWhenReady = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 -CreatePaidServer -ConfirmPaidCreate"
         }
         timewebNetherlands = [ordered]@{
             readyByBalance = $timewebNlReadyByBalance
@@ -181,7 +181,7 @@ $result = [ordered]@{
     }
     nextActions = @(
         "If RUVDS browser balance is funded, replace GREENVPN_RUVDS_API_KEY with a token from that same funded account and rerun this script.",
-        "When ruvdsZurich.readyToCreate is true, run the ruvds_zurich_gate.ps1 create command, then prepare_remote_wireguard_node.ps1 with the new IP.",
+        "When ruvdsZurich.readyToCreate is true, run rollout_ruvds_zurich_preview.ps1 with -CreatePaidServer -ConfirmPaidCreate; if the API does not return IPv4, rerun it with -NodeIPv4 <public-ip> -ApplyBootstrap -ConfirmRemoteProvision -AddToPreview.",
         "Do not spend Timeweb NL balance unless the owner explicitly accepts the production-balance risk.",
         "Keep KZ out of preview/stable until repeated full smoke checks pass."
     )

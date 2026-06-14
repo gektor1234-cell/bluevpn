@@ -141,6 +141,12 @@ Preferred safe gate for Zurich:
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\ruvds_zurich_gate.ps1
 ```
 
+Preferred end-to-end Zurich rollout wrapper, dry-run by default:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1
+```
+
 Expected current result until the correct RUVDS account/token is visible to API:
 
 - `currentBalanceRub=267`
@@ -152,12 +158,22 @@ If the browser panel shows a higher balance, create or copy the RUVDS API v2 tok
 After the API-visible balance is enough, create the paid Zurich test VPS with the explicit double-confirm command:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\ruvds_zurich_gate.ps1 -ApplyWhenReady -ConfirmPaidCreate
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 -CreatePaidServer -ConfirmPaidCreate
 ```
 
 This command still refuses to create anything if the API-visible balance is lower than the quoted cost.
 
 Important RUVDS limitation: current RUVDS API v2 responses for existing servers may return `network_v4=null`. If live-create does not expose the public IPv4, take the IP once from the panel and continue the automated bootstrap chain from that point.
+
+Resume the rollout when the public IPv4 is known:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 `
+  -NodeIPv4 <public-ip-from-provider-panel> `
+  -ApplyBootstrap `
+  -ConfirmRemoteProvision `
+  -AddToPreview
+```
 
 Post-create remote node bootstrap, dry-run first:
 
