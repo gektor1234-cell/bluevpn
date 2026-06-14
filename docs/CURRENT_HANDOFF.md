@@ -21,7 +21,7 @@ Last updated: 2026-06-14.
 
 ## Live Backend Snapshot
 
-Checked 2026-06-14, 09:05-09:07 MSK:
+Checked 2026-06-14, 11:19 MSK:
 
 - `https://api.greenvpn.pro/healthz` returns backend version `0.9.102`.
 - Public server catalog returns Netherlands nodes only:
@@ -33,6 +33,11 @@ Checked 2026-06-14, 09:05-09:07 MSK:
   - Android stable and preview return `.apk`;
   - Windows stable and preview return `.exe`;
   - legacy Android compatibility path does not return Windows installer.
+- Preview server catalog returns:
+  - `intelligent_smew` / Netherlands #1;
+  - `tw-7879598-nl1` / Netherlands #2;
+  - `ruvds-2584554-ld8` / RUVDS London #1.
+- Preview Android/Windows builds use preview catalog automatically when the app version contains `preview` or `adgate`.
 
 ## Infrastructure
 
@@ -40,8 +45,9 @@ Checked 2026-06-14, 09:05-09:07 MSK:
 - FriendlyLynet / Friendly Linnet is personal infrastructure and must not be modified.
 - Timeweb API works and currently sees 5 servers. Timeweb production balance is about `1660.8 RUB`; do not spend it on a new NL node without explicit production-balance-risk acceptance.
 - RUVDS API works and currently sees one server, `ruvds-2584554-ld8`, which is preview-only and passes remote provisioning, peer, and client-config smoke checks.
-- RUVDS Zurich rollout wrapper exists and is dry-run safe by default, but paid create is blocked until the API-visible balance is at least `933 RUB`. Current configured RUVDS API credential still sees `267 RUB`.
-- `continue_ruvds_preview_rollout.ps1 -CreateWhenReady -ConfirmPaidCreate` was run on 2026-06-14 and correctly refused to create a paid VPS because the API-visible balance is still too low.
+- Do not create another RUVDS Zurich node unless the owner explicitly reopens that scaling task. The current RUVDS task is to test and use the already-created London preview node.
+- Historical note: RUVDS Zurich rollout wrapper exists and is dry-run safe by default, but paid create is blocked until the API-visible balance is at least `933 RUB`. Current configured RUVDS API credential still sees `267 RUB`.
+- Historical note: `continue_ruvds_preview_rollout.ps1 -CreateWhenReady -ConfirmPaidCreate` was run on 2026-06-14 and correctly refused to create a paid VPS because the API-visible balance is still too low.
 - Serverspace API works but is not in the active plan right now because funding is not ready.
 - New test VPN nodes must be created outside the main public pool first and promoted only to preview/test after smoke checks.
 
@@ -56,32 +62,39 @@ Checked 2026-06-14, 09:05-09:07 MSK:
 
 1. Keep stable public site untouched.
 2. Continue testing/fixing only on the preview contour.
-3. For RUVDS scaling, first make sure `D:\GreenVPN_Secrets\provider_api.local.ps1` contains an API v2 token from the funded RUVDS account. Then run:
+3. For current RUVDS London preview validation, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_preview_vpn_nodes.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ops\check_public_download_manifests.ps1
+```
+
+4. Only if the owner explicitly asks for a second RUVDS node, first make sure `D:\GreenVPN_Secrets\provider_api.local.ps1` contains an API v2 token from the funded RUVDS account. Then run:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_ruvds_access_candidates.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_scaling_readiness.ps1
 ```
 
-4. Preferred RUVDS continuation command, safe dry-run by default:
+5. Historical Zurich continuation command, safe dry-run by default:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\continue_ruvds_preview_rollout.ps1
 ```
 
-5. When RUVDS is ready, create and provision the Zurich preview node with:
+6. When RUVDS is ready and the owner explicitly wants another node, create and provision the Zurich preview node with:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\continue_ruvds_preview_rollout.ps1 -CreateWhenReady -ConfirmPaidCreate
 ```
 
-6. If RUVDS API creates the VPS but does not return public IPv4, take the IP from the panel once and continue:
+7. If RUVDS API creates the VPS but does not return public IPv4, take the IP from the panel once and continue:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 -NodeIPv4 <public-ip> -ApplyBootstrap -ConfirmRemoteProvision -AddToPreview
 ```
 
-7. Before any release publish, verify Android/Windows artifacts, backend catalog, and stable/preview target separation:
+8. Before any release publish, verify Android/Windows artifacts, backend catalog, and stable/preview target separation:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ops\check_public_download_manifests.ps1
