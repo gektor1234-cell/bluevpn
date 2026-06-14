@@ -155,7 +155,7 @@ $result = [ordered]@{
             currentBalanceRub = $ruvdsGate.quote.currentBalanceRub
             quotedCostRub = $ruvdsGate.quote.quotedCostRub
             minimumTopUpRub = $ruvdsGate.quote.minimumTopUpRub
-            commandWhenReady = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 -CreatePaidServer -ConfirmPaidCreate"
+            commandWhenReady = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 -CreatePaidServer -ConfirmPaidCreate -ApplyBootstrap -ConfirmRemoteProvision -AddToPreview"
         }
         timewebNetherlands = [ordered]@{
             readyByBalance = $timewebNlReadyByBalance
@@ -201,7 +201,7 @@ $result = [ordered]@{
     }
     nextActions = @(
         "If RUVDS browser balance is funded but accessCandidates.readyCandidateFound is false, put a token from that same funded account into GREENVPN_RUVDS_API_KEY or GREENVPN_RUVDS_API_KEY_2 and rerun this script.",
-        "When ruvdsZurich.readyToCreate is true, run rollout_ruvds_zurich_preview.ps1 with -CreatePaidServer -ConfirmPaidCreate; if the API does not return IPv4, rerun it with -NodeIPv4 <public-ip> -ApplyBootstrap -ConfirmRemoteProvision -AddToPreview.",
+        "When ruvdsZurich.readyToCreate is true, run rollout_ruvds_zurich_preview.ps1 with -CreatePaidServer -ConfirmPaidCreate -ApplyBootstrap -ConfirmRemoteProvision -AddToPreview; if the API does not return IPv4, rerun it with -NodeIPv4 <public-ip> -ApplyBootstrap -ConfirmRemoteProvision -AddToPreview.",
         "Do not spend Timeweb NL balance unless the owner explicitly accepts the production-balance risk; use rollout_timeweb_nl_preview.ps1 for the protected emergency path.",
         "Keep KZ out of preview/stable until repeated full smoke checks pass."
     )

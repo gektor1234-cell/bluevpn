@@ -91,7 +91,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_
 Платное создание:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 -CreatePaidServer -ConfirmPaidCreate
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 -CreatePaidServer -ConfirmPaidCreate -ApplyBootstrap -ConfirmRemoteProvision -AddToPreview
 ```
 
 Дальше автоматика:

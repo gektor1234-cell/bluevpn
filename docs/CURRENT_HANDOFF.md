@@ -65,7 +65,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_scaling_
 4. When RUVDS is ready, create Zurich preview node with:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 -CreatePaidServer -ConfirmPaidCreate
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 -CreatePaidServer -ConfirmPaidCreate -ApplyBootstrap -ConfirmRemoteProvision -AddToPreview
 ```
 
 5. If RUVDS API creates the VPS but does not return public IPv4, take the IP from the panel once and continue:

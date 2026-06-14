@@ -172,7 +172,7 @@ $result = [ordered]@{
 }
 
 if (-not $CreatePaidServer -and -not $ApplyBootstrap -and [string]::IsNullOrWhiteSpace($NodeIPv4)) {
-    $result.nextCommandWhenRuvdsReady = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 -CreatePaidServer -ConfirmPaidCreate"
+    $result.nextCommandWhenRuvdsReady = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 -CreatePaidServer -ConfirmPaidCreate -ApplyBootstrap -ConfirmRemoteProvision -AddToPreview"
     $result.nextCommandWithKnownIp = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 -NodeIPv4 <public-ip> -ApplyBootstrap -ConfirmRemoteProvision -AddToPreview"
     Write-GreenVpnJson -InputObject ([pscustomobject]$result)
     return

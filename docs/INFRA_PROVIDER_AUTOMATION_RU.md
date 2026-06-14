@@ -188,7 +188,7 @@ If the browser panel shows a higher balance, create or copy the RUVDS API v2 tok
 After the API-visible balance is enough, create the paid Zurich test VPS with the explicit double-confirm command:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 -CreatePaidServer -ConfirmPaidCreate
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 -CreatePaidServer -ConfirmPaidCreate -ApplyBootstrap -ConfirmRemoteProvision -AddToPreview
 ```
 
 This command still refuses to create anything if the API-visible balance is lower than the quoted cost.
