@@ -1,6 +1,6 @@
 # Green VPN Current Handoff
 
-Last compacted: 2026-06-12.
+Last updated: 2026-06-14.
 
 ## Hard Rules
 
@@ -21,7 +21,7 @@ Last compacted: 2026-06-12.
 
 ## Live Backend Snapshot
 
-Checked 2026-06-12:
+Checked 2026-06-14:
 
 - `https://api.greenvpn.pro/healthz` returns backend version `0.9.102`.
 - Public server catalog returns Netherlands nodes only:
@@ -29,12 +29,20 @@ Checked 2026-06-12:
   - `tw-7879598-nl1` / Netherlands #2 / `nl2.vpn.greenvpn.pro:443`.
 - Client-side YouTube route-quality gate is disabled in the live catalog. Server-side adaptive routing remains enabled.
 - Older Frankfurt/Germany notes are historical only.
+- Public update/download check is green:
+  - Android stable and preview return `.apk`;
+  - Windows stable and preview return `.exe`;
+  - legacy Android compatibility path does not return Windows installer.
 
 ## Infrastructure
 
 - Timeweb Frankfurt/Germany server `8147243` and floating IP `72.56.31.142` were retired/deleted.
 - FriendlyLynet / Friendly Linnet is personal infrastructure and must not be modified.
-- Next test VPN node should be created outside the main public pool first. Preferred provider research is in `docs/VPS_PROVIDER_OPTIONS_WITH_API_RU.md`.
+- Timeweb API works and currently sees 5 servers. Timeweb production balance is about `1671.5 RUB`; do not spend it on a new NL node without explicit production-balance-risk acceptance.
+- RUVDS API works and currently sees one server, `ruvds-2584554-ld8`, which is preview-only and passes remote provisioning, peer, and client-config smoke checks.
+- RUVDS Zurich rollout wrapper exists and is dry-run safe by default, but paid create is blocked until the API-visible balance is at least `933 RUB`. Current configured RUVDS API credential still sees `267 RUB`.
+- Serverspace API works but is not in the active plan right now because funding is not ready.
+- New test VPN nodes must be created outside the main public pool first and promoted only to preview/test after smoke checks.
 
 ## Repo Cleanup Status
 
@@ -47,5 +55,28 @@ Checked 2026-06-12:
 
 1. Keep stable public site untouched.
 2. Continue testing/fixing only on the preview contour.
-3. Pick a new test VPS provider, preferably RUVDS first or HOSTKEY second.
-4. Before any release publish, verify Android/Windows artifacts, backend catalog, and stable/preview target separation.
+3. For RUVDS scaling, first make sure `D:\GreenVPN_Secrets\provider_api.local.ps1` contains an API v2 token from the funded RUVDS account. Then run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_ruvds_access_candidates.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_scaling_readiness.ps1
+```
+
+4. When RUVDS is ready, create Zurich preview node with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 -CreatePaidServer -ConfirmPaidCreate
+```
+
+5. If RUVDS API creates the VPS but does not return public IPv4, take the IP from the panel once and continue:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 -NodeIPv4 <public-ip> -ApplyBootstrap -ConfirmRemoteProvision -AddToPreview
+```
+
+6. Before any release publish, verify Android/Windows artifacts, backend catalog, and stable/preview target separation:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ops\check_public_download_manifests.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_preview_vpn_nodes.ps1
+```

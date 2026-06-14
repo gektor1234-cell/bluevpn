@@ -104,7 +104,7 @@ The `-AcceptProductionBalanceRisk` switch is intentional: this Timeweb account a
 
 KZ latest full smoke, 2026-06-14: still unreliable. Non-mutating catalog/provisioning checks may pass, but full smoke can fail with remote SSH/WireGuard reachability false. Keep `tw-kz1-test-01` in maintenance and out of preview/stable until it passes repeated full smoke checks.
 
-Timeweb balance visible through API on 2026-06-14: about `1682 RUB`.
+Timeweb balance visible through API on 2026-06-14: about `1671.5 RUB`.
 
 Known Timeweb quotes:
 
@@ -113,7 +113,7 @@ Known Timeweb quotes:
 
 ### RUVDS
 
-API works, but the API-visible balance is currently `267 RUB`. The owner reported topping up RUVDS, but that top-up is not visible to the currently configured API credentials yet. Until the same browser account and API token show the funded balance, paid create commands must stay blocked.
+API works, but the API-visible balance is currently `267 RUB`. The owner reported topping up RUVDS, but that top-up is not visible to the currently configured API credentials yet. Current local secret inventory contains only one RUVDS API token, and that token resolves to the `267 RUB` account. Until the same funded browser account and API token show at least `933 RUB`, paid create commands must stay blocked.
 
 Current server:
 
