@@ -46,6 +46,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_preview_
 
 This command SSHes to the origin, reads `/opt/bluevpn/backend/data/admin_token.txt` only on that host, runs protected admin checks, and prints only a safe status summary.
 
+Check end-to-end scaling readiness in one safe command:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_scaling_readiness.ps1
+```
+
+Owner-facing click/action packet:
+
+```text
+docs\OWNER_INFRA_NEXT_CLICKS_RU.md
+```
+
 ## Current API status, 2026-06-14
 
 ### Timeweb
@@ -61,6 +73,13 @@ API works. Current inventory has 5 servers:
 Timeweb live-create support exists in `scripts\infra\new_test_vps_plan.ps1` when pinned Timeweb IDs are passed. Existing working NL nodes stay unchanged.
 
 KZ latest full smoke, 2026-06-14: still unreliable. Non-mutating catalog/provisioning checks may pass, but full smoke can fail with remote SSH/WireGuard reachability false. Keep `tw-kz1-test-01` in maintenance and out of preview/stable until it passes repeated full smoke checks.
+
+Timeweb balance visible through API on 2026-06-14: about `1682 RUB`.
+
+Known Timeweb quotes:
+
+- NL preset `3344`, location `nl-1`: about `1600 RUB/month`; technically enough balance, but do not auto-create because it would consume almost all current Timeweb production balance.
+- KZ preset `2937`, location `kz-1`: about `611 RUB/month`; do not create more KZ before current KZ reliability is understood.
 
 ### RUVDS
 
@@ -278,3 +297,9 @@ $preview.catalog.servers | Select-Object id,title
 ## Next owner action
 
 Open RUVDS and check whether the account shown in the browser is the same account as the configured API token. The configured API currently sees only `267 RUB`; server creation can continue once this API-visible balance is at least `933 RUB` for Zurich.
+
+Use the exact owner-facing sequence in:
+
+```text
+docs\OWNER_INFRA_NEXT_CLICKS_RU.md
+```

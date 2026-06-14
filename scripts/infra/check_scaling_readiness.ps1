@@ -1,0 +1,190 @@
+param(
+    [Parameter(Mandatory = $false)]
+    [switch]$SkipPreviewSmoke,
+
+    [Parameter(Mandatory = $false)]
+    [int]$TimewebNlPresetId = 3344,
+
+    [Parameter(Mandatory = $false)]
+    [int]$TimewebKzPresetId = 2937
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+. "$PSScriptRoot\provider_api_common.ps1"
+
+function Invoke-InfraJsonScript {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ScriptName,
+
+        [Parameter(Mandatory = $false)]
+        [hashtable]$Parameters = @{}
+    )
+
+    $scriptPath = Join-Path $PSScriptRoot $ScriptName
+    if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
+        throw "Infra script not found: $scriptPath"
+    }
+
+    $raw = & $scriptPath @Parameters
+
+    return (($raw | Out-String).Trim() | ConvertFrom-Json)
+}
+
+function Get-ProviderStatus {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Providers,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    $match = @($Providers | Where-Object { $_.provider -eq $Name } | Select-Object -First 1)
+    if ($match.Count -eq 0) {
+        return [pscustomobject]@{
+            status = "missing"
+        }
+    }
+    return $match[0]
+}
+
+function Get-TimewebQuote {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $true)]
+        [int]$PresetId
+    )
+
+    return Invoke-InfraJsonScript -ScriptName "new_test_vps_plan.ps1" -Parameters @{
+        Provider = "timeweb"
+        Name = $Name
+        TimewebPresetId = $PresetId
+        TimewebOsId = 95
+        QuotePrice = $true
+    }
+}
+
+$providerInventory = Invoke-InfraJsonScript -ScriptName "test_provider_api.ps1" -Parameters @{
+    Provider = "all"
+    IncludeInventory = $true
+}
+
+$ruvdsGate = Invoke-InfraJsonScript -ScriptName "ruvds_zurich_gate.ps1"
+$timewebNlQuote = Get-TimewebQuote -Name "greenvpn-timeweb-nl-test-next" -PresetId $TimewebNlPresetId
+$timewebKzQuote = Get-TimewebQuote -Name "greenvpn-timeweb-kz-test-next" -PresetId $TimewebKzPresetId
+
+$previewSmoke = $null
+if (-not $SkipPreviewSmoke) {
+    $previewSmoke = Invoke-InfraJsonScript -ScriptName "check_preview_vpn_nodes.ps1"
+}
+
+$timeweb = Get-ProviderStatus -Providers $providerInventory.providers -Name "timeweb"
+$ruvds = Get-ProviderStatus -Providers $providerInventory.providers -Name "ruvds"
+$serverspace = Get-ProviderStatus -Providers $providerInventory.providers -Name "serverspace"
+
+$timewebNlReadyByBalance = [decimal]$timewebNlQuote.plan.currentBalanceRub -ge [decimal]$timewebNlQuote.plan.quotedPreset.price
+$timewebKzReadyByBalance = [decimal]$timewebKzQuote.plan.currentBalanceRub -ge [decimal]$timewebKzQuote.plan.quotedPreset.price
+
+$result = [ordered]@{
+    ok = $true
+    generatedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+    stablePolicy = [ordered]@{
+        stableMustRemainUntouched = $true
+        newNodesGoToPreviewFirst = $true
+        friendlyLinnetNoTouch = $true
+    }
+    providers = [ordered]@{
+        timeweb = [ordered]@{
+            status = $timeweb.status
+            serverCount = $timeweb.details.serverCount
+            balanceRub = $timewebNlQuote.plan.currentBalanceRub
+            currentServers = @($timeweb.details.servers | ForEach-Object {
+                [ordered]@{
+                    id = $_.id
+                    name = $_.name
+                    status = $_.status
+                    mainIp = $_.mainIp
+                }
+            })
+        }
+        ruvds = [ordered]@{
+            status = $ruvds.status
+            serverCount = $ruvds.details.serverCount
+            balanceRub = $ruvds.details.balanceAmount
+            currentServers = @($ruvds.details.servers | ForEach-Object {
+                [ordered]@{
+                    id = $_.id
+                    status = $_.status
+                    datacenter = $_.datacenter
+                }
+            })
+        }
+        serverspace = [ordered]@{
+            status = $serverspace.status
+            serverCount = $serverspace.details.serverCount
+            balance = $serverspace.details.balance
+            currency = $serverspace.details.currency
+        }
+    }
+    createOptions = [ordered]@{
+        ruvdsZurich = [ordered]@{
+            readyToCreate = [bool]$ruvdsGate.quote.readyToCreate
+            currentBalanceRub = $ruvdsGate.quote.currentBalanceRub
+            quotedCostRub = $ruvdsGate.quote.quotedCostRub
+            minimumTopUpRub = $ruvdsGate.quote.minimumTopUpRub
+            commandWhenReady = "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\ruvds_zurich_gate.ps1 -ApplyWhenReady -ConfirmPaidCreate"
+        }
+        timewebNetherlands = [ordered]@{
+            readyByBalance = $timewebNlReadyByBalance
+            recommendedForEmergencyOnly = $true
+            reason = "Creating this node would consume almost all current Timeweb production balance."
+            currentBalanceRub = $timewebNlQuote.plan.currentBalanceRub
+            quotedMonthlyRub = $timewebNlQuote.plan.quotedPreset.price
+            presetId = $timewebNlQuote.plan.quotedPreset.id
+            location = $timewebNlQuote.plan.quotedPreset.location
+        }
+        timewebKazakhstan = [ordered]@{
+            readyByBalance = $timewebKzReadyByBalance
+            recommended = $false
+            reason = "Existing KZ node has unreliable full smoke; do not create more KZ before the provider/route issue is understood."
+            currentBalanceRub = $timewebKzQuote.plan.currentBalanceRub
+            quotedMonthlyRub = $timewebKzQuote.plan.quotedPreset.price
+            presetId = $timewebKzQuote.plan.quotedPreset.id
+            location = $timewebKzQuote.plan.quotedPreset.location
+        }
+    }
+    previewSmoke = if ($null -eq $previewSmoke) {
+        [ordered]@{
+            skipped = $true
+        }
+    } else {
+        [ordered]@{
+            skipped = $false
+            ok = $previewSmoke.ok
+            serverCount = $previewSmoke.serverCount
+            servers = @($previewSmoke.servers | ForEach-Object {
+                [ordered]@{
+                    serverId = $_.serverId
+                    checksOk = $_.checksOk
+                    inStable = $_.publicCatalog.inStable
+                    inPreview = $_.publicCatalog.inPreview
+                    status = $_.catalog.status
+                    clientConfigReady = $_.catalog.clientConfigReady
+                }
+            })
+        }
+    }
+    nextActions = @(
+        "If RUVDS browser balance is funded, replace GREENVPN_RUVDS_API_KEY with a token from that same funded account and rerun this script.",
+        "When ruvdsZurich.readyToCreate is true, run the ruvds_zurich_gate.ps1 create command, then prepare_remote_wireguard_node.ps1 with the new IP.",
+        "Do not spend Timeweb NL balance unless the owner explicitly accepts the production-balance risk.",
+        "Keep KZ out of preview/stable until repeated full smoke checks pass."
+    )
+}
+
+Write-GreenVpnJson -InputObject ([pscustomobject]$result)
