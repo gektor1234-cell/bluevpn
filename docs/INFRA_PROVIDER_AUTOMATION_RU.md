@@ -1,119 +1,73 @@
-# Green VPN: provider API automation
+# Green VPN: automation for VPN node providers
 
-Цель: сделать так, чтобы новые VPN-узлы можно было поднимать через API провайдеров, но не рисковать основным сайтом и текущими пользователями.
+Цель: поднимать новые VPN-узлы через API провайдеров, не трогая основной сайт и текущих пользователей. Все новые узлы сначала идут только в `test/preview`.
 
-## Текущая граница безопасности
+## Safety boundary
 
-- Основной сайт и основной public catalog не трогаем без отдельного решения владельца.
-- Новые серверы сначала создаются как test/preview.
-- В backend новый узел сначала регистрируется только как скрытый draft: `isPublic=false`, `isActive=false`, `status=draft`.
-- В public catalog узел попадает только после bootstrap WireGuard, remote provisioning check, smoke test и ручного решения.
-- FriendlyLynet не трогаем.
-- API-ключи, SMTP/SMS/YooKassa secrets, SSH private keys и WireGuard private keys не пишем в repo.
+- Основной сайт, stable APK/EXE и public catalog не менять без отдельного решения.
+- Новые узлы регистрировать сначала как скрытые draft/test nodes: `isPublic=false`, `isActive=false`, `status=draft`.
+- В preview catalog узел попадает только после WireGuard bootstrap, backend env, smoke checks и отдельного включения preview allowlist.
+- `Friendly Linnet` не трогать.
+- API keys, SMTP/SMS/YooKassa secrets, SSH private keys и WireGuard private keys не писать в repo.
 
-## Где хранить ключи
+## Secrets
 
-Основной локальный файл для секретов рядом с проектом:
-
-```powershell
-C:\Users\gekto\projects\bluevpn\secrets\provider_api.local.ps1
-```
-
-Он игнорируется git через `secrets/`, поэтому не попадает в репозиторий.
-
-Внешняя папка-источник/backup:
+Источник истины для локальных секретов:
 
 ```powershell
-D:\GreenVPN_Secrets
+D:\GreenVPN_Secrets\provider_api.local.ps1
 ```
 
-Импорт существующих `*_access.txt` из внешней папки в проектный локальный файл:
-
-```powershell
-.\scripts\infra\import_existing_secrets.ps1 -Force
-```
-
-Шаблон без реальных значений лежит тут:
+Repo хранит только пример:
 
 ```powershell
 scripts\infra\provider_secrets.example.ps1
 ```
 
-В реальном локальном файле должны быть только присваивания env vars:
+Импорт существующих access-файлов во внешний secrets-файл:
 
 ```powershell
-$env:GREENVPN_SERVERSPACE_API_KEY = "..."
-$env:GREENVPN_TIMEWEB_TOKEN = "..."
-$env:GREENVPN_RUVDS_API_KEY = "..."
-$env:BLUEVPN_ADMIN_TOKEN = "..."
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\import_existing_secrets.ps1 -Force
 ```
 
-`GREENVPN_RUVDS_API_KEY` — это RUVDS API v2 bearer token из `https://ruvds.com/my/settings/api`.
-Логин/пароль RUVDS для старого `/api/logon/` flow больше не нужен для текущей автоматизации.
-
-HOSTKEY сейчас не входит в рабочий пул. Если позже появится нормальный API-ключ, его можно добавить отдельно как `$env:GREENVPN_HOSTKEY_API_KEY`, но текущая автоматизация не должна блокироваться об него.
-
-Файл `*.local.ps1` игнорируется git.
-
-## Проверка API-доступов
+Проверка, что секреты загружаются, без вывода значений:
 
 ```powershell
-.\scripts\infra\test_provider_api.ps1 -Provider all
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\test_provider_api.ps1 -Provider all
 ```
 
-С инвентаризацией без вывода секретов:
+## Current API status, 2026-06-14
+
+### Timeweb
+
+API работает. Видит 4 сервера:
+
+- `Friendly Linnet` — личный/no-touch.
+- `Intelligent Smew` — origin/VPN/backend.
+- `Friendly Cetus` — site/proxy/monitoring.
+- `GreenVPN NL1 VPN 20260511` — NL VPN node.
+
+Live-create в `new_test_vps_plan.ps1` пока намеренно отключён, потому что для безопасной покупки надо зафиксировать точные Timeweb configuration IDs. Читать inventory можно.
+
+### RUVDS
+
+API v2 работает.
+
+- Баланс на момент проверки: `267 RUB`.
+- Текущий сервер: `2584554`, backend serverId `ruvds-2584554-ld8`.
+- Доступные целевые локации из текущего API-инвентаря:
+  - `3` — LD8 London.
+  - `2` — ZUR1 Zurich.
+- Debian 12 image: `52`.
+- SSH key `greenvpn-codex-local` есть в аккаунте.
+
+Dry-run Zurich node:
 
 ```powershell
-.\scripts\infra\test_provider_api.ps1 -Provider all -IncludeInventory
-```
-
-Что сейчас делает скрипт:
-
-- Timeweb: проверяет список серверов через `GET https://api.timeweb.cloud/api/v1/servers`.
-- RUVDS: проверяет `GET https://api.ruvds.com/v2/balance`, `/v2/servers`, `/v2/datacenters`, `/v2/os`, `/v2/tariffs`.
-- Serverspace: проверяет проект через `GET https://api.serverspace.io/api/v1/project`.
-- HOSTKEY: не входит в `-Provider all`; доступен только ручной проверкой `-Provider hostkey`, пока считается запасным вариантом без live-вызовов.
-
-## Dry-run плана VPS
-
-Serverspace, без покупки:
-
-```powershell
-.\scripts\infra\new_test_vps_plan.ps1 `
-  -Provider serverspace `
-  -Name greenvpn-test-am2-01 `
-  -LocationId am2 `
-  -ImageId Debian-12-X64 `
-  -Cpu 1 `
-  -RamMb 1024 `
-  -DiskGb 25 `
-  -BandwidthMbps 50
-```
-
-Реальное создание в Serverspace:
-
-```powershell
-.\scripts\infra\new_test_vps_plan.ps1 `
-  -Provider serverspace `
-  -Name greenvpn-test-am2-01 `
-  -LocationId am2 `
-  -ImageId Debian-12-X64 `
-  -Cpu 1 `
-  -RamMb 1024 `
-  -DiskGb 25 `
-  -BandwidthMbps 50 `
-  -Apply
-```
-
-`-Apply` тратит деньги у провайдера. Без `-Apply` денег не тратит.
-
-RUVDS London, только расчет цены без создания сервера:
-
-```powershell
-.\scripts\infra\new_test_vps_plan.ps1 `
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\new_test_vps_plan.ps1 `
   -Provider ruvds `
-  -Name greenvpn-ruvds-ld8-test-01 `
-  -LocationId 3 `
+  -Name greenvpn-ruvds-zurich-test-01 `
+  -LocationId 2 `
   -ImageId 52 `
   -Cpu 1 `
   -RamMb 1024 `
@@ -121,75 +75,85 @@ RUVDS London, только расчет цены без создания сер�
   -PaymentPeriod 2 `
   -RuvdsTariffId 41 `
   -RuvdsDriveTariffId 9 `
+  -ServerId ruvds-zurich-test-01 `
+  -Title "Green VPN RUVDS Zurich Test 01" `
+  -Country Switzerland `
+  -City Zurich `
   -QuotePrice
 ```
 
-Текущий безопасный RUVDS baseline:
+Текущая цена dry-run: `933 RUB`; минимум докинуть при балансе `267 RUB`: `666 RUB`. Практичный запас: пополнить RUVDS минимум на `1500 RUB`.
 
-- `LocationId 3` — LD8 London.
-- `LocationId 2` — ZUR1 Zurich как fallback.
-- `ImageId 52` — Debian 12.
-- `RuvdsTariffId 41` — PremiumEurope.
-- `RuvdsDriveTariffId 9` — европейский drive tariff из каталога RUVDS.
-- `PaymentPeriod 2` — 1 месяц.
-- SSH public key `greenvpn-codex-local` должен быть в RUVDS. Он нужен, чтобы VPS создавался сразу доступным по SSH без вывода стартового пароля в чат.
+Ограничение: RUVDS API v2 в текущем ответе `/v2/servers/{id}` не отдаёт публичный IPv4 в server object (`network_v4=null` у существующей ноды). Если после live-create API тоже не отдаст IP, нужен либо старый/другой RUVDS endpoint для IP, либо разово взять IP из панели. Остальная цепочка после IP автоматизируема.
 
-Реальное создание RUVDS VPS:
+### Serverspace
+
+API работает.
+
+- Проект активен.
+- Серверов сейчас `0`.
+- Баланс на момент проверки: `0.50 EUR`.
+
+Создание через API технически доступно в `new_test_vps_plan.ps1`, но перед live-create нужен баланс. Этот провайдер держим как альтернативу, если RUVDS окажется неудобен из-за IP в API.
+
+### HOSTKEY
+
+Не входит в рабочий пул. API key пока не подтверждён, live calls отключены.
+
+## Provider check commands
+
+All providers:
 
 ```powershell
-.\scripts\infra\new_test_vps_plan.ps1 `
-  -Provider ruvds `
-  -Name greenvpn-ruvds-ld8-test-01 `
-  -LocationId 3 `
-  -ImageId 52 `
-  -Cpu 1 `
-  -RamMb 1024 `
-  -DiskGb 20 `
-  -PaymentPeriod 2 `
-  -RuvdsTariffId 41 `
-  -RuvdsDriveTariffId 9 `
-  -Apply
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\test_provider_api.ps1 -Provider all -IncludeInventory
 ```
 
-`-Apply` создает платный сервер. Созданный узел остается вне основного сайта до ручного bootstrap/smoke/promote.
+RUVDS only:
 
-## Bootstrap свежего VPN-узла
-
-На новом VPS:
-
-```bash
-bash /root/bootstrap_wireguard_node.sh --apply
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\test_provider_api.ps1 -Provider ruvds -IncludeInventory
 ```
 
-Скрипт:
+Serverspace only:
 
-- ставит WireGuard;
-- включает forwarding;
-- создает `/etc/wireguard/wg0.conf`;
-- запускает `wg-quick@wg0`;
-- печатает только public key и безопасные факты.
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\test_provider_api.ps1 -Provider serverspace -IncludeInventory
+```
 
-Private key остается только на сервере.
+## Standard node rollout
 
-## Подключение к backend
-
-После создания VPS и bootstrap:
-
-1. Завести backend-only файл на origin:
+1. Quote price with `new_test_vps_plan.ps1 -QuotePrice`.
+2. Top up provider balance if needed.
+3. Create paid VPS with `new_test_vps_plan.ps1 -Apply`.
+4. Wait for VPS to become reachable by SSH.
+5. Run WireGuard bootstrap on the VPS with `scripts/server/bootstrap_wireguard_node.sh --apply`.
+6. Create origin-only env file:
 
 ```bash
 /etc/bluevpn/vpn_nodes/<serverId>.env
 ```
 
-2. Указать там host, SSH key path, public host/port, WG public key и interface.
-3. Запустить `remote-provisioning-check`.
-4. Запустить `remote-peer-smoke`.
-5. Запустить `client-config-smoke`.
-6. Только после этого решать, добавлять ли узел в preview или public pool.
+7. Register/update backend draft entry.
+8. Run admin checks:
+   - `remote-provisioning-check`
+   - `remote-peer-smoke`
+   - `client-config-smoke`
+9. Add the node only to `GREENVPN_PREVIEW_SERVER_IDS`.
+10. Restart backend and verify:
+   - stable catalog does not contain the new node;
+   - preview catalog contains the new node;
+   - Android preview can connect.
 
-## Источники API
+## Owner actions needed next
 
-- Serverspace Public API: `https://serverspace.io/support/help/automation/`
-- Timeweb Cloud API: `https://timeweb.cloud/api-docs`
-- RUVDS API v2: `https://ruvds.com/api-docs/`
-- HOSTKEY Invapi/API docs: `https://hostkey.com/documentation/apidocs/`
+1. Пополнить RUVDS минимум на `1500 RUB`, если хотим создать Zurich fallback.
+2. Пополнить Serverspace, если хотим проверить альтернативного провайдера.
+3. Не менять основной сайт и stable-релизы, пока preview не подтверждён реальным Android smoke.
+
+## API links
+
+- RUVDS API: https://ruvds.com/api-docs/
+- RUVDS API settings: https://ruvds.com/my/settings/api
+- Serverspace API: https://serverspace.io/support/help/automation/
+- Serverspace panel: https://my.serverspace.io/
+- Timeweb API: https://timeweb.cloud/api-docs

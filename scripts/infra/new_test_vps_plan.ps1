@@ -271,8 +271,13 @@ switch ($Provider) {
     "ruvds" {
         $plan.endpoint = "POST https://api.ruvds.com/v2/servers"
         $apiKey = $null
+        $balance = $null
         if ($QuotePrice -or $Apply) {
             $apiKey = Get-GreenVpnSecret -Name "GREENVPN_RUVDS_API_KEY" -Required
+            $balance = Invoke-GreenVpnJson `
+                -Method GET `
+                -Uri "https://api.ruvds.com/v2/balance" `
+                -Headers @{ Authorization = "Bearer $apiKey" }
             if ([string]::IsNullOrWhiteSpace($RuvdsSshKeyId)) {
                 $RuvdsSshKeyId = Get-RuvdsDefaultSshKeyId -Token $apiKey
             }
@@ -297,6 +302,9 @@ switch ($Provider) {
                 -Uri "https://api.ruvds.com/v2/servers?get_price_only=true" `
                 -Headers @{ Authorization = "Bearer $apiKey" } `
                 -Body $plan.payload
+            $plan.currentBalanceRub = $balance.amount
+            $plan.quotedCostRub = $plan.providerResponse.cost_rub
+            $plan.minimumTopUpRub = [Math]::Max(0, [Math]::Ceiling(([decimal]$plan.quotedCostRub) - ([decimal]$plan.currentBalanceRub)))
         }
 
         if ($Apply) {

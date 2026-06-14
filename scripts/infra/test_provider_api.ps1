@@ -36,6 +36,30 @@ function New-ProviderResult {
     }
 }
 
+function Get-ProviderField {
+    param(
+        [Parameter(Mandatory = $false)]
+        [AllowNull()]
+        [object]$Object,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$Names
+    )
+
+    if ($null -eq $Object) {
+        return $null
+    }
+
+    foreach ($name in $Names) {
+        $prop = $Object.PSObject.Properties[$name]
+        if ($null -ne $prop) {
+            return $prop.Value
+        }
+    }
+
+    return $null
+}
+
 function Test-Serverspace {
     $apiKey = Get-GreenVpnSecret -Name "GREENVPN_SERVERSPACE_API_KEY"
     if ([string]::IsNullOrWhiteSpace($apiKey)) {
@@ -229,13 +253,18 @@ function Test-Ruvds {
     }
 
     if ($IncludeInventory) {
+        $details.serverFieldNames = @($serverItems |
+            Select-Object -First 1 |
+            ForEach-Object { $_.PSObject.Properties.Name })
+        $details.firstServerPreview = @($serverItems | Select-Object -First 1)
+
         $details.servers = @($serverItems | ForEach-Object {
             [pscustomobject]@{
-                id = $_.id
-                name = $_.name
-                status = $_.status
-                datacenter = $_.datacenter
-                paidTill = $_.paid_till
+                id = Get-ProviderField -Object $_ -Names @("id", "server_id", "virtual_server_id")
+                name = Get-ProviderField -Object $_ -Names @("name", "title")
+                status = Get-ProviderField -Object $_ -Names @("status", "state")
+                datacenter = Get-ProviderField -Object $_ -Names @("datacenter", "datacenter_id", "dc")
+                paidTill = Get-ProviderField -Object $_ -Names @("paid_till", "paidTill")
             }
         })
 
@@ -244,10 +273,10 @@ function Test-Ruvds {
             Select-Object -First 20 |
             ForEach-Object {
                 [pscustomobject]@{
-                    id = $_.id
-                    name = $_.name
-                    vpsTariffs = $_.vps_tariffs
-                    driveTariffs = $_.drive_tariffs
+                    id = Get-ProviderField -Object $_ -Names @("id", "datacenter_id")
+                    name = Get-ProviderField -Object $_ -Names @("name", "title")
+                    vpsTariffs = Get-ProviderField -Object $_ -Names @("vps_tariffs", "vpsTariffs")
+                    driveTariffs = Get-ProviderField -Object $_ -Names @("drive_tariffs", "driveTariffs")
                 }
             })
 
@@ -255,9 +284,9 @@ function Test-Ruvds {
             Where-Object { $_.type -eq "linux" -and $_.is_active -and $_.name -match 'Debian 12|Ubuntu 22\.04|Ubuntu 24\.04' } |
             ForEach-Object {
                 [pscustomobject]@{
-                    id = $_.id
-                    name = $_.name
-                    sshKeysSupported = $_.ssh_keys_supported
+                    id = Get-ProviderField -Object $_ -Names @("id", "os_id", "image_id")
+                    name = Get-ProviderField -Object $_ -Names @("name", "title")
+                    sshKeysSupported = Get-ProviderField -Object $_ -Names @("ssh_keys_supported", "sshKeysSupported")
                 }
             })
 
@@ -266,11 +295,11 @@ function Test-Ruvds {
             Select-Object -First 20 |
             ForEach-Object {
                 [pscustomobject]@{
-                    id = $_.id
-                    name = $_.name
-                    cpuPrice = $_.cpu
-                    ramPrice = $_.ram
-                    ipPrice = $_.ip
+                    id = Get-ProviderField -Object $_ -Names @("id", "tariff_id")
+                    name = Get-ProviderField -Object $_ -Names @("name", "title")
+                    cpuPrice = Get-ProviderField -Object $_ -Names @("cpu", "cpu_price")
+                    ramPrice = Get-ProviderField -Object $_ -Names @("ram", "ram_price")
+                    ipPrice = Get-ProviderField -Object $_ -Names @("ip", "ip_price")
                 }
             })
 

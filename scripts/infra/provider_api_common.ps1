@@ -13,8 +13,8 @@ function Import-GreenVpnProviderSecrets {
     if (-not [string]::IsNullOrWhiteSpace($SecretsPath)) {
         $candidatePaths += $SecretsPath
     } else {
-        $candidatePaths += (Join-Path $PSScriptRoot "..\..\secrets\provider_api.local.ps1")
         $candidatePaths += "D:\GreenVPN_Secrets\provider_api.local.ps1"
+        $candidatePaths += (Join-Path $PSScriptRoot "..\..\secrets\provider_api.local.ps1")
     }
 
     foreach ($candidate in $candidatePaths) {

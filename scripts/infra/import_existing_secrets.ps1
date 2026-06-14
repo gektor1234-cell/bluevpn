@@ -15,7 +15,7 @@ $ErrorActionPreference = "Stop"
 . "$PSScriptRoot\provider_api_common.ps1"
 
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
-    $OutputPath = Join-Path $PSScriptRoot "..\..\secrets\provider_api.local.ps1"
+    $OutputPath = "D:\GreenVPN_Secrets\provider_api.local.ps1"
 }
 
 function Read-KeyValueFile {
