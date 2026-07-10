@@ -1,102 +1,87 @@
 # Green VPN Current Handoff
 
-Last updated: 2026-06-14.
+Last updated: 2026-07-10.
 
-## Hard Rules
+## Hard rules
 
-- Start every serious project pass with `git status --short`.
-- Do not print or commit secrets, SMTP/SMS/YooKassa tokens, API keys, SSH private keys, or WireGuard private keys.
-- Do not use `git reset --hard`, `git checkout --`, or destructive cleanup without explicit owner approval.
-- Visible brand is Green VPN. Internal BlueVPN names may stay for now.
-- Do not touch FriendlyLynet / Friendly Linnet.
-- Main public contour `https://greenvpn.pro` is frozen. Do not upload stable APK/EXE, do not change stable manifests, and do not alter the main public site unless the owner explicitly unfreezes it.
-- Work on the closed/test/preview contour only.
+- Start with `git status --short` and read this file plus `PAID_BETA_EXECUTION_PLAN_2026_07_10_RU.md`.
+- Never print or commit API keys, passwords, provider tokens, payment credentials, private keys, admin tokens or full invite codes.
+- Do not touch Friendly Linnet `5.129.237.163`.
+- Production stable, main site and public downloads stay frozen until explicit owner approval.
+- Paid beta work goes only to the isolated `/paid-beta` and `/paid-beta-api` contour.
+- Do not enable ads, forced disconnect timer or auto-renew in paid beta.
+- Do not publish beta links/codes to a cold audience before the owner gate.
 
-## Current Stable State
+## Repository
 
-- Main public site: frozen and currently used by real users.
-- Main Android stable: no-ads/trial-only line, last recorded as `0.2.23-trial-only-android-vpn-takeover`.
-- Main Windows stable: no-ads/trial-only line, last recorded as `0.2.22-trial-only-manual-server-switch`.
-- Test/preview contour is the place for rewarded ads, experiments, and risky fixes.
+- Root: `C:\Users\gekto\projects\bluevpn`.
+- Branch: `green-vpn-paid-beta-20260710`.
+- Stable tag: `greenvpn-stable-pre-paid-beta-20260710`.
+- Stable checkpoint: `C:\Users\gekto\GreenVPN_Checkpoints\pre_paid_beta_20260710_103722`.
+- Server stable snapshots: `/root/greenvpn-pre-paid-beta-20260710T103821`.
+- Current paid beta plan: `docs/PAID_BETA_EXECUTION_PLAN_2026_07_10_RU.md`.
 
-## Live Backend Snapshot
+## Frozen production stable
 
-Checked 2026-06-14, 11:19 MSK:
+- Site: `https://greenvpn.pro/`.
+- API: `https://api.greenvpn.pro/`, backend `0.9.105`.
+- Android SHA-256: `308320429991A3278E3BA903155482D6613425D46681F180338ECB8C0929248F`.
+- Windows SHA-256: `0B2FEAA2232582207CFB998902B04107067C8DDE1C4243A003FF979C2F2B5F15`.
+- Production runs on Timeweb Moscow `72.56.32.197` with RUVDS Moscow `176.113.81.35` fallback and 30-second critical-state sync.
+- Stable files/hashes remained unchanged throughout paid beta deployment and ops work.
 
-- `https://api.greenvpn.pro/healthz` returns backend version `0.9.102`.
-- Public server catalog returns Netherlands nodes only:
-  - `intelligent_smew` / Netherlands #1 / `nl1.vpn.greenvpn.pro:443`;
-  - `tw-7879598-nl1` / Netherlands #2 / `nl2.vpn.greenvpn.pro:443`.
-- Client-side YouTube route-quality gate is disabled in the live catalog. Server-side adaptive routing remains enabled.
-- Older Frankfurt/Germany notes are historical only.
-- Public update/download check is green:
-  - Android stable and preview return `.apk`;
-  - Windows stable and preview return `.exe`;
-  - legacy Android compatibility path does not return Windows installer.
-- Preview server catalog returns:
-  - `intelligent_smew` / Netherlands #1;
-  - `tw-7879598-nl1` / Netherlands #2;
-  - `ruvds-2584554-ld8` / RUVDS London #1.
-- Preview Android/Windows builds use preview catalog automatically when the app version contains `preview` or `adgate`.
+## Isolated paid beta
 
-## Infrastructure
+- Primary API/site:
+  - `https://api.greenvpn.pro/paid-beta-api`;
+  - `https://greenvpn.pro/paid-beta/`.
+- Fallback API/site:
+  - `https://176-113-81-35.sslip.io/paid-beta-api`;
+  - `https://176-113-81-35.sslip.io/paid-beta/`.
+- Backend: `0.9.106-paid-beta.2`, service `greenvpn-paid-beta.service`, bind only `127.0.0.1:8010`.
+- DB: `/opt/bluevpn-paid-beta/data/bluevpn.db`; beta sync every 10 seconds.
+- Probe: `greenvpn-paid-beta-service-probe.timer` on both control-plane nodes, every 300 seconds.
+- Marker/channel: `green-vpn-paid-beta-v1` / `paid-beta`.
+- Model: 3-day Trial, first period 149 RUB by personal invite, then 299 RUB/30 days manually, 2 devices, no ads, no auto-renew.
+- SQLite caveat: primary-normal/fallback-only for writes; no mass launch before transactional storage/write authority decision.
 
-- Timeweb Frankfurt/Germany server `8147243` and floating IP `72.56.31.142` were retired/deleted.
-- FriendlyLynet / Friendly Linnet is personal infrastructure and must not be modified.
-- Timeweb API works and currently sees 5 servers. Timeweb production balance is about `1660.8 RUB`; do not spend it on a new NL node without explicit production-balance-risk acceptance.
-- RUVDS API works and currently sees one server, `ruvds-2584554-ld8`, which is preview-only and passes remote provisioning, peer, and client-config smoke checks.
-- Do not create another RUVDS Zurich node unless the owner explicitly reopens that scaling task. The current RUVDS task is to test and use the already-created London preview node.
-- Historical note: RUVDS Zurich rollout wrapper exists and is dry-run safe by default, but paid create is blocked until the API-visible balance is at least `933 RUB`. Current configured RUVDS API credential still sees `267 RUB`.
-- Historical note: `continue_ruvds_preview_rollout.ps1 -CreateWhenReady -ConfirmPaidCreate` was run on 2026-06-14 and correctly refused to create a paid VPS because the API-visible balance is still too low.
-- Serverspace API works but is not in the active plan right now because funding is not ready.
-- New test VPN nodes must be created outside the main public pool first and promoted only to preview/test after smoke checks.
+## Paid beta artifacts
 
-## Repo Cleanup Status
+- Android: `C:\BlueVPN_Builds\paid_beta_20260710_v2\GreenVPN_Android_0.3.0-paid-beta.2_2026071002.apk`.
+- Android SHA-256: `29252A8AE44BA4487363E669A0ED31DDAC159289A49254EBBED34F123D20AB50`.
+- Windows: `C:\BlueVPN_Builds\paid_beta_20260710_v2\GreenVPN_Setup_0.3.0-paid-beta.2.exe`.
+- Windows SHA-256: `41F96CB95118507AACA861721F83B2972CF419E2F10BA2FCF38CB73800988332`.
+- Windows Authenticode: `NotSigned`.
+- Approved bundle: `C:\BlueVPN_Builds\paid_beta_20260710_v2\paid-beta-0.3.0-paid-beta.2-2026071002-r2.tar.gz`.
+- Bundle SHA-256: `440671161C710AD6BA7A47D4A5DC77CB96D3451F9FF26E3C233EF58853295B17`.
+- r1 is forensic only and must not be used as rollback because of the fixed managed-peer cleanup bug.
 
-- Large generated/cache folders were archived to `D:\GreenVPN_Cleanup_Archive\20260612_144838`.
-- Full old historical handoff docs were archived to `D:\GreenVPN_Cleanup_Archive\20260612_144838\docs_full_history_before_compaction`.
-- Old root one-shot patch scripts were removed from the repo working tree.
-- Remaining dirty source changes are real project work and should be reviewed/committed by topic, not blindly deleted.
+## Verified
 
-## Practical Next Steps
+- 26 backend/DB-sync/package tests pass.
+- Release gate passes with 0 warnings and 0 errors.
+- Stateful auth/invite/trial/quote/bootstrap/config/fallback/cleanup smoke passed.
+- Timeweb beta outage selected RUVDS beta fallback while production stayed healthy.
+- All beta downloads were fetched through both HTTPS routes and matched expected SHA.
+- Both beta probes see all three public VPN endpoints as healthy; both beta API health targets are green.
+- Beta staging and temporary seed copies were removed; live beta env contains one assignment per key.
 
-1. Keep stable public site untouched.
-2. Continue testing/fixing only on the preview contour.
-3. For current RUVDS London preview validation, run:
+## Owner gate: next action
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_preview_vpn_nodes.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ops\check_public_download_manifests.ps1
-```
+Do not create/send the 20 invite codes yet. The owner must:
 
-4. Only if the owner explicitly asks for a second RUVDS node, first make sure `D:\GreenVPN_Secrets\provider_api.local.ps1` contains an API v2 token from the funded RUVDS account. Then run:
+1. Install and smoke Android beta on a real phone.
+2. Install and smoke Windows beta on a real PC, including reboot/uninstall/network recovery.
+3. Make one real 149 RUB YooKassa payment and verify activation, polling and refund/cancel handling.
+4. Accept or legally review beta terms/privacy.
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_ruvds_access_candidates.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_scaling_readiness.ps1
-```
+Then run `scripts/ops/create_paid_beta_first20_package.py` following `docs/PAID_BETA_FIRST20_RUNBOOK_2026_07_10_RU.md`.
 
-5. Historical Zurich continuation command, safe dry-run by default:
+## Separate production decisions
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\continue_ruvds_preview_rollout.ps1
-```
+- Delete unreachable hidden KZ test VPS `8360589` at 611 RUB/month: recommended, owner approval required.
+- Clean old London recovery artifacts occupying about 12 GB: recommended, owner approval required.
+- Retire legacy NL1 nginx/certbot and disable/fix unused NL2 dnsmasq: owner approval required.
+- Review support report for user `34`; eight older reports are likely resolved historical tests but were not auto-closed.
 
-6. When RUVDS is ready and the owner explicitly wants another node, create and provision the Zurich preview node with:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\continue_ruvds_preview_rollout.ps1 -CreateWhenReady -ConfirmPaidCreate
-```
-
-7. If RUVDS API creates the VPS but does not return public IPv4, take the IP from the panel once and continue:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\rollout_ruvds_zurich_preview.ps1 -NodeIPv4 <public-ip> -ApplyBootstrap -ConfirmRemoteProvision -AddToPreview
-```
-
-8. Before any release publish, verify Android/Windows artifacts, backend catalog, and stable/preview target separation:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\ops\check_public_download_manifests.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\infra\check_preview_vpn_nodes.ps1
-```
+Full evidence: `docs/PAID_BETA_OPS_AUDIT_2026_07_10_RU.md`.

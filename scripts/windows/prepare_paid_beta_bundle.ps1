@@ -53,11 +53,13 @@ if (Test-Path -LiteralPath $stage) {
 
 $backendTarget = Join-Path $stage "backend"
 $opsTarget = Join-Path $stage "ops"
+$monitoringTarget = Join-Path $stage "monitoring"
 $siteTarget = Join-Path $stage "site"
 $downloadsTarget = Join-Path $siteTarget "downloads"
 New-Item -ItemType Directory -Force -Path `
     (Join-Path $backendTarget "app"), `
     $opsTarget, `
+    $monitoringTarget, `
     (Join-Path $siteTarget "assets"), `
     (Join-Path $siteTarget "terms"), `
     (Join-Path $siteTarget "privacy"), `
@@ -73,6 +75,14 @@ $opsFiles = @(
 )
 foreach ($name in $opsFiles) {
     Copy-Item -LiteralPath (Join-Path $repo "scripts\ops\$name") -Destination (Join-Path $opsTarget $name)
+}
+
+$monitoringFiles = @(
+    "service_probe.py",
+    "install_paid_beta_probe_systemd.sh"
+)
+foreach ($name in $monitoringFiles) {
+    Copy-Item -LiteralPath (Join-Path $repo "scripts\monitoring\$name") -Destination (Join-Path $monitoringTarget $name)
 }
 
 Copy-Item -LiteralPath (Join-Path $siteSource "index.html") -Destination (Join-Path $siteTarget "index.html")

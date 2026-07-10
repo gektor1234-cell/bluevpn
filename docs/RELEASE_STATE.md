@@ -1,6 +1,6 @@
 # Green VPN Release State
 
-Last compacted: 2026-07-05.
+Last compacted: 2026-07-10.
 
 ## Stable Public Contour
 
@@ -17,9 +17,13 @@ Status: active production rollout approved by owner on 2026-07-05.
 
 ## Preview/Test Contour
 
-- Preview/test is still where rewarded ads, adgate, new server experiments, and risky client fixes should happen before the next owner-approved stable promotion.
-- Preview artifacts may be rebuilt and uploaded only to preview/test links.
-- Stable and preview must stay visibly separated.
+- The active test contour is the isolated paid beta under `/paid-beta` and `/paid-beta-api`.
+- App/backend: `0.3.0-paid-beta.2` / `0.9.106-paid-beta.2`.
+- Primary/fallback beta APIs run separately on `:8010`; beta DB sync runs every 10 seconds.
+- Paid beta uses marker + channel + personal invite + cohort enforcement.
+- Policy: 3-day Trial, 149 RUB first invited period, then 299 RUB manually, 2 devices, no ads/forced timer/auto-renew.
+- Beta probe timers run on both Russian control-plane nodes and keep primary/fallback/API/VPN endpoint observations separate from production telemetry.
+- Do not publish or promote this contour until the owner gate in `docs/PAID_BETA_FIRST20_RUNBOOK_2026_07_10_RU.md` is complete.
 
 ## Public Download Checks
 
@@ -50,9 +54,10 @@ Verified 2026-07-05:
 ## Known Product Risks
 
 - Windows installer and EXE are not code-signed. This remains the main SmartScreen/Defender/trust risk.
-- YooKassa webhook should still be verified on the next real payment before scaling paid sales.
+- A real 149 RUB YooKassa beta payment, activation polling and refund/cancel path still need owner verification.
 - RuStore/Yandex Ads moderation and monetization status still depends on external review.
-- Repository still has real uncommitted source changes. They need topic-by-topic review/commits, not a blind reset.
+- Two SQLite control-plane nodes are not globally transactional; keep primary-normal/fallback-only for the first 20.
+- KZ test VPS is unreachable and costs 611 RUB/month; London needs approved recovery-artifact cleanup.
 
 ## Operational Rule
 

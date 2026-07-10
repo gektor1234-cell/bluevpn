@@ -181,6 +181,33 @@ class PaidBetaPolicyTests(unittest.TestCase):
         )
         self.assertTrue(manifest["fileReady"])
 
+    def test_default_monitoring_targets_cover_api_fallbacks(self) -> None:
+        previous = list(main.SERVER_CATALOG_API_BASE_URLS)
+        main.SERVER_CATALOG_API_BASE_URLS = [
+            "https://primary.example.test/paid-beta-api",
+            "https://fallback.example.test/paid-beta-api",
+        ]
+        try:
+            targets = {
+                item["targetId"]: item
+                for item in main.default_monitoring_targets()
+            }
+        finally:
+            main.SERVER_CATALOG_API_BASE_URLS = previous
+
+        self.assertEqual(
+            targets["green_api_healthz"]["url"],
+            "https://primary.example.test/paid-beta-api/healthz",
+        )
+        self.assertEqual(
+            targets["green_api_fallback_1_healthz"]["url"],
+            "https://fallback.example.test/paid-beta-api/healthz",
+        )
+        self.assertIn(
+            "fallback",
+            targets["green_api_fallback_1_healthz"]["tags"],
+        )
+
     def test_beta_quote_ignores_unsupported_options(self) -> None:
         selection = main.normalize_tariff_selection(self.beta_payload())
         quote = main.quote_tariff(selection)

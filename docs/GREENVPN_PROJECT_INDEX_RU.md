@@ -1,6 +1,6 @@
 # Green VPN: project index
 
-Дата фиксации: 2026-07-05.
+Дата фиксации: 2026-07-10.
 
 Этот файл отвечает на вопрос: где что лежит и куда смотреть в первую очередь.
 
@@ -23,16 +23,22 @@ C:\Users\gekto\projects\bluevpn
 - `scripts/infra/` - provider API, создание/проверка VPS/VPN nodes.
 - `scripts/ops/` - аварийные backend/SQLite/remote-node операции.
 - `scripts/monitoring/` - probes/monitoring.
+- `paid_beta_site/` - закрытая noindex paid beta-страница, не production root.
 - `docs/` - handoff/runbooks/product state.
 - `secrets/` - локальные secret-файлы, ignored by git.
 
 ## Главные документы
 
+- `docs/CURRENT_HANDOFF.md` - короткая актуальная точка входа: stable, paid beta, owner gate.
+- `docs/PAID_BETA_EXECUTION_PLAN_2026_07_10_RU.md` - обязательный порядок paid beta.
+- `docs/PAID_BETA_TEST_CONTOUR_2026_07_10_RU.md` - live test-only контур, hashes, backups и rollback.
+- `docs/PAID_BETA_OPS_AUDIT_2026_07_10_RU.md` - аудит всех control/VPN nodes и граница production-решений.
+- `docs/PAID_BETA_FIRST20_RUNBOOK_2026_07_10_RU.md` - owner gate и запуск первых 20.
+- `docs/STABLE_FREEZE_2026_07_10_RU.md` - восстановление production stable.
 - `docs/GREENVPN_WORKING_MODEL_RU.md` - текущая рабочая логика продукта.
 - `docs/GREENVPN_CURRENT_TRIAGE_2026_07_05_RU.md` - текущие проблемы, порядок расследования.
 - `docs/SERVER_INFRA_AUDIT_2026_07_05_RU.md` - актуальная карта серверов, Moscow control-plane migration, RUVDS Moscow fallback, live catalog, cleanup/fix.
-- `docs/CURRENT_HANDOFF.md` - старый общий handoff.
-- `docs/RELEASE_STATE.md` - старый stable/preview state.
+- `docs/RELEASE_STATE.md` - compact stable/paid-beta release state.
 - `docs/INFRA_PROVIDER_AUTOMATION_RU.md` - provider automation runbook.
 - `docs/WIREGUARD_MANUAL_CONFIG_NOTES_RU.md` - важная заметка по London manual configs.
 
@@ -126,6 +132,14 @@ C:\Users\gekto\projects\bluevpn\secrets
   - release wrapper.
 - `scripts/ops/check_public_download_manifests.ps1`
   - APK/EXE manifest mixup check.
+- `scripts/ops/create_paid_beta_first20_package.py`
+  - защищённый one-shot export 20 персональных beta-кодов после owner gate;
+  - полные коды никогда не печатаются в stdout и не попадают в repo.
+- `scripts/server/install_paid_beta_contour.sh`
+  - изолированная установка/update paid beta на `:8010`;
+  - не заменяет production service/DB/downloads.
+- `scripts/monitoring/install_paid_beta_probe_systemd.sh`
+  - отдельный monitoring timer только для двух разрешённых beta API.
 
 ## Provider/infra scripts
 
@@ -135,13 +149,9 @@ C:\Users\gekto\projects\bluevpn\secrets
 - `scripts/infra/prepare_remote_wireguard_node.ps1` - remote WG node bootstrap.
 - `scripts/infra/new_test_vps_plan.ps1` - quote/create test VPS with provider API.
 
-## Dirty working tree policy
+## Working tree policy
 
-Текущий repo содержит много незакоммиченных рабочих изменений. Их нельзя слепо удалять или откатывать.
-
-Порядок наведения чистоты:
-
-1. Разделить изменения на темы: Android VPN/status/update, backend auth/config/catalog, admin panel, infra scripts, monitoring scripts.
-2. Сначала сохранять/архивировать спорные файлы в `D:\GreenVPN_Cleanup_Archive`.
-3. Не удалять untracked ops-скрипты, пока не понятно, какие из них использовались для восстановления live.
-4. После стабилизации login/config сделать topic commits.
+- Paid beta ведётся в branch `green-vpn-paid-beta-20260710` тематическими commits.
+- Не удалять и не откатывать чужие изменения; перед работой всегда проверять `git status --short`.
+- Generated builds остаются в `C:\BlueVPN_Builds`, stable checkpoints - в `C:\Users\gekto\GreenVPN_Checkpoints`, secrets - вне Git.
+- Старые документы использовать только как историю, если они противоречат `CURRENT_HANDOFF.md` или paid beta-плану.

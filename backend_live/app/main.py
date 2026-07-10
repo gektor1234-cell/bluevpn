@@ -11759,7 +11759,8 @@ def default_monitoring_targets() -> list[dict]:
             },
         ]
     )
-    api_url = SERVER_CATALOG_API_BASE_URLS[0] if SERVER_CATALOG_API_BASE_URLS else PUBLIC_API_BASE_URL
+    api_base_urls = SERVER_CATALOG_API_BASE_URLS or [PUBLIC_API_BASE_URL]
+    api_url = api_base_urls[0]
     service_targets.extend(
         [
             {
@@ -11809,6 +11810,20 @@ def default_monitoring_targets() -> list[dict]:
             },
         ]
     )
+    for index, fallback_api_url in enumerate(api_base_urls[1:], start=1):
+        service_targets.append(
+            {
+                "targetId": f"green_api_fallback_{index}_healthz",
+                "title": f"Резервный API Green VPN #{index}",
+                "service": "api",
+                "targetType": "bootstrap",
+                "url": f"{fallback_api_url.rstrip('/')}/healthz",
+                "host": urllib.parse.urlparse(fallback_api_url).hostname or WG_ENDPOINT_HOST,
+                "expectedStatus": 200,
+                "tags": ["api", "bootstrap", "fallback"],
+                "notes": "Отдельная проверка резервного API из bootstrap-цепочки.",
+            }
+        )
     return service_targets
 
 

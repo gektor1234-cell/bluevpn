@@ -6,6 +6,7 @@ CONFIGURE_NGINX=0
 START_SYNC=0
 STOP_SYNC=0
 REPLACE_ENV=0
+REMOVE_SEED_ENV=0
 ROLE=""
 BUNDLE_DIR=""
 SEED_ENV=""
@@ -41,7 +42,7 @@ Usage:
     --bundle-dir PATH \
     --peer-host HOST \
     --peer-name NAME \
-    [--seed-env PATH] [--replace-env] \
+    [--seed-env PATH] [--replace-env] [--remove-seed-env] \
     [--sync-interval SECONDS] [--configure-nginx] \
     [--start-sync|--stop-sync] [--apply]
 
@@ -79,6 +80,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --replace-env)
       REPLACE_ENV=1
+      shift
+      ;;
+    --remove-seed-env)
+      REMOVE_SEED_ENV=1
       shift
       ;;
     --role)
@@ -185,6 +190,33 @@ if [[ "${REPLACE_ENV}" -eq 1 && -z "${SEED_ENV}" ]]; then
   echo "--replace-env requires --seed-env" >&2
   exit 2
 fi
+if [[ "${REMOVE_SEED_ENV}" -eq 1 && -z "${SEED_ENV}" ]]; then
+  echo "--remove-seed-env requires --seed-env" >&2
+  exit 2
+fi
+if [[ "${REMOVE_SEED_ENV}" -eq 1 ]]; then
+  if [[ -L "${SEED_ENV}" ]]; then
+    echo "Refusing to remove a symlink seed env" >&2
+    exit 2
+  fi
+  seed_env_real="$(readlink -f -- "${SEED_ENV}")"
+  live_env_real="$(readlink -f -- "${ENV_FILE}" 2>/dev/null || printf '%s' "${ENV_FILE}")"
+  if [[ "${seed_env_real}" == "${live_env_real}" ]]; then
+    echo "Refusing to remove the live beta env" >&2
+    exit 2
+  fi
+  case "${seed_env_real}" in
+    /root/greenvpn-paid-beta-stage/*|/run/greenvpn-paid-beta-*) ;;
+    *)
+      echo "--remove-seed-env accepts only beta staging or /run seed files" >&2
+      exit 2
+      ;;
+  esac
+  if [[ "$(stat -c '%U' -- "${SEED_ENV}")" != "root" ]]; then
+    echo "Refusing to remove a seed env not owned by root" >&2
+    exit 2
+  fi
+fi
 
 echo "Green VPN paid beta contour plan"
 echo "mode=$([[ ${APPLY} -eq 1 ]] && echo apply || echo dry-run)"
@@ -201,6 +233,7 @@ echo "sync_interval=${SYNC_INTERVAL}"
 echo "configure_nginx=${CONFIGURE_NGINX}"
 echo "start_sync=${START_SYNC}"
 echo "stop_sync=${STOP_SYNC}"
+echo "remove_seed_env=${REMOVE_SEED_ENV}"
 echo "production_backend_changed=false"
 echo "production_db_changed=false"
 echo "production_downloads_replaced=false"
@@ -266,7 +299,7 @@ if [[ -e "${release_dir}" || -e "${site_release_dir}" ]]; then
   exit 1
 fi
 
-install -d -m 755 "${release_dir}/backend/app" "${release_dir}/ops" "${site_release_dir}"
+install -d -m 755 "${release_dir}/backend/app" "${release_dir}/ops" "${release_dir}/monitoring" "${site_release_dir}"
 install -d -m 700 "${DATA_DIR}" "${SYNC_STATE_DIR}"
 if [[ ! -d "$(dirname "${ENV_FILE}")" ]]; then
   install -d -m 700 "$(dirname "${ENV_FILE}")"
@@ -274,11 +307,20 @@ fi
 install -d -m 755 "${RELEASES_ROOT}" "${SITE_RELEASES_ROOT}"
 cp -a "${BUNDLE_DIR}/backend/." "${release_dir}/backend/"
 cp -a "${BUNDLE_DIR}/ops/." "${release_dir}/ops/"
+if [[ -d "${BUNDLE_DIR}/monitoring" ]]; then
+  cp -a "${BUNDLE_DIR}/monitoring/." "${release_dir}/monitoring/"
+fi
 cp -a "${BUNDLE_DIR}/site/." "${site_release_dir}/"
 cp -a "${BUNDLE_DIR}/bundle-manifest.json" "${release_dir}/bundle-manifest.json"
 chmod 755 "${release_dir}/ops/greenvpn_db_sync_from_peer.sh"
 chmod 755 "${release_dir}/ops/greenvpn_sqlite_snapshot_stdout.py"
 chmod 755 "${release_dir}/ops/greenvpn_sqlite_state_sync.py"
+if [[ -f "${release_dir}/monitoring/service_probe.py" ]]; then
+  chmod 755 "${release_dir}/monitoring/service_probe.py"
+fi
+if [[ -f "${release_dir}/monitoring/install_paid_beta_probe_systemd.sh" ]]; then
+  chmod 755 "${release_dir}/monitoring/install_paid_beta_probe_systemd.sh"
+fi
 find "${site_release_dir}" -type d -exec chmod 755 {} +
 find "${site_release_dir}" -type f -exec chmod 644 {} +
 
@@ -290,6 +332,40 @@ fi
 if [[ ! -f "${ENV_FILE}" || "${REPLACE_ENV}" -eq 1 ]]; then
   install -m 600 "${SEED_ENV}" "${ENV_FILE}"
 fi
+chown root:root "${ENV_FILE}"
+chmod 600 "${ENV_FILE}"
+
+python3 - "${ENV_FILE}" <<'PY'
+import os
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+lines = path.read_text(encoding="utf-8").splitlines()
+assignment = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
+last_index = {}
+for index, raw in enumerate(lines):
+    match = assignment.match(raw.strip())
+    if match:
+        last_index[match.group(1)] = index
+
+out = []
+removed = 0
+for index, raw in enumerate(lines):
+    match = assignment.match(raw.strip())
+    if match and last_index[match.group(1)] != index:
+        removed += 1
+        continue
+    out.append(raw)
+
+if removed:
+    temporary = path.with_name(path.name + ".dedupe.tmp")
+    temporary.write_text("\n".join(out) + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+print(f"beta env dedupe: removed={removed}")
+PY
 chown root:root "${ENV_FILE}"
 chmod 600 "${ENV_FILE}"
 
@@ -550,3 +626,12 @@ echo "backup_dir=${backup_dir}"
 echo "release_dir=${release_dir}"
 echo "site_release_dir=${site_release_dir}"
 echo "sync_timer=$(systemctl is-active "${SYNC_SERVICE_NAME}.timer" 2>/dev/null || true)"
+
+if [[ "${REMOVE_SEED_ENV}" -eq 1 ]]; then
+  if command -v shred >/dev/null 2>&1; then
+    shred -u -- "${SEED_ENV}"
+  else
+    rm -f -- "${SEED_ENV}"
+  fi
+  echo "seed_env_removed=true"
+fi

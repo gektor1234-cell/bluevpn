@@ -47,13 +47,15 @@ API prefix срезается перед proxy на `127.0.0.1:8010`. Static pat
 
 ## Проверки
 
-- 22 backend/DB-sync unit tests: OK.
+- 26 backend/DB-sync/package unit tests: OK.
 - Flutter smoke: OK; release APK/EXE: OK.
 - Release gate: 0 предупреждений, 0 ошибок.
 - Оба local/public beta health возвращают `0.9.106-paid-beta.2`.
 - Оба production health одновременно возвращают `0.9.105`.
 - Каталог на обоих beta-узлах содержит 5 managed записей и 3 доступных config-ready сервера.
 - DB sync на обоих узлах активен; последние summary: 0 conflicts, 0 errors.
+- Отдельный `greenvpn-paid-beta-service-probe.timer` активен на обоих control-plane и не заменяет production probe.
+- Оба beta API имеют отдельные свежие service observations; все 3 config-ready VPN endpoint имеют `healthy` observations с Timeweb и RUVDS.
 - Stateful HTTP smoke: login primary/fallback, beta denial до claim, персональный invite, Trial, quote 149 RUB, 2 устройства, без рекламы/timer, app-open/funnel, bootstrap и config на обоих API: OK.
 - Primary/fallback выдали один и тот же config и `10.10.0.180`; тестовый peer затем удалён live и из `wg0.conf`.
 - После cleanup на обоих control-plane: 0 smoke users/devices/subscriptions/invites/redemptions/events.
@@ -70,10 +72,16 @@ Installer сделал root-only backups:
 - RUVDS first install: `/root/greenvpn-paid-beta-backups/20260710T094428Z-ruvds-paid-beta-0.3.0-paid-beta.2-2026071002`;
 - Timeweb r2: `/root/greenvpn-paid-beta-backups/20260710T101011Z-timeweb-paid-beta-0.3.0-paid-beta.2-2026071002-r2`;
 - RUVDS r2: `/root/greenvpn-paid-beta-backups/20260710T101015Z-ruvds-paid-beta-0.3.0-paid-beta.2-2026071002-r2`.
+- Timeweb env dedupe: `/root/greenvpn-paid-beta-backups/20260710T103801Z-env-dedupe`;
+- RUVDS env dedupe: `/root/greenvpn-paid-beta-backups/20260710T103751Z-env-dedupe`;
+- Timeweb beta probe: `/root/greenvpn-paid-beta-backups/20260710T104147Z-timeweb-paid-beta-probe`;
+- RUVDS beta probe: `/root/greenvpn-paid-beta-backups/20260710T104206Z-ruvds-paid-beta-probe`.
 
-Первый backend release сохранён рядом с r2 для адресного rollback. На NL1 есть отдельная backup конфигурации перед ручной очисткой первого smoke peer: `/root/greenvpn-paid-beta-smoke-cleanup-20260710T100214Z`.
+Первый backend release сохранён только для forensic comparison: в нём известна ошибка удаления peer для managed `current_wg0`, поэтому он не является разрешённой rollback-целью. На NL1 есть отдельная backup конфигурации перед ручной очисткой первого smoke peer: `/root/greenvpn-paid-beta-smoke-cleanup-20260710T100214Z`.
 
-Rollback beta выполняется отдельно: остановить beta sync, переключить beta current/site symlinks на предыдущий release, перезапустить только `greenvpn-paid-beta.service`, проверить `:8010` и снова включить beta sync. Production service/DB/downloads при beta rollback не трогать.
+Разрешённый rollback beta: остановить beta sync/probe и сам beta backend либо повторно развернуть проверенный r2 bundle с SHA `440671161C710AD6BA7A47D4A5DC77CB96D3451F9FF26E3C233EF58853295B17`. На r1 не переключаться. Production service/DB/downloads при beta rollback не трогать.
+
+Временный `/root/greenvpn-paid-beta-stage` удалён на обоих control-plane после проверки current/site symlink и SHA r2. Установленные releases, сайт, DB и backups сохранены.
 
 ## Оставшиеся ограничения
 

@@ -80,11 +80,16 @@
    - Реальный beta peer получил `10.10.0.180`, одинаковый config на primary/fallback и был штатно удалён после smoke.
    - Остановка только Timeweb beta дала `502` на primary, selector выбрал RUVDS, production `0.9.105` не прервался; primary затем восстановлен.
    - Четыре beta download по двум HTTPS-маршрутам скачаны полностью и совпали по SHA; production SHA не изменились.
-   - Двадцать два backend/DB-sync теста и release gate 0/0 проходят.
+   - Двадцать шесть backend/DB-sync/package тестов и release gate 0/0 проходят.
    - Серверный манифест: `docs/PAID_BETA_TEST_CONTOUR_2026_07_10_RU.md`.
-8. **Ops cleanup** - выполняется.
-   - NL2 `dnsmasq`, KZ audit, monitoring freshness, support backlog.
-9. **Пакет для первых 20 участников** - ожидает действий владельца только на этапе персонального приглашения людей.
+8. **Ops cleanup** - выполнен в разрешённой test-only границе 2026-07-10.
+   - Удалены временные beta seed/staging, 18 env-дублей устранены без изменения effective config.
+   - На обоих beta control-plane установлен отдельный probe; primary/fallback API и три VPN endpoint получают свежие observations.
+   - NL2 `dnsmasq`, NL1 certbot, London disk, KZ cost/reachability и support backlog диагностированы read-only; production-изменения вынесены владельцу.
+   - Аудит: `docs/PAID_BETA_OPS_AUDIT_2026_07_10_RU.md`.
+9. **Пакет для первых 20 участников** - технически подготовлен, ждёт owner gate.
+   - Добавлен защищённый генератор одноразовых кодов и tracker; коды до real-device/payment/legal smoke намеренно не создавались.
+   - Runbook аудитории, приглашений, касаний, метрик и stop-условий: `docs/PAID_BETA_FIRST20_RUNBOOK_2026_07_10_RU.md`.
 
 ## Критерии beta
 
