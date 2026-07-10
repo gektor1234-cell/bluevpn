@@ -17,6 +17,8 @@ GREENVPN_DB_SYNC_STATE_DIR="${GREENVPN_DB_SYNC_STATE_DIR:-/var/lib/greenvpn-db-s
 GREENVPN_DB_SYNC_APPLY="${GREENVPN_DB_SYNC_APPLY:-1}"
 GREENVPN_DB_SYNC_SSH_KEY="${GREENVPN_DB_SYNC_SSH_KEY:-/root/.ssh/greenvpn_db_sync_ed25519}"
 GREENVPN_DB_SYNC_REMOTE_SNAPSHOT_ENV_FILE="${GREENVPN_DB_SYNC_REMOTE_SNAPSHOT_ENV_FILE:-/etc/bluevpn/backend.env}"
+GREENVPN_DB_SYNC_REMOTE_SNAPSHOT_SCRIPT="${GREENVPN_DB_SYNC_REMOTE_SNAPSHOT_SCRIPT:-/usr/local/sbin/greenvpn_sqlite_snapshot_stdout.py}"
+GREENVPN_DB_SYNC_LOCAL_STATE_SYNC_SCRIPT="${GREENVPN_DB_SYNC_LOCAL_STATE_SYNC_SCRIPT:-/usr/local/sbin/greenvpn_sqlite_state_sync.py}"
 GREENVPN_DB_SYNC_PEER_HOST="${GREENVPN_DB_SYNC_PEER_HOST%$'\r'}"
 GREENVPN_DB_SYNC_PEER_NAME="${GREENVPN_DB_SYNC_PEER_NAME%$'\r'}"
 GREENVPN_DB_SYNC_TARGET_DB="${GREENVPN_DB_SYNC_TARGET_DB%$'\r'}"
@@ -24,12 +26,26 @@ GREENVPN_DB_SYNC_STATE_DIR="${GREENVPN_DB_SYNC_STATE_DIR%$'\r'}"
 GREENVPN_DB_SYNC_APPLY="${GREENVPN_DB_SYNC_APPLY%$'\r'}"
 GREENVPN_DB_SYNC_SSH_KEY="${GREENVPN_DB_SYNC_SSH_KEY%$'\r'}"
 GREENVPN_DB_SYNC_REMOTE_SNAPSHOT_ENV_FILE="${GREENVPN_DB_SYNC_REMOTE_SNAPSHOT_ENV_FILE%$'\r'}"
+GREENVPN_DB_SYNC_REMOTE_SNAPSHOT_SCRIPT="${GREENVPN_DB_SYNC_REMOTE_SNAPSHOT_SCRIPT%$'\r'}"
+GREENVPN_DB_SYNC_LOCAL_STATE_SYNC_SCRIPT="${GREENVPN_DB_SYNC_LOCAL_STATE_SYNC_SCRIPT%$'\r'}"
 
 : "${GREENVPN_DB_SYNC_PEER_HOST:?}"
 : "${GREENVPN_DB_SYNC_PEER_NAME:?}"
 
 if [[ ! "$GREENVPN_DB_SYNC_REMOTE_SNAPSHOT_ENV_FILE" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
   echo "invalid remote snapshot env path" >&2
+  exit 2
+fi
+if [[ ! "$GREENVPN_DB_SYNC_REMOTE_SNAPSHOT_SCRIPT" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+  echo "invalid remote snapshot script path" >&2
+  exit 2
+fi
+if [[ ! "$GREENVPN_DB_SYNC_LOCAL_STATE_SYNC_SCRIPT" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+  echo "invalid local state sync script path" >&2
+  exit 2
+fi
+if [[ ! -f "$GREENVPN_DB_SYNC_LOCAL_STATE_SYNC_SCRIPT" ]]; then
+  echo "local state sync script not found" >&2
   exit 2
 fi
 
@@ -54,7 +70,7 @@ ts() {
   ssh -i "$GREENVPN_DB_SYNC_SSH_KEY" \
     -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
     "root@${GREENVPN_DB_SYNC_PEER_HOST}" \
-    "GREENVPN_SNAPSHOT_ENV_FILE=${GREENVPN_DB_SYNC_REMOTE_SNAPSHOT_ENV_FILE} python3 /usr/local/sbin/greenvpn_sqlite_snapshot_stdout.py" > "$TMP"
+    "GREENVPN_SNAPSHOT_ENV_FILE=${GREENVPN_DB_SYNC_REMOTE_SNAPSHOT_ENV_FILE} python3 ${GREENVPN_DB_SYNC_REMOTE_SNAPSHOT_SCRIPT}" > "$TMP"
   test -s "$TMP"
   mv "$TMP" "$SNAPSHOT"
 
@@ -63,7 +79,7 @@ ts() {
     mode_args+=(--apply)
   fi
 
-  python3 /usr/local/sbin/greenvpn_sqlite_state_sync.py \
+  python3 "$GREENVPN_DB_SYNC_LOCAL_STATE_SYNC_SCRIPT" \
     --source-db "$SNAPSHOT" \
     --target-db "$GREENVPN_DB_SYNC_TARGET_DB" \
     --summary-json "$SUMMARY" \

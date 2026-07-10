@@ -53,7 +53,7 @@
    - Cohort/email/phone mutations получили `users.updated_at`; DB-sync переносит только более новую запись.
    - Cohort и DB-sync покрыты отдельными backend-тестами.
 4. **Paid-beta clients** - выполнен локально 2026-07-10, без публикации.
-   - Отдельный channel `paid-beta`, версия `0.3.0-paid-beta.1`, Android build `2026071001`.
+   - Отдельный channel `paid-beta`, финальная версия с инвайтами `0.3.0-paid-beta.2`, Android build `2026071002`.
    - Primary/fallback указывают только на изолированный path `/paid-beta-api`.
    - YooKassa UI включён; rewarded ads и session timer выключены compile-time.
    - Android APK подписан и проверен; Windows installer собран, но остаётся без Authenticode-подписи.

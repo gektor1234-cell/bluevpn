@@ -1,9 +1,9 @@
 param(
     [ValidateSet("android", "windows", "both")]
     [string]$Mode = "both",
-    [string]$AppVersion = "0.3.0-paid-beta.1",
+    [string]$AppVersion = "0.3.0-paid-beta.2",
     [string]$AndroidBuildName = "0.3.0",
-    [string]$AndroidBuildNumber = "2026071001",
+    [string]$AndroidBuildNumber = "2026071002",
     [string]$ApiBaseUrl = "https://api.greenvpn.pro/paid-beta-api",
     [string]$ApiFallbackBaseUrls = "https://176-113-81-35.sslip.io/paid-beta-api",
     [string]$ClientMarker = "green-vpn-paid-beta-v1",
