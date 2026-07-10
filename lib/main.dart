@@ -4036,6 +4036,7 @@ while True:
             'platform': platform,
             'appVersion': appVersion,
             'releaseChannel': releaseChannel ?? greenVpnUpdateChannel(),
+            if (kPaidBetaBuild) 'clientMarker': kPaidBetaClientMarker,
           }),
         );
 
@@ -4087,6 +4088,7 @@ while True:
           'deviceUid': deviceId,
           'mode': 'full',
           'releaseChannel': releaseChannel ?? greenVpnUpdateChannel(),
+          if (kPaidBetaBuild) 'clientMarker': kPaidBetaClientMarker,
         };
         if (serverId != null && serverId.trim().isNotEmpty) {
           payload['serverId'] = serverId.trim();
@@ -8601,6 +8603,27 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       if (p.isNotEmpty && mounted) {
         setState(() => planName = p);
       }
+    }
+
+    if (kPaidBetaBuild && bootMap['canConnect'] != true) {
+      final reason = (bootMap['reason'] ?? '').toString().trim();
+      final message = switch (reason) {
+        'beta_cohort_required' =>
+          'Для закрытой beta нужен персональный инвайт.',
+        'subscription_inactive' =>
+          'Beta Trial закончился. Открой тариф и оплати следующий период.',
+        'device_limit_exceeded' =>
+          'Достигнут лимит beta: не больше двух устройств.',
+        'device_disabled' => 'Это устройство отключено в аккаунте.',
+        _ => 'Beta-доступ сейчас недоступен.',
+      };
+      if (mounted) {
+        setState(() => _index = 1);
+        _toast(context, message);
+      }
+      return ProvisionedConfigResult.err(
+        reason.isEmpty ? 'paid_beta_access_denied' : reason,
+      );
     }
 
     Future<ApiResult<WireGuardConfigResponse>>? prefetchedConfig;

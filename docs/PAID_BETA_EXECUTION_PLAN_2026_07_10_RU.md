@@ -43,10 +43,16 @@
    - Цена первого периода по инвайту 149 RUB зафиксирована в policy; персональные инвайты создаются на этапе 5.
    - Policy требует отдельные server flag, release channel и client marker; production default выключен.
    - Шесть backend-тестов покрывают нормализацию, изоляцию stable, заказ, активацию, смену server flag и продление.
-3. **Marker/cohort enforcement** - выполняется.
-   - Ввести отдельный paid-beta marker.
-   - Не применять обязательную подписку к старому stable.
-4. **Paid-beta clients** - ожидает.
+3. **Marker/cohort enforcement** - выполнен 2026-07-10 в коде тестового контура.
+   - Beta требует точные server flag, release channel, client marker и cohort пользователя.
+   - Non-cohort beta-клиент не получает конфиг и не может создать платежный заказ.
+   - Beta-cohort не может обойти окончание Trial установкой stable-клиента.
+   - Пользователи вне beta-cohort сохраняют stable-доступ и не попадают под beta enforcement.
+   - Enrolment идемпотентно выдаёт 3-дневный Trial на 2 устройства и не перезаписывает активную платную подписку.
+   - Реклама и session timer принудительно выключены для всего beta-scope на клиенте и backend.
+   - Cohort/email/phone mutations получили `users.updated_at`; DB-sync переносит только более новую запись.
+   - Четырнадцать backend/DB-sync тестов проходят.
+4. **Paid-beta clients** - выполняется.
    - Отдельные Android и Windows версии/channel.
    - YooKassa UI включен, ad gate выключен.
 5. **Инвайты и воронка** - ожидает.

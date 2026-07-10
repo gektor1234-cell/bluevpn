@@ -233,6 +233,9 @@ PAID_BETA_RELEASE_CHANNEL = (
     .lower()
 )
 PAID_BETA_POLICY_VERSION = "2026-07-10-paid-beta-v1"
+PAID_BETA_COHORT_CODE = "paid_beta_v1"
+PAID_BETA_TRIAL_PLAN_CODE = "paid_beta_trial"
+PAID_BETA_TRIAL_PLAN_NAME = "Beta Trial"
 PAID_BETA_PLAN_CODE = "paid_beta_30d"
 PAID_BETA_PLAN_NAME = "Beta"
 PAID_BETA_PRICE_RUB = 299
@@ -1212,6 +1215,7 @@ class BootstrapIn(BaseModel):
     platform: str = "windows"
     appVersion: str = "0.1.0"
     releaseChannel: Optional[str] = None
+    clientMarker: Optional[str] = None
 
 
 class ClientConfigIn(BaseModel):
@@ -1219,6 +1223,7 @@ class ClientConfigIn(BaseModel):
     mode: str = "full"
     serverId: Optional[str] = None
     releaseChannel: Optional[str] = None
+    clientMarker: Optional[str] = None
 
 
 class AdChallengeStartIn(BaseModel):
@@ -1242,6 +1247,12 @@ class AdminSubscriptionIn(BaseModel):
     maxDevices: int
     isActive: bool = True
     expiresAt: Optional[str] = None
+
+
+class AdminPaidBetaCohortIn(BaseModel):
+    enabled: bool = True
+    source: Optional[str] = None
+    reason: str
 
 
 class AdminUserDeleteIn(BaseModel):
@@ -1686,6 +1697,31 @@ def init_db() -> None:
             "phone_verified INTEGER NOT NULL DEFAULT 0",
         )
         ensure_column(conn, "users", "phone_verified_at", "phone_verified_at TEXT")
+        ensure_column(
+            conn,
+            "users",
+            "access_cohort",
+            "access_cohort TEXT NOT NULL DEFAULT 'stable'",
+        )
+        ensure_column(
+            conn,
+            "users",
+            "acquisition_source",
+            "acquisition_source TEXT",
+        )
+        ensure_column(
+            conn,
+            "users",
+            "cohort_enrolled_at",
+            "cohort_enrolled_at TEXT",
+        )
+        ensure_column(conn, "users", "updated_at", "updated_at TEXT")
+        conn.execute(
+            "UPDATE users SET updated_at = COALESCE(updated_at, created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_users_access_cohort ON users(access_cohort)"
+        )
 
         conn.execute(
             """
@@ -2854,7 +2890,16 @@ def ensure_subscription_for_existing_users() -> None:
 def backfill_expired_non_paid_subscriptions() -> dict:
     now = utc_now_iso()
     updated = 0
-    safe_plan_codes = tuple(dict.fromkeys((DEFAULT_PLAN_CODE, "trial", "support_trial")))
+    safe_plan_codes = tuple(
+        dict.fromkeys(
+            (
+                DEFAULT_PLAN_CODE,
+                "trial",
+                "support_trial",
+                PAID_BETA_TRIAL_PLAN_CODE,
+            )
+        )
+    )
     placeholders = ", ".join("?" for _ in safe_plan_codes)
     with db() as conn:
         updated = conn.execute(
@@ -3176,6 +3221,36 @@ def free_ad_gate_policy(
     }
 
 
+def disabled_ad_gate_policy(
+    platform: Optional[str],
+    *,
+    reason: str = "not_required",
+) -> dict:
+    return {
+        "enabled": False,
+        "required": False,
+        "requiredByPlan": False,
+        "provider": "none",
+        "platform": (platform or "").strip().lower(),
+        "clientSupported": True,
+        "clientMarker": "",
+        "reason": reason,
+        "message": "Реклама перед подключением не требуется.",
+        "grant": None,
+        "grantTtlMinutes": 0,
+        "grantMaxConnects": 0,
+        "sessionTimerEnabled": False,
+        "sessionTtlSeconds": 0,
+        "sessionMaxConnects": 0,
+        "sessionExpiresAt": None,
+        "androidRewarded": {
+            "enabled": False,
+            "provider": "none",
+            "adUnitId": "",
+        },
+    }
+
+
 def create_free_ad_challenge(user: sqlite3.Row, payload: AdChallengeStartIn) -> dict:
     device_uid = payload.deviceUid.strip()
     if not device_uid:
@@ -3197,12 +3272,16 @@ def create_free_ad_challenge(user: sqlite3.Row, payload: AdChallengeStartIn) -> 
         or "windows"
     )
     sub = subscription_status(get_subscription_row(int(user["id"])))
-    policy = free_ad_gate_policy(
-        int(user["id"]),
-        device_uid,
-        platform,
-        sub,
-        app_version=(payload.appVersion or device["app_version"] or ""),
+    policy = (
+        disabled_ad_gate_policy(platform, reason="paid_beta_no_ads")
+        if user_is_paid_beta_cohort(user)
+        else free_ad_gate_policy(
+            int(user["id"]),
+            device_uid,
+            platform,
+            sub,
+            app_version=(payload.appVersion or device["app_version"] or ""),
+        )
     )
     if not policy["required"]:
         return {
@@ -3800,6 +3879,243 @@ def paid_beta_request_allowed(
         and hmac.compare_digest(marker, PAID_BETA_CLIENT_MARKER)
         and hmac.compare_digest(channel, PAID_BETA_RELEASE_CHANNEL)
     )
+
+
+def user_access_cohort(user) -> str:
+    try:
+        return str(user["access_cohort"] or "stable").strip().lower() or "stable"
+    except Exception:
+        return "stable"
+
+
+def user_is_paid_beta_cohort(user) -> bool:
+    return bool(
+        PAID_BETA_ENABLED
+        and user_access_cohort(user) == PAID_BETA_COHORT_CODE
+    )
+
+
+def get_user_access_row(user_id: int):
+    with db() as conn:
+        return conn.execute(
+            """
+            SELECT id, email, access_cohort, acquisition_source, cohort_enrolled_at
+            FROM users
+            WHERE id = ?
+            """,
+            (int(user_id),),
+        ).fetchone()
+
+
+def paid_beta_trial_selection() -> dict:
+    return {
+        "policyMode": "paid_beta_trial",
+        "policyVersion": PAID_BETA_POLICY_VERSION,
+        "planCode": PAID_BETA_TRIAL_PLAN_CODE,
+        "devices": PAID_BETA_MAX_DEVICES,
+        "unlimitedApps": [],
+        "dedicatedIp": False,
+        "autoRenew": False,
+        "clientMarker": PAID_BETA_CLIENT_MARKER,
+        "releaseChannel": PAID_BETA_RELEASE_CHANNEL,
+        "includedFeatures": ["vpn_access", "social_routing", "no_ads"],
+    }
+
+
+def set_user_paid_beta_cohort(
+    user_id: int,
+    *,
+    enabled: bool,
+    source: Optional[str] = None,
+) -> dict:
+    now = utc_now()
+    now_iso = now.isoformat()
+    clean_source = clean_limited_text(source, 80).strip() or "manual"
+
+    with db() as conn:
+        user = conn.execute(
+            "SELECT * FROM users WHERE id = ?",
+            (int(user_id),),
+        ).fetchone()
+        if user is None:
+            raise HTTPException(status_code=404, detail="Пользователь не найден.")
+
+        already_enrolled = user_access_cohort(user) == PAID_BETA_COHORT_CODE
+        if enabled:
+            conn.execute(
+                """
+                UPDATE users
+                SET access_cohort = ?,
+                    acquisition_source = CASE
+                        WHEN access_cohort = ? THEN COALESCE(acquisition_source, ?)
+                        ELSE ?
+                    END,
+                    cohort_enrolled_at = COALESCE(cohort_enrolled_at, ?),
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    PAID_BETA_COHORT_CODE,
+                    PAID_BETA_COHORT_CODE,
+                    clean_source,
+                    clean_source,
+                    now_iso,
+                    now_iso,
+                    int(user_id),
+                ),
+            )
+
+            if not already_enrolled:
+                current = conn.execute(
+                    """
+                    SELECT *
+                    FROM subscriptions
+                    WHERE user_id = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (int(user_id),),
+                ).fetchone()
+                current_paid_active = False
+                if current is not None:
+                    current_expires = parse_dt(current["expires_at"])
+                    if current_expires is not None and current_expires.tzinfo is None:
+                        current_expires = current_expires.replace(tzinfo=timezone.utc)
+                    current_paid_active = (
+                        bool(current["is_active"])
+                        and int(current["monthly_price_rub"] or 0) > 0
+                        and (
+                        current_expires is None or current_expires > now
+                        )
+                    )
+
+                if not current_paid_active:
+                    trial_expires = (now + timedelta(days=PAID_BETA_TRIAL_DAYS)).isoformat()
+                    trial_selection_json = json.dumps(
+                        paid_beta_trial_selection(),
+                        ensure_ascii=False,
+                    )
+                    if current is None:
+                        conn.execute(
+                            """
+                            INSERT INTO subscriptions(
+                                user_id, plan_code, plan_name, max_devices, is_active,
+                                expires_at, created_at, updated_at, monthly_price_rub,
+                                selection_json, auto_renew, provider_payment_method_id
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                int(user_id),
+                                PAID_BETA_TRIAL_PLAN_CODE,
+                                PAID_BETA_TRIAL_PLAN_NAME,
+                                PAID_BETA_MAX_DEVICES,
+                                1,
+                                trial_expires,
+                                now_iso,
+                                now_iso,
+                                0,
+                                trial_selection_json,
+                                0,
+                                None,
+                            ),
+                        )
+                    else:
+                        conn.execute(
+                            """
+                            UPDATE subscriptions
+                            SET plan_code = ?, plan_name = ?, max_devices = ?,
+                                is_active = ?, expires_at = ?, updated_at = ?,
+                                monthly_price_rub = ?, selection_json = ?, auto_renew = ?,
+                                provider_payment_method_id = ?
+                            WHERE id = ?
+                            """,
+                            (
+                                PAID_BETA_TRIAL_PLAN_CODE,
+                                PAID_BETA_TRIAL_PLAN_NAME,
+                                PAID_BETA_MAX_DEVICES,
+                                1,
+                                trial_expires,
+                                now_iso,
+                                0,
+                                trial_selection_json,
+                                0,
+                                None,
+                                int(current["id"]),
+                            ),
+                        )
+        else:
+            conn.execute(
+                """
+                UPDATE users
+                SET access_cohort = 'stable',
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (now_iso, int(user_id)),
+            )
+        conn.commit()
+
+        updated_user = conn.execute(
+            """
+            SELECT id, email, access_cohort, acquisition_source, cohort_enrolled_at
+            FROM users
+            WHERE id = ?
+            """,
+            (int(user_id),),
+        ).fetchone()
+
+    subscription = subscription_status(get_subscription_row(int(user_id)))
+    return {
+        "userId": int(user_id),
+        "email": updated_user["email"],
+        "accessCohort": user_access_cohort(updated_user),
+        "acquisitionSource": updated_user["acquisition_source"],
+        "cohortEnrolledAt": updated_user["cohort_enrolled_at"],
+        "paidBeta": user_access_cohort(updated_user) == PAID_BETA_COHORT_CODE,
+        "subscription": subscription,
+    }
+
+
+def client_subscription_access_policy(
+    user,
+    sub: dict,
+    *,
+    client_marker: Optional[str],
+    release_channel: Optional[str],
+) -> dict:
+    beta_client = paid_beta_request_allowed(client_marker, release_channel)
+    beta_user = user_is_paid_beta_cohort(user)
+    beta_scope = beta_client or beta_user
+
+    if beta_client and not beta_user:
+        allowed = False
+        enforced = True
+        reason = "beta_cohort_required"
+    elif beta_user:
+        allowed = bool(sub.get("isActive"))
+        enforced = True
+        reason = None if allowed else "subscription_inactive"
+    else:
+        enforced = bool(ENFORCE_SUBSCRIPTION_ACCESS and not PAID_BETA_ENABLED)
+        allowed = bool(sub.get("isActive")) or not enforced
+        reason = None if allowed else "subscription_inactive"
+
+    return {
+        "allowed": allowed,
+        "enforced": enforced,
+        "reason": reason,
+        "paidBetaClient": beta_client,
+        "paidBetaUser": beta_user,
+        "paidBetaScope": beta_scope,
+        "accessCohort": user_access_cohort(user),
+        "maxDevices": (
+            PAID_BETA_MAX_DEVICES
+            if beta_user
+            else max(1, int(sub.get("maxDevices") or DEFAULT_MAX_DEVICES))
+        ),
+        "adsDisabled": beta_scope,
+    }
 
 
 def build_paid_beta_tariff_catalog() -> dict:
@@ -4597,6 +4913,30 @@ def normalize_tariff_selection(payload: TariffSelectionIn) -> dict:
 
 
 def quote_tariff(selection: dict, strict_promo: bool = False) -> dict:
+    if selection.get("policyMode") == "paid_beta_trial":
+        return {
+            "planCode": PAID_BETA_TRIAL_PLAN_CODE,
+            "planName": PAID_BETA_TRIAL_PLAN_NAME,
+            "policyVersion": PAID_BETA_POLICY_VERSION,
+            "pricingModel": "fixed_paid_beta_trial",
+            "periodDays": PAID_BETA_TRIAL_DAYS,
+            "devices": PAID_BETA_MAX_DEVICES,
+            "includedDevices": PAID_BETA_MAX_DEVICES,
+            "unlimitedApps": [],
+            "dedicatedIp": False,
+            "autoRenew": False,
+            "adsEnabled": False,
+            "includedFeatures": ["vpn_access", "social_routing", "no_ads"],
+            "lineItems": [],
+            "monthlyPriceRub": 0,
+            "summary": {
+                "periodDays": PAID_BETA_TRIAL_DAYS,
+                "maxDevices": PAID_BETA_MAX_DEVICES,
+                "ads": False,
+                "autoRenew": False,
+            },
+        }
+
     if selection.get("policyMode") == "paid_beta":
         quote = {
             "planCode": PAID_BETA_PLAN_CODE,
@@ -4792,7 +5132,10 @@ def get_user_by_token(authorization: Optional[str]):
                 u.email_verified_at,
                 u.phone,
                 u.phone_verified,
-                u.phone_verified_at
+                u.phone_verified_at,
+                u.access_cohort,
+                u.acquisition_source,
+                u.cohort_enrolled_at
             FROM tokens t
             JOIN users u ON u.id = t.user_id
             WHERE t.token = ?
@@ -4828,6 +5171,8 @@ def auth_session_payload(user, access_token: str) -> dict:
         "emailConfirmationRequired": EMAIL_CONFIRMATION_REQUIRED,
         "phone": user["phone"] if "phone" in user.keys() else None,
         "phoneVerified": user_phone_verified(user),
+        "accessCohort": user_access_cohort(user),
+        "paidBeta": user_access_cohort(user) == PAID_BETA_COHORT_CODE,
     }
 
 
@@ -5106,10 +5451,10 @@ def consume_email_confirmation_token(token: str) -> dict:
         conn.execute(
             """
             UPDATE users
-            SET email_verified = 1, email_verified_at = ?
+            SET email_verified = 1, email_verified_at = ?, updated_at = ?
             WHERE id = ?
             """,
-            (now.isoformat(), row["user_id"]),
+            (now.isoformat(), now.isoformat(), row["user_id"]),
         )
         conn.commit()
 
@@ -5848,8 +6193,8 @@ def ensure_user_for_email_code(email: str) -> tuple[sqlite3.Row, bool]:
             return row, False
 
         conn.execute(
-            "INSERT INTO users(email, password_hash, created_at) VALUES (?, ?, ?)",
-            (email, hash_password(secrets.token_urlsafe(48)), now),
+            "INSERT INTO users(email, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (email, hash_password(secrets.token_urlsafe(48)), now, now),
         )
         row = conn.execute(
             """
@@ -6038,10 +6383,10 @@ def consume_email_login_code(email: str, code: str) -> dict:
         conn.execute(
             """
             UPDATE users
-            SET email_verified = 1, email_verified_at = ?
+            SET email_verified = 1, email_verified_at = ?, updated_at = ?
             WHERE id = ?
             """,
-            (now.isoformat(), row["user_id"]),
+            (now.isoformat(), now.isoformat(), row["user_id"]),
         )
         user = conn.execute(
             """
@@ -6112,14 +6457,17 @@ def ensure_user_for_phone_code(phone: str) -> tuple[sqlite3.Row, bool]:
 
         conn.execute(
             """
-            INSERT INTO users(email, password_hash, phone, phone_verified, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO users(
+                email, password_hash, phone, phone_verified, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 synthetic_email,
                 hash_password(secrets.token_urlsafe(48)),
                 phone,
                 0,
+                now,
                 now,
             ),
         )
@@ -6522,10 +6870,10 @@ def consume_phone_confirmation_code(user_id: int, phone: str, code: str) -> dict
         conn.execute(
             """
             UPDATE users
-            SET phone = ?, phone_verified = 1, phone_verified_at = ?
+            SET phone = ?, phone_verified = 1, phone_verified_at = ?, updated_at = ?
             WHERE id = ?
             """,
-            (phone, now.isoformat(), user_id),
+            (phone, now.isoformat(), now.isoformat(), user_id),
         )
         conn.commit()
 
@@ -14665,6 +15013,9 @@ def list_admin_users(q: Optional[str] = None, limit: int = 100) -> list[dict]:
             u.email_verified,
             u.phone,
             u.phone_verified,
+            u.access_cohort,
+            u.acquisition_source,
+            u.cohort_enrolled_at,
             u.created_at,
             COUNT(d.id) AS device_count,
             COALESCE(SUM(CASE WHEN d.is_enabled = 1 THEN 1 ELSE 0 END), 0) AS enabled_device_count,
@@ -14676,7 +15027,9 @@ def list_admin_users(q: Optional[str] = None, limit: int = 100) -> list[dict]:
     if filters:
         query += " WHERE " + " AND ".join(filters)
     query += """
-        GROUP BY u.id, u.email, u.email_verified, u.phone, u.phone_verified, u.created_at
+        GROUP BY u.id, u.email, u.email_verified, u.phone, u.phone_verified,
+                 u.access_cohort, u.acquisition_source, u.cohort_enrolled_at,
+                 u.created_at
         ORDER BY u.id ASC
         LIMIT ?
     """
@@ -14694,6 +15047,10 @@ def list_admin_users(q: Optional[str] = None, limit: int = 100) -> list[dict]:
                 "emailVerified": bool(row["email_verified"]),
                 "phone": row["phone"],
                 "phoneVerified": bool(row["phone_verified"]),
+                "accessCohort": user_access_cohort(row),
+                "acquisitionSource": row["acquisition_source"],
+                "cohortEnrolledAt": row["cohort_enrolled_at"],
+                "paidBeta": user_access_cohort(row) == PAID_BETA_COHORT_CODE,
                 "createdAt": row["created_at"],
                 "deviceCount": int(row["device_count"]),
                 "enabledDeviceCount": int(row["enabled_device_count"]),
@@ -14719,6 +15076,9 @@ def get_admin_user_detail(user_id: int) -> dict:
                 u.email_verified,
                 u.phone,
                 u.phone_verified,
+                u.access_cohort,
+                u.acquisition_source,
+                u.cohort_enrolled_at,
                 u.created_at,
                 COUNT(d.id) AS device_count,
                 COALESCE(SUM(CASE WHEN d.is_enabled = 1 THEN 1 ELSE 0 END), 0) AS enabled_device_count,
@@ -14727,7 +15087,9 @@ def get_admin_user_detail(user_id: int) -> dict:
             FROM users u
             LEFT JOIN devices d ON d.user_id = u.id
             WHERE u.id = ?
-            GROUP BY u.id, u.email, u.email_verified, u.phone, u.phone_verified, u.created_at
+            GROUP BY u.id, u.email, u.email_verified, u.phone, u.phone_verified,
+                     u.access_cohort, u.acquisition_source, u.cohort_enrolled_at,
+                     u.created_at
             """,
             (int(user_id),),
         ).fetchone()
@@ -14741,6 +15103,10 @@ def get_admin_user_detail(user_id: int) -> dict:
         "emailVerified": bool(row["email_verified"]),
         "phone": row["phone"],
         "phoneVerified": bool(row["phone_verified"]),
+        "accessCohort": user_access_cohort(row),
+        "acquisitionSource": row["acquisition_source"],
+        "cohortEnrolledAt": row["cohort_enrolled_at"],
+        "paidBeta": user_access_cohort(row) == PAID_BETA_COHORT_CODE,
         "createdAt": row["created_at"],
         "deviceCount": int(row["device_count"]),
         "enabledDeviceCount": int(row["enabled_device_count"]),
@@ -15747,6 +16113,31 @@ def create_yookassa_payment_for_order(row, user_email: str) -> dict:
 
 
 def create_billing_order_for_user(user_id: int, payload: TariffSelectionIn) -> dict:
+    user_access = get_user_access_row(int(user_id))
+    if user_access is None:
+        raise HTTPException(status_code=404, detail="Пользователь не найден.")
+    beta_request = paid_beta_request_allowed(
+        payload.clientMarker,
+        payload.releaseChannel,
+    )
+    beta_user = user_is_paid_beta_cohort(user_access)
+    if beta_request and not beta_user:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "beta_cohort_required",
+                "message": "Для оплаты beta нужен персональный инвайт.",
+            },
+        )
+    if beta_user and not beta_request:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "paid_beta_client_required",
+                "message": "Открой оплату в beta-версии Green VPN.",
+            },
+        )
+
     normalized = normalize_tariff_selection(payload)
     quote = quote_tariff(
         normalized,
@@ -23670,8 +24061,8 @@ def auth_register(payload: RegisterIn):
             raise HTTPException(status_code=409, detail="Пользователь уже существует.")
 
         conn.execute(
-            "INSERT INTO users(email, password_hash, created_at) VALUES (?, ?, ?)",
-            (email, hash_password(password), utc_now_iso()),
+            "INSERT INTO users(email, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (email, hash_password(password), utc_now_iso(), utc_now_iso()),
         )
         user = conn.execute(
             """
@@ -23993,6 +24384,8 @@ def me(authorization: Optional[str] = Header(default=None)):
         "phone": user["phone"],
         "phoneVerified": user_phone_verified(user),
         "phoneVerifiedAt": user["phone_verified_at"],
+        "accessCohort": user_access_cohort(user),
+        "paidBeta": user_is_paid_beta_cohort(user),
     }
 
 
@@ -24205,6 +24598,8 @@ def subscription_me(authorization: Optional[str] = Header(default=None)):
         "selection": sub["selection"],
         "includedFeatures": sub["includedFeatures"],
         "trafficUsage": traffic_usage,
+        "accessCohort": user_access_cohort(user),
+        "paidBeta": user_is_paid_beta_cohort(user),
     }
 
 
@@ -24333,41 +24728,55 @@ def client_bootstrap(
     touch_device(device["device_uid"], config_issued=False)
 
     sub = subscription_status(get_subscription_row(user["id"]))
+    access_policy = client_subscription_access_policy(
+        user,
+        sub,
+        client_marker=payload.clientMarker,
+        release_channel=payload.releaseChannel,
+    )
+    effective_max_devices = int(access_policy["maxDevices"])
+    if access_policy["paidBetaUser"]:
+        sub = {**sub, "maxDevices": effective_max_devices}
     traffic_usage = subscription_traffic_usage_status(int(user["id"]), sub)
 
     with db() as conn:
-        count = enforce_device_limit_for_current_device(
-            conn,
-            user_id=user["id"],
-            current_device_uid=device["device_uid"],
-            max_devices=sub["maxDevices"],
-        )
+        if access_policy["reason"] == "beta_cohort_required":
+            count = enabled_device_count(conn, int(user["id"]))
+        else:
+            count = enforce_device_limit_for_current_device(
+                conn,
+                user_id=user["id"],
+                current_device_uid=device["device_uid"],
+                max_devices=effective_max_devices,
+            )
         conn.commit()
 
     device_enabled = bool(device["is_enabled"])
-    subscription_ok = sub["isActive"] or not ENFORCE_SUBSCRIPTION_ACCESS
-    ad_gate = free_ad_gate_policy(
-        int(user["id"]),
-        device["device_uid"],
-        device["platform"],
-        sub,
-        app_version=device["app_version"],
+    subscription_ok = bool(access_policy["allowed"])
+    ad_gate = (
+        disabled_ad_gate_policy(device["platform"], reason="paid_beta_no_ads")
+        if access_policy["paidBetaScope"]
+        else free_ad_gate_policy(
+            int(user["id"]),
+            device["device_uid"],
+            device["platform"],
+            sub,
+            app_version=device["app_version"],
+        )
     )
     can_connect = (
         subscription_ok
-        and count <= sub["maxDevices"]
+        and count <= effective_max_devices
         and device_enabled
         and not ad_gate["required"]
     )
 
-    reason = None
-    if not subscription_ok:
-        reason = "subscription_inactive"
-    elif count > sub["maxDevices"]:
+    reason = access_policy["reason"]
+    if reason is None and count > effective_max_devices:
         reason = "device_limit_exceeded"
-    elif not device_enabled:
+    elif reason is None and not device_enabled:
         reason = "device_disabled"
-    elif ad_gate["required"]:
+    elif reason is None and ad_gate["required"]:
         reason = "ad_reward_required"
 
     catalog = build_server_catalog(
@@ -24400,6 +24809,7 @@ def client_bootstrap(
             "appVersion": device["app_version"],
         },
         "subscription": sub,
+        "accessPolicy": access_policy,
         "trafficUsage": traffic_usage,
         "server": {
             "id": selected_server.get("id") or "intelligent_smew",
@@ -24423,7 +24833,31 @@ def client_config(
     authorization: Optional[str] = Header(default=None),
 ):
     user = get_user_by_token(authorization)
-    sub = require_active_subscription(user["id"])
+    sub = subscription_status(get_subscription_row(user["id"]))
+    access_policy = client_subscription_access_policy(
+        user,
+        sub,
+        client_marker=payload.clientMarker,
+        release_channel=payload.releaseChannel,
+    )
+    if not access_policy["allowed"]:
+        code = str(access_policy["reason"] or "subscription_inactive")
+        message = (
+            "Для beta-доступа нужен персональный инвайт."
+            if code == "beta_cohort_required"
+            else "Beta Trial или оплаченный период завершён."
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": code,
+                "message": message,
+                "accessPolicy": access_policy,
+            },
+        )
+    effective_max_devices = int(access_policy["maxDevices"])
+    if access_policy["paidBetaUser"]:
+        sub = {**sub, "maxDevices": effective_max_devices}
     traffic_usage = subscription_traffic_usage_status(int(user["id"]), sub)
 
     with db() as conn:
@@ -24446,19 +24880,23 @@ def client_config(
             conn,
             user_id=user["id"],
             current_device_uid=payload.deviceUid.strip(),
-            max_devices=sub["maxDevices"],
+            max_devices=effective_max_devices,
         )
         conn.commit()
 
-    if count > sub["maxDevices"]:
+    if count > effective_max_devices:
         raise HTTPException(status_code=403, detail="Device limit exceeded.")
 
-    ad_gate = free_ad_gate_policy(
-        int(user["id"]),
-        payload.deviceUid.strip(),
-        device["platform"],
-        sub,
-        app_version=device["app_version"],
+    ad_gate = (
+        disabled_ad_gate_policy(device["platform"], reason="paid_beta_no_ads")
+        if access_policy["paidBetaScope"]
+        else free_ad_gate_policy(
+            int(user["id"]),
+            payload.deviceUid.strip(),
+            device["platform"],
+            sub,
+            app_version=device["app_version"],
+        )
     )
     consumed_ad_grant = None
     if ad_gate["required"]:
@@ -24552,10 +24990,14 @@ def client_config(
         client_mtu=provisioning.get("clientMtu"),
     )
     touch_device(device["device_uid"], config_issued=True)
-    if FREE_AD_GATE_ENABLED and free_ad_gate_required_for(
+    if (
+        not access_policy["paidBetaScope"]
+        and FREE_AD_GATE_ENABLED
+        and free_ad_gate_required_for(
         sub,
         device["platform"],
         device["app_version"],
+        )
     ):
         consumed_ad_grant = consume_free_access_grant(int(user["id"]), device["device_uid"])
 
@@ -24589,6 +25031,7 @@ def client_config(
         "trafficUsage": traffic_usage,
         "supportConfigRefreshApplied": support_refresh_applied,
         "subscription": sub,
+        "accessPolicy": access_policy,
         "adGate": {
             **ad_gate,
             "grantConsumed": consumed_ad_grant is not None,
@@ -28305,6 +28748,41 @@ def admin_set_subscription(
         "ok": True,
         "userId": user_id,
         "subscription": subscription,
+    }
+
+
+@app.post("/api/v1/admin/users/{user_id}/paid-beta")
+def admin_set_paid_beta_cohort(
+    user_id: int,
+    payload: AdminPaidBetaCohortIn,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "billing.manage", request=request)
+    reason = clean_limited_text(payload.reason, 500).strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="reason обязателен.")
+    result = set_user_paid_beta_cohort(
+        user_id,
+        enabled=payload.enabled,
+        source=payload.source,
+    )
+    write_admin_audit(
+        "paid_beta_cohort_updated",
+        "user",
+        str(user_id),
+        {
+            "enabled": payload.enabled,
+            "source": clean_limited_text(payload.source, 80).strip() or "manual",
+            "reason": reason,
+            "accessCohort": result["accessCohort"],
+        },
+        request=request,
+    )
+    return {
+        "ok": True,
+        **result,
     }
 
 
