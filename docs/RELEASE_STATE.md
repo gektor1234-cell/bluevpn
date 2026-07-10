@@ -1,20 +1,23 @@
 # Green VPN Release State
 
-Last compacted: 2026-06-12.
+Last compacted: 2026-07-05.
 
 ## Stable Public Contour
 
-Status: frozen.
+Status: active production rollout approved by owner on 2026-07-05.
 
 - Public site: `https://greenvpn.pro`.
 - Public API: `https://api.greenvpn.pro`.
-- Stable Android is the no-ads/trial-only line. Last recorded version: `0.2.23-trial-only-android-vpn-takeover`.
-- Stable Windows is the no-ads/trial-only line. Last recorded version: `0.2.22-trial-only-manual-server-switch`.
-- Do not replace stable public APK/EXE or update stable manifests until the owner explicitly asks for it.
+- Stable Android: `0.2.44`, build `2026070504`, mandatory update enabled.
+- Stable Windows: `0.2.39-windows-clean-server-ui`, mandatory update enabled.
+- Public Android alias: `https://greenvpn.pro/downloads/GreenVPN_Android.apk`.
+- Public Windows alias: `https://greenvpn.pro/downloads/GreenVPN_Setup.exe`.
+- RUVDS Moscow mirrors both active public aliases for fallback downloads.
+- Owner explicitly approved replacing stable public APK/EXE and enabling the update popup on 2026-07-05.
 
 ## Preview/Test Contour
 
-- Preview/test is where rewarded ads, adgate, new server experiments, and risky client fixes should happen.
+- Preview/test is still where rewarded ads, adgate, new server experiments, and risky client fixes should happen before the next owner-approved stable promotion.
 - Preview artifacts may be rebuilt and uploaded only to preview/test links.
 - Stable and preview must stay visibly separated.
 
@@ -30,14 +33,13 @@ This verifies that Android manifests/download aliases return APK files, Windows 
 
 ## Backend And Catalog
 
-Verified 2026-06-12:
+Verified 2026-07-05:
 
-- `/healthz` version: `0.9.102`.
-- Public client catalog exposes two Netherlands WireGuard UDP endpoints:
-  - `intelligent_smew`, `nl1.vpn.greenvpn.pro:443`, health score around `95`;
-  - `tw-7879598-nl1`, `nl2.vpn.greenvpn.pro:443`, health score around `100`.
-- Public catalog default: `intelligent_smew`.
-- Client-side YouTube quality gate is disabled. Server-side adaptive routing remains enabled.
+- `/healthz` version: `0.9.105`.
+- Public client catalog exposes `current_wg0`, `ruvds-2584554-ld8`, and `tw-7879598-nl1`.
+- Public catalog and update manifests are served by Timeweb Moscow primary and RUVDS Moscow fallback.
+- Timeweb/RUVDS Moscow DB state sync runs every 30 seconds for critical auth/session/device/ad-grant state.
+- Rewarded ads and the ad-session disconnect timer are disabled server-side.
 
 ## Retired Infrastructure
 
