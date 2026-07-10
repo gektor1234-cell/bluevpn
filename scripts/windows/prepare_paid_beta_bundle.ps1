@@ -7,7 +7,9 @@ param(
 
     [string]$AppVersion = "0.3.0-paid-beta.2",
     [string]$AndroidBuildNumber = "2026071002",
-    [string]$BackendVersion = "0.9.106-paid-beta.1",
+    [string]$BackendVersion = "0.9.106-paid-beta.2",
+    [ValidateRange(1, 99)]
+    [int]$BundleRevision = 1,
     [string]$OutDir = "C:\BlueVPN_Builds\paid_beta_20260710"
 )
 
@@ -41,6 +43,9 @@ if (-not (Get-Command tar.exe -ErrorAction SilentlyContinue)) {
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $releaseId = "paid-beta-$($AppVersion -replace '[^A-Za-z0-9._-]', '_')-$AndroidBuildNumber"
+if ($BundleRevision -gt 1) {
+    $releaseId += "-r$BundleRevision"
+}
 $stage = Join-Path $OutDir $releaseId
 if (Test-Path -LiteralPath $stage) {
     throw "Bundle staging directory already exists: $stage"
@@ -136,6 +141,7 @@ $bundleManifest = [ordered]@{
     appVersion = $AppVersion
     androidBuildNumber = $AndroidBuildNumber
     backendVersion = $BackendVersion
+    bundleRevision = $BundleRevision
     generatedAt = $generatedAt
     apiBaseUrl = "https://api.greenvpn.pro/paid-beta-api"
     apiFallbackBaseUrl = "https://176-113-81-35.sslip.io/paid-beta-api"

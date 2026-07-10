@@ -68,15 +68,21 @@
    - Инвайты, погашения и funnel events добавлены в межсерверный SQLite state sync.
    - Двадцать backend/DB-sync тестов, Flutter smoke и локальный HTTP-contract проходят.
    - Контракт и ограничения: `docs/PAID_BETA_INVITES_AND_FUNNEL_2026_07_10_RU.md`.
-6. **Закрытая beta-страница** - выполнена локально 2026-07-10, без публикации.
+6. **Закрытая beta-страница** - выполнена и опубликована только в тестовом контуре 2026-07-10.
    - Отдельный пакет `paid_beta_site` не пересекается с `public_demo_site` и production `/downloads/`.
    - Главная, условия и дополнение о данных имеют `noindex`; `robots.txt` закрывает весь путь.
    - Указаны только фактические условия beta, персональный инвайт и отдельные beta download links.
    - Desktop/mobile visual QA, локальные ссылки, якоря и ресурсы проверены; release-файлы добавляются только на этапе 7.
    - Манифест страницы: `docs/PAID_BETA_SITE_2026_07_10_RU.md`.
-7. **Тесты и smoke** - выполняется только в изолированном тестовом контуре.
-   - Auth, billing, webhook idempotency, expiry, API failover, DB sync, updates.
-8. **Ops cleanup** - ожидает.
+7. **Тесты и smoke** - выполнено в изолированном тестовом контуре 2026-07-10.
+   - Backend `0.9.106-paid-beta.2` работает отдельно на `127.0.0.1:8010` у Timeweb и RUVDS.
+   - Auth, marker/cohort denial, invite claim, quote 149, no-ads, expiry policy, primary/fallback bootstrap/config, update manifests, DB sync и funnel прошли.
+   - Реальный beta peer получил `10.10.0.180`, одинаковый config на primary/fallback и был штатно удалён после smoke.
+   - Остановка только Timeweb beta дала `502` на primary, selector выбрал RUVDS, production `0.9.105` не прервался; primary затем восстановлен.
+   - Четыре beta download по двум HTTPS-маршрутам скачаны полностью и совпали по SHA; production SHA не изменились.
+   - Двадцать два backend/DB-sync теста и release gate 0/0 проходят.
+   - Серверный манифест: `docs/PAID_BETA_TEST_CONTOUR_2026_07_10_RU.md`.
+8. **Ops cleanup** - выполняется.
    - NL2 `dnsmasq`, KZ audit, monitoring freshness, support backlog.
 9. **Пакет для первых 20 участников** - ожидает действий владельца только на этапе персонального приглашения людей.
 

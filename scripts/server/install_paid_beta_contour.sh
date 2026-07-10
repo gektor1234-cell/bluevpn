@@ -4,6 +4,7 @@ set -euo pipefail
 APPLY=0
 CONFIGURE_NGINX=0
 START_SYNC=0
+STOP_SYNC=0
 REPLACE_ENV=0
 ROLE=""
 BUNDLE_DIR=""
@@ -41,7 +42,8 @@ Usage:
     --peer-host HOST \
     --peer-name NAME \
     [--seed-env PATH] [--replace-env] \
-    [--sync-interval SECONDS] [--configure-nginx] [--start-sync] [--apply]
+    [--sync-interval SECONDS] [--configure-nginx] \
+    [--start-sync|--stop-sync] [--apply]
 
 The bundle must contain backend/, ops/, site/ and bundle-manifest.json.
 The seed env is required on first install and must already contain shared,
@@ -69,6 +71,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --start-sync)
       START_SYNC=1
+      shift
+      ;;
+    --stop-sync)
+      STOP_SYNC=1
       shift
       ;;
     --replace-env)
@@ -132,6 +138,10 @@ if [[ ! "${SYNC_INTERVAL}" =~ ^[0-9]+$ ]] || (( SYNC_INTERVAL < 5 || SYNC_INTERV
   echo "--sync-interval must be 5..300 seconds" >&2
   exit 2
 fi
+if [[ "${START_SYNC}" -eq 1 && "${STOP_SYNC}" -eq 1 ]]; then
+  echo "--start-sync and --stop-sync are mutually exclusive" >&2
+  exit 2
+fi
 
 required_bundle_files=(
   "backend/app/main.py"
@@ -190,6 +200,7 @@ echo "peer=${PEER_NAME}@${PEER_HOST}"
 echo "sync_interval=${SYNC_INTERVAL}"
 echo "configure_nginx=${CONFIGURE_NGINX}"
 echo "start_sync=${START_SYNC}"
+echo "stop_sync=${STOP_SYNC}"
 echo "production_backend_changed=false"
 echo "production_db_changed=false"
 echo "production_downloads_replaced=false"
@@ -518,7 +529,7 @@ if [[ "${START_SYNC}" -eq 1 ]]; then
   systemctl enable "${SYNC_SERVICE_NAME}.timer"
   systemctl restart "${SYNC_SERVICE_NAME}.timer"
   systemctl start "${SYNC_SERVICE_NAME}.service"
-else
+elif [[ "${STOP_SYNC}" -eq 1 ]]; then
   systemctl disable --now "${SYNC_SERVICE_NAME}.timer" >/dev/null 2>&1 || true
 fi
 
@@ -538,4 +549,4 @@ echo "production_local_health=ok"
 echo "backup_dir=${backup_dir}"
 echo "release_dir=${release_dir}"
 echo "site_release_dir=${site_release_dir}"
-echo "sync_timer=$([[ ${START_SYNC} -eq 1 ]] && echo active || echo staged)"
+echo "sync_timer=$(systemctl is-active "${SYNC_SERVICE_NAME}.timer" 2>/dev/null || true)"

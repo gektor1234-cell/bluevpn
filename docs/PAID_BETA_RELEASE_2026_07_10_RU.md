@@ -1,6 +1,6 @@
 # Green VPN: paid beta 0.3.0, release 2
 
-Дата сборки: 2026-07-10. Статус: локальная тестовая сборка, не опубликована на основном сайте и не включена в production update manifests.
+Дата сборки: 2026-07-10. Статус: развёрнуто только в изолированном тестовом контуре. Production API, production DB, основной stable-сайт, stable downloads и production update manifests не заменены.
 
 ## Контур
 
@@ -26,9 +26,11 @@
 
 Machine-readable manifest: `C:\BlueVPN_Builds\paid_beta_20260710_v2\paid-beta-artifacts.json`.
 
-Изолированный deploy-bundle: `C:\BlueVPN_Builds\paid_beta_20260710_v2\paid-beta-0.3.0-paid-beta.2-2026071002.tar.gz`.
+Текущий изолированный deploy-bundle: `C:\BlueVPN_Builds\paid_beta_20260710_v2\paid-beta-0.3.0-paid-beta.2-2026071002-r2.tar.gz`.
 
-SHA-256 deploy-bundle: `F5AE97EC8760FAA077746CE942FC0B1E7F4DCD40185167A127AC4115DE60DE5B`.
+SHA-256 deploy-bundle: `440671161C710AD6BA7A47D4A5DC77CB96D3451F9FF26E3C233EF58853295B17`.
+
+Backend release: `0.9.106-paid-beta.2`. Первый bundle без `-r2` оставлен только как rollback и заменён после исправления удаления peer для managed `current_wg0`.
 
 ## Проверки
 
@@ -41,7 +43,7 @@ SHA-256 deploy-bundle: `F5AE97EC8760FAA077746CE942FC0B1E7F4DCD40185167A127AC4115
 - JSON manifest hashes совпадают с файлами.
 - Stable Android SHA-256 остался `308320429991A3278E3BA903155482D6613425D46681F180338ECB8C0929248F`.
 - Stable Windows SHA-256 остался `0B2FEAA2232582207CFB998902B04107067C8DDE1C4243A003FF979C2F2B5F15`.
-- Двадцать backend/DB-sync тестов проходят.
+- Двадцать два backend/DB-sync теста проходят.
 - Release gate: 0 предупреждений, 0 ошибок.
 - В deploy-bundle входят только beta backend, отдельные ops-скрипты, закрытая страница и два beta-артефакта; секретов и production DB в нём нет.
 
@@ -54,10 +56,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -OutDir C:\BlueVPN_Builds\paid_beta_20260710_v2
 ```
 
-Builder блокирует beta-сборку, если primary или fallback не содержат `/paid-beta-api`. Он не содержит шага публикации.
+Builder блокирует beta-сборку, если primary или fallback не содержат `/paid-beta-api`. Подготовка bundle и серверная установка остаются отдельными явными шагами.
 
 ## Ограничения
 
-- До развёртывания изолированного backend path beta-клиенты не смогут войти или получить конфиг.
 - Windows installer нельзя считать доверенной массовой сборкой до Authenticode-подписи.
 - Нельзя заменять этими файлами production `GreenVPN_Android.apk` или `GreenVPN_Setup.exe`.
+- Реальный платёж владельцем и установка на реальные Android/Windows устройства ещё обязательны перед приглашением участников.

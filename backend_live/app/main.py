@@ -19189,13 +19189,17 @@ def best_effort_remove_peer_from_server(
     if not normalized_server_id or not public_key:
         return False
 
-    if normalized_server_id in {"intelligent_smew", "current_wg0"}:
+    if normalized_server_id == "intelligent_smew":
         removed_live = best_effort_remove_peer_live(public_key)
         removed_config = best_effort_remove_peer_block_in_wg0(device_uid)
         return bool(removed_live or removed_config)
 
     row = get_managed_server_catalog_row_by_server_id(normalized_server_id)
     if row is None:
+        if normalized_server_id == "current_wg0":
+            removed_live = best_effort_remove_peer_live(public_key)
+            removed_config = best_effort_remove_peer_block_in_wg0(device_uid)
+            return bool(removed_live or removed_config)
         return False
     readiness = server_client_config_readiness(row)
     profile = readiness.get("profile")
@@ -19216,13 +19220,26 @@ def best_effort_remove_peer_from_server(
     return False
 
 
+def wireguard_server_uses_builtin_target(server_id: Optional[str]) -> bool:
+    normalized = str(server_id or "").strip()
+    if normalized == "intelligent_smew":
+        return True
+    row = get_managed_server_catalog_row_by_server_id(normalized)
+    if row is None:
+        return normalized == "current_wg0"
+    readiness = server_client_config_readiness(row)
+    return readiness.get("profile") == "builtin_wg0"
+
+
 def same_wireguard_target_server_id(first: Optional[str], second: Optional[str]) -> bool:
     first_id = str(first or "").strip()
     second_id = str(second or "").strip()
     if first_id == second_id:
         return True
-    local_aliases = {"intelligent_smew", "current_wg0"}
-    return bool(first_id in local_aliases and second_id in local_aliases)
+    return bool(
+        wireguard_server_uses_builtin_target(first_id)
+        and wireguard_server_uses_builtin_target(second_id)
+    )
 
 
 def provision_wireguard_peer_for_selected_server(

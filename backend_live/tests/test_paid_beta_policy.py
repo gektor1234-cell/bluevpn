@@ -556,6 +556,77 @@ class PaidBetaPolicyTests(unittest.TestCase):
         self.assertFalse(bootstrap["adGate"]["enabled"])
         self.assertFalse(bootstrap["adGate"]["sessionTimerEnabled"])
 
+    def test_managed_current_wg0_peer_removal_uses_remote_profile(self) -> None:
+        managed_row = object()
+        remote_config = {"serverId": "current_wg0"}
+        with (
+            patch.object(
+                main,
+                "get_managed_server_catalog_row_by_server_id",
+                return_value=managed_row,
+            ),
+            patch.object(
+                main,
+                "server_client_config_readiness",
+                return_value={"profile": "remote_ssh_wg0", "ready": True},
+            ),
+            patch.object(
+                main,
+                "load_remote_vpn_node_config",
+                return_value=remote_config,
+            ),
+            patch.object(
+                main,
+                "best_effort_remove_remote_peer_live",
+                return_value=True,
+            ) as remote_remove,
+            patch.object(main, "best_effort_remove_peer_live") as local_remove,
+            patch.object(main, "best_effort_remove_peer_block_in_wg0") as local_config_remove,
+        ):
+            removed = main.best_effort_remove_peer_from_server(
+                "current_wg0",
+                device_uid="managed-current-device",
+                public_key="managed-current-public-key",
+            )
+            same_as_builtin = main.same_wireguard_target_server_id(
+                "intelligent_smew",
+                "current_wg0",
+            )
+
+        self.assertTrue(removed)
+        self.assertFalse(same_as_builtin)
+        remote_remove.assert_called_once_with(
+            remote_config,
+            "managed-current-device",
+            "managed-current-public-key",
+        )
+        local_remove.assert_not_called()
+        local_config_remove.assert_not_called()
+
+    def test_legacy_current_wg0_without_catalog_keeps_local_cleanup(self) -> None:
+        with (
+            patch.object(
+                main,
+                "get_managed_server_catalog_row_by_server_id",
+                return_value=None,
+            ),
+            patch.object(main, "best_effort_remove_peer_live", return_value=True) as local_remove,
+            patch.object(
+                main,
+                "best_effort_remove_peer_block_in_wg0",
+                return_value=True,
+            ) as local_config_remove,
+        ):
+            removed = main.best_effort_remove_peer_from_server(
+                "current_wg0",
+                device_uid="legacy-current-device",
+                public_key="legacy-current-public-key",
+            )
+
+        self.assertTrue(removed)
+        local_remove.assert_called_once_with("legacy-current-public-key")
+        local_config_remove.assert_called_once_with("legacy-current-device")
+
 
 if __name__ == "__main__":
     unittest.main()
