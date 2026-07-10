@@ -68,10 +68,13 @@
    - Инвайты, погашения и funnel events добавлены в межсерверный SQLite state sync.
    - Двадцать backend/DB-sync тестов, Flutter smoke и локальный HTTP-contract проходят.
    - Контракт и ограничения: `docs/PAID_BETA_INVITES_AND_FUNNEL_2026_07_10_RU.md`.
-6. **Закрытая beta-страница** - выполняется.
-   - `noindex`, factual wording, legal links, beta download links.
-   - Main Trial site до beta smoke не заменять.
-7. **Тесты и smoke** - ожидает.
+6. **Закрытая beta-страница** - выполнена локально 2026-07-10, без публикации.
+   - Отдельный пакет `paid_beta_site` не пересекается с `public_demo_site` и production `/downloads/`.
+   - Главная, условия и дополнение о данных имеют `noindex`; `robots.txt` закрывает весь путь.
+   - Указаны только фактические условия beta, персональный инвайт и отдельные beta download links.
+   - Desktop/mobile visual QA, локальные ссылки, якоря и ресурсы проверены; release-файлы добавляются только на этапе 7.
+   - Манифест страницы: `docs/PAID_BETA_SITE_2026_07_10_RU.md`.
+7. **Тесты и smoke** - выполняется только в изолированном тестовом контуре.
    - Auth, billing, webhook idempotency, expiry, API failover, DB sync, updates.
 8. **Ops cleanup** - ожидает.
    - NL2 `dnsmasq`, KZ audit, monitoring freshness, support backlog.
