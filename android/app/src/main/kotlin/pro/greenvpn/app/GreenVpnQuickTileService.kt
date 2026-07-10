@@ -32,6 +32,7 @@ import javax.crypto.spec.GCMParameterSpec
 class GreenVpnQuickTileService : TileService() {
     private companion object {
         const val API_BASE_URL = "https://api.greenvpn.pro"
+        val API_FALLBACK_BASE_URLS = listOf("https://176-113-81-35.sslip.io")
         val APP_VERSION = BuildConfig.GREENVPN_APP_VERSION
         const val SECURE_PREFS_NAME = "greenvpn_secure_config_store_v1"
         const val SECURE_KEY_ALIAS = "greenvpn_config_aes_v1"
@@ -71,6 +72,7 @@ class GreenVpnQuickTileService : TileService() {
 
                 val session = readSession()
                 val accessToken = session.optString("accessToken").trim()
+                val sessionApiBaseUrl = normalizeApiBaseUrl(session.optString("apiBaseUrl"))
                 if (accessToken.isEmpty()) {
                     openApp("Войдите в Green VPN, чтобы использовать плитку.")
                     setTile(Tile.STATE_INACTIVE, "Нужен вход")
@@ -87,6 +89,7 @@ class GreenVpnQuickTileService : TileService() {
                 val bootstrap = postJson(
                     path = "/api/v1/client/bootstrap",
                     accessToken = accessToken,
+                    preferredBaseUrl = sessionApiBaseUrl,
                     payload = JSONObject()
                         .put("deviceUid", deviceId)
                         .put("deviceName", "Android Quick Settings")
@@ -100,7 +103,7 @@ class GreenVpnQuickTileService : TileService() {
                     return@execute
                 }
 
-                val config = fetchFreshConfig(accessToken, deviceId)
+                val config = fetchFreshConfig(accessToken, deviceId, sessionApiBaseUrl)
                     ?: readSecureString(MANAGED_CONFIG_KEY)?.trim()
                 if (config.isNullOrBlank()) {
                     openApp("Откройте Green VPN, чтобы получить VPN-конфиг.")
@@ -180,10 +183,15 @@ class GreenVpnQuickTileService : TileService() {
             !currentBackend.getRunningTunnelNames().contains(tunnel.getName())
     }
 
-    private fun fetchFreshConfig(accessToken: String, deviceId: String): String? {
+    private fun fetchFreshConfig(
+        accessToken: String,
+        deviceId: String,
+        preferredBaseUrl: String?
+    ): String? {
         val json = postJson(
             path = "/api/v1/client/config",
             accessToken = accessToken,
+            preferredBaseUrl = preferredBaseUrl,
             payload = JSONObject()
                 .put("deviceUid", deviceId)
                 .put("mode", "full")
@@ -210,11 +218,90 @@ class GreenVpnQuickTileService : TileService() {
     private fun tileBlockedMessage(): String =
         "Откройте Green VPN и активируйте Trial или подписку, чтобы включать VPN из плитки."
 
-    private fun postJson(path: String, accessToken: String, payload: JSONObject): JSONObject {
-        val connection = (URL("$API_BASE_URL$path").openConnection() as HttpURLConnection).apply {
+    private fun postJson(
+        path: String,
+        accessToken: String,
+        preferredBaseUrl: String? = null,
+        payload: JSONObject
+    ): JSONObject {
+        val bases = orderedApiBaseUrls(preferredBaseUrl)
+        var lastError: Exception? = null
+        for (baseUrl in bases) {
+            try {
+                return postJsonToBase(baseUrl, path, accessToken, payload)
+            } catch (e: Exception) {
+                lastError = e
+                val message = e.message.orEmpty()
+                if (!message.contains("HTTP 408") && !message.contains("HTTP 5")) {
+                    throw e
+                }
+            }
+        }
+        throw lastError ?: IllegalStateException("API недоступен")
+    }
+
+    private fun orderedApiBaseUrls(preferredBaseUrl: String? = null): List<String> {
+        val bases = linkedSetOf<String>()
+        bases.add(API_BASE_URL)
+        bases.addAll(API_FALLBACK_BASE_URLS)
+
+        val preferred = normalizeApiBaseUrl(preferredBaseUrl)
+        if (preferred != null && bases.contains(preferred)) {
+            val ordered = linkedSetOf<String>()
+            ordered.add(preferred)
+            ordered.addAll(bases)
+            return ordered.toList()
+        }
+
+        val healthy = bases.firstOrNull { isApiBaseHealthy(it) }
+        if (healthy == null) return bases.toList()
+
+        val ordered = linkedSetOf<String>()
+        ordered.add(healthy)
+        ordered.addAll(bases)
+        return ordered.toList()
+    }
+
+    private fun normalizeApiBaseUrl(value: String?): String? {
+        var normalized = value?.trim().orEmpty()
+        while (normalized.endsWith("/")) {
+            normalized = normalized.dropLast(1)
+        }
+        if (normalized.isEmpty()) return null
+        return try {
+            val url = URL(normalized)
+            if (url.protocol.isNullOrBlank() || url.host.isNullOrBlank()) null else normalized
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun isApiBaseHealthy(baseUrl: String): Boolean {
+        val connection = (URL("$baseUrl/healthz").openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 1200
+            readTimeout = 1600
+            setRequestProperty("Accept", "application/json")
+        }
+        return try {
+            connection.responseCode in 200..299
+        } catch (_: Exception) {
+            false
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun postJsonToBase(
+        baseUrl: String,
+        path: String,
+        accessToken: String,
+        payload: JSONObject
+    ): JSONObject {
+        val connection = (URL("$baseUrl$path").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
-            connectTimeout = 8000
-            readTimeout = 12000
+            connectTimeout = 5000
+            readTimeout = 10000
             doOutput = true
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
             setRequestProperty("Accept", "application/json")
@@ -228,7 +315,7 @@ class GreenVpnQuickTileService : TileService() {
         val body = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
         connection.disconnect()
         if (code !in 200..299) {
-            throw IllegalStateException("сервер вернул HTTP $code")
+            throw IllegalStateException("сервер вернул HTTP $code: $body")
         }
         return JSONObject(body)
     }

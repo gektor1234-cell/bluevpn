@@ -2,6 +2,9 @@ param(
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\.." )).Path,
     [string]$OutBase = "$env:USERPROFILE\Desktop",
     [string]$PackageName = "BlueVPN_Release",
+    [string]$AppVersion = "0.2.39-windows-clean-server-ui",
+    [string]$ApiBaseUrl = "https://api.greenvpn.pro",
+    [string]$ApiFallbackBaseUrls = "https://176-113-81-35.sslip.io",
     [switch]$SkipBuild,
     [switch]$OpenFolder
 )
@@ -93,7 +96,11 @@ if (-not $SkipBuild) {
     try {
         flutter clean
         flutter pub get
-        flutter build windows --release
+        flutter build windows --release `
+            --dart-define="GREENVPN_APP_VERSION=$AppVersion" `
+            --dart-define="GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=true" `
+            --dart-define="BLUEVPN_API_BASE_URL=$ApiBaseUrl" `
+            --dart-define="BLUEVPN_API_BASE_URLS=$ApiFallbackBaseUrls"
     }
     finally {
         Pop-Location

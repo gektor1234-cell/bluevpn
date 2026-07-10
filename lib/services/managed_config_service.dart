@@ -53,6 +53,18 @@ class ManagedConfigService {
     'x': ['104.244.42.0/24', '185.45.5.0/24', '192.133.76.0/22'],
   };
 
+  static const Map<String, List<String>> androidSocialPackageNames = {
+    'telegram': [
+      'org.telegram.messenger',
+      'org.telegram.messenger.web',
+      'org.thunderdog.challegram',
+    ],
+    'instagram': ['com.instagram.android'],
+    'youtube': ['com.google.android.youtube'],
+    'discord': ['com.discord'],
+    'tiktok': ['com.zhiliaoapp.musically'],
+  };
+
   Future<ManagedConfigBuildResult> buildManagedConfig({
     required bool socialOnlyEnabled,
     required List<String> selectedApps,
@@ -75,7 +87,28 @@ class ManagedConfigService {
       allowedIps = baseAllowedIps.isEmpty
           ? const ['0.0.0.0/1', '128.0.0.0/1']
           : baseAllowedIps;
-      updatedConfig = _replaceAllowedIps(original, allowedIps.join(', '));
+      updatedConfig = _removeInterfaceField(
+        _removeInterfaceField(
+          _replaceAllowedIps(original, allowedIps.join(', ')),
+          'IncludedApplications',
+        ),
+        'ExcludedApplications',
+      );
+    } else if (Platform.isAndroid) {
+      mode = 'social_only';
+      final baseAllowedIps = _readAllowedIps(original);
+      allowedIps = baseAllowedIps.isEmpty
+          ? const ['0.0.0.0/1', '128.0.0.0/1']
+          : baseAllowedIps;
+      final packageNames = _resolveAndroidPackagesForApps(selectedApps);
+      updatedConfig = _setInterfaceCsvField(
+        _removeInterfaceField(
+          _replaceAllowedIps(original, allowedIps.join(', ')),
+          'ExcludedApplications',
+        ),
+        'IncludedApplications',
+        packageNames,
+      );
     } else {
       final resolvedIps = _resolveAllowedIpsForApps(selectedApps);
       mode = 'social_only';
@@ -111,6 +144,53 @@ class ManagedConfigService {
     }
 
     return result.toList()..sort();
+  }
+
+  List<String> _resolveAndroidPackagesForApps(List<String> apps) {
+    final result = <String>{};
+    for (final app in apps) {
+      final normalized = app.trim().toLowerCase();
+      final packages = androidSocialPackageNames[normalized];
+      if (packages != null) {
+        result.addAll(packages);
+      }
+    }
+    if (result.isEmpty) {
+      result.addAll(androidSocialPackageNames['telegram'] ?? const []);
+    }
+    return result.toList()..sort();
+  }
+
+  String _removeInterfaceField(String configText, String fieldName) {
+    final escaped = RegExp.escape(fieldName);
+    return configText.replaceAll(
+      RegExp(
+        r'^\s*' + escaped + r'\s*=.*(?:\r?\n)?',
+        multiLine: true,
+        caseSensitive: false,
+      ),
+      '',
+    );
+  }
+
+  String _setInterfaceCsvField(
+    String configText,
+    String fieldName,
+    List<String> values,
+  ) {
+    final cleaned = _removeInterfaceField(configText, fieldName);
+    if (values.isEmpty) return cleaned;
+
+    final lines = cleaned.split('\n');
+    final interfaceIndex = lines.indexWhere(
+      (line) => line.trim().toLowerCase() == '[interface]',
+    );
+    final fieldLine = '$fieldName = ${values.join(', ')}';
+    if (interfaceIndex == -1) {
+      return '$fieldLine\n$cleaned';
+    }
+    lines.insert(interfaceIndex + 1, fieldLine);
+    return lines.join('\n');
   }
 
   String _replaceAllowedIps(String configText, String allowedIpsValue) {

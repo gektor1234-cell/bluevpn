@@ -7,6 +7,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.provider.Settings
 import android.net.VpnService
 import android.security.keystore.KeyGenParameterSpec
@@ -38,6 +39,10 @@ class MainActivity : FlutterActivity() {
         const val SECURE_PREFS_NAME = "greenvpn_secure_config_store_v1"
         const val SECURE_KEY_ALIAS = "greenvpn_config_aes_v1"
         const val GCM_TAG_BITS = 128
+        const val OWN_VPN_ACTIVE_KEY = "greenvpn_android_own_vpn_active_v1"
+        const val OWN_VPN_ACTIVE_WALL_AT_KEY = "greenvpn_android_own_vpn_active_wall_at_v1"
+        const val OWN_VPN_ACTIVE_ELAPSED_AT_KEY = "greenvpn_android_own_vpn_active_elapsed_at_v1"
+        const val OWN_VPN_MARKER_MAX_AGE_MS = 7L * 24L * 60L * 60L * 1000L
     }
 
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
@@ -57,7 +62,7 @@ class MainActivity : FlutterActivity() {
             CHANNEL
         ).setMethodCallHandler { call, result ->
             when (call.method) {
-                "status" -> handleStatus(result)
+                "status" -> handleStatusV2(call, result)
                 "connect" -> handleConnect(call, result)
                 "disconnect" -> handleDisconnect(result)
                 "secureRead" -> handleSecureRead(call, result)
@@ -138,14 +143,15 @@ class MainActivity : FlutterActivity() {
             return
         }
 
+        val effectiveConfigText = filterVpnApplicationSelectors(configText)
         val parsed = try {
-            Config.parse(ByteArrayInputStream(configText.toByteArray(StandardCharsets.UTF_8)))
+            Config.parse(ByteArrayInputStream(effectiveConfigText.toByteArray(StandardCharsets.UTF_8)))
         } catch (e: Exception) {
             result.success(
                 response(
                     ok = false,
                     connected = false,
-                    message = "Android не смог прочитать WireGuard-конфиг: ${safeError(e)}"
+                    message = "Android не смог подготовить VPN-подключение: ${safeError(e)}"
                 )
             )
             return
@@ -171,6 +177,11 @@ class MainActivity : FlutterActivity() {
                     Thread.sleep(250)
                 }
                 val state = currentBackend.setState(tunnel, Tunnel.State.UP, config)
+                if (state == Tunnel.State.UP) {
+                    markOwnVpnActive()
+                } else {
+                    markOwnVpnInactive()
+                }
                 runOnUiThread {
                     result.success(
                         response(
@@ -205,6 +216,9 @@ class MainActivity : FlutterActivity() {
                 val state = currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
                 val runningNames = currentBackend.getRunningTunnelNames().toList()
                 val stillRunning = runningNames.contains(tunnel.getName())
+                if (state == Tunnel.State.DOWN && !stillRunning) {
+                    markOwnVpnInactive()
+                }
                 runOnUiThread {
                     result.success(
                         response(
@@ -232,7 +246,7 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun handleStatus(result: MethodChannel.Result) {
+    private fun handleStatus(call: MethodCall, result: MethodChannel.Result) {
         executor.execute {
             try {
                 val currentBackend = backend()
@@ -268,6 +282,86 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun handleStatusV2(call: MethodCall, result: MethodChannel.Result) {
+        executor.execute {
+            val requestedName = call.argument<String>("name").orEmpty()
+            val systemVpnActive = isAnyVpnNetworkActive()
+            if (!systemVpnActive) {
+                markOwnVpnInactive()
+            }
+            val statusErrors = mutableListOf<String>()
+            val currentBackend = try {
+                backend()
+            } catch (e: Exception) {
+                statusErrors.add("backend=${safeError(e)}")
+                null
+            }
+
+            val runningNames = try {
+                currentBackend?.getRunningTunnelNames()?.toList() ?: emptyList()
+            } catch (e: Exception) {
+                statusErrors.add("running=${safeError(e)}")
+                emptyList()
+            }
+
+            val state = try {
+                currentBackend?.getState(tunnel)
+            } catch (e: Exception) {
+                statusErrors.add("state=${safeError(e)}")
+                null
+            }
+
+            val backendOwnRunning = systemVpnActive &&
+                (state == Tunnel.State.UP || runningNames.contains(tunnel.getName()))
+            val markerOwnRunning = !backendOwnRunning &&
+                systemVpnActive &&
+                hasOwnVpnActiveMarker(systemVpnActive)
+            val ownRunning = backendOwnRunning || markerOwnRunning
+            val markerAgeMs = ownVpnMarkerAgeMs()
+            val stats = try {
+                if (backendOwnRunning && currentBackend != null) currentBackend.getStatistics(tunnel) else null
+            } catch (e: Exception) {
+                statusErrors.add("stats=${safeError(e)}")
+                null
+            }
+
+            val version = try {
+                currentBackend?.getVersion().orEmpty()
+            } catch (e: Exception) {
+                statusErrors.add("version=${safeError(e)}")
+                ""
+            }
+
+            runOnUiThread {
+                result.success(
+                    mapOf(
+                        "ok" to (currentBackend != null),
+                        "connected" to ownRunning,
+                        "ownTunnelRunning" to ownRunning,
+                        "state" to if (markerOwnRunning) "up" else (state?.name?.lowercase() ?: "unknown"),
+                        "rxBytes" to (stats?.totalRx() ?: 0L),
+                        "txBytes" to (stats?.totalTx() ?: 0L),
+                        "version" to version,
+                        "runningTunnels" to runningNames,
+                        "systemVpnActive" to systemVpnActive,
+                        "systemVpnActiveWithoutOwnTunnel" to (systemVpnActive && !ownRunning),
+                        "externalVpnActive" to (systemVpnActive && !ownRunning),
+                        "lastGreenVpnActive" to markerOwnRunning,
+                        "lastGreenVpnActiveAgeMs" to markerAgeMs,
+                        "ownTunnelSource" to when {
+                            backendOwnRunning -> "backend"
+                            markerOwnRunning -> "marker"
+                            else -> "none"
+                        },
+                        "nativeTunnelName" to tunnel.getName(),
+                        "requestedTunnelName" to requestedName,
+                        "statusError" to statusErrors.joinToString("; ")
+                    )
+                )
+            }
+        }
+    }
+
     private fun handleOpenUrl(call: MethodCall, result: MethodChannel.Result) {
         val url = call.argument<String>("url").orEmpty().trim()
         if (url.isEmpty()) {
@@ -286,6 +380,53 @@ class MainActivity : FlutterActivity() {
                     message = "Не удалось открыть ссылку: ${safeError(e)}"
                 )
             )
+        }
+    }
+
+    private fun filterVpnApplicationSelectors(configText: String): String {
+        val fieldRegex = Regex(
+            "^\\s*(IncludedApplications|ExcludedApplications)\\s*=\\s*(.*?)\\s*$",
+            setOf(RegexOption.IGNORE_CASE)
+        )
+        val lines = configText.split(Regex("\\r?\\n"))
+        val filtered = mutableListOf<String>()
+        for (line in lines) {
+            val match = fieldRegex.matchEntire(line)
+            if (match == null) {
+                filtered.add(line)
+                continue
+            }
+            val fieldName = match.groupValues[1]
+            val packages = match.groupValues[2]
+                .split(',')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .filter { isPackageInstalled(it) }
+                .distinct()
+                .sorted()
+            if (packages.isNotEmpty()) {
+                filtered.add("$fieldName = ${packages.joinToString(", ")}")
+            } else {
+                filtered.add(line)
+            }
+        }
+        return filtered.joinToString("\n")
+    }
+
+    private fun isPackageInstalled(packageName: String): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                packageManager.getPackageInfo(
+                    packageName,
+                    android.content.pm.PackageManager.PackageInfoFlags.of(0)
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getPackageInfo(packageName, 0)
+            }
+            true
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -532,6 +673,49 @@ class MainActivity : FlutterActivity() {
             "state" to if (connected) "up" else "down",
             "message" to message
         )
+    }
+
+    private fun markOwnVpnActive() {
+        securePrefs.edit()
+            .putBoolean(OWN_VPN_ACTIVE_KEY, true)
+            .putLong(OWN_VPN_ACTIVE_WALL_AT_KEY, System.currentTimeMillis())
+            .putLong(OWN_VPN_ACTIVE_ELAPSED_AT_KEY, SystemClock.elapsedRealtime())
+            .apply()
+    }
+
+    private fun markOwnVpnInactive() {
+        securePrefs.edit()
+            .remove(OWN_VPN_ACTIVE_KEY)
+            .remove(OWN_VPN_ACTIVE_WALL_AT_KEY)
+            .remove(OWN_VPN_ACTIVE_ELAPSED_AT_KEY)
+            .apply()
+    }
+
+    private fun hasOwnVpnActiveMarker(systemVpnActive: Boolean): Boolean {
+        if (!systemVpnActive) {
+            markOwnVpnInactive()
+            return false
+        }
+        if (!securePrefs.getBoolean(OWN_VPN_ACTIVE_KEY, false)) return false
+        val startedAtElapsed = securePrefs.getLong(OWN_VPN_ACTIVE_ELAPSED_AT_KEY, -1L)
+        val nowElapsed = SystemClock.elapsedRealtime()
+        if (startedAtElapsed <= 0L || startedAtElapsed > nowElapsed) {
+            markOwnVpnInactive()
+            return false
+        }
+        if (nowElapsed - startedAtElapsed > OWN_VPN_MARKER_MAX_AGE_MS) {
+            markOwnVpnInactive()
+            return false
+        }
+        return true
+    }
+
+    private fun ownVpnMarkerAgeMs(): Long {
+        val startedAtElapsed = securePrefs.getLong(OWN_VPN_ACTIVE_ELAPSED_AT_KEY, -1L)
+        if (startedAtElapsed <= 0L) return -1L
+        val nowElapsed = SystemClock.elapsedRealtime()
+        if (startedAtElapsed > nowElapsed) return -1L
+        return nowElapsed - startedAtElapsed
     }
 
     private fun isAnyVpnNetworkActive(): Boolean {

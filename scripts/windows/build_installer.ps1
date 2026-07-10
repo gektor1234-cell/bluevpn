@@ -3,6 +3,9 @@ param(
     [string]$OutBase = "C:\BlueVPN_Builds",
     [string]$ReleaseZip = "",
     [string]$InstallerName = "GreenVPN_Setup.exe",
+    [string]$AppVersion = "0.2.39-windows-clean-server-ui",
+    [string]$ApiBaseUrl = "https://api.greenvpn.pro",
+    [string]$ApiFallbackBaseUrls = "https://176-113-81-35.sslip.io",
     [switch]$SkipBuild,
     [switch]$OpenFolder
 )
@@ -220,7 +223,11 @@ if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
         Write-Section 'BUILD WINDOWS RELEASE'
         Push-Location $ProjectRoot
         try {
-            flutter build windows --release -t .\lib\main.dart
+            flutter build windows --release -t .\lib\main.dart `
+                --dart-define="GREENVPN_APP_VERSION=$AppVersion" `
+                --dart-define="GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=true" `
+                --dart-define="BLUEVPN_API_BASE_URL=$ApiBaseUrl" `
+                --dart-define="BLUEVPN_API_BASE_URLS=$ApiFallbackBaseUrls"
             if ($LASTEXITCODE -ne 0) {
                 throw "flutter build windows failed with exit code $LASTEXITCODE"
             }

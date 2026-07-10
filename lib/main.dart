@@ -8,6 +8,7 @@ import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:yandex_mobileads/mobile_ads.dart';
 
 /*
@@ -48,6 +49,10 @@ const String kYandexRewardedDemoAdUnitId = 'demo-rewarded-yandex';
 const String kApiBaseUrl = String.fromEnvironment(
   'BLUEVPN_API_BASE_URL',
   defaultValue: 'https://api.greenvpn.pro',
+);
+const String kApiFallbackBaseUrls = String.fromEnvironment(
+  'BLUEVPN_API_BASE_URLS',
+  defaultValue: 'https://176-113-81-35.sslip.io',
 );
 
 const String kBuildMarker = 'bluevpn-safety-runtime-20260428-2355';
@@ -92,6 +97,36 @@ String greenVpnUpdateChannel() {
   return 'stable';
 }
 
+String greenVpnNormalizeBaseUrl(String value) {
+  var normalized = value.trim();
+  while (normalized.endsWith('/')) {
+    normalized = normalized.substring(0, normalized.length - 1);
+  }
+  return normalized;
+}
+
+List<String> greenVpnApiBaseUrls() {
+  final urls = <String>[];
+  final seen = <String>{};
+
+  void add(String value) {
+    final normalized = greenVpnNormalizeBaseUrl(value);
+    if (normalized.isEmpty) return;
+    final uri = Uri.tryParse(normalized);
+    if (uri == null || uri.scheme.isEmpty || uri.host.isEmpty) return;
+    if (seen.add(normalized)) {
+      urls.add(normalized);
+    }
+  }
+
+  add(kApiBaseUrl);
+  for (final item in kApiFallbackBaseUrls.split(',')) {
+    add(item);
+  }
+
+  return urls.isEmpty ? <String>['https://api.greenvpn.pro'] : urls;
+}
+
 int greenVpnIntValue(Object? value) {
   if (value is int) return value;
   if (value is num) return value.toInt();
@@ -99,14 +134,34 @@ int greenVpnIntValue(Object? value) {
 }
 
 Map<String, Object?> greenVpnSafeAndroidVpnStatus(Map<String, dynamic> status) {
+  final rawRunningTunnels = status['runningTunnels'];
+  final runningTunnelNames = rawRunningTunnels is Iterable
+      ? rawRunningTunnels.map((item) => item.toString()).toList()
+      : <String>[];
   return <String, Object?>{
     'ok': status['ok'] == true,
     'connected': status['connected'] == true,
+    'ownTunnelRunning': status['ownTunnelRunning'] == true,
+    'systemVpnActive': status['systemVpnActive'] == true,
+    'systemVpnActiveWithoutOwnTunnel':
+        status['systemVpnActiveWithoutOwnTunnel'] == true,
+    'externalVpnActive':
+        status['externalVpnActive'] == true ||
+        status['systemVpnActiveWithoutOwnTunnel'] == true,
     'state': (status['state'] ?? '').toString(),
     'rxBytes': greenVpnIntValue(status['rxBytes']),
     'txBytes': greenVpnIntValue(status['txBytes']),
     'version': (status['version'] ?? '').toString(),
-    'runningTunnels': greenVpnIntValue(status['runningTunnels']),
+    'runningTunnels': runningTunnelNames.length,
+    'runningTunnelNames': runningTunnelNames,
+    'nativeTunnelName': (status['nativeTunnelName'] ?? '').toString(),
+    'requestedTunnelName': (status['requestedTunnelName'] ?? '').toString(),
+    'lastGreenVpnActive': status['lastGreenVpnActive'] == true,
+    'lastGreenVpnActiveAgeMs': greenVpnIntValue(
+      status['lastGreenVpnActiveAgeMs'],
+    ),
+    'ownTunnelSource': (status['ownTunnelSource'] ?? '').toString(),
+    'statusError': (status['statusError'] ?? '').toString(),
   };
 }
 
@@ -132,6 +187,22 @@ bool greenVpnIsAdRewardRequiredMessage(String? message) {
   return raw.contains('ad_reward_required') ||
       raw.contains('нужно посмотреть рекламу') ||
       raw.contains('реклама перед подключением');
+}
+
+bool greenVpnIsInvalidSessionMessage(String? message) {
+  final raw = (message ?? '').toLowerCase();
+  if (raw.isEmpty) return false;
+  final has401 =
+      raw.contains('401') ||
+      raw.contains('unauthorized') ||
+      raw.contains('not authenticated');
+  if (!has401) return false;
+  return raw.contains('некорректный токен') ||
+      raw.contains('invalid token') ||
+      raw.contains('bad token') ||
+      raw.contains('token') ||
+      raw.contains('unauthorized') ||
+      raw.contains('not authenticated');
 }
 
 String greenVpnAdChallengeTokenFromRewardUrl(String rewardUrl) {
@@ -183,6 +254,7 @@ class GreenVpnYandexRewardedAds {
   static Future<bool> showRewardedAd({
     required String adUnitId,
     required Future<void> Function(String message) log,
+    Future<void> Function()? onRewarded,
   }) async {
     final unit = adUnitId.trim();
     if (kTrialOnlyNoAdsBuild || unit.isEmpty) {
@@ -219,6 +291,10 @@ class GreenVpnYandexRewardedAds {
           },
           onRewarded: (reward) {
             unawaited(log('Yandex rewarded ad reward earned'));
+            final callback = onRewarded;
+            if (callback != null) {
+              unawaited(callback());
+            }
           },
         ),
       );
@@ -528,7 +604,14 @@ class _AppBootstrapState extends State<AppBootstrap> {
   }
 
   Future<void> _onAuthSuccess(Session s) async {
-    await _sessionStore.write(s);
+    try {
+      await _sessionStore.write(s);
+      await appendBlueVpnClientLog('session persisted after auth');
+    } catch (e, st) {
+      await appendBlueVpnClientLog(
+        'session persist failed after auth: $e stack=$st',
+      );
+    }
     if (!mounted) return;
     setState(() {
       _session = s;
@@ -899,6 +982,7 @@ class _SessionGatePageState extends State<SessionGatePage> {
 class Session {
   final String accessToken;
   final String email;
+  final String apiBaseUrl;
   final bool emailVerified;
   final bool emailConfirmationRequired;
   final String? phone;
@@ -907,6 +991,7 @@ class Session {
   const Session({
     required this.accessToken,
     required this.email,
+    this.apiBaseUrl = '',
     this.emailVerified = false,
     this.emailConfirmationRequired = false,
     this.phone,
@@ -916,6 +1001,7 @@ class Session {
   Map<String, dynamic> toJson() => {
     'accessToken': accessToken,
     'email': email,
+    'apiBaseUrl': apiBaseUrl,
     'emailVerified': emailVerified,
     'emailConfirmationRequired': emailConfirmationRequired,
     'phone': phone,
@@ -926,6 +1012,9 @@ class Session {
     return Session(
       accessToken: (json['accessToken'] ?? '').toString(),
       email: (json['email'] ?? '').toString(),
+      apiBaseUrl: greenVpnNormalizeBaseUrl(
+        (json['apiBaseUrl'] ?? '').toString(),
+      ),
       emailVerified: json['emailVerified'] == true,
       emailConfirmationRequired: json['emailConfirmationRequired'] == true,
       phone: json['phone']?.toString(),
@@ -936,6 +1025,7 @@ class Session {
   Session copyWith({
     String? accessToken,
     String? email,
+    String? apiBaseUrl,
     bool? emailVerified,
     bool? emailConfirmationRequired,
     String? phone,
@@ -944,6 +1034,7 @@ class Session {
     return Session(
       accessToken: accessToken ?? this.accessToken,
       email: email ?? this.email,
+      apiBaseUrl: apiBaseUrl ?? this.apiBaseUrl,
       emailVerified: emailVerified ?? this.emailVerified,
       emailConfirmationRequired:
           emailConfirmationRequired ?? this.emailConfirmationRequired,
@@ -1244,6 +1335,34 @@ class BlueVpnLocalPaths {
     return r'C:\ProgramData\BlueVPN\state';
   }
 
+  static String userStateDirSync() {
+    if (kIsWeb) return '';
+    if (!Platform.isWindows) {
+      return sharedStateDirSync();
+    }
+    final appData = Platform.environment['APPDATA'];
+    if (appData != null && appData.trim().isNotEmpty) {
+      return '$appData\\GreenVPN\\state';
+    }
+    final userProfile = Platform.environment['USERPROFILE'];
+    if (userProfile != null && userProfile.trim().isNotEmpty) {
+      return '$userProfile\\AppData\\Roaming\\GreenVPN\\state';
+    }
+    return '${Directory.systemTemp.path}\\GreenVPN\\state';
+  }
+
+  static Future<String> userStateDir() async {
+    if (kIsWeb) return '';
+    final dir = Directory(userStateDirSync());
+    if (!dir.existsSync()) {
+      dir.createSync(recursive: true);
+    }
+    if (Platform.isWindows) {
+      await WindowsLocalSecurity.hardenPath(dir.path, directory: true);
+    }
+    return dir.path;
+  }
+
   static Future<String> sharedStateDir() async {
     if (kIsWeb) return '';
     if (!Platform.isWindows) {
@@ -1278,7 +1397,15 @@ class BlueVpnLocalPaths {
 
     final appData = Platform.environment['APPDATA'];
     if (appData != null && appData.trim().isNotEmpty) {
+      addPath('$appData\\GreenVPN\\state');
+      addPath('$appData\\GreenVPN');
       addPath('$appData\\BlueVPN');
+    }
+
+    final programData = Platform.environment['ProgramData'];
+    if (programData != null && programData.trim().isNotEmpty) {
+      addPath('$programData\\BlueVPN\\state');
+      addPath('$programData\\BlueVPN');
     }
 
     final usersRoot = Directory(r'C:\Users');
@@ -1323,7 +1450,7 @@ class SecureLocalFile {
       if (!file.existsSync()) return null;
       final raw = await file.readAsString();
       if (!encrypted) return raw;
-      return await WindowsLocalSecurity.unprotectString(raw);
+      return await WindowsLocalSecurity.unprotectString(raw) ?? raw;
     } catch (_) {
       return null;
     }
@@ -1381,6 +1508,9 @@ class SessionStore {
   }
 
   Future<String> _appDirPath() async {
+    if (!kIsWeb && Platform.isWindows) {
+      return BlueVpnLocalPaths.userStateDir();
+    }
     return BlueVpnLocalPaths.sharedStateDir();
   }
 
@@ -1456,15 +1586,17 @@ class SessionStore {
         }
       }
       final jsonMap = jsonDecode(raw) as Map<String, dynamic>;
-      final s = Session.fromJson(jsonMap);
+      var s = Session.fromJson(jsonMap);
       if (s.accessToken.isEmpty) return null;
-      await write(s);
-      final legacy = await _file();
-      if (legacy.existsSync()) {
-        try {
-          await legacy.delete();
-        } catch (_) {}
+      if (s.apiBaseUrl.isEmpty) {
+        final primaryApiBase = greenVpnApiBaseUrls().first;
+        s = s.copyWith(apiBaseUrl: primaryApiBase);
+        await appendBlueVpnClientLog(
+          'session api base migrated to $primaryApiBase',
+        );
       }
+      BlueVpnApi.rememberSession(s);
+      await write(s);
       return s;
     } catch (_) {
       return null;
@@ -1473,6 +1605,7 @@ class SessionStore {
 
   Future<void> write(Session session) async {
     if (kIsWeb) return;
+    BlueVpnApi.rememberSession(session);
     final raw = jsonEncode(session.toJson());
     if (_usesMobileSecureStore) {
       await _writeMobileSession(raw);
@@ -1485,15 +1618,23 @@ class SessionStore {
     } catch (_) {
       final legacy = await _file();
       await legacy.writeAsString(raw);
-      unawaited(
-        WindowsLocalSecurity.prepareSharedStateDirectory(legacy.parent.path),
-      );
-      unawaited(WindowsLocalSecurity.prepareSharedStateFile(legacy.path));
+      if (BlueVpnLocalPaths.isSharedStatePath(legacy.path)) {
+        unawaited(
+          WindowsLocalSecurity.prepareSharedStateDirectory(legacy.parent.path),
+        );
+        unawaited(WindowsLocalSecurity.prepareSharedStateFile(legacy.path));
+      } else {
+        unawaited(
+          WindowsLocalSecurity.hardenPath(legacy.parent.path, directory: true),
+        );
+        unawaited(WindowsLocalSecurity.hardenPath(legacy.path));
+      }
     }
   }
 
   Future<void> clear() async {
     if (kIsWeb) return;
+    BlueVpnApi.forgetAllSessions();
     try {
       await _deleteMobileSession();
       final f = await _file();
@@ -1946,14 +2087,14 @@ class WireGuardInstallState {
   });
 
   String get subtitle {
-    if (installed) return 'WireGuard найден: $exePath';
+    if (installed) return 'Системный компонент установлен.';
     if (!kIsWeb && Platform.isIOS) {
       return 'iOS-версия требует Apple Network Extension. Интерфейс готов, реальное подключение включим после Apple Developer.';
     }
     if (wingetAvailable) {
-      return 'WireGuard не установлен. Green VPN может поставить его автоматически.';
+      return 'Системный компонент не установлен. Green VPN может поставить его автоматически.';
     }
-    return 'WireGuard не установлен. Понадобится ручная установка.';
+    return 'Системный компонент не установлен. Понадобится ручная установка.';
   }
 }
 
@@ -2060,7 +2201,7 @@ Future<WireGuardInstallResult> installWireGuardForWindows() async {
   if (!kIsWeb && Platform.isAndroid) {
     return const WireGuardInstallResult(
       ok: true,
-      message: 'На Android WireGuard уже встроен в Green VPN.',
+      message: 'На Android всё уже встроено в Green VPN.',
     );
   }
   if (!kIsWeb && Platform.isIOS) {
@@ -2083,7 +2224,7 @@ Future<WireGuardInstallResult> installWireGuardForWindows() async {
     return const WireGuardInstallResult(
       ok: false,
       message:
-          'winget не найден. Открыл страницу установки WireGuard в браузере.',
+          'winget не найден. Открыл страницу установки системного компонента в браузере.',
     );
   }
 
@@ -2109,7 +2250,7 @@ Future<WireGuardInstallResult> installWireGuardForWindows() async {
     if (check.installed) {
       return WireGuardInstallResult(
         ok: true,
-        message: 'WireGuard установлен: ${check.exePath}',
+        message: 'Системный компонент установлен.',
       );
     }
 
@@ -2118,12 +2259,12 @@ Future<WireGuardInstallResult> installWireGuardForWindows() async {
       ok: false,
       message: stderr.isNotEmpty
           ? 'Установка не завершилась: $stderr'
-          : 'WireGuard пока не найден после установки. Нажми "Проверить снова".',
+          : 'Системный компонент пока не найден после установки. Нажми "Проверить снова".',
     );
   } catch (e) {
     return WireGuardInstallResult(
       ok: false,
-      message: 'Не удалось запустить установку WireGuard: $e',
+      message: 'Не удалось запустить установку системного компонента: $e',
     );
   }
 }
@@ -2380,12 +2521,14 @@ class WireGuardConfigResponse {
   final String serverId;
   final String serverName;
   final Map<String, dynamic> endpointAssignment;
+  final Map<String, dynamic> adGate;
 
   const WireGuardConfigResponse({
     required this.configText,
     required this.serverId,
     required this.serverName,
     required this.endpointAssignment,
+    required this.adGate,
   });
 
   static WireGuardConfigResponse fromJson(Map<String, dynamic> json) {
@@ -2396,6 +2539,10 @@ class WireGuardConfigResponse {
         : const <String, dynamic>{};
     final assignmentMap = assignment is Map
         ? Map<String, dynamic>.from(assignment)
+        : const <String, dynamic>{};
+    final adGateRaw = json['adGate'];
+    final adGateMap = adGateRaw is Map
+        ? Map<String, dynamic>.from(adGateRaw)
         : const <String, dynamic>{};
     final id =
         (json['serverId'] ?? serverMap['id'] ?? assignmentMap['serverId'] ?? '')
@@ -2409,6 +2556,7 @@ class WireGuardConfigResponse {
       serverId: id,
       serverName: name,
       endpointAssignment: assignmentMap,
+      adGate: adGateMap,
     );
   }
 }
@@ -2756,7 +2904,7 @@ class AuthProvisioningService {
       }
       return ProvisioningWarmupResult(
         ok: false,
-        message: cfgRes.message ?? 'Не удалось получить WireGuard-конфиг.',
+        message: cfgRes.message ?? 'Не удалось подготовить VPN-подключение.',
       );
     }
 
@@ -2767,38 +2915,239 @@ class AuthProvisioningService {
   }
 }
 
+class GreenVpnHttpStatusException implements Exception {
+  final int statusCode;
+  final String body;
+  final Uri? uri;
+  final String? message;
+
+  const GreenVpnHttpStatusException({
+    required this.statusCode,
+    required this.body,
+    this.uri,
+    this.message,
+  });
+
+  bool get isRetriable =>
+      statusCode == HttpStatus.requestTimeout || statusCode >= 500;
+
+  @override
+  String toString() {
+    final text = (message ?? 'HTTP status $statusCode: $body').trim();
+    if (uri == null) return text;
+    return '$text, uri = $uri';
+  }
+}
+
 class BlueVpnApi {
   final String baseUrl;
-  const BlueVpnApi({required this.baseUrl});
+  final List<String> fallbackBaseUrls;
+  const BlueVpnApi({required this.baseUrl, this.fallbackBaseUrls = const []});
 
   static const int _wslRelayPort = 18000;
   static Uri? _cachedWslRelayUri;
   static Future<Uri?>? _wslRelayStartFuture;
   static Process? _wslRelayProcess;
+  static const Duration _apiBaseFailureCooldown = Duration(minutes: 3);
+  static final Map<String, DateTime> _apiBaseCooldownUntil =
+      <String, DateTime>{};
+  static String? _lastSuccessfulApiBaseUrl;
+  static String? _pendingAuthApiBaseUrl;
+  static final Map<String, String> _sessionApiBaseByAccessToken =
+      <String, String>{};
 
-  Uri _u(String path) => Uri.parse('$baseUrl$path');
+  static String? _normalizeApiBaseUrl(String? value) {
+    final normalized = greenVpnNormalizeBaseUrl(value ?? '');
+    if (normalized.isEmpty) return null;
+    final uri = Uri.tryParse(normalized);
+    if (uri == null || uri.scheme.isEmpty || uri.host.isEmpty) return null;
+    return normalized;
+  }
+
+  static void rememberSession(Session session) {
+    final token = session.accessToken.trim();
+    final apiBase = _normalizeApiBaseUrl(session.apiBaseUrl);
+    if (token.isEmpty || apiBase == null) return;
+    _sessionApiBaseByAccessToken[token] = apiBase;
+    _lastSuccessfulApiBaseUrl = apiBase;
+  }
+
+  static void forgetAllSessions() {
+    _sessionApiBaseByAccessToken.clear();
+    _pendingAuthApiBaseUrl = null;
+  }
+
   Uri _uFor(String resolvedBaseUrl, String path) =>
       Uri.parse('$resolvedBaseUrl$path');
+
+  String _primaryBaseUrl() {
+    final urls = _apiBaseUrls();
+    return urls.isEmpty ? greenVpnNormalizeBaseUrl(baseUrl) : urls.first;
+  }
+
+  List<String> _apiBaseUrls() {
+    final urls = <String>[];
+    final seen = <String>{};
+
+    void add(String value) {
+      final normalized = greenVpnNormalizeBaseUrl(value);
+      if (normalized.isEmpty) return;
+      final uri = Uri.tryParse(normalized);
+      if (uri == null || uri.scheme.isEmpty || uri.host.isEmpty) return;
+      if (seen.add(normalized)) urls.add(normalized);
+    }
+
+    add(baseUrl);
+    for (final item in greenVpnApiBaseUrls()) {
+      add(item);
+    }
+    for (final item in fallbackBaseUrls) {
+      add(item);
+    }
+
+    return urls;
+  }
 
   HttpClient _client({bool direct = true}) {
     final client = HttpClient();
     if (direct) {
       client.findProxy = (_) => 'DIRECT';
     }
-    client.connectionTimeout = const Duration(seconds: 12);
+    client.connectionTimeout = const Duration(seconds: 8);
+    return client;
+  }
+
+  HttpClient _probeClient() {
+    final client = HttpClient();
+    client.findProxy = (_) => 'DIRECT';
+    client.connectionTimeout = const Duration(milliseconds: 1200);
     return client;
   }
 
   bool _isRetriableNetworkError(Object error) {
+    if (error is GreenVpnHttpStatusException) {
+      return error.isRetriable;
+    }
     return error is SocketException ||
         error is HttpException ||
         error is TimeoutException;
   }
 
+  bool _isApiBaseCoolingDown(String baseUrl) {
+    final until = _apiBaseCooldownUntil[baseUrl];
+    if (until == null) return false;
+    if (DateTime.now().isBefore(until)) return true;
+    _apiBaseCooldownUntil.remove(baseUrl);
+    return false;
+  }
+
+  void _markApiBaseFailure(
+    String baseUrl,
+    Object error, {
+    required bool retriable,
+  }) {
+    if (!retriable || _apiBaseUrls().length <= 1) return;
+    _apiBaseCooldownUntil[baseUrl] = DateTime.now().add(
+      _apiBaseFailureCooldown,
+    );
+  }
+
+  void _markApiBaseSuccess(String baseUrl) {
+    _apiBaseCooldownUntil.remove(baseUrl);
+    _lastSuccessfulApiBaseUrl = baseUrl;
+  }
+
+  String? _preferredApiBaseUrlForBearer(String? bearerToken) {
+    final token = (bearerToken ?? '').trim();
+    if (token.isEmpty) return null;
+    final remembered = _normalizeApiBaseUrl(
+      _sessionApiBaseByAccessToken[token],
+    );
+    if (remembered == null) return null;
+    return _apiBaseUrls().contains(remembered) ? remembered : null;
+  }
+
+  List<String> _orderedApiBaseUrlsForRetry({String? preferredBaseUrl}) {
+    final urls = _apiBaseUrls();
+    if (urls.length <= 1) return urls;
+
+    final ordered = <String>[];
+    final seen = <String>{};
+
+    void add(String value) {
+      if (seen.add(value)) ordered.add(value);
+    }
+
+    final preferred = _normalizeApiBaseUrl(preferredBaseUrl);
+    if (preferred != null && urls.contains(preferred)) {
+      add(preferred);
+    }
+
+    final lastGood = _lastSuccessfulApiBaseUrl;
+    if (lastGood != null &&
+        urls.contains(lastGood) &&
+        lastGood != preferred &&
+        !_isApiBaseCoolingDown(lastGood)) {
+      add(lastGood);
+    }
+
+    for (final url in urls) {
+      if (!_isApiBaseCoolingDown(url)) add(url);
+    }
+    for (final url in urls) {
+      add(url);
+    }
+
+    return ordered;
+  }
+
+  Future<String?> _quickHealthyApiBaseUrl(List<String> candidates) async {
+    final liveCandidates = candidates
+        .where((baseUrl) => !_isApiBaseCoolingDown(baseUrl))
+        .toList(growable: false);
+    if (liveCandidates.length <= 1) return null;
+
+    final completer = Completer<String?>();
+    var pending = liveCandidates.length;
+
+    Future<void> probe(String baseUrl) async {
+      final client = _probeClient();
+      try {
+        final req = await client.getUrl(_uFor(baseUrl, '/healthz'));
+        final res = await req.close().timeout(
+          const Duration(milliseconds: 1600),
+        );
+        await res.drain<void>().timeout(const Duration(milliseconds: 500));
+        if (res.statusCode >= 200 &&
+            res.statusCode < 300 &&
+            !completer.isCompleted) {
+          completer.complete(baseUrl);
+        }
+      } catch (_) {
+        // The normal HTTP retry path will produce the user-visible error.
+      } finally {
+        client.close(force: true);
+        pending -= 1;
+        if (pending <= 0 && !completer.isCompleted) {
+          completer.complete(null);
+        }
+      }
+    }
+
+    for (final baseUrl in liveCandidates) {
+      unawaited(probe(baseUrl));
+    }
+
+    return completer.future.timeout(
+      const Duration(milliseconds: 1800),
+      onTimeout: () => null,
+    );
+  }
+
   bool _isWindowsDevBackend() {
     if (kIsWeb || !Platform.isWindows) return false;
     try {
-      final uri = Uri.parse(baseUrl);
+      final uri = Uri.parse(_primaryBaseUrl());
       return uri.host == kIntelligentSmewHost;
     } catch (_) {
       return false;
@@ -2823,7 +3172,7 @@ class BlueVpnApi {
     Duration timeout = const Duration(milliseconds: 1200),
   }) async {
     try {
-      final uri = Uri.parse(baseUrl);
+      final uri = Uri.parse(_primaryBaseUrl());
       if (uri.host.isEmpty) return false;
       final port = uri.hasPort ? uri.port : (uri.scheme == 'https' ? 443 : 80);
       final socket = await Socket.connect(uri.host, port, timeout: timeout);
@@ -2899,7 +3248,7 @@ while True:
       return _cachedWslRelayUri;
     }
 
-    final primaryUri = Uri.parse(baseUrl);
+    final primaryUri = Uri.parse(_primaryBaseUrl());
     if (primaryUri.scheme != 'http' || primaryUri.host.isEmpty) return null;
 
     final relayUri = Uri.parse('http://127.0.0.1:$_wslRelayPort');
@@ -2974,9 +3323,11 @@ while True:
 
   Future<T> _withHttpRetry<T>(
     Future<T> Function(HttpClient client, bool direct, String resolvedBaseUrl)
-    action,
-  ) async {
+    action, {
+    String? preferredBaseUrl,
+  }) async {
     Object? lastError;
+    final normalizedPreferredBaseUrl = _normalizeApiBaseUrl(preferredBaseUrl);
 
     final preferredRelay = await _preferredRelayUriIfNeeded();
     if (preferredRelay != null) {
@@ -2991,17 +3342,45 @@ while True:
       }
     }
 
-    for (final direct in const [true, false]) {
-      final client = _client(direct: direct);
-      try {
-        return await action(client, direct, baseUrl);
-      } catch (e) {
-        lastError = e;
-        if (!_isRetriableNetworkError(e) || !direct) {
-          break;
+    final initialCandidates = _orderedApiBaseUrlsForRetry(
+      preferredBaseUrl: normalizedPreferredBaseUrl,
+    );
+    final preferredHealthyBase = normalizedPreferredBaseUrl == null
+        ? await _quickHealthyApiBaseUrl(initialCandidates)
+        : null;
+    final retryBases = <String>[
+      if (preferredHealthyBase != null) preferredHealthyBase,
+      ...initialCandidates,
+    ];
+    final seenRetryBases = <String>{};
+
+    for (final candidateBaseUrl in retryBases) {
+      if (!seenRetryBases.add(candidateBaseUrl)) continue;
+      for (final direct in const [true, false]) {
+        final client = _client(direct: direct);
+        try {
+          final result = await action(client, direct, candidateBaseUrl);
+          _markApiBaseSuccess(candidateBaseUrl);
+          return result;
+        } catch (e) {
+          lastError = e;
+          final retriable = _isRetriableNetworkError(e);
+          _markApiBaseFailure(candidateBaseUrl, e, retriable: retriable);
+          if (!retriable) {
+            if (normalizedPreferredBaseUrl != null) {
+              throw e;
+            }
+            break;
+          }
+          await _authLog(
+            'HTTP retry candidate failed base=$candidateBaseUrl route=${direct ? 'direct' : 'system'} error=$e',
+          );
+          if (_apiBaseUrls().length > 1) {
+            break;
+          }
+        } finally {
+          client.close(force: true);
         }
-      } finally {
-        client.close(force: true);
       }
     }
 
@@ -3036,7 +3415,9 @@ while True:
   }
 
   Future<String> _tcpPreflight(String path) async {
-    final uri = _u(path);
+    final urls = _orderedApiBaseUrlsForRetry();
+    final baseUrl = urls.isEmpty ? _primaryBaseUrl() : urls.first;
+    final uri = _uFor(baseUrl, path);
     try {
       final socket = await Socket.connect(
         uri.host,
@@ -3079,6 +3460,9 @@ while True:
       method: 'POST',
       path: '/api/v1/auth/email/code/start',
       payload: {'email': email},
+      onSuccessBaseUrl: (baseUrl) {
+        _pendingAuthApiBaseUrl = _normalizeApiBaseUrl(baseUrl);
+      },
     );
     if (!res.ok) return ApiResult.err(res.message);
     if (res.data is! Map) {
@@ -3095,14 +3479,18 @@ while True:
     String? platform,
     String? appVersion,
   }) async {
-    return _postSession('/api/v1/auth/email/code/verify', {
-      'email': email,
-      'code': code,
-      if (deviceUid != null) 'deviceUid': deviceUid,
-      if (deviceName != null) 'deviceName': deviceName,
-      if (platform != null) 'platform': platform,
-      if (appVersion != null) 'appVersion': appVersion,
-    });
+    return _postSession(
+      '/api/v1/auth/email/code/verify',
+      {
+        'email': email,
+        'code': code,
+        if (deviceUid != null) 'deviceUid': deviceUid,
+        if (deviceName != null) 'deviceName': deviceName,
+        if (platform != null) 'platform': platform,
+        if (appVersion != null) 'appVersion': appVersion,
+      },
+      preferredApiBaseUrl: _pendingAuthApiBaseUrl,
+    );
   }
 
   Future<ApiResult<Map<String, dynamic>>> startPhoneCodeAuth({
@@ -3112,6 +3500,9 @@ while True:
       method: 'POST',
       path: '/api/v1/auth/phone/login/start',
       payload: {'phone': phone},
+      onSuccessBaseUrl: (baseUrl) {
+        _pendingAuthApiBaseUrl = _normalizeApiBaseUrl(baseUrl);
+      },
     );
     if (!res.ok) return ApiResult.err(res.message);
     if (res.data is! Map) {
@@ -3128,14 +3519,18 @@ while True:
     String? platform,
     String? appVersion,
   }) async {
-    return _postSession('/api/v1/auth/phone/login/verify', {
-      'phone': phone,
-      'code': code,
-      if (deviceUid != null) 'deviceUid': deviceUid,
-      if (deviceName != null) 'deviceName': deviceName,
-      if (platform != null) 'platform': platform,
-      if (appVersion != null) 'appVersion': appVersion,
-    });
+    return _postSession(
+      '/api/v1/auth/phone/login/verify',
+      {
+        'phone': phone,
+        'code': code,
+        if (deviceUid != null) 'deviceUid': deviceUid,
+        if (deviceName != null) 'deviceName': deviceName,
+        if (platform != null) 'platform': platform,
+        if (appVersion != null) 'appVersion': appVersion,
+      },
+      preferredApiBaseUrl: _pendingAuthApiBaseUrl,
+    );
   }
 
   Future<ApiResult<Map<String, dynamic>>> startAuthChallenge({
@@ -3150,6 +3545,9 @@ while True:
         'method': method,
         if (phone != null) 'phone': phone,
         if (email != null) 'email': email,
+      },
+      onSuccessBaseUrl: (baseUrl) {
+        _pendingAuthApiBaseUrl = _normalizeApiBaseUrl(baseUrl);
       },
     );
     if (!res.ok) return ApiResult.err(res.message);
@@ -3169,16 +3567,20 @@ while True:
     String? platform,
     String? appVersion,
   }) async {
-    return _postSession('/api/v1/auth/challenge/verify', {
-      'method': method,
-      'code': code,
-      if (phone != null) 'phone': phone,
-      if (email != null) 'email': email,
-      if (deviceUid != null) 'deviceUid': deviceUid,
-      if (deviceName != null) 'deviceName': deviceName,
-      if (platform != null) 'platform': platform,
-      if (appVersion != null) 'appVersion': appVersion,
-    });
+    return _postSession(
+      '/api/v1/auth/challenge/verify',
+      {
+        'method': method,
+        'code': code,
+        if (phone != null) 'phone': phone,
+        if (email != null) 'email': email,
+        if (deviceUid != null) 'deviceUid': deviceUid,
+        if (deviceName != null) 'deviceName': deviceName,
+        if (platform != null) 'platform': platform,
+        if (appVersion != null) 'appVersion': appVersion,
+      },
+      preferredApiBaseUrl: _pendingAuthApiBaseUrl,
+    );
   }
 
   Future<ApiResult<Map<String, dynamic>>> fetchWindowsBootstrap() async {
@@ -3206,19 +3608,21 @@ while True:
         final uri = _uFor(resolvedBaseUrl, '/api/v1/subscription/me');
         final req = await client.getUrl(uri);
         req.headers.set('Authorization', 'Bearer $accessToken');
-        final res = await req.close().timeout(const Duration(seconds: 20));
+        final res = await req.close().timeout(const Duration(seconds: 8));
         final body = await utf8
             .decodeStream(res)
-            .timeout(const Duration(seconds: 10));
+            .timeout(const Duration(seconds: 5));
 
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          throw HttpException(
-            'Ошибка сервера (${res.statusCode}): $body',
+          throw GreenVpnHttpStatusException(
+            statusCode: res.statusCode,
+            body: body,
             uri: uri,
+            message: 'Ошибка сервера (${res.statusCode}): $body',
           );
         }
         return body;
-      });
+      }, preferredBaseUrl: _preferredApiBaseUrlForBearer(accessToken));
 
       {
         final jsonMap = Map<String, dynamic>.from(jsonDecode(body) as Map);
@@ -3619,18 +4023,20 @@ while True:
           }),
         );
 
-        final res = await req.close().timeout(const Duration(seconds: 20));
+        final res = await req.close().timeout(const Duration(seconds: 8));
         final body = await utf8
             .decodeStream(res)
-            .timeout(const Duration(seconds: 10));
+            .timeout(const Duration(seconds: 5));
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          throw HttpException(
-            'Ошибка bootstrap (${res.statusCode}): $body',
+          throw GreenVpnHttpStatusException(
+            statusCode: res.statusCode,
+            body: body,
             uri: uri,
+            message: 'Ошибка bootstrap (${res.statusCode}): $body',
           );
         }
         return body;
-      });
+      }, preferredBaseUrl: _preferredApiBaseUrlForBearer(accessToken));
 
       {
         final jsonMap = Map<String, dynamic>.from(jsonDecode(body) as Map);
@@ -3671,18 +4077,20 @@ while True:
         }
         req.write(jsonEncode(payload));
 
-        final res = await req.close().timeout(const Duration(seconds: 20));
+        final res = await req.close().timeout(const Duration(seconds: 12));
         final body = await utf8
             .decodeStream(res)
-            .timeout(const Duration(seconds: 10));
+            .timeout(const Duration(seconds: 6));
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          throw HttpException(
-            'Ошибка сервера (${res.statusCode}): $body',
+          throw GreenVpnHttpStatusException(
+            statusCode: res.statusCode,
+            body: body,
             uri: uri,
+            message: 'Ошибка сервера (${res.statusCode}): $body',
           );
         }
         return body;
-      });
+      }, preferredBaseUrl: _preferredApiBaseUrlForBearer(accessToken));
 
       {
         final trimmed = body.trim();
@@ -3747,13 +4155,15 @@ while True:
 
   Future<ApiResult<Session>> _postSession(
     String path,
-    Map<String, dynamic> payload,
-  ) async {
+    Map<String, dynamic> payload, {
+    String? preferredApiBaseUrl,
+  }) async {
     try {
       await _authLog(
         'POST ' + path + ' email=' + ((payload['email'] ?? '').toString()),
       );
-      await _authLog(await _tcpPreflight(path));
+      unawaited(_tcpPreflight(path).then(_authLog));
+      String? sessionApiBaseUrl;
       final body = await _withHttpRetry<String>((
         client,
         direct,
@@ -3764,10 +4174,10 @@ while True:
         req.headers.contentType = ContentType.json;
         req.write(jsonEncode(payload));
 
-        final res = await req.close().timeout(const Duration(seconds: 20));
+        final res = await req.close().timeout(const Duration(seconds: 8));
         final body = await utf8
             .decodeStream(res)
-            .timeout(const Duration(seconds: 10));
+            .timeout(const Duration(seconds: 5));
         await _authLog(
           'HTTP ' +
               path +
@@ -3784,22 +4194,33 @@ while True:
             statusCode: res.statusCode,
             body: body,
           );
-          throw HttpException(
-            friendly ?? 'Ошибка сервера (${res.statusCode}): $body',
+          throw GreenVpnHttpStatusException(
+            statusCode: res.statusCode,
+            body: body,
             uri: uri,
+            message: friendly ?? 'Ошибка сервера (${res.statusCode}): $body',
           );
         }
+        sessionApiBaseUrl = _normalizeApiBaseUrl(resolvedBaseUrl);
         return body;
-      });
+      }, preferredBaseUrl: preferredApiBaseUrl);
 
       {
         final jsonMap = jsonDecode(body) as Map<String, dynamic>;
         final token = (jsonMap['accessToken'] ?? '').toString();
         final email = (jsonMap['email'] ?? payload['email'] ?? '').toString();
 
-        if (token.isEmpty)
+        if (token.isEmpty) {
           return const ApiResult.err('Сервер не вернул accessToken.');
-        return ApiResult.ok(Session(accessToken: token, email: email));
+        }
+        final session = Session(
+          accessToken: token,
+          email: email,
+          apiBaseUrl: sessionApiBaseUrl ?? _primaryBaseUrl(),
+        );
+        rememberSession(session);
+        _pendingAuthApiBaseUrl = null;
+        return ApiResult.ok(session);
       }
     } catch (e) {
       await _authLog('HTTP ' + path + ' exception=' + e.toString());
@@ -3864,6 +4285,8 @@ while True:
     String? bearerToken,
     String? adminToken,
     Map<String, dynamic>? payload,
+    String? preferredBaseUrl,
+    void Function(String baseUrl)? onSuccessBaseUrl,
   }) async {
     try {
       await _authLog('API $method $path start');
@@ -3895,19 +4318,27 @@ while True:
           req.write(jsonEncode(payload));
         }
 
-        final res = await req.close();
-        final body = await utf8.decodeStream(res);
+        final res = await req.close().timeout(const Duration(seconds: 8));
+        final body = await utf8
+            .decodeStream(res)
+            .timeout(const Duration(seconds: 5));
         await _authLog(
           'API $method $path status=${res.statusCode} route=${direct ? 'direct' : 'system'} base=$resolvedBaseUrl',
         );
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          throw HttpException(
-            'Ошибка сервера (${res.statusCode}): $body',
+          throw GreenVpnHttpStatusException(
+            statusCode: res.statusCode,
+            body: body,
             uri: uri,
+            message: 'Ошибка сервера (${res.statusCode}): $body',
           );
         }
+        onSuccessBaseUrl?.call(resolvedBaseUrl);
         return body;
-      });
+      },
+      preferredBaseUrl:
+          preferredBaseUrl ?? _preferredApiBaseUrlForBearer(bearerToken),
+    );
 
       if (body.trim().isEmpty) {
         return const ApiResult.ok(<String, dynamic>{});
@@ -4128,9 +4559,12 @@ class ConfigStore {
   static Future<void> _configIoBarrier = Future<void>.value();
   static const _mobileManagedConfigKey = 'greenvpn_mobile_managed_config_v1';
   static const _mobileBaseConfigKey = 'greenvpn_mobile_base_config_v1';
+  static const _mobileServerBaseConfigPrefix =
+      'greenvpn_mobile_base_config_server_v1_';
   static const _mobileConfigChannel = MethodChannel('green_vpn/android_vpn');
   static String? _mobileManagedConfig;
   static String? _mobileBaseConfig;
+  static final Map<String, String?> _mobileServerBaseConfigs = {};
 
   bool get _usesMobileSecureConfig =>
       !kIsWeb && !Platform.isWindows && (Platform.isAndroid || Platform.isIOS);
@@ -4193,6 +4627,57 @@ class ConfigStore {
     }
   }
 
+  String _safeServerCacheKey(String serverId) {
+    final safe = serverId.trim().toLowerCase().replaceAll(
+      RegExp(r'[^a-z0-9_.-]+'),
+      '_',
+    );
+    return safe.isEmpty ? 'auto' : safe;
+  }
+
+  String _mobileServerBaseConfigKey(String serverId) {
+    return '$_mobileServerBaseConfigPrefix${_safeServerCacheKey(serverId)}';
+  }
+
+  Future<String?> _readMobileServerBaseConfig(String serverId) async {
+    final key = _mobileServerBaseConfigKey(serverId);
+    if (!Platform.isAndroid) {
+      return _mobileServerBaseConfigs[key];
+    }
+    try {
+      final value = await _mobileConfigChannel.invokeMethod<String>(
+        'secureRead',
+        {'key': key},
+      );
+      _mobileServerBaseConfigs[key] = value;
+      return value;
+    } catch (e) {
+      await appendBlueVpnClientLog(
+        'mobile server config secure read failed server=$serverId error=$e',
+      );
+      return _mobileServerBaseConfigs[key];
+    }
+  }
+
+  Future<void> _writeMobileServerBaseConfig(
+    String serverId,
+    String content,
+  ) async {
+    final key = _mobileServerBaseConfigKey(serverId);
+    _mobileServerBaseConfigs[key] = content;
+    if (!Platform.isAndroid) return;
+    try {
+      await _mobileConfigChannel.invokeMethod<void>('secureWrite', {
+        'key': key,
+        'value': content,
+      });
+    } catch (e) {
+      await appendBlueVpnClientLog(
+        'mobile server config secure write failed server=$serverId error=$e',
+      );
+    }
+  }
+
   Future<T> _runConfigIo<T>(Future<T> Function() action) {
     final completer = Completer<T>();
     _configIoBarrier = _configIoBarrier.then((_) async {
@@ -4219,6 +4704,15 @@ class ConfigStore {
     if (_usesMobileSecureConfig) return 'greenvpn://mobile/base.conf';
     if (!Platform.isWindows) return '';
     return r'C:\ProgramData\BlueVPN\BlueVPNDev1.base.conf';
+  }
+
+  String serverBaseConfigPath(String serverId) {
+    if (kIsWeb) return '';
+    if (_usesMobileSecureConfig) {
+      return 'greenvpn://mobile/server/${_safeServerCacheKey(serverId)}.conf';
+    }
+    if (!Platform.isWindows) return '';
+    return 'C:\\ProgramData\\BlueVPN\\server-cache\\${_safeServerCacheKey(serverId)}.base.conf';
   }
 
   Future<bool> hasManagedConfig() async {
@@ -4367,6 +4861,43 @@ class ConfigStore {
     });
   }
 
+  Future<void> writeBaseConfigForServer(String serverId, String content) async {
+    final key = _safeServerCacheKey(serverId);
+    if (key == 'auto' || content.trim().isEmpty) return;
+    await _runConfigIo(() async {
+      if (kIsWeb) return;
+      if (_usesMobileSecureConfig) {
+        await _writeMobileServerBaseConfig(key, content);
+        return;
+      }
+      final p = serverBaseConfigPath(key);
+      if (p.isEmpty) return;
+      final f = File(p);
+      if (!f.parent.existsSync()) {
+        f.parent.createSync(recursive: true);
+      }
+      await WindowsLocalSecurity.prepareSharedConfigDirectory(f.parent.path);
+      if (f.existsSync()) {
+        await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
+      }
+      try {
+        await f.writeAsString(content);
+      } on FileSystemException {
+        await appendBlueVpnClientLog(
+          'config write retry path=${f.path} kind=server-base server=$key',
+        );
+        await WindowsLocalSecurity.repairBlueVpnLocalAcls();
+        await WindowsLocalSecurity.prepareSharedConfigDirectory(f.parent.path);
+        if (f.existsSync()) {
+          await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
+        }
+        await f.writeAsString(content);
+      }
+      await WindowsLocalSecurity.prepareSharedConfigDirectory(f.parent.path);
+      await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
+    });
+  }
+
   Future<String?> readBaseConfig() async {
     return _runConfigIo(() async {
       if (kIsWeb) return null;
@@ -4396,6 +4927,34 @@ class ConfigStore {
           return await f.readAsString();
         }
         return _readManagedConfigUnlocked();
+      }
+    });
+  }
+
+  Future<String?> readBaseConfigForServer(String serverId) async {
+    final key = _safeServerCacheKey(serverId);
+    if (key == 'auto') return null;
+    return _runConfigIo(() async {
+      if (kIsWeb) return null;
+      if (_usesMobileSecureConfig) {
+        return _readMobileServerBaseConfig(key);
+      }
+      final p = serverBaseConfigPath(key);
+      if (p.isEmpty) return null;
+      final f = File(p);
+      if (!f.existsSync()) return null;
+      await WindowsLocalSecurity.prepareSharedConfigDirectory(f.parent.path);
+      await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
+      try {
+        return await f.readAsString();
+      } on FileSystemException {
+        await appendBlueVpnClientLog(
+          'config read retry path=${f.path} kind=server-base server=$key',
+        );
+        await WindowsLocalSecurity.repairBlueVpnLocalAcls();
+        await WindowsLocalSecurity.prepareSharedConfigDirectory(f.parent.path);
+        await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
+        return f.existsSync() ? await f.readAsString() : null;
       }
     });
   }
@@ -4811,12 +5370,7 @@ class _AuthPageState extends State<AuthPage>
         return;
       }
 
-      await _completeAuth(
-        res.data!,
-        progressText: phone
-            ? 'Телефон подтверждён. Готовим VPN для этого устройства...'
-            : 'Email подтверждён. Готовим VPN для этого устройства...',
-      );
+      await _completeAuth(res.data!);
     } catch (e, st) {
       await _authLog('challenge verify exception=$e stack=$st');
       final text = authUserMessage(e, fallback: 'Ошибка входа.');
@@ -4877,12 +5431,7 @@ class _AuthPageState extends State<AuthPage>
         return;
       }
 
-      await _completeAuth(
-        res.data!,
-        progressText: isRegister
-            ? 'Аккаунт создан. Готовим VPN для этого устройства...'
-            : 'Готовим VPN для этого устройства...',
-      );
+      await _completeAuth(res.data!);
     } catch (e, st) {
       await _authLog('legacy auth exception=$e stack=$st');
       final text = authUserMessage(e, fallback: 'Ошибка входа.');
@@ -4893,24 +5442,8 @@ class _AuthPageState extends State<AuthPage>
     }
   }
 
-  Future<void> _completeAuth(
-    Session session, {
-    required String progressText,
-  }) async {
-    _setAuthStatus(progressText);
-    final warmup = await AuthProvisioningService(
-      api: _api,
-      cfg: _cfg,
-      deviceStore: _deviceStore,
-    ).warmup(session);
-    await _authLog('warmup ok=${warmup.ok} msg=${warmup.message ?? ''}');
-    if (!warmup.ok && mounted) {
-      _toast(
-        'Вход выполнен, но серверный VPN-конфиг пока не прогрелся. '
-        'Продолжим вход и дотянем конфиг на главном экране.',
-      );
-    }
-
+  Future<void> _completeAuth(Session session) async {
+    await _authLog('auth config warmup deferred until home screen');
     _setAuthStatus('Открываем Green VPN...');
     try {
       await widget.onAuthSuccess(session);
@@ -5154,8 +5687,9 @@ class _AuthPageState extends State<AuthPage>
                             const SizedBox(height: 12),
                             if (wireGuardMissing) ...[
                               _WireGuardSetupCard(
-                                title: 'Нужен WireGuard',
-                                subtitle: wireGuardState.subtitle,
+                                title: 'Нужен системный компонент',
+                                subtitle:
+                                    'Green VPN установит компонент для подключения.',
                                 busy: _wireGuardBusy,
                                 onInstall: _installWireGuard,
                                 onRefresh: _refreshWireGuardState,
@@ -5273,11 +5807,9 @@ class ServerLocation {
     final scoreRaw = json['healthScore'];
     final country = (json['country'] ?? '').toString();
     final city = (json['city'] ?? '').toString();
-    final provider = (json['provider'] ?? '').toString();
     final defaultSubtitle = [
       if (city.isNotEmpty) city,
       if (country.isNotEmpty) country,
-      if (provider.isNotEmpty) provider,
     ].join(' • ');
     return ServerLocation(
       id: (json['id'] ?? '').toString(),
@@ -5301,6 +5833,39 @@ class ServerLocation {
   }
 }
 
+String greenVpnPublicServerTitle(ServerLocation server) {
+  if (server.isAuto) return server.title;
+  var text = server.title.trim();
+  text = text
+      .replaceAll(RegExp(r'\bRU\s*VDS\b', caseSensitive: false), '')
+      .replaceAll(RegExp(r'\bRUVDS\b', caseSensitive: false), '')
+      .replaceAll(RegExp(r'\bTimeWeb\b', caseSensitive: false), '')
+      .replaceAll(RegExp(r'\bWireGuard\b', caseSensitive: false), '')
+      .replaceAll(RegExp(r'\bwireguard_udp\b', caseSensitive: false), '')
+      .replaceAll(RegExp(r'\bendpoint\b', caseSensitive: false), '')
+      .replaceAll(RegExp(r'\bhidden\s+test\b', caseSensitive: false), '')
+      .replaceAll(RegExp(r'\bVPN[-\s]*node\b', caseSensitive: false), '')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .replaceAll(RegExp(r'\s+#'), ' #')
+      .trim();
+  text = text.replaceAll(RegExp(r'^[\s\-•]+|[\s\-•]+$'), '').trim();
+  if (text.isEmpty || text.toLowerCase() == 'green vpn') return 'Сервер';
+  return text;
+}
+
+String greenVpnPublicServerSubtitle(
+  ServerLocation server, {
+  bool includeUnavailable = false,
+}) {
+  if (server.isAuto) return 'Автовыбор';
+  if (includeUnavailable && !server.isCurrentClientReady) {
+    return 'Недоступен';
+  }
+  final pingMs = server.pingMs;
+  if (pingMs == null) return '';
+  return '$pingMs ms';
+}
+
 class ProvisionedConfigResult {
   final bool ok;
   final String? message;
@@ -5309,6 +5874,22 @@ class ProvisionedConfigResult {
   const ProvisionedConfigResult.ok(this.server) : ok = true, message = null;
 
   const ProvisionedConfigResult.err(this.message) : ok = false, server = null;
+}
+
+class PostConnectProbeResult {
+  final bool ok;
+  final String target;
+  final int? statusCode;
+  final int latencyMs;
+  final String? error;
+
+  const PostConnectProbeResult({
+    required this.ok,
+    required this.target,
+    this.statusCode,
+    required this.latencyMs,
+    this.error,
+  });
 }
 
 enum SocialApp {
@@ -5383,11 +5964,124 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     SocialApp.tiktok: ['23.192.0.0/11', '23.32.0.0/11'],
   };
 
+  static const Map<SocialApp, List<String>> _androidSocialPackageNames = {
+    SocialApp.telegram: [
+      'org.telegram.messenger',
+      'org.telegram.messenger.web',
+      'org.thunderdog.challegram',
+    ],
+    SocialApp.instagram: ['com.instagram.android'],
+    SocialApp.youtube: ['com.google.android.youtube'],
+    SocialApp.discord: ['com.discord'],
+    SocialApp.tiktok: ['com.zhiliaoapp.musically'],
+  };
+
+  static const Map<String, List<String>> _serverEndpointAliases = {
+    'intelligent_smew': ['37.220.85.211', 'nl1.vpn.greenvpn.pro'],
+    'tw-7879598-nl1': ['5.129.216.42', 'nl2.vpn.greenvpn.pro'],
+    'ruvds-2584554-ld8': ['88.218.250.86'],
+  };
+
+  static List<ServerLocation> _fallbackServerCatalogForCurrentChannel() {
+    final list = <ServerLocation>[
+      const ServerLocation(
+        id: 'auto',
+        title: 'Авто',
+        subtitle: 'Самый здоровый VPN-узел из локального списка',
+        pingMs: null,
+        isAuto: true,
+        status: 'healthy',
+        available: true,
+        clientConfigReady: true,
+      ),
+      const ServerLocation(
+        id: 'intelligent_smew',
+        title: 'Netherlands #1',
+        subtitle: 'Netherlands',
+        endpointHost: 'nl1.vpn.greenvpn.pro',
+        pingMs: 44,
+        country: 'NL',
+        city: 'Amsterdam',
+        status: 'healthy',
+        available: true,
+        healthScore: 100,
+        clientConfigReady: true,
+      ),
+      const ServerLocation(
+        id: 'tw-7879598-nl1',
+        title: 'Netherlands #2',
+        subtitle: 'Netherlands',
+        endpointHost: 'nl2.vpn.greenvpn.pro',
+        pingMs: 58,
+        country: 'NL',
+        city: 'Amsterdam',
+        status: 'healthy',
+        available: true,
+        healthScore: 100,
+        clientConfigReady: true,
+      ),
+      const ServerLocation(
+        id: 'ruvds-2584554-ld8',
+        title: 'London #1',
+        subtitle: 'United Kingdom',
+        endpointHost: '88.218.250.86',
+        pingMs: 72,
+        country: 'GB',
+        city: 'London',
+        status: 'healthy',
+        available: true,
+        healthScore: 100,
+        clientConfigReady: true,
+      ),
+    ];
+
+    return list;
+  }
+
+  static List<ServerLocation> _mergeServerCatalogs(
+    List<ServerLocation> primary,
+    List<ServerLocation> secondary,
+  ) {
+    final merged = <ServerLocation>[];
+    final seen = <String>{};
+
+    void add(ServerLocation server) {
+      final id = server.id.trim();
+      if (id.isEmpty || !seen.add(id)) return;
+      merged.add(server);
+    }
+
+    for (final server in primary) {
+      add(server);
+    }
+    for (final server in secondary) {
+      add(server);
+    }
+
+    if (!seen.contains('auto')) {
+      merged.insert(
+        0,
+        const ServerLocation(
+          id: 'auto',
+          title: 'Авто',
+          subtitle: 'Самый здоровый VPN-узел из локального списка',
+          isAuto: true,
+          status: 'healthy',
+          available: true,
+          clientConfigReady: true,
+        ),
+      );
+    }
+
+    return merged;
+  }
+
   int _index = 0;
 
   // VPN state
   bool vpnEnabled = false;
   bool vpnBusy = false;
+  bool _androidExternalVpnActive = false;
 
   // "Только для соцсетей"
   bool socialOnlyEnabled = false;
@@ -5397,33 +6091,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   };
 
   // Сервер
-  List<ServerLocation> servers = const [
-    ServerLocation(
-      id: 'auto',
-      title: 'Авто',
-      subtitle: 'Безопасный dev-сервер Intelligent Smew',
-      pingMs: null,
-      isAuto: true,
-    ),
-    ServerLocation(
-      id: 'intelligent_smew',
-      title: 'Intelligent Smew',
-      subtitle: 'Сервер разработки, 37.220.85.211',
-      endpointHost: kIntelligentSmewHost,
-      pingMs: 44,
-      country: 'NL',
-      city: 'Amsterdam',
-      status: 'unavailable',
-      available: false,
-      healthScore: 0,
-      clientConfigReady: false,
-    ),
-  ];
+  List<ServerLocation> servers = _fallbackServerCatalogForCurrentChannel();
 
   ServerLocation selectedServer = const ServerLocation(
     id: 'auto',
     title: 'Авто',
-    subtitle: 'Безопасный dev-сервер Intelligent Smew',
+    subtitle: 'Самый здоровый VPN-узел из локального списка',
     pingMs: null,
     isAuto: true,
   );
@@ -5449,6 +6122,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   Timer? _tariffDebounce;
   Timer? _vpnTapCooldownTimer;
   Timer? _pendingBillingPollTimer;
+  Timer? _freeAdSessionTimer;
   WireGuardInstallState? _wireGuardState;
   bool _wireGuardBusy = false;
   bool _tariffBusy = false;
@@ -5482,6 +6156,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   String? _phoneStatusMessage;
   bool _updateCheckBusy = false;
   bool _forcedUpdateRouteOpen = false;
+  String? _updatePromptVersionInFlight;
+  bool _sessionInvalidationInProgress = false;
+  static const String _freeAdSessionExpiryPrefsKey =
+      'greenvpn.free_ad_session.expires_at';
 
   void goToTab(int i) => setState(() => _index = i);
 
@@ -5500,6 +6178,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _loadPrefsAndApply();
 
     _syncVpnStatus();
+    unawaited(_restoreFreeAdSessionTimer());
     _ensureProvisionedConfigSilently();
     _syncPlanSilently();
     _syncTariffFromServerSilently();
@@ -5518,42 +6197,147 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(_handleAppResumed());
+      unawaited(_restoreFreeAdSessionTimer());
       unawaited(_checkRequiredUpdateSilently());
     }
   }
 
   Future<void> _handleAppResumed() async {
-    await _syncVpnStatus();
-    if (kIsWeb || !Platform.isAndroid || vpnBusy) return;
+    if (kIsWeb || !Platform.isAndroid) {
+      await _syncVpnStatus();
+      return;
+    }
+    if (vpnBusy) return;
+    final wasEnabledBeforeResume = vpnEnabled;
     try {
       final status = await WireGuardAndroidBackend.statusSnapshot(
         tunnelName: kTunnelName,
       );
-      final connected =
-          status['connected'] == true ||
-          (status['state'] ?? '').toString().toLowerCase() == 'up';
+      final connected = _androidStatusLooksLikeOwnTunnel(status);
+      final systemVpnActive = status['systemVpnActive'] == true;
+      final externalVpnActive = _androidStatusLooksLikeExternalVpn(status);
       await appendBlueVpnClientLog(
-        "android resume vpn status connected=$connected state=${status['state'] ?? ""}",
+        'android resume vpn status connected=$connected systemVpnActive=$systemVpnActive externalVpnActive=$externalVpnActive wasEnabled=$wasEnabledBeforeResume state=${status['state'] ?? ""} status=$status',
       );
       if (connected) {
-        if (mounted) setState(() => vpnEnabled = true);
+        if (mounted) {
+          setState(() {
+            vpnEnabled = true;
+            _androidExternalVpnActive = false;
+          });
+        }
         return;
       }
-      final off = await _vpnBackend.disconnect();
-      await appendBlueVpnClientLog(
-        'android resume stale vpn disconnect ok=${off.ok} message=${off.message ?? ""}',
-      );
-      await Future<void>.delayed(const Duration(milliseconds: 700));
+
+      if (externalVpnActive || systemVpnActive) {
+        if (mounted) {
+          setState(() {
+            vpnEnabled = false;
+            _androidExternalVpnActive = true;
+          });
+        }
+        await appendBlueVpnClientLog(
+          'android resume detected external system VPN without confirmed own tunnel',
+        );
+        return;
+      }
+
       await _syncVpnStatus();
-    } catch (e) {
       await appendBlueVpnClientLog(
-        'android resume stale vpn cleanup failed=$e',
+        'android resume sync done vpnEnabled=$vpnEnabled',
       );
+    } catch (e) {
+      await appendBlueVpnClientLog('android resume status sync failed=$e');
+      await _syncVpnStatus();
     }
   }
 
   void _toast(BuildContext context, String text) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  String _safeSessionInvalidationReason(String? message) {
+    final raw = (message ?? '').replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (raw.isEmpty) return 'empty';
+    if (raw.length <= 180) return raw;
+    return '${raw.substring(0, 180)}...';
+  }
+
+  Future<void> _handleInvalidSession({
+    required String source,
+    String? message,
+    bool logout = true,
+    bool disconnectVpn = false,
+    bool clearManagedConfig = false,
+    bool showToast = true,
+  }) async {
+    if (_sessionInvalidationInProgress) return;
+    _sessionInvalidationInProgress = true;
+    try {
+      final reason = _safeSessionInvalidationReason(message);
+      await appendBlueVpnClientLog(
+        'invalid session detected source=$source logout=$logout disconnectVpn=$disconnectVpn reason=$reason',
+      );
+
+      _prefsDebounce?.cancel();
+      _tariffDebounce?.cancel();
+      _vpnTapCooldownTimer?.cancel();
+      _stopPendingBillingPolling();
+      _cancelFreeAdSessionTimer();
+
+      try {
+        await _pendingVpnActionStore.clear();
+      } catch (_) {}
+      if (clearManagedConfig) {
+        try {
+          await _cfg.deleteManagedConfig();
+        } catch (_) {}
+      }
+      if (disconnectVpn) {
+        try {
+          await _vpnBackend.disconnect().timeout(const Duration(seconds: 8));
+        } catch (e) {
+          await appendBlueVpnClientLog(
+            'invalid session tunnel cleanup failed source=$source error=$e',
+          );
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          if (disconnectVpn) {
+            vpnEnabled = false;
+            _androidExternalVpnActive = false;
+          }
+          vpnBusy = false;
+          _vpnBusyStage = null;
+          _vpnBusyHint = null;
+        });
+        if (showToast) _toast(context, 'Сессия истекла. Войди снова.');
+      }
+
+      if (logout) {
+        await widget.onLogout();
+      } else {
+        await _syncVpnStatus();
+      }
+    } finally {
+      _sessionInvalidationInProgress = false;
+    }
+  }
+
+  Future<void> _noteInvalidSession({
+    required String source,
+    String? message,
+    bool showToast = false,
+  }) async {
+    final reason = _safeSessionInvalidationReason(message);
+    await appendBlueVpnClientLog(
+      'invalid session ignored source=$source reason=$reason',
+    );
+    if (showToast && mounted) {
+      _toast(context, 'Не удалось обновить аккаунт. VPN продолжает работать.');
+    }
   }
 
   Future<void> _refreshWireGuardState() async {
@@ -5588,6 +6372,20 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         accessToken: widget.session.accessToken,
       );
       if (!mounted) return;
+      if (greenVpnIsInvalidSessionMessage(res.message)) {
+        if (!showToast) {
+          await _noteInvalidSession(
+            source: 'email_status',
+            message: res.message,
+          );
+          return;
+        }
+        await _handleInvalidSession(
+          source: 'email_status',
+          message: res.message,
+        );
+        return;
+      }
       if (!res.ok || res.data == null) {
         final text = res.message ?? 'Не удалось проверить статус почты.';
         setState(() => _emailStatusMessage = text);
@@ -5622,6 +6420,13 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         accessToken: widget.session.accessToken,
       );
       if (!mounted) return;
+      if (greenVpnIsInvalidSessionMessage(res.message)) {
+        await _handleInvalidSession(
+          source: 'email_confirmation_resend',
+          message: res.message,
+        );
+        return;
+      }
       if (!res.ok || res.data == null) {
         final text = res.message ?? 'Не удалось отправить письмо.';
         setState(() => _emailStatusMessage = text);
@@ -5656,6 +6461,20 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         accessToken: widget.session.accessToken,
       );
       if (!mounted) return;
+      if (greenVpnIsInvalidSessionMessage(res.message)) {
+        if (!showToast) {
+          await _noteInvalidSession(
+            source: 'phone_status',
+            message: res.message,
+          );
+          return;
+        }
+        await _handleInvalidSession(
+          source: 'phone_status',
+          message: res.message,
+        );
+        return;
+      }
       if (!res.ok || res.data == null) {
         final text = res.message ?? 'Не удалось проверить статус телефона.';
         setState(() => _phoneStatusMessage = text);
@@ -5690,6 +6509,13 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         phone: phone,
       );
       if (!mounted) return null;
+      if (greenVpnIsInvalidSessionMessage(res.message)) {
+        await _handleInvalidSession(
+          source: 'phone_confirmation_start',
+          message: res.message,
+        );
+        return null;
+      }
       if (!res.ok || res.data == null) {
         final text = authUserMessage(
           res.message ?? 'Не удалось отправить SMS.',
@@ -5735,6 +6561,13 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         code: code,
       );
       if (!mounted) return false;
+      if (greenVpnIsInvalidSessionMessage(res.message)) {
+        await _handleInvalidSession(
+          source: 'phone_confirmation_verify',
+          message: res.message,
+        );
+        return false;
+      }
       if (!res.ok || res.data == null || res.data!['ok'] != true) {
         final status = (res.data?['status'] ?? '').toString();
         final text = status == 'expired'
@@ -6085,6 +6918,13 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       final res = await _api.fetchSubscriptionProfile(
         accessToken: widget.session.accessToken,
       );
+      if (greenVpnIsInvalidSessionMessage(res.message)) {
+        await _noteInvalidSession(
+          source: 'subscription_profile',
+          message: res.message,
+        );
+        return;
+      }
       if (!res.ok || res.data == null) return;
 
       final plan = (res.data!['planName'] ?? '').toString().trim();
@@ -6450,8 +7290,48 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     return normalizeProvisionedEndpoint(rawConfig);
   }
 
+  Set<String> _knownEndpointHostsForServer(ServerLocation server) {
+    final hosts = <String>{};
+
+    void addHost(String? host) {
+      final value = (host ?? '').trim().toLowerCase();
+      if (value.isNotEmpty) hosts.add(value);
+    }
+
+    addHost(server.endpointHost);
+    for (final alias in _serverEndpointAliases[server.id] ?? const <String>[]) {
+      addHost(alias);
+    }
+    return hosts;
+  }
+
+  Set<String> _knownEndpointHostsForAllServers() {
+    final hosts = <String>{};
+    for (final server in servers) {
+      if (server.isAuto) continue;
+      hosts.addAll(_knownEndpointHostsForServer(server));
+    }
+    for (final aliases in _serverEndpointAliases.values) {
+      for (final alias in aliases) {
+        final value = alias.trim().toLowerCase();
+        if (value.isNotEmpty) hosts.add(value);
+      }
+    }
+    hosts.add(kIntelligentSmewHost);
+    return hosts;
+  }
+
   bool _configLooksLikeSupportedLocalServer(String rawConfig) {
-    return _configLooksLikeDedicatedDev1(rawConfig);
+    final endpointHost = _endpointHostFromConfig(rawConfig);
+    if (endpointHost == null || endpointHost.isEmpty) return false;
+
+    if (rawConfig.contains('engage.cloudflareclient.com')) return false;
+    if (rawConfig.contains('\n    S1 =') ||
+        rawConfig.contains('\r\n    S1 =')) {
+      return false;
+    }
+
+    return _knownEndpointHostsForAllServers().contains(endpointHost);
   }
 
   String? _expectedEndpointHostForServer(ServerLocation server) {
@@ -6465,16 +7345,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
     final expectedHost = _expectedEndpointHostForServer(server);
     if (expectedHost == null) {
-      final knownHosts = servers
-          .where((s) => !s.isAuto && s.endpointHost != null)
-          .map((s) => s.endpointHost!.trim().toLowerCase())
-          .where((host) => host.isNotEmpty)
-          .toSet();
-      knownHosts.add(kIntelligentSmewHost);
-      return knownHosts.contains(endpointHost);
+      return _knownEndpointHostsForAllServers().contains(endpointHost);
     }
 
-    return endpointHost == expectedHost;
+    final expectedHosts = _knownEndpointHostsForServer(server);
+    expectedHosts.add(expectedHost.trim().toLowerCase());
+    return expectedHosts.contains(endpointHost);
   }
 
   List<String> _preferredLocalConfigCandidates() {
@@ -6603,7 +7479,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         _configLooksLikeSupportedLocalServer(normalizedBase) &&
         _configMatchesServer(effectiveServer, normalizedBase)) {
       if (normalizedBase != base) {
-        await _writeProvisionedConfig(normalizedBase);
+        await _writeProvisionedConfig(normalizedBase, server: effectiveServer);
       }
       return true;
     }
@@ -6613,7 +7489,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     );
     if (preferred == null || preferred.content.trim().isEmpty) return false;
 
-    await _writeProvisionedConfig(preferred.content);
+    await _writeProvisionedConfig(preferred.content, server: effectiveServer);
 
     if (showToast && mounted) {
       _toast(context, 'BlueVPNDev1 конфиг восстановлен из ${preferred.path}');
@@ -6644,16 +7520,92 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     return replaceAllowedIpsInConfig(configText, allowedIps);
   }
 
+  List<String> _resolveAndroidSocialPackageNames(Set<SocialApp> apps) {
+    final out = <String>{};
+    for (final app in apps) {
+      final packages = _androidSocialPackageNames[app];
+      if (packages != null) {
+        out.addAll(packages);
+      }
+    }
+    if (out.isEmpty) {
+      out.addAll(_androidSocialPackageNames[SocialApp.telegram] ?? const []);
+    }
+    final list = out.toList()..sort();
+    return list;
+  }
+
+  String _removeWireGuardInterfaceField(String configText, String fieldName) {
+    final escaped = RegExp.escape(fieldName);
+    return configText.replaceAll(
+      RegExp(
+        r'^\s*' + escaped + r'\s*=.*(?:\r?\n)?',
+        multiLine: true,
+        caseSensitive: false,
+      ),
+      '',
+    );
+  }
+
+  String _setWireGuardInterfaceCsvField(
+    String configText,
+    String fieldName,
+    List<String> values,
+  ) {
+    final cleaned = _removeWireGuardInterfaceField(configText, fieldName);
+    if (values.isEmpty) return cleaned;
+
+    final lines = cleaned.split('\n');
+    final interfaceIndex = lines.indexWhere(
+      (line) => line.trim().toLowerCase() == '[interface]',
+    );
+    final fieldLine = '$fieldName = ${values.join(', ')}';
+    if (interfaceIndex == -1) {
+      return '$fieldLine\n$cleaned';
+    }
+    lines.insert(interfaceIndex + 1, fieldLine);
+    return lines.join('\n');
+  }
+
+  String _buildAndroidSocialOnlyConfig(String baseConfig) {
+    final packageNames = _resolveAndroidSocialPackageNames(socialOnlyApps);
+    final fullTunnelConfig = preserveFullTunnelAllowedIps(baseConfig);
+    final withoutExcluded = _removeWireGuardInterfaceField(
+      fullTunnelConfig,
+      'ExcludedApplications',
+    );
+    return _setWireGuardInterfaceCsvField(
+      withoutExcluded,
+      'IncludedApplications',
+      packageNames,
+    );
+  }
+
   String _buildManagedConfigFromBase(String baseConfig) {
     if (!socialOnlyEnabled) {
-      return preserveFullTunnelAllowedIps(baseConfig);
+      final fullTunnel = preserveFullTunnelAllowedIps(baseConfig);
+      final withoutIncluded = _removeWireGuardInterfaceField(
+        fullTunnel,
+        'IncludedApplications',
+      );
+      return _removeWireGuardInterfaceField(
+        withoutIncluded,
+        'ExcludedApplications',
+      );
+    }
+
+    if (!kIsWeb && Platform.isAndroid) {
+      return _buildAndroidSocialOnlyConfig(baseConfig);
     }
 
     final allowedIps = _resolveSocialAllowedIps(socialOnlyApps);
     return _replaceAllowedIps(baseConfig, allowedIps);
   }
 
-  Future<void> _writeProvisionedConfig(String rawConfig) async {
+  Future<void> _writeProvisionedConfig(
+    String rawConfig, {
+    ServerLocation? server,
+  }) async {
     await _cfg.writeManagedConfig(_buildManagedConfigFromBase(rawConfig));
     try {
       await _cfg.writeBaseConfig(rawConfig);
@@ -6661,6 +7613,16 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       await appendBlueVpnClientLog(
         'config write skipped path=${_cfg.baseConfigPath} kind=base-root error=$e',
       );
+    }
+    final effectiveServer = server;
+    if (effectiveServer != null && !effectiveServer.isAuto) {
+      try {
+        await _cfg.writeBaseConfigForServer(effectiveServer.id, rawConfig);
+      } catch (e) {
+        await appendBlueVpnClientLog(
+          'config write skipped kind=server-cache server=${effectiveServer.id} error=$e',
+        );
+      }
     }
   }
 
@@ -6683,8 +7645,19 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
     try {
       final effectiveServer = serverOverride ?? selectedServer;
+      if (!kIsWeb && Platform.isAndroid && !effectiveServer.isAuto) {
+        await appendBlueVpnClientLog(
+          'local config fallback blocked on android manual server=${effectiveServer.id}: $reason',
+        );
+        return false;
+      }
       await _cfg.ensureBaseSeededFromManagedIfMissing();
-      final base = await _cfg.readBaseConfig();
+      final serverBase = effectiveServer.isAuto
+          ? null
+          : await _cfg.readBaseConfigForServer(effectiveServer.id);
+      final base = ((serverBase ?? '').trim().isNotEmpty)
+          ? serverBase
+          : await _cfg.readBaseConfig();
       if (base == null || base.trim().isEmpty) return false;
 
       final normalizedBase = _normalizeDevEndpoint(base);
@@ -6696,6 +7669,19 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       await _cfg.writeManagedConfig(
         _buildManagedConfigFromBase(normalizedBase),
       );
+      try {
+        await _cfg.writeBaseConfig(normalizedBase);
+        if (!effectiveServer.isAuto) {
+          await _cfg.writeBaseConfigForServer(
+            effectiveServer.id,
+            normalizedBase,
+          );
+        }
+      } catch (e) {
+        await appendBlueVpnClientLog(
+          'local config fallback cache refresh skipped server=${effectiveServer.id} error=$e',
+        );
+      }
       await appendBlueVpnClientLog(
         'ensure config fetch failed; using existing local config: $reason',
       );
@@ -6768,21 +7754,70 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   Future<void> _syncVpnStatus() async {
     final wgState = _wireGuardState;
     if (wgState != null && !wgState.installed) {
-      if (mounted) setState(() => vpnEnabled = false);
+      if (mounted) {
+        setState(() {
+          vpnEnabled = false;
+          _androidExternalVpnActive = false;
+        });
+      }
+      return;
+    }
+    if (!kIsWeb && Platform.isAndroid) {
+      final status = await WireGuardAndroidBackend.statusSnapshot(
+        tunnelName: kTunnelName,
+      );
+      final own = _androidStatusLooksLikeOwnTunnel(status);
+      final external = _androidStatusLooksLikeExternalVpn(status);
+      await appendBlueVpnClientLog(
+        'android sync status ownTunnel=$own externalVpn=$external status=$status',
+      );
+      if (mounted) {
+        setState(() {
+          vpnEnabled = own;
+          _androidExternalVpnActive = external;
+        });
+      }
       return;
     }
     final on = await _vpnBackend.isConnected();
-    if (mounted) setState(() => vpnEnabled = on);
+    if (mounted) {
+      setState(() {
+        vpnEnabled = on;
+        _androidExternalVpnActive = false;
+      });
+    }
   }
 
   bool _androidStatusLooksLikeOwnTunnel(Map<String, dynamic> status) {
     final state = (status['state'] ?? '').toString().toLowerCase();
-    if (status['connected'] == true || state == 'up') return true;
+    if (status['connected'] == true ||
+        status['ownTunnelRunning'] == true ||
+        state == 'up') {
+      return true;
+    }
+    if (status['systemVpnActive'] == true &&
+        (status['lastGreenVpnActive'] == true ||
+            status['ownTunnelSource'] == 'marker')) {
+      return true;
+    }
+    final nativeTunnelName = (status['nativeTunnelName'] ?? '').toString();
+    final expectedNames = <String>{
+      kTunnelName,
+      if (nativeTunnelName.isNotEmpty) nativeTunnelName,
+      'GreenVPN',
+    };
     final running = status['runningTunnels'];
     if (running is Iterable) {
-      return running.any((item) => item.toString() == kTunnelName);
+      return running.any((item) => expectedNames.contains(item.toString()));
     }
     return false;
+  }
+
+  bool _androidStatusLooksLikeExternalVpn(Map<String, dynamic> status) {
+    if (_androidStatusLooksLikeOwnTunnel(status)) return false;
+    return status['externalVpnActive'] == true ||
+        status['systemVpnActiveWithoutOwnTunnel'] == true ||
+        status['systemVpnActive'] == true;
   }
 
   Future<void> _prepareAndroidControlPlaneAccess(String reason) async {
@@ -6793,10 +7828,19 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       );
       final ownTunnel = _androidStatusLooksLikeOwnTunnel(status);
       final systemVpnActive = status['systemVpnActive'] == true;
+      final externalVpnActive = _androidStatusLooksLikeExternalVpn(status);
       await appendBlueVpnClientLog(
-        'android control-plane preflight reason=$reason ownTunnel=$ownTunnel systemVpnActive=$systemVpnActive status=$status',
+        'android control-plane preflight reason=$reason ownTunnel=$ownTunnel systemVpnActive=$systemVpnActive externalVpnActive=$externalVpnActive status=$status',
       );
-      if (!ownTunnel) return;
+      if (!ownTunnel) {
+        if (mounted && externalVpnActive) {
+          setState(() {
+            vpnEnabled = false;
+            _androidExternalVpnActive = true;
+          });
+        }
+        return;
+      }
       await _recoverAndroidStaleVpnForNetwork('preflight_$reason');
       return;
     } catch (e) {
@@ -6815,32 +7859,21 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       );
       final ownTunnel = _androidStatusLooksLikeOwnTunnel(status);
       final systemVpnActive = status['systemVpnActive'] == true;
+      final externalVpnActive = _androidStatusLooksLikeExternalVpn(status);
       await appendBlueVpnClientLog(
-        'android connect preflight reason=$reason ownTunnel=$ownTunnel systemVpnActive=$systemVpnActive status=$status',
+        'android connect preflight reason=$reason ownTunnel=$ownTunnel systemVpnActive=$systemVpnActive externalVpnActive=$externalVpnActive status=$status',
       );
       if (ownTunnel) {
         await _recoverAndroidStaleVpnForNetwork('connect_preflight_$reason');
         return;
       }
       if (!systemVpnActive) return;
-
-      final cached = await _cfg.readManagedConfig();
-      if (cached == null || cached.trim().isEmpty) {
-        await appendBlueVpnClientLog(
-          'android connect preflight foreign vpn active but no cached config',
-        );
-        return;
+      if (mounted && externalVpnActive) {
+        setState(() => _androidExternalVpnActive = true);
       }
-
       await appendBlueVpnClientLog(
-        'android connect preflight taking over foreign vpn with cached config',
+        'android connect preflight external vpn is active; next real connect will request Green VPN takeover with fresh config',
       );
-      final on = await _vpnBackend.connect(configPath: _cfg.managedConfigPath);
-      await appendBlueVpnClientLog(
-        'android connect preflight takeover ok=${on.ok} message=${on.message ?? ""}',
-      );
-      await Future<void>.delayed(const Duration(milliseconds: 900));
-      await _syncVpnStatus();
     } catch (e) {
       await appendBlueVpnClientLog(
         'android connect preflight failed reason=$reason error=$e',
@@ -6999,6 +8032,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         accessToken: widget.session.accessToken,
         deviceId: did,
       );
+      if (greenVpnIsInvalidSessionMessage(res.message)) {
+        await _noteInvalidSession(source: 'plan', message: res.message);
+        return;
+      }
       if (res.ok && res.data != null && mounted) {
         setState(() => planName = res.data!);
       }
@@ -7045,6 +8082,13 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       }
 
       final boot = await _bootstrapWithDeviceRetry(showToastOnRotate: false);
+      if (greenVpnIsInvalidSessionMessage(boot.message)) {
+        await _noteInvalidSession(
+          source: 'silent_bootstrap',
+          message: boot.message,
+        );
+        return;
+      }
       if (!boot.ok || boot.data == null) return;
 
       final did = await _ensureDeviceId();
@@ -7073,14 +8117,27 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           serverId: selectedServer.id == 'auto' ? null : selectedServer.id,
         );
       }
+      if (greenVpnIsInvalidSessionMessage(res.message)) {
+        await _noteInvalidSession(
+          source: 'silent_config',
+          message: res.message,
+        );
+        return;
+      }
       if (res.ok && res.data != null) {
+        final provisionedServer = _serverFromConfigResponse(
+          res.data!,
+          fallback: selectedServer,
+        );
         await _writeProvisionedConfig(
           _normalizeDevEndpoint(res.data!.configText),
+          server: provisionedServer,
         );
       } else {
         await _reuseExistingProvisionedConfig(
           reason: res.message ?? '',
           showToast: false,
+          serverOverride: selectedServer,
         );
       }
     } catch (_) {}
@@ -7092,6 +8149,156 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     if (adGateRaw is! Map) return false;
     final adGate = Map<String, dynamic>.from(adGateRaw);
     return adGate['enabled'] == true && adGate['required'] == true;
+  }
+
+  Map<String, dynamic>? _asStringMap(Object? raw) {
+    if (raw is! Map) return null;
+    return Map<String, dynamic>.from(raw);
+  }
+
+  DateTime? _parseServerDateTime(Object? raw) {
+    final text = (raw ?? '').toString().trim();
+    if (text.isEmpty) return null;
+    return DateTime.tryParse(text.replaceFirst('Z', '+00:00'))?.toUtc();
+  }
+
+  void _scheduleFreeAdSessionFromAdGate(
+    Map<String, dynamic> adGate, {
+    required String source,
+  }) {
+    if (kTrialOnlyNoAdsBuild || adGate['enabled'] != true) {
+      _cancelFreeAdSessionTimer();
+      return;
+    }
+    if (adGate['sessionTimerEnabled'] == false) {
+      _cancelFreeAdSessionTimer();
+      unawaited(
+        appendBlueVpnClientLog(
+          'free ad session timer disabled by server source=$source',
+        ),
+      );
+      return;
+    }
+
+    final consumedGrant = _asStringMap(adGate['consumedGrant']);
+    final grant = consumedGrant ?? _asStringMap(adGate['grant']);
+    final expiresAt = _parseServerDateTime(
+      consumedGrant?['sessionExpiresAt'] ??
+          consumedGrant?['expiresAt'] ??
+          grant?['sessionExpiresAt'] ??
+          grant?['expiresAt'] ??
+          adGate['sessionExpiresAt'],
+    );
+    if (expiresAt == null) return;
+
+    final delay = expiresAt.difference(DateTime.now().toUtc());
+    if (delay <= const Duration(seconds: 5)) {
+      unawaited(_expireFreeAdSession(source: '$source:already_expired'));
+      return;
+    }
+
+    _freeAdSessionTimer?.cancel();
+    _freeAdSessionTimer = Timer(delay, () {
+      unawaited(_expireFreeAdSession(source: source));
+    });
+    unawaited(_storeFreeAdSessionExpiry(expiresAt));
+    unawaited(
+      appendBlueVpnClientLog(
+        'free ad session timer scheduled source=$source seconds=${delay.inSeconds} expiresAt=${expiresAt.toIso8601String()}',
+      ),
+    );
+  }
+
+  void _cancelFreeAdSessionTimer() {
+    _freeAdSessionTimer?.cancel();
+    _freeAdSessionTimer = null;
+    unawaited(_clearStoredFreeAdSessionExpiry());
+  }
+
+  Future<void> _storeFreeAdSessionExpiry(DateTime expiresAt) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _freeAdSessionExpiryPrefsKey,
+        expiresAt.toUtc().toIso8601String(),
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _clearStoredFreeAdSessionExpiry() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_freeAdSessionExpiryPrefsKey);
+    } catch (_) {}
+  }
+
+  Future<void> _restoreFreeAdSessionTimer() async {
+    if (!mounted || kTrialOnlyNoAdsBuild) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final expiresAt = _parseServerDateTime(
+        prefs.getString(_freeAdSessionExpiryPrefsKey),
+      );
+      if (expiresAt == null) return;
+      final delay = expiresAt.difference(DateTime.now().toUtc());
+      if (delay <= const Duration(seconds: 5)) {
+        final connected = await _vpnBackend.isConnected();
+        if (connected || vpnEnabled) {
+          await _expireFreeAdSession(source: 'restore:expired');
+        } else {
+          await _clearStoredFreeAdSessionExpiry();
+        }
+        return;
+      }
+      _freeAdSessionTimer?.cancel();
+      _freeAdSessionTimer = Timer(delay, () {
+        unawaited(_expireFreeAdSession(source: 'restore'));
+      });
+      await appendBlueVpnClientLog(
+        'free ad session timer restored seconds=${delay.inSeconds} expiresAt=${expiresAt.toIso8601String()}',
+      );
+    } catch (e) {
+      await appendBlueVpnClientLog('free ad session restore failed error=$e');
+    }
+  }
+
+  Future<void> _expireFreeAdSession({required String source}) async {
+    if (!mounted || kTrialOnlyNoAdsBuild) return;
+    if (vpnBusy) {
+      _freeAdSessionTimer?.cancel();
+      _freeAdSessionTimer = Timer(const Duration(seconds: 15), () {
+        unawaited(_expireFreeAdSession(source: '$source:retry'));
+      });
+      return;
+    }
+
+    await appendBlueVpnClientLog('free ad session expired source=$source');
+    final connected = await _vpnBackend.isConnected();
+    if (!connected && !vpnEnabled) {
+      _cancelFreeAdSessionTimer();
+      return;
+    }
+    _setVpnBusyUi(
+      stage: 'Бесплатная сессия закончилась...',
+      hint:
+          'Отключаем VPN. Для нового подключения нужно снова посмотреть рекламу.',
+    );
+    try {
+      final res = await _vpnBackend.disconnect();
+      await appendBlueVpnClientLog(
+        'free ad session disconnect ok=${res.ok} message=${res.message ?? ""}',
+      );
+      await _syncVpnStatus();
+      if (!mounted) return;
+      setState(() => vpnEnabled = false);
+      _toast(
+        context,
+        'Бесплатная сессия закончилась. Для нового подключения посмотри рекламу.',
+      );
+    } finally {
+      _cancelFreeAdSessionTimer();
+      _clearVpnBusyUi();
+    }
   }
 
   Future<bool> _waitForAdChallengeCompletion(String challengeId) async {
@@ -7117,6 +8324,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     required String adUnitId,
     required String challengeId,
     required String rewardUrl,
+    Future<void> Function()? onRewardGranted,
   }) async {
     final token = greenVpnAdChallengeTokenFromRewardUrl(rewardUrl);
     if (token.isEmpty) {
@@ -7130,9 +8338,35 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           'Досмотри видео до зачёта награды. После этого Green VPN продолжит подключение.',
     );
 
+    Future<ApiResult<Map<String, dynamic>>>? completeFuture;
+    var rewardGrantedCallbackStarted = false;
+
+    Future<ApiResult<Map<String, dynamic>>> completeChallenge() {
+      completeFuture ??= _api.completeAdChallenge(
+        challengeId: challengeId,
+        token: token,
+      );
+      return completeFuture!;
+    }
+
+    Future<void> completeAndPrepareConfig() async {
+      final complete = await completeChallenge();
+      if (!complete.ok) {
+        await appendBlueVpnClientLog(
+          'Yandex rewarded early complete failed: ${complete.message ?? ""}',
+        );
+        return;
+      }
+      final callback = onRewardGranted;
+      if (callback == null || rewardGrantedCallbackStarted) return;
+      rewardGrantedCallbackStarted = true;
+      unawaited(callback());
+    }
+
     final rewarded = await GreenVpnYandexRewardedAds.showRewardedAd(
       adUnitId: adUnitId,
       log: appendBlueVpnClientLog,
+      onRewarded: completeAndPrepareConfig,
     );
     if (!mounted) return false;
     if (!rewarded) {
@@ -7143,10 +8377,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       return false;
     }
 
-    final complete = await _api.completeAdChallenge(
-      challengeId: challengeId,
-      token: token,
-    );
+    final complete = await completeChallenge();
     if (!mounted) return false;
     if (!complete.ok) {
       _toast(
@@ -7156,13 +8387,20 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       return false;
     }
 
+    final callback = onRewardGranted;
+    if (callback != null && !rewardGrantedCallbackStarted) {
+      rewardGrantedCallbackStarted = true;
+      unawaited(callback());
+    }
+
     return true;
   }
 
   Future<bool> _ensureAdRewardForConnect(
     Map<String, dynamic> bootMap,
-    String deviceId,
-  ) async {
+    String deviceId, {
+    Future<void> Function()? onRewardGranted,
+  }) async {
     if (kTrialOnlyNoAdsBuild) return true;
     if (!_bootAdGateRequiresReward(bootMap)) return true;
     final yandexRewardedAdUnitId = greenVpnAndroidYandexRewardedAdUnitId(
@@ -7186,6 +8424,13 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     );
 
     if (!start.ok || start.data == null) {
+      if (greenVpnIsInvalidSessionMessage(start.message)) {
+        await _handleInvalidSession(
+          source: 'ad_challenge_start',
+          message: start.message,
+        );
+        return false;
+      }
       _toast(
         context,
         start.message ?? 'Не удалось подготовить рекламный просмотр.',
@@ -7215,6 +8460,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         adUnitId: yandexRewardedAdUnitId,
         challengeId: challengeId,
         rewardUrl: rewardUrl,
+        onRewardGranted: onRewardGranted,
       );
     }
 
@@ -7242,7 +8488,38 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       return false;
     }
 
+    final callback = onRewardGranted;
+    if (callback != null) {
+      unawaited(callback());
+    }
+
     return true;
+  }
+
+  Future<ApiResult<WireGuardConfigResponse>> _fetchWireGuardConfigWithRecovery(
+    String deviceId,
+    ServerLocation effectiveServer, {
+    required String source,
+  }) async {
+    var res = await _api.fetchWireGuardConfig(
+      accessToken: widget.session.accessToken,
+      deviceId: deviceId,
+      serverId: effectiveServer.isAuto ? null : effectiveServer.id,
+    );
+    if (!res.ok && _isAndroidNetworkFailureMessage(res.message)) {
+      await _recoverAndroidStaleVpnForNetwork(
+        res.message ?? '${source}_network_failure',
+      );
+      res = await _api.fetchWireGuardConfig(
+        accessToken: widget.session.accessToken,
+        deviceId: deviceId,
+        serverId: effectiveServer.isAuto ? null : effectiveServer.id,
+      );
+    }
+    await appendBlueVpnClientLog(
+      'ensure config fetch source=$source ok=${res.ok} message=${res.message ?? ""} bytes=${res.data?.configText.length ?? 0} server=${res.data?.serverId ?? ""}',
+    );
+    return res;
   }
 
   Future<ProvisionedConfigResult> _ensureProvisionedConfigInteractive({
@@ -7275,6 +8552,19 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     );
 
     if (!boot.ok || boot.data == null) {
+      if (greenVpnIsInvalidSessionMessage(boot.message)) {
+        await _handleInvalidSession(
+          source: 'interactive_bootstrap',
+          message: boot.message,
+        );
+        return ProvisionedConfigResult.err('invalid_session');
+      }
+      final reused = await _reuseExistingProvisionedConfig(
+        reason: boot.message ?? '',
+        showToast: true,
+        serverOverride: effectiveServer,
+      );
+      if (reused) return ProvisionedConfigResult.ok(effectiveServer);
       _toast(context, boot.message ?? 'Не удалось пройти bootstrap.');
       return ProvisionedConfigResult.err(boot.message);
     }
@@ -7295,29 +8585,43 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       }
     }
 
-    final adReady = await _ensureAdRewardForConnect(bootMap, did);
-    if (!adReady)
-      return const ProvisionedConfigResult.err('ad_reward_required');
-
-    var res = await _api.fetchWireGuardConfig(
-      accessToken: widget.session.accessToken,
-      deviceId: did,
-      serverId: effectiveServer.isAuto ? null : effectiveServer.id,
-    );
-    if (!res.ok && _isAndroidNetworkFailureMessage(res.message)) {
-      await _recoverAndroidStaleVpnForNetwork(
-        res.message ?? 'interactive_config_network_failure',
+    Future<ApiResult<WireGuardConfigResponse>>? prefetchedConfig;
+    Future<void> startConfigPrefetchAfterAdReward() async {
+      if (prefetchedConfig != null) return;
+      prefetchedConfig = _fetchWireGuardConfigWithRecovery(
+        did,
+        effectiveServer,
+        source: 'ad_reward_prefetch',
       );
-      res = await _api.fetchWireGuardConfig(
-        accessToken: widget.session.accessToken,
-        deviceId: did,
-        serverId: effectiveServer.isAuto ? null : effectiveServer.id,
+      await appendBlueVpnClientLog(
+        'ensure config prefetch started after ad reward server=${effectiveServer.id}',
       );
     }
-    await appendBlueVpnClientLog(
-      'ensure config fetch ok=${res.ok} message=${res.message ?? ""} bytes=${res.data?.configText.length ?? 0} server=${res.data?.serverId ?? ""}',
+
+    final adReady = await _ensureAdRewardForConnect(
+      bootMap,
+      did,
+      onRewardGranted: startConfigPrefetchAfterAdReward,
     );
+    if (!adReady) {
+      return const ProvisionedConfigResult.err('ad_reward_required');
+    }
+
+    final res =
+        await (prefetchedConfig ??
+            _fetchWireGuardConfigWithRecovery(
+              did,
+              effectiveServer,
+              source: 'interactive_config',
+            ));
     if (!res.ok || res.data == null || res.data!.configText.trim().isEmpty) {
+      if (greenVpnIsInvalidSessionMessage(res.message)) {
+        await _handleInvalidSession(
+          source: 'interactive_config',
+          message: res.message,
+        );
+        return ProvisionedConfigResult.err('invalid_session');
+      }
       if (greenVpnIsAdRewardRequiredMessage(res.message)) {
         _toast(
           context,
@@ -7339,7 +8643,14 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       res.data!,
       fallback: effectiveServer,
     );
-    await _writeProvisionedConfig(_normalizeDevEndpoint(res.data!.configText));
+    _scheduleFreeAdSessionFromAdGate(
+      res.data!.adGate,
+      source: 'interactive_config',
+    );
+    await _writeProvisionedConfig(
+      _normalizeDevEndpoint(res.data!.configText),
+      server: provisionedServer,
+    );
     return ProvisionedConfigResult.ok(provisionedServer);
   }
 
@@ -7426,20 +8737,28 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             return a.title.compareTo(b.title);
           });
 
+    List<ServerLocation> selectedThenFallbacks(ServerLocation first) {
+      final result = <ServerLocation>[first];
+      for (final server in usable) {
+        if (server.id != first.id) result.add(server);
+      }
+      return result;
+    }
+
     if (selectedServer.isAuto) {
       return usable.isNotEmpty ? usable : [_backendAutoCandidate()];
     }
 
     if (selectedServer.isCurrentClientReady) {
-      return [selectedServer];
+      return selectedThenFallbacks(selectedServer);
     }
 
     final selectedFromCatalog = usable.where((s) => s.id == selectedServer.id);
     if (selectedFromCatalog.isNotEmpty) {
-      return [selectedFromCatalog.first];
+      return selectedThenFallbacks(selectedFromCatalog.first);
     }
 
-    return const [];
+    return usable;
   }
 
   String _serverUnsupportedReason(ServerLocation server) {
@@ -7480,6 +8799,13 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         details: details,
       );
       if (!res.ok) {
+        if (greenVpnIsInvalidSessionMessage(res.message)) {
+          await _noteInvalidSession(
+            source: 'route_event',
+            message: res.message,
+          );
+          return;
+        }
         await appendBlueVpnClientLog(
           'route event failed stage=$stage server=${server.id} message=${res.message ?? ""}',
         );
@@ -7491,6 +8817,75 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
   }
 
+  bool get _shouldRunPostConnectProbe =>
+      !kIsWeb && greenVpnHasNativeVpnBackend && !socialOnlyEnabled;
+
+  Future<PostConnectProbeResult> _probeConnectedTunnelRoute(
+    ServerLocation server,
+  ) async {
+    final targets = <Uri>[
+      Uri.parse('https://www.youtube.com/generate_204'),
+      Uri.parse('https://i.ytimg.com/generate_204'),
+    ];
+    Object? lastError;
+    String lastTarget = targets.first.toString();
+    var lastLatencyMs = 0;
+    int? lastStatusCode;
+
+    for (final uri in targets) {
+      final watch = Stopwatch()..start();
+      final client = HttpClient()
+        ..connectionTimeout = const Duration(seconds: 6);
+      lastTarget = uri.toString();
+      try {
+        final request = await client
+            .getUrl(uri)
+            .timeout(const Duration(seconds: 7));
+        request.headers.set(
+          HttpHeaders.userAgentHeader,
+          'GreenVPN/$kAppVersion route-check',
+        );
+        final response = await request.close().timeout(
+          const Duration(seconds: 8),
+        );
+        await response.drain<void>().timeout(const Duration(seconds: 2));
+        watch.stop();
+        lastLatencyMs = watch.elapsedMilliseconds;
+        lastStatusCode = response.statusCode;
+        final ok = response.statusCode >= 200 && response.statusCode < 400;
+        await appendBlueVpnClientLog(
+          'post connect probe server=${server.id} target=$uri status=${response.statusCode} ok=$ok ms=$lastLatencyMs',
+        );
+        if (ok) {
+          return PostConnectProbeResult(
+            ok: true,
+            target: uri.toString(),
+            statusCode: response.statusCode,
+            latencyMs: lastLatencyMs,
+          );
+        }
+        lastError = 'http_${response.statusCode}';
+      } catch (e) {
+        watch.stop();
+        lastLatencyMs = watch.elapsedMilliseconds;
+        lastError = e;
+        await appendBlueVpnClientLog(
+          'post connect probe failed server=${server.id} target=$uri error=$e ms=$lastLatencyMs',
+        );
+      } finally {
+        client.close(force: true);
+      }
+    }
+
+    return PostConnectProbeResult(
+      ok: false,
+      target: lastTarget,
+      statusCode: lastStatusCode,
+      latencyMs: lastLatencyMs,
+      error: lastError?.toString(),
+    );
+  }
+
   Future<void> _toggleVpnReal() async {
     await appendBlueVpnClientLog(
       'toggle requested vpnEnabled=$vpnEnabled busy=$vpnBusy cooldown=$_vpnTapCooldown',
@@ -7499,8 +8894,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       _toast(
         context,
         vpnEnabled
-            ? 'Green VPN уже отключает туннель. Подожди пару секунд.'
-            : 'Green VPN уже запускает туннель. Подожди пару секунд.',
+            ? 'Green VPN уже отключается. Подожди пару секунд.'
+            : 'Green VPN уже запускает подключение. Подожди пару секунд.',
       );
       return;
     }
@@ -7516,7 +8911,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _setVpnBusyUi(
       stage: vpnEnabled ? 'Отключаем...' : 'Готовим подключение...',
       hint: vpnEnabled
-          ? 'Снимаем сервис WireGuard и очищаем маршруты.'
+          ? 'Останавливаем VPN и очищаем маршруты.'
           : 'Проверяем доступ и готовим рабочий конфиг. Повторно нажимать не нужно.',
     );
 
@@ -7567,7 +8962,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         String? lastError;
         for (var i = 0; i < candidates.length; i++) {
           var candidate = candidates[i];
-          final canTryNext = selectedServer.isAuto && i < candidates.length - 1;
+          final canTryNext = i < candidates.length - 1;
           await appendBlueVpnClientLog(
             'toggle connect candidate ${i + 1}/${candidates.length} id=${candidate.id} protocol=${candidate.protocolCode} score=${_serverConnectScore(candidate)}',
           );
@@ -7575,7 +8970,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           _setVpnBusyUi(
             stage: 'Получаем конфиг...',
             hint:
-                'Пробуем ${candidate.title}: регистрируем устройство и забираем конфиг именно для этого ПК.',
+                'Пробуем ${greenVpnPublicServerTitle(candidate)}: готовим подключение именно для этого устройства.',
           );
           final configFetchWatch = Stopwatch()..start();
           final provisioned = await _ensureProvisionedConfigInteractive(
@@ -7621,8 +9016,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                 ? 'Подключаем режим соцсетей...'
                 : 'Запускаем VPN...',
             hint: socialOnlyEnabled
-                ? 'Поднимаем ${candidate.protocolLabel} в режиме только для выбранных приложений.'
-                : 'Поднимаем ${candidate.protocolLabel} и ждём честный handshake.',
+                ? 'Подключаем VPN только для выбранных приложений.'
+                : 'Запускаем VPN и проверяем подключение.',
           );
           final configPath = _cfg.managedConfigPath;
           await appendBlueVpnClientLog(
@@ -7667,7 +9062,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
           _setVpnBusyUi(
             stage: 'Проверяем статус...',
-            hint: 'Сверяем handshake, трафик и реальное состояние туннеля.',
+            hint: 'Проверяем подключение и состояние VPN.',
           );
           await _syncVpnStatus();
           await appendBlueVpnClientLog(
@@ -7691,14 +9086,68 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           );
           if (!vpnEnabled) {
             lastError =
-                'туннель не закрепился после запуска ${candidate.title}';
+                'VPN не подтвердился после запуска ${greenVpnPublicServerTitle(candidate)}';
             if (canTryNext) continue;
             _toast(context, 'VPN запустился, но статус не подтвердился.');
             return;
           }
 
+          if (_shouldRunPostConnectProbe) {
+            _setVpnBusyUi(
+              stage: 'Проверяем YouTube...',
+              hint:
+                  'VPN включён. Проверяем, что YouTube открывается.',
+            );
+            final probe = await _probeConnectedTunnelRoute(candidate);
+            unawaited(
+              _reportRouteEvent(
+                candidate,
+                stage: 'post_connect_probe',
+                ok: probe.ok,
+                latencyMs: probe.latencyMs,
+                errorCode: probe.ok
+                    ? null
+                    : (probe.statusCode == null
+                          ? 'youtube_probe_failed'
+                          : 'youtube_http_${probe.statusCode}'),
+                message: probe.ok
+                    ? 'YouTube route confirmed after VPN connect.'
+                    : 'VPN поднялся, но YouTube не открылся через этот узел.',
+                details: {
+                  'attempt': i + 1,
+                  'candidates': candidates.length,
+                  'autoMode': selectedServer.isAuto,
+                  'target': probe.target,
+                  'statusCode': probe.statusCode,
+                  'error': probe.error,
+                },
+              ),
+            );
+            if (!probe.ok) {
+              lastError = 'YouTube не открылся через ${greenVpnPublicServerTitle(candidate)}';
+              await appendBlueVpnClientLog(
+                'post connect probe rejected server=${candidate.id}; disconnecting before next candidate',
+              );
+              await _vpnBackend.disconnect();
+              await _syncVpnStatus();
+              if (canTryNext) {
+                _setVpnBusyUi(
+                  stage: 'Пробуем запасной узел...',
+                  hint:
+                      '${candidate.title} поднялся, но не даёт YouTube. Пробуем следующий сервер.',
+                );
+                continue;
+              }
+              _toast(
+                context,
+                'VPN включился, но YouTube не работает. Подключение остановлено.',
+              );
+              return;
+            }
+          }
+
           await appendBlueVpnClientLog(
-            'client route probe removed; accepting connected tunnel server=${candidate.id}',
+            'post connect checks accepted tunnel server=${candidate.id}',
           );
           _startVpnTapCooldown(
             hint:
@@ -7707,7 +9156,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           _toast(
             context,
             selectedServer.isAuto
-                ? 'VPN включён через ${candidate.title}.'
+                ? 'VPN включён через ${greenVpnPublicServerTitle(candidate)}.'
                 : 'VPN включён.',
           );
           return;
@@ -7723,7 +9172,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         await appendBlueVpnClientLog('toggle disconnect branch start');
         _setVpnBusyUi(
           stage: 'Отключаем VPN...',
-          hint: 'Останавливаем сервис и аккуратно снимаем туннель.',
+          hint: 'Останавливаем VPN и аккуратно снимаем подключение.',
         );
         final res = await _vpnBackend.disconnect();
         await appendBlueVpnClientLog(
@@ -7737,6 +9186,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
           return;
         }
+        _cancelFreeAdSessionTimer();
 
         _setVpnBusyUi(
           stage: 'Проверяем статус...',
@@ -7781,9 +9231,27 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       }
       if (!mounted) return;
       if (!res.ok || res.data == null) {
+        final fallbackServers = _mergeServerCatalogs(
+          _fallbackServerCatalogForCurrentChannel(),
+          servers.where((s) => !s.isAuto).toList(),
+        );
+        final stillSelected = fallbackServers.any(
+          (s) => s.id == selectedServer.id,
+        );
         setState(() {
+          servers = fallbackServers;
+          selectedServer = stillSelected
+              ? fallbackServers.firstWhere(
+                  (s) => s.id == selectedServer.id,
+                  orElse: () => fallbackServers.first,
+                )
+              : fallbackServers.first;
+          _adaptiveRouteServerId = null;
+          _adaptiveRouteProtocol = null;
+          _adaptiveRouteScore = null;
+          _adaptiveRouteConfidence = null;
           _serverCatalogStatus =
-              res.message ?? 'Не удалось загрузить список серверов.';
+              '${res.message ?? 'Не удалось загрузить список серверов.'} Использую локальный резервный список.';
         });
         if (showToast) _toast(context, _serverCatalogStatus!);
         return;
@@ -7836,7 +9304,15 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       }
 
       if (nextServers.length == 1) {
-        nextServers.addAll(servers.where((s) => !s.isAuto));
+        final fallbackServers = _fallbackServerCatalogForCurrentChannel().where(
+          (s) => !s.isAuto,
+        );
+        nextServers.addAll(
+          _mergeServerCatalogs(
+            fallbackServers.toList(),
+            servers.where((s) => !s.isAuto).toList(),
+          ).where((s) => !s.isAuto),
+        );
       }
 
       final stillSelected = nextServers.any((s) => s.id == selectedServer.id);
@@ -7891,17 +9367,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                 mainAxisSize: MainAxisSize.min,
                 children: servers.map((s) {
                   final selected = s.id == selectedServer.id;
-                  final subtitle = s.isAuto
-                      ? 'Авто-подбор'
-                      : [
-                          s.subtitle,
-                          if (s.protocolLabel.isNotEmpty) s.protocolLabel,
-                          if (s.pingMs != null) '${s.pingMs} ms',
-                          if (s.healthScore != null)
-                            'здоровье ${s.healthScore}%',
-                          if (!s.isCurrentClientReady)
-                            _serverUnsupportedReason(s),
-                        ].where((e) => e.isNotEmpty).join(' • ');
+                  final title = greenVpnPublicServerTitle(s);
+                  final subtitle = greenVpnPublicServerSubtitle(
+                    s,
+                    includeUnavailable: true,
+                  );
                   return ListTile(
                     contentPadding: EdgeInsets.zero,
                     leading: Icon(
@@ -7915,10 +9385,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                           : kBrandWarm,
                     ),
                     title: Text(
-                      s.title,
+                      title,
                       style: const TextStyle(fontWeight: FontWeight.w900),
                     ),
-                    subtitle: Text(subtitle),
+                    subtitle: subtitle.isEmpty ? null : Text(subtitle),
                     enabled: s.isAuto || s.isCurrentClientReady,
                     trailing: selected
                         ? const Icon(
@@ -7953,7 +9423,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     if (vpnBusy) {
       _toast(
         context,
-        'Green VPN уже переключает туннель. Подожди пару секунд.',
+        'Green VPN уже переключает подключение. Подожди пару секунд.',
       );
       return;
     }
@@ -7970,7 +9440,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _setVpnBusyUi(
       stage: 'Переключаем сервер...',
       hint:
-          'Останавливаем текущий туннель, получаем новый конфиг и запускаем VPN заново.',
+          'Останавливаем текущее подключение и запускаем VPN заново.',
     );
 
     try {
@@ -8001,87 +9471,158 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       }
 
       await _syncVpnStatus();
-      _setVpnBusyUi(
-        stage: 'Получаем конфиг...',
-        hint: picked.isAuto
-            ? 'Backend выбирает рабочий VPN-узел и выдаёт свежий WireGuard-конфиг.'
-            : 'Запрашиваем свежий WireGuard-конфиг именно для ${picked.title}.',
-      );
+      final candidates = _connectCandidatesForCurrentSelection().isNotEmpty
+          ? _connectCandidatesForCurrentSelection()
+          : <ServerLocation>[picked];
+      String? lastError;
 
-      final configWatch = Stopwatch()..start();
-      final provisioned = await _ensureProvisionedConfigInteractive(
-        serverOverride: picked,
-      );
-      configWatch.stop();
-      final effectiveServer = provisioned.server ?? picked;
-      await appendBlueVpnClientLog(
-        'server switch config ok=${provisioned.ok} requested=${picked.id} effective=${effectiveServer.id}',
-      );
-      unawaited(
-        _reportRouteEvent(
-          effectiveServer,
-          stage: 'switch_config_fetch',
-          ok: provisioned.ok,
-          latencyMs: configWatch.elapsedMilliseconds,
-          errorCode: provisioned.ok ? null : 'config_fetch_failed',
-          message: provisioned.message,
-          details: {'requestedServerId': picked.id},
-        ),
-      );
-      if (!provisioned.ok) {
+      for (var i = 0; i < candidates.length; i++) {
+        var candidate = candidates[i];
+        final canTryNext = i < candidates.length - 1;
+        _setVpnBusyUi(
+          stage: 'Получаем конфиг...',
+          hint: candidate.isAuto
+              ? 'Подбираем подходящую локацию и готовим подключение.'
+              : 'Готовим подключение для ${greenVpnPublicServerTitle(candidate)}.',
+        );
+
+        final configWatch = Stopwatch()..start();
+        final provisioned = await _ensureProvisionedConfigInteractive(
+          serverOverride: candidate,
+        );
+        configWatch.stop();
+        final effectiveServer = provisioned.server ?? candidate;
+        if (provisioned.ok && effectiveServer.id != candidate.id) {
+          candidate = effectiveServer;
+        }
+        await appendBlueVpnClientLog(
+          'server switch config ok=${provisioned.ok} requested=${picked.id} candidate=${candidate.id} effective=${effectiveServer.id}',
+        );
+        unawaited(
+          _reportRouteEvent(
+            effectiveServer,
+            stage: 'switch_config_fetch',
+            ok: provisioned.ok,
+            latencyMs: configWatch.elapsedMilliseconds,
+            errorCode: provisioned.ok ? null : 'config_fetch_failed',
+            message: provisioned.message,
+            details: {
+              'requestedServerId': picked.id,
+              'attempt': i + 1,
+              'candidates': candidates.length,
+            },
+          ),
+        );
+        if (!provisioned.ok) {
+          lastError = 'не удалось получить конфиг для ${candidate.title}';
+          await _syncVpnStatus();
+          if (canTryNext) continue;
+          break;
+        }
+
+        if (effectiveServer.id != selectedServer.id) {
+          setState(() => selectedServer = effectiveServer);
+          _schedulePrefsSave();
+        }
+
+        _setVpnBusyUi(
+          stage: 'Запускаем VPN...',
+          hint:
+              'Запускаем VPN через ${greenVpnPublicServerTitle(effectiveServer)}.',
+        );
+        final connectWatch = Stopwatch()..start();
+        final on = await _vpnBackend.connect(
+          configPath: _cfg.managedConfigPath,
+        );
+        connectWatch.stop();
+        await appendBlueVpnClientLog(
+          'server switch connect ok=${on.ok} server=${effectiveServer.id} message=${on.message ?? ""}',
+        );
+        unawaited(
+          _reportRouteEvent(
+            effectiveServer,
+            stage: 'switch_connect',
+            ok: on.ok,
+            latencyMs: connectWatch.elapsedMilliseconds,
+            errorCode: on.ok ? null : 'connect_failed',
+            message: on.message,
+            details: {
+              'requestedServerId': picked.id,
+              'attempt': i + 1,
+              'candidates': candidates.length,
+            },
+          ),
+        );
         await _syncVpnStatus();
-        _toast(
-          context,
-          'Не удалось получить VPN-конфиг для выбранного сервера.',
+        if (!on.ok) {
+          lastError =
+              on.message ?? 'не удалось подключить ${greenVpnPublicServerTitle(effectiveServer)}';
+          if (canTryNext) continue;
+          break;
+        }
+        if (!vpnEnabled) {
+          lastError = 'VPN не подтвердился через ${greenVpnPublicServerTitle(effectiveServer)}';
+          if (canTryNext) continue;
+          break;
+        }
+
+        if (_shouldRunPostConnectProbe) {
+          _setVpnBusyUi(
+            stage: 'Проверяем YouTube...',
+            hint:
+                'VPN включён. Проверяем, что YouTube открывается.',
+          );
+          final probe = await _probeConnectedTunnelRoute(effectiveServer);
+          unawaited(
+            _reportRouteEvent(
+              effectiveServer,
+              stage: 'switch_post_connect_probe',
+              ok: probe.ok,
+              latencyMs: probe.latencyMs,
+              errorCode: probe.ok
+                  ? null
+                  : (probe.statusCode == null
+                        ? 'youtube_probe_failed'
+                        : 'youtube_http_${probe.statusCode}'),
+              message: probe.ok
+                  ? 'YouTube route confirmed after server switch.'
+                  : 'VPN поднялся, но YouTube не открылся через этот узел.',
+              details: {
+                'requestedServerId': picked.id,
+                'attempt': i + 1,
+                'candidates': candidates.length,
+                'target': probe.target,
+                'statusCode': probe.statusCode,
+                'error': probe.error,
+              },
+            ),
+          );
+          if (!probe.ok) {
+            lastError = 'YouTube не открылся через ${greenVpnPublicServerTitle(effectiveServer)}';
+            await appendBlueVpnClientLog(
+              'server switch post connect probe rejected server=${effectiveServer.id}; disconnecting before next candidate',
+            );
+            await _vpnBackend.disconnect();
+            await _syncVpnStatus();
+            if (canTryNext) continue;
+            break;
+          }
+        }
+
+        _startVpnTapCooldown(
+          hint:
+              'VPN только что переключился. Кнопка разблокируется через секунду.',
         );
+        _toast(context, 'VPN переключён на ${greenVpnPublicServerTitle(effectiveServer)}.');
         return;
       }
 
-      if (effectiveServer.id != selectedServer.id) {
-        setState(() => selectedServer = effectiveServer);
-        _schedulePrefsSave();
-      }
-
-      _setVpnBusyUi(
-        stage: 'Запускаем VPN...',
-        hint:
-            'Поднимаем ${effectiveServer.protocolLabel} через ${effectiveServer.title}.',
+      _toast(
+        context,
+        lastError == null
+            ? 'Не удалось переключить VPN-узел.'
+            : 'Не удалось переключить VPN-узел: $lastError.',
       );
-      final connectWatch = Stopwatch()..start();
-      final on = await _vpnBackend.connect(configPath: _cfg.managedConfigPath);
-      connectWatch.stop();
-      await appendBlueVpnClientLog(
-        'server switch connect ok=${on.ok} server=${effectiveServer.id} message=${on.message ?? ""}',
-      );
-      unawaited(
-        _reportRouteEvent(
-          effectiveServer,
-          stage: 'switch_connect',
-          ok: on.ok,
-          latencyMs: connectWatch.elapsedMilliseconds,
-          errorCode: on.ok ? null : 'connect_failed',
-          message: on.message,
-          details: {'requestedServerId': picked.id},
-        ),
-      );
-      await _syncVpnStatus();
-      if (!on.ok) {
-        _toast(
-          context,
-          on.message ?? 'Не удалось подключить выбранный сервер.',
-        );
-        return;
-      }
-      if (!vpnEnabled) {
-        _toast(context, 'VPN запустился, но статус туннеля не подтвердился.');
-        return;
-      }
-
-      _startVpnTapCooldown(
-        hint:
-            'VPN только что переключился. Кнопка разблокируется через секунду.',
-      );
-      _toast(context, 'VPN переключён на ${effectiveServer.title}.');
     } catch (e, st) {
       await appendBlueVpnClientLog('server switch exception=$e stack=$st');
       await _syncVpnStatus();
@@ -8173,6 +9714,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _tariffDebounce?.cancel();
     _vpnTapCooldownTimer?.cancel();
     _pendingBillingPollTimer?.cancel();
+    _freeAdSessionTimer?.cancel();
     super.dispose();
   }
 
@@ -8240,32 +9782,208 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       if (!mounted ||
           !res.ok ||
           manifest == null ||
-          !manifest.required ||
           !manifest.hasUpdate ||
           !greenVpnUpdateManifestMatchesCurrentPlatform(manifest)) {
         return;
       }
 
-      _openForcedUpdateRoute(manifest);
+      if (await _isUpdatePromptDismissed(manifest)) return;
+      await _openForcedUpdateRoute(manifest);
     } finally {
       _updateCheckBusy = false;
     }
   }
 
-  void _openForcedUpdateRoute(GreenVpnUpdateManifest manifest) {
+  String _updatePromptDismissKey(GreenVpnUpdateManifest manifest) {
+    return 'greenvpn.update_prompt.dismissed.'
+        '${manifest.platform}.${greenVpnUpdateChannel()}';
+  }
+
+  Future<bool> _isUpdatePromptDismissed(GreenVpnUpdateManifest manifest) async {
+    if (manifest.latestVersion.trim().isEmpty) return false;
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_updatePromptDismissKey(manifest)) ==
+        manifest.latestVersion.trim();
+  }
+
+  Future<void> _dismissUpdatePrompt(GreenVpnUpdateManifest manifest) async {
+    final latest = manifest.latestVersion.trim();
+    if (latest.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_updatePromptDismissKey(manifest), latest);
+  }
+
+  Future<void> _openForcedUpdateRoute(GreenVpnUpdateManifest manifest) async {
     if (_forcedUpdateRouteOpen || !mounted) return;
+    if (_updatePromptVersionInFlight == manifest.latestVersion) return;
     _forcedUpdateRouteOpen = true;
-    Navigator.of(context)
-        .push(
-          MaterialPageRoute(
-            builder: (_) =>
-                UpdatesPage(forceRequired: true, initialManifest: manifest),
-          ),
-        )
-        .whenComplete(() {
-          _forcedUpdateRouteOpen = false;
-          if (mounted) unawaited(_checkRequiredUpdateSilently());
-        });
+    _updatePromptVersionInFlight = manifest.latestVersion;
+    try {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) {
+          final theme = Theme.of(dialogContext);
+          final platformTitle = manifest.platform == 'android'
+              ? 'Android'
+              : manifest.platform == 'windows'
+              ? 'Windows'
+              : manifest.platform.toUpperCase();
+          return Dialog(
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 18,
+              vertical: 24,
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(22),
+            ),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 430),
+              child: Stack(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              width: 44,
+                              height: 44,
+                              decoration: BoxDecoration(
+                                color: kBrandPrimarySoft,
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: const Icon(
+                                Icons.system_update_alt_rounded,
+                                color: kBrandPrimary,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    manifest.required
+                                        ? 'Важное обновление'
+                                        : 'Доступно обновление',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w900,
+                                      fontSize: 18,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    '$platformTitle · ${manifest.latestVersion}',
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: theme.colorScheme.onSurface
+                                          .withOpacity(0.62),
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        Text(
+                          'Можно продолжить пользоваться приложением, но лучше поставить свежую версию: исправления приезжают через обновление.',
+                          style: TextStyle(
+                            color: theme.colorScheme.onSurface.withOpacity(
+                              0.72,
+                            ),
+                            fontWeight: FontWeight.w600,
+                            height: 1.28,
+                          ),
+                        ),
+                        if (manifest.changelog.isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          for (final item in manifest.changelog.take(3))
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 6),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    '• ',
+                                    style: TextStyle(
+                                      color: kBrandPrimary,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: Text(
+                                      item,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                        ],
+                        const SizedBox(height: 16),
+                        ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: kBrandPrimary,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          onPressed: !manifest.canDownload
+                              ? null
+                              : () {
+                                  Navigator.of(dialogContext).pop();
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) => UpdatesPage(
+                                        initialManifest: manifest,
+                                        autoStart: true,
+                                      ),
+                                    ),
+                                  );
+                                },
+                          icon: const Icon(Icons.download_rounded),
+                          label: const Text('Обновить'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Positioned(
+                    top: 4,
+                    right: 4,
+                    child: IconButton(
+                      tooltip: 'Закрыть',
+                      visualDensity: VisualDensity.compact,
+                      iconSize: 18,
+                      onPressed: () async {
+                        await _dismissUpdatePrompt(manifest);
+                        if (dialogContext.mounted) {
+                          Navigator.of(dialogContext).pop();
+                        }
+                      },
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+    } finally {
+      _forcedUpdateRouteOpen = false;
+      _updatePromptVersionInFlight = null;
+    }
   }
 
   @override
@@ -8275,6 +9993,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       VpnPage(
         planName: planName,
         vpnEnabled: vpnEnabled,
+        androidExternalVpnActive: _androidExternalVpnActive,
         vpnBusy: vpnBusy,
         vpnInteractionLocked: _vpnInteractionLocked,
         vpnBusyStage: _vpnBusyStage,
@@ -8288,7 +10007,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           if (wireGuardState != null && !wireGuardState.installed) {
             _toast(
               context,
-              'Сначала установи WireGuard. После этого кнопка VPN заработает.',
+              'Сначала установи системный компонент. После этого кнопка VPN заработает.',
             );
             return;
           }
@@ -8571,6 +10290,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 class VpnPage extends StatelessWidget {
   final String planName;
   final bool vpnEnabled;
+  final bool androidExternalVpnActive;
   final bool vpnBusy;
   final bool vpnInteractionLocked;
   final String? vpnBusyStage;
@@ -8594,6 +10314,7 @@ class VpnPage extends StatelessWidget {
     super.key,
     required this.planName,
     required this.vpnEnabled,
+    required this.androidExternalVpnActive,
     required this.vpnBusy,
     required this.vpnInteractionLocked,
     required this.vpnBusyStage,
@@ -8622,13 +10343,15 @@ class VpnPage extends StatelessWidget {
     final mutedColor = textColor.withOpacity(isDark ? 0.72 : 0.62);
     final statusText = vpnBusy
         ? (vpnBusyStage ?? (vpnEnabled ? 'Отключаем...' : 'Подключаем...'))
-        : (vpnEnabled ? 'Включено' : 'Отключено');
+        : (vpnEnabled
+              ? 'Включено'
+              : (androidExternalVpnActive
+                    ? 'Другой VPN активен'
+                    : 'Отключено'));
     final serverTitle = selectedServer.isAuto
         ? 'Самая быстрая локация'
-        : selectedServer.title;
-    final serverSub = selectedServer.isAuto
-        ? 'Авто-подбор'
-        : '${selectedServer.subtitle}${selectedServer.pingMs != null ? ' • ${selectedServer.pingMs} ms' : ''}';
+        : greenVpnPublicServerTitle(selectedServer);
+    final serverSub = greenVpnPublicServerSubtitle(selectedServer);
     final appsText = socialOnlyApps.isEmpty
         ? 'Не выбрано'
         : socialOnlyApps.map((e) => e.title).join(', ');
@@ -8671,10 +10394,9 @@ class VpnPage extends StatelessWidget {
         const SizedBox(height: 18),
         if (!wireGuardInstalled) ...[
           _WireGuardSetupCard(
-            title: 'Установи WireGuard перед первым подключением',
+            title: 'Установи системный компонент перед первым подключением',
             subtitle:
-                wireGuardStatusText ??
-                'Green VPN не сможет включать туннель, пока WireGuard не установлен.',
+                'Green VPN установит компонент, который нужен для подключения.',
             busy: wireGuardBusy,
             onInstall: onInstallWireGuard,
             onRefresh: onRefreshWireGuard,
@@ -8709,7 +10431,11 @@ class VpnPage extends StatelessWidget {
                         ? (vpnEnabled
                               ? 'Отключаем VPN...'
                               : 'Подключаем VPN...')
-                        : (vpnEnabled ? 'Отключить VPN' : 'Подключить VPN'),
+                        : (vpnEnabled
+                              ? 'Отключить VPN'
+                              : (androidExternalVpnActive
+                                    ? 'Переключить на Green VPN'
+                                    : 'Подключить VPN')),
                   ),
                   style: ElevatedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 18),
@@ -8728,11 +10454,23 @@ class VpnPage extends StatelessWidget {
                   color: textColor,
                 ),
               ),
+              if (!vpnBusy && androidExternalVpnActive) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'Сейчас Android держит VPN вне Green VPN. Нажми кнопку выше, чтобы переключиться на Green VPN.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
               if (vpnBusy) ...[
                 const SizedBox(height: 8),
                 Text(
                   vpnBusyHint ??
-                      'Подожди пару секунд. Мы уже запускаем туннель и специально блокируем повторные нажатия.',
+                      'Подожди пару секунд. Мы уже запускаем VPN и специально блокируем повторные нажатия.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: mutedColor,
@@ -8833,15 +10571,17 @@ class VpnPage extends StatelessWidget {
                       fontSize: 15,
                     ),
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    serverSub,
-                    style: TextStyle(
-                      color: mutedColor,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 12,
+                  if (serverSub.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      serverSub,
+                      style: TextStyle(
+                        color: mutedColor,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12,
+                      ),
                     ),
-                  ),
+                  ],
                 ],
               ),
             ),
@@ -8913,7 +10653,7 @@ class _WireGuardSetupCard extends StatelessWidget {
                   onPressed: busy ? null : () => onInstall(),
                   icon: const Icon(Icons.download_for_offline_rounded),
                   label: Text(
-                    busy ? 'Установка…' : 'Установить WireGuard',
+                    busy ? 'Установка…' : 'Установить',
                     style: const TextStyle(fontWeight: FontWeight.w900),
                   ),
                   style: ElevatedButton.styleFrom(
@@ -10188,11 +11928,13 @@ class SettingsPage extends StatelessWidget {
 class UpdatesPage extends StatefulWidget {
   final bool forceRequired;
   final GreenVpnUpdateManifest? initialManifest;
+  final bool autoStart;
 
   const UpdatesPage({
     super.key,
     this.forceRequired = false,
     this.initialManifest,
+    this.autoStart = false,
   });
 
   @override
@@ -10200,6 +11942,9 @@ class UpdatesPage extends StatefulWidget {
 }
 
 class _UpdatesPageState extends State<UpdatesPage> {
+  static const _staleUpdateCacheAge = Duration(hours: 12);
+  static const _postInstallCleanupDelay = Duration(minutes: 30);
+
   final _api = const BlueVpnApi(baseUrl: kApiBaseUrl);
   final _deviceStore = DeviceIdStore();
 
@@ -10210,10 +11955,12 @@ class _UpdatesPageState extends State<UpdatesPage> {
   String? _downloadError;
   GreenVpnUpdateManifest? _manifest;
   String? _error;
+  bool _autoStartConsumed = false;
 
   @override
   void initState() {
     super.initState();
+    unawaited(_cleanupStaleUpdateCache());
     final initial = widget.initialManifest;
     if (initial != null) {
       _loading = false;
@@ -10221,6 +11968,9 @@ class _UpdatesPageState extends State<UpdatesPage> {
     } else {
       _refresh();
     }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _maybeAutoStartUpdate();
+    });
   }
 
   Future<void> _refresh() async {
@@ -10253,6 +12003,9 @@ class _UpdatesPageState extends State<UpdatesPage> {
       } else {
         _error = res.message ?? 'Не удалось проверить обновления.';
       }
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _maybeAutoStartUpdate();
     });
   }
 
@@ -10288,6 +12041,21 @@ class _UpdatesPageState extends State<UpdatesPage> {
     final uri = Uri.tryParse(url);
     final path = (uri?.path ?? url).toLowerCase();
     return path.endsWith(expected);
+  }
+
+  void _maybeAutoStartUpdate() {
+    if (!mounted || !widget.autoStart || _autoStartConsumed || _downloading) {
+      return;
+    }
+    final manifest = _manifest;
+    if (manifest == null ||
+        !manifest.hasUpdate ||
+        !manifest.canDownload ||
+        !_downloadLooksPlatformSpecific(manifest.downloadUrl)) {
+      return;
+    }
+    _autoStartConsumed = true;
+    unawaited(_downloadAndInstall());
   }
 
   String _safeUpdateFileName(Uri uri) {
@@ -10342,10 +12110,12 @@ class _UpdatesPageState extends State<UpdatesPage> {
 
   Future<void> _cleanupOldUpdateFiles(
     Directory dir, {
-    required String keepPath,
-    required String tempPath,
+    String? keepPath,
+    String? tempPath,
+    Duration minAge = Duration.zero,
   }) async {
     try {
+      final now = DateTime.now();
       await for (final entity in dir.list()) {
         if (entity is! File) continue;
         if (entity.path == keepPath || entity.path == tempPath) continue;
@@ -10353,12 +12123,43 @@ class _UpdatesPageState extends State<UpdatesPage> {
         if (lower.endsWith('.apk') ||
             lower.endsWith('.exe') ||
             lower.endsWith('.download')) {
+          if (minAge > Duration.zero) {
+            final stat = await entity.stat();
+            if (now.difference(stat.modified) < minAge) continue;
+          }
           await entity.delete();
         }
       }
     } catch (_) {
       // Cleanup is best effort; a locked stale file must not block the update.
     }
+  }
+
+  Future<void> _cleanupStaleUpdateCache() async {
+    if (kIsWeb) return;
+    try {
+      final dir = await _updateDownloadDirectory();
+      await _cleanupOldUpdateFiles(dir, minAge: _staleUpdateCacheAge);
+    } catch (_) {
+      // Cache cleanup must never block the update screen.
+    }
+  }
+
+  void _schedulePostInstallUpdateCacheCleanup() {
+    if (kIsWeb) return;
+    unawaited(
+      Future<void>.delayed(_postInstallCleanupDelay, () async {
+        try {
+          final dir = await _updateDownloadDirectory();
+          await _cleanupOldUpdateFiles(
+            dir,
+            minAge: const Duration(minutes: 10),
+          );
+        } catch (_) {
+          // Best effort only.
+        }
+      }),
+    );
   }
 
   Future<File> _downloadUpdateFile(GreenVpnUpdateManifest manifest) async {
@@ -10505,6 +12306,7 @@ class _UpdatesPageState extends State<UpdatesPage> {
         setState(() => _downloadStatus = 'Файл скачан. Запускаю установку...');
       }
       await _installDownloadedUpdate(file);
+      _schedulePostInstallUpdateCacheCleanup();
       if (!mounted) return;
       setState(() {
         _downloadStatus = !kIsWeb && Platform.isAndroid
@@ -12735,7 +14537,7 @@ class WireGuardRuntimeStatus {
 
   String get routeConflictHint {
     if (hasCompetingTunnel) {
-      return 'Есть другой активный WireGuard-интерфейс или сервис. Он может мешать маршрутизации и рукопожатию BlueVPNDev1.';
+      return 'Есть другой активный VPN-интерфейс или сервис. Он может мешать подключению Green VPN.';
     }
     if (routeOwnerLabel != 'unknown' && routeOwnerLabel != tunnelName) {
       return 'Основной IPv4-маршрут сейчас принадлежит не BlueVPNDev1, а $routeOwnerLabel.';
@@ -13223,23 +15025,37 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
   Map<String, Object?>? _androidSupportFields() {
     if (!_isAndroidDiagnostics) return null;
     final safe = greenVpnSafeAndroidVpnStatus(_androidVpnStatus);
-    final connected = safe['connected'] == true || safe['state'] == 'up';
+    final connected =
+        safe['connected'] == true ||
+        safe['ownTunnelRunning'] == true ||
+        safe['state'] == 'up';
+    final systemVpnActive = safe['systemVpnActive'] == true;
+    final externalVpnActive =
+        safe['externalVpnActive'] == true ||
+        safe['systemVpnActiveWithoutOwnTunnel'] == true ||
+        (systemVpnActive && !connected);
     final rxBytes = greenVpnIntValue(safe['rxBytes']);
     final txBytes = greenVpnIntValue(safe['txBytes']);
     final hasTraffic = rxBytes > 0 || txBytes > 0;
     return <String, Object?>{
       'service': 'android_vpn_service',
-      'mode': connected ? 'android_wireguard' : 'android_down',
+      'mode': connected
+          ? 'android_wireguard'
+          : (externalVpnActive ? 'android_external_vpn' : 'android_down'),
       'hasHandshake': connected && hasTraffic,
       'hasTraffic': hasTraffic,
       'traffic':
           'rx ${WireGuardRuntimeStatus._formatBytes(rxBytes)} / tx ${WireGuardRuntimeStatus._formatBytes(txBytes)}',
       'realTunnel': connected,
-      'competingVpn': 'unknown',
-      'routeOwner': connected ? 'android_vpn_service' : 'unknown',
+      'competingVpn': externalVpnActive ? 'external_vpn_active' : 'none',
+      'routeOwner': connected
+          ? 'green_vpn_android_vpn_service'
+          : (externalVpnActive ? 'android_system_external_vpn' : 'unknown'),
       'routeHint': connected
           ? 'Android VpnService is active. Use route events for YouTube reachability.'
-          : 'Android VpnService is not active.',
+          : (externalVpnActive
+                ? 'Another Android VPN is active. Green VPN must take over before route checks are valid.'
+                : 'Android VpnService is not active.'),
       'endpoint': 'android-native',
       'androidStatus': safe,
     };
@@ -13495,7 +15311,12 @@ class _SupportStatusLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final valueStyle = TextStyle(
+      color: theme.colorScheme.onSurface.withOpacity(0.65),
+      fontWeight: FontWeight.w800,
+    );
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Icon(
           ok ? Icons.check_circle_rounded : Icons.info_rounded,
@@ -13504,16 +15325,23 @@ class _SupportStatusLine extends StatelessWidget {
         ),
         const SizedBox(width: 10),
         Expanded(
-          child: Text(
-            title,
-            style: const TextStyle(fontWeight: FontWeight.w800),
-          ),
-        ),
-        Text(
-          value,
-          style: TextStyle(
-            color: theme.colorScheme.onSurface.withOpacity(0.65),
-            fontWeight: FontWeight.w800,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                value,
+                softWrap: true,
+                overflow: TextOverflow.visible,
+                style: valueStyle,
+              ),
+            ],
           ),
         ),
       ],
@@ -13625,7 +15453,7 @@ class WireGuardAndroidBackend extends VpnBackend {
   Future<bool> isConnected() async {
     try {
       final response = await _invokeMap('status', {'name': tunnelName});
-      return response['connected'] == true || response['state'] == 'up';
+      return statusLooksConnected(response, tunnelName: tunnelName);
     } catch (_) {
       return false;
     }
@@ -13656,6 +15484,34 @@ class WireGuardAndroidBackend extends VpnBackend {
       return raw.map((key, value) => MapEntry('$key', value));
     }
     return const <String, dynamic>{};
+  }
+
+  static bool statusLooksConnected(
+    Map<String, dynamic> status, {
+    String tunnelName = kTunnelName,
+  }) {
+    final state = (status['state'] ?? '').toString().toLowerCase();
+    if (status['connected'] == true ||
+        status['ownTunnelRunning'] == true ||
+        state == 'up') {
+      return true;
+    }
+    if (status['systemVpnActive'] == true &&
+        (status['lastGreenVpnActive'] == true ||
+            status['ownTunnelSource'] == 'marker')) {
+      return true;
+    }
+    final nativeTunnelName = (status['nativeTunnelName'] ?? '').toString();
+    final expectedNames = <String>{
+      tunnelName,
+      if (nativeTunnelName.isNotEmpty) nativeTunnelName,
+      'GreenVPN',
+    };
+    final running = status['runningTunnels'];
+    if (running is Iterable) {
+      return running.any((item) => expectedNames.contains(item.toString()));
+    }
+    return false;
   }
 
   static String? _messageFromNative(Map<String, dynamic> response) {
@@ -14212,7 +16068,7 @@ if ($null -eq $svc) { exit 0 }
       return VpnBackendResult(
         ok: false,
         message:
-            'BlueVPNDev1 поднял сервис, но не подтвердил реальный handshake/traffic. ${status.describe()}. Открой диагностику и пришли VPN-узел, handshake и traffic.',
+            'VPN запустился, но подключение не подтвердилось. Открой диагностику и отправь отчёт в поддержку.',
       );
     } catch (e) {
       await log('EXCEPTION(connect): ' + e.toString());

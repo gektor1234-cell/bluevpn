@@ -55,14 +55,15 @@ if ($Mode -eq "release" -or $Mode -eq "both") {
     $releaseArgs += "--build-name=$releaseBuildName"
     $releaseArgs += "--build-number=$releaseBuildNumber"
     if ($EnableYandexRewardedAds -or $DeployPreview) {
-        $releaseAppVersion = "0.2.26-adgate-preview-ruvds"
-        $releaseBuildName = "0.2.26"
-        $releaseBuildNumber = "2026061401"
+        $releaseAppVersion = "0.2.43-preview"
+        $releaseBuildName = "0.2.43"
+        $releaseBuildNumber = "2026070503"
         $releaseArgs[4] = "--dart-define=GREENVPN_APP_VERSION=$releaseAppVersion"
         $releaseArgs[5] = "--build-name=$releaseBuildName"
         $releaseArgs[6] = "--build-number=$releaseBuildNumber"
         $releaseArgs += "--dart-define=GREENVPN_YANDEX_REWARDED_ADS_ENABLED=true"
         $releaseArgs += "--dart-define=GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=false"
+        $releaseArgs += "--dart-define=BLUEVPN_API_BASE_URLS=https://176-113-81-35.sslip.io"
     }
     $previousGreenVpnAppVersion = $env:GREENVPN_APP_VERSION
     try {
