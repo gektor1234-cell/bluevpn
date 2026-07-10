@@ -23,6 +23,22 @@ os.environ["YOOKASSA_SECRET_KEY"] = ""
 
 from backend_live.app import main  # noqa: E402
 
+PAID_BETA_SITE_HTML = """
+<html><head><meta name="robots" content="noindex,nofollow"></head><body>
+<p>3 дня</p><p>149 ₽</p><p>299 ₽</p><p>до двух устройств</p>
+<p>без рекламы и автопродления</p>
+<a href="downloads/GreenVPN_Android.apk">Android</a>
+<a href="downloads/GreenVPN_Setup.exe">Windows</a>
+<a href="terms/">Условия</a><a href="privacy/">Конфиденциальность</a>
+</body></html>
+"""
+PAID_BETA_SITE_FETCH = {
+    "status": 200,
+    "html": PAID_BETA_SITE_HTML,
+    "xRobotsTag": "noindex, nofollow, noarchive",
+    "error": "",
+}
+
 
 class PaidBetaPolicyTests(unittest.TestCase):
     @classmethod
@@ -207,6 +223,82 @@ class PaidBetaPolicyTests(unittest.TestCase):
             "fallback",
             targets["green_api_fallback_1_healthz"]["tags"],
         )
+
+    def test_paid_beta_payment_urls_include_public_base_prefix(self) -> None:
+        previous = {
+            "PUBLIC_BASE_URL": main.PUBLIC_BASE_URL,
+            "PUBLIC_SITE_URL": main.PUBLIC_SITE_URL,
+            "YOOKASSA_RETURN_URL": main.YOOKASSA_RETURN_URL,
+            "YOOKASSA_WEBHOOK_URL": main.YOOKASSA_WEBHOOK_URL,
+        }
+        main.PUBLIC_BASE_URL = "https://api.example.test/paid-beta-api"
+        main.PUBLIC_SITE_URL = "https://example.test/paid-beta"
+        main.YOOKASSA_RETURN_URL = (
+            "https://api.example.test/paid-beta-api/payment/return"
+        )
+        main.YOOKASSA_WEBHOOK_URL = (
+            "https://api.example.test/paid-beta-api/api/v1/billing/yookassa/webhook"
+        )
+        try:
+            with patch.object(
+                main,
+                "_fetch_paid_beta_site",
+                return_value=PAID_BETA_SITE_FETCH,
+            ):
+                readiness = main.public_site_readiness()
+        finally:
+            for key, value in previous.items():
+                setattr(main, key, value)
+
+        checks = {item["code"]: item for item in readiness["checks"]}
+        urls = checks["yookassa_required_urls"]
+        self.assertTrue(urls["ok"])
+        self.assertEqual(
+            urls["value"]["expectedReturnPath"],
+            "/paid-beta-api/payment/return",
+        )
+        self.assertEqual(
+            urls["value"]["expectedWebhookPath"],
+            "/paid-beta-api/api/v1/billing/yookassa/webhook",
+        )
+
+    def test_paid_beta_site_readiness_does_not_require_ad_markers(self) -> None:
+        previous = {
+            "PUBLIC_BASE_URL": main.PUBLIC_BASE_URL,
+            "PUBLIC_SITE_URL": main.PUBLIC_SITE_URL,
+            "YOOKASSA_RETURN_URL": main.YOOKASSA_RETURN_URL,
+            "YOOKASSA_WEBHOOK_URL": main.YOOKASSA_WEBHOOK_URL,
+            "LEGAL_OWNER_NAME": main.LEGAL_OWNER_NAME,
+            "LEGAL_OWNER_INN": main.LEGAL_OWNER_INN,
+            "LEGAL_CONTACT_EMAIL": main.LEGAL_CONTACT_EMAIL,
+        }
+        main.PUBLIC_BASE_URL = "https://api.example.test/paid-beta-api"
+        main.PUBLIC_SITE_URL = "https://example.test/paid-beta"
+        main.YOOKASSA_RETURN_URL = (
+            "https://api.example.test/paid-beta-api/payment/return"
+        )
+        main.YOOKASSA_WEBHOOK_URL = (
+            "https://api.example.test/paid-beta-api/api/v1/billing/yookassa/webhook"
+        )
+        main.LEGAL_OWNER_NAME = "Test Owner"
+        main.LEGAL_OWNER_INN = "123456789012"
+        main.LEGAL_CONTACT_EMAIL = "support@example.test"
+        try:
+            with patch.object(
+                main,
+                "_fetch_paid_beta_site",
+                return_value=PAID_BETA_SITE_FETCH,
+            ):
+                readiness = main.public_site_readiness()
+        finally:
+            for key, value in previous.items():
+                setattr(main, key, value)
+
+        checks = {item["code"]: item for item in readiness["checks"]}
+        self.assertEqual(readiness["mode"], "paid_beta")
+        self.assertTrue(readiness["productionReady"])
+        self.assertTrue(checks["paid_beta_offer_visible"]["ok"])
+        self.assertNotIn("2 рекламы", PAID_BETA_SITE_HTML)
 
     def test_beta_quote_ignores_unsupported_options(self) -> None:
         selection = main.normalize_tariff_selection(self.beta_payload())

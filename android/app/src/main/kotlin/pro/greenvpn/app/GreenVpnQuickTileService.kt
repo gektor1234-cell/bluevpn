@@ -31,9 +31,13 @@ import javax.crypto.spec.GCMParameterSpec
 
 class GreenVpnQuickTileService : TileService() {
     private companion object {
-        const val API_BASE_URL = "https://api.greenvpn.pro"
-        val API_FALLBACK_BASE_URLS = listOf("https://176-113-81-35.sslip.io")
+        val API_BASE_URL = BuildConfig.GREENVPN_API_BASE_URL.trim().trimEnd('/')
+        val API_FALLBACK_BASE_URLS = BuildConfig.GREENVPN_API_FALLBACK_BASE_URLS
+            .split(',')
+            .map { it.trim().trimEnd('/') }
+            .filter { it.isNotEmpty() }
         val APP_VERSION = BuildConfig.GREENVPN_APP_VERSION
+        val APP_LABEL = BuildConfig.GREENVPN_APP_LABEL
         const val SECURE_PREFS_NAME = "greenvpn_secure_config_store_v1"
         const val SECURE_KEY_ALIAS = "greenvpn_config_aes_v1"
         const val GCM_TAG_BITS = 128
@@ -377,7 +381,7 @@ class GreenVpnQuickTileService : TileService() {
     private fun setTile(state: Int, subtitle: String) {
         mainHandler.post {
             val tile = qsTile ?: return@post
-            tile.label = "Green VPN"
+            tile.label = APP_LABEL
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 tile.subtitle = subtitle
             }
@@ -395,7 +399,7 @@ class GreenVpnQuickTileService : TileService() {
     private fun openApp(message: String) {
         showToast(message)
         val intent = Intent(this, MainActivity::class.java).apply {
-            action = "pro.greenvpn.app.OPEN_TARIFF"
+            action = "${BuildConfig.APPLICATION_ID}.OPEN_TARIFF"
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             putExtra("greenVpnTileMessage", message)
         }

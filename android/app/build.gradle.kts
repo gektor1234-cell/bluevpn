@@ -19,9 +19,20 @@ fun quotedBuildConfig(value: String): String {
     return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 }
 
+fun environmentValue(name: String, defaultValue: String): String {
+    return (System.getenv(name) ?: defaultValue).trim().ifEmpty { defaultValue }
+}
+
 val greenVpnAppVersion = (System.getenv("GREENVPN_APP_VERSION") ?: "0.2.23-trial-only-android-vpn-takeover")
     .trim()
     .ifEmpty { "0.2.23-trial-only-android-vpn-takeover" }
+val greenVpnApplicationId = environmentValue("GREENVPN_ANDROID_APPLICATION_ID", "pro.greenvpn.app")
+val greenVpnAppLabel = environmentValue("GREENVPN_ANDROID_APP_LABEL", "Green VPN")
+val greenVpnApiBaseUrl = environmentValue("GREENVPN_ANDROID_API_BASE_URL", "https://api.greenvpn.pro")
+val greenVpnApiFallbackBaseUrls = environmentValue(
+    "GREENVPN_ANDROID_API_FALLBACK_BASE_URLS",
+    "https://176-113-81-35.sslip.io",
+)
 
 android {
     namespace = "pro.greenvpn.app"
@@ -43,14 +54,22 @@ android {
     }
 
     defaultConfig {
-        applicationId = "pro.greenvpn.app"
+        applicationId = greenVpnApplicationId
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 24
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        manifestPlaceholders["greenVpnApplicationLabel"] = greenVpnAppLabel
         buildConfigField("String", "GREENVPN_APP_VERSION", quotedBuildConfig(greenVpnAppVersion))
+        buildConfigField("String", "GREENVPN_APP_LABEL", quotedBuildConfig(greenVpnAppLabel))
+        buildConfigField("String", "GREENVPN_API_BASE_URL", quotedBuildConfig(greenVpnApiBaseUrl))
+        buildConfigField(
+            "String",
+            "GREENVPN_API_FALLBACK_BASE_URLS",
+            quotedBuildConfig(greenVpnApiFallbackBaseUrls),
+        )
     }
 
     if (hasReleaseKeystore) {

@@ -448,6 +448,20 @@ PUBLIC_SITE_REQUIRED_PRICING_MARKERS = [
     {"code": "zero_price", "label": "Zero rubles start", "needle": "0 ₽"},
     {"code": "configurable_tariff", "label": "Configurable tariff", "needle": "Тариф без рекламы"},
 ]
+PAID_BETA_SITE_REQUIRED_MARKERS = [
+    {"code": "trial_3d", "label": "3-day Trial", "needle": "3 дня"},
+    {"code": "first_149", "label": "149 RUB first period", "needle": "149 ₽"},
+    {"code": "renewal_299", "label": "299 RUB renewal", "needle": "299 ₽"},
+    {"code": "two_devices", "label": "Two devices", "needle": "до двух устройств"},
+    {"code": "no_ads", "label": "No ads", "needle": "без рекламы"},
+    {"code": "no_auto_renew", "label": "No auto-renew", "needle": "автопродления"},
+]
+PAID_BETA_SITE_REQUIRED_LINKS = [
+    {"code": "android", "label": "Android beta", "needle": "downloads/GreenVPN_Android.apk"},
+    {"code": "windows", "label": "Windows beta", "needle": "downloads/GreenVPN_Setup.exe"},
+    {"code": "terms", "label": "Beta terms", "needle": "terms/"},
+    {"code": "privacy", "label": "Beta privacy", "needle": "privacy/"},
+]
 PUBLIC_SITE_BANNED_PHRASES = [
     "обход блокировок",
     "обхода блокировок",
@@ -16584,7 +16598,167 @@ def _public_site_rendered_pages() -> tuple[dict[str, str], list[dict]]:
     return pages, errors
 
 
+def _fetch_paid_beta_site(url: str) -> dict:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "GreenVPN-PaidBetaReadiness/1.0"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=12) as response:
+            return {
+                "status": int(getattr(response, "status", 200) or 200),
+                "html": response.read(2 * 1024 * 1024).decode("utf-8", errors="replace"),
+                "xRobotsTag": str(response.headers.get("X-Robots-Tag") or ""),
+                "error": "",
+            }
+    except Exception as exc:
+        return {
+            "status": 0,
+            "html": "",
+            "xRobotsTag": "",
+            "error": clean_limited_text(str(exc), 240),
+        }
+
+
+def paid_beta_site_readiness() -> dict:
+    fetched = _fetch_paid_beta_site(PUBLIC_SITE_URL)
+    html = str(fetched.get("html") or "")
+    html_lower = html.lower()
+    missing_markers = [
+        item
+        for item in PAID_BETA_SITE_REQUIRED_MARKERS
+        if item["needle"].lower() not in html_lower
+    ]
+    missing_links = [
+        item
+        for item in PAID_BETA_SITE_REQUIRED_LINKS
+        if item["needle"].lower() not in html_lower
+    ]
+    banned_matches = [
+        phrase
+        for phrase in PUBLIC_SITE_BANNED_PHRASES
+        if phrase in re.sub(r"<[^>]+>", " ", html_lower)
+    ]
+    webhook_url = yookassa_effective_webhook_url()
+    public_base_path = urllib.parse.urlparse(PUBLIC_BASE_URL).path.rstrip("/")
+    expected_return_path = f"{public_base_path}/payment/return"
+    expected_webhook_path = f"{public_base_path}/api/v1/billing/yookassa/webhook"
+    local_hosts = {"", "bluevpn.local", "localhost", "127.0.0.1"}
+    legal_configured = (
+        bool(LEGAL_OWNER_NAME)
+        and LEGAL_OWNER_NAME != "Владелец Green VPN"
+        and bool(LEGAL_OWNER_INN)
+        and bool(LEGAL_CONTACT_EMAIL)
+        and "@" in LEGAL_CONTACT_EMAIL
+    )
+    noindex_html = "name=\"robots\"" in html_lower and "noindex" in html_lower
+    noindex_header = "noindex" in str(fetched.get("xRobotsTag") or "").lower()
+    checks = [
+        {
+            "code": "paid_beta_site_https",
+            "title": "HTTPS закрытой beta",
+            "ok": _is_https_url(PUBLIC_SITE_URL)
+            and _url_host(PUBLIC_SITE_URL) not in local_hosts
+            and _public_site_url_path(PUBLIC_SITE_URL).startswith("/paid-beta"),
+            "message": "GREENVPN_PUBLIC_SITE_URL должен вести на закрытый HTTPS path /paid-beta.",
+            "value": PUBLIC_SITE_URL,
+        },
+        {
+            "code": "paid_beta_site_reachable",
+            "title": "Доступность закрытой beta",
+            "ok": int(fetched.get("status") or 0) == 200 and not fetched.get("error"),
+            "message": "Закрытая beta-страница должна отвечать HTTP 200.",
+            "status": int(fetched.get("status") or 0),
+            "error": fetched.get("error") or "",
+        },
+        {
+            "code": "paid_beta_noindex",
+            "title": "Закрытие от индексации",
+            "ok": noindex_html and noindex_header,
+            "message": "Paid beta должна иметь noindex одновременно в HTML и HTTP header.",
+            "html": noindex_html,
+            "header": noindex_header,
+        },
+        {
+            "code": "paid_beta_offer_visible",
+            "title": "Условия paid beta",
+            "ok": not missing_markers,
+            "message": "Страница должна показывать Trial, 149/299 RUB, 2 устройства, no-ads и no-auto-renew.",
+            "missing": [
+                {"code": item["code"], "label": item["label"]}
+                for item in missing_markers
+            ],
+        },
+        {
+            "code": "paid_beta_links_visible",
+            "title": "Загрузки и документы beta",
+            "ok": not missing_links,
+            "message": "Страница должна содержать Android/Windows downloads и beta terms/privacy.",
+            "missing": [
+                {"code": item["code"], "label": item["label"]}
+                for item in missing_links
+            ],
+        },
+        {
+            "code": "legal_requisites_configured",
+            "title": "Реквизиты",
+            "ok": legal_configured,
+            "message": "Server-only legal owner, INN и support email должны быть настроены.",
+        },
+        {
+            "code": "safe_public_wording",
+            "title": "Безопасные формулировки",
+            "ok": not banned_matches,
+            "message": "Beta-страница не должна использовать запрещённые VPN-маркетинговые фразы.",
+            "bannedMatches": banned_matches,
+        },
+        {
+            "code": "yookassa_required_urls",
+            "title": "YooKassa URLs",
+            "ok": (
+                _is_https_url(YOOKASSA_RETURN_URL)
+                and _is_https_url(webhook_url)
+                and _url_host(YOOKASSA_RETURN_URL) not in local_hosts
+                and _url_host(webhook_url) not in local_hosts
+                and _public_site_url_path(YOOKASSA_RETURN_URL) == expected_return_path
+                and _public_site_url_path(webhook_url) == expected_webhook_path
+            ),
+            "message": "Return/webhook URL должны точно соответствовать paid-beta API prefix.",
+            "value": {
+                "returnUrl": YOOKASSA_RETURN_URL,
+                "webhookUrl": webhook_url,
+                "expectedReturnPath": expected_return_path,
+                "expectedWebhookPath": expected_webhook_path,
+            },
+        },
+    ]
+    failed = [check for check in checks if not check["ok"]]
+    return {
+        "ok": True,
+        "version": APP_VERSION,
+        "generatedAt": utc_now_iso(),
+        "mode": "paid_beta",
+        "productionReady": not failed,
+        "publicSiteReady": not failed,
+        "summary": {
+            "green": len(checks) - len(failed),
+            "yellow": len(failed),
+            "red": 0,
+            "message": (
+                "Готовность закрытой paid beta-страницы зелёная."
+                if not failed
+                else "У закрытой paid beta-страницы есть блокеры."
+            ),
+        },
+        "siteUrl": PUBLIC_SITE_URL,
+        "checks": checks,
+        "requiredActions": [check["message"] for check in failed],
+    }
+
+
 def public_site_readiness() -> dict:
+    if PAID_BETA_ENABLED:
+        return paid_beta_site_readiness()
     route_paths = {str(getattr(route, "path", "")) for route in app.routes}
     missing_routes = [
         item for item in PUBLIC_SITE_REQUIRED_PATHS if item["path"] not in route_paths
@@ -16615,8 +16789,9 @@ def public_site_readiness() -> dict:
     webhook_host = _url_host(webhook_url)
     public_base_host = _url_host(PUBLIC_BASE_URL)
     local_hosts = {"", "bluevpn.local", "localhost", "127.0.0.1"}
-    expected_return_path = "/payment/return"
-    expected_webhook_path = "/api/v1/billing/yookassa/webhook"
+    public_base_path = urllib.parse.urlparse(PUBLIC_BASE_URL).path.rstrip("/")
+    expected_return_path = f"{public_base_path}/payment/return"
+    expected_webhook_path = f"{public_base_path}/api/v1/billing/yookassa/webhook"
 
     legal_configured = (
         bool(LEGAL_OWNER_NAME)

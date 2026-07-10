@@ -53,7 +53,8 @@
    - Cohort/email/phone mutations получили `users.updated_at`; DB-sync переносит только более новую запись.
    - Cohort и DB-sync покрыты отдельными backend-тестами.
 4. **Paid-beta clients** - выполнен локально 2026-07-10, без публикации.
-   - Отдельный channel `paid-beta`, финальная версия с инвайтами `0.3.0-paid-beta.2`, Android build `2026071002`.
+   - Отдельный channel `paid-beta`, финальный Android `0.3.0-paid-beta.5`, build `2026071005`, package `pro.greenvpn.app.beta`.
+   - Windows остаётся `0.3.0-paid-beta.2`: артефакт собран и проверен, но ждёт реальной установки владельцем.
    - Primary/fallback указывают только на изолированный path `/paid-beta-api`.
    - YooKassa UI включён; rewarded ads и session timer выключены compile-time.
    - Android APK подписан и проверен; Windows installer собран, но остаётся без Authenticode-подписи.
@@ -75,12 +76,14 @@
    - Desktop/mobile visual QA, локальные ссылки, якоря и ресурсы проверены; release-файлы добавляются только на этапе 7.
    - Манифест страницы: `docs/PAID_BETA_SITE_2026_07_10_RU.md`.
 7. **Тесты и smoke** - выполнено в изолированном тестовом контуре 2026-07-10.
-   - Backend `0.9.106-paid-beta.2` работает отдельно на `127.0.0.1:8010` у Timeweb и RUVDS.
+   - Backend `0.9.106-paid-beta.4` работает отдельно на `127.0.0.1:8010` у Timeweb и RUVDS; current release `paid-beta-0.3.0-paid-beta.5-2026071005-r5`.
    - Auth, marker/cohort denial, invite claim, quote 149, no-ads, expiry policy, primary/fallback bootstrap/config, update manifests, DB sync и funnel прошли.
    - Реальный beta peer получил `10.10.0.180`, одинаковый config на primary/fallback и был штатно удалён после smoke.
    - Остановка только Timeweb beta дала `502` на primary, selector выбрал RUVDS, production `0.9.105` не прервался; primary затем восстановлен.
    - Четыре beta download по двум HTTPS-маршрутам скачаны полностью и совпали по SHA; production SHA не изменились.
-   - Двадцать шесть backend/DB-sync/package тестов и release gate 0/0 проходят.
+   - Двадцать восемь backend/DB-sync/package тестов и release gate 0/0 проходят.
+   - Физический Samsung Android 13 прошёл login, YouTube, реальный Timeweb→RUVDS failover, recents/reopen и disconnect.
+   - В social-only добавлены поиск и выбор любого установленного приложения; add/remove Chrome при активном VPN проверен по `tun0` и Android UID allowlist.
    - Серверный манифест: `docs/PAID_BETA_TEST_CONTOUR_2026_07_10_RU.md`.
 8. **Ops cleanup** - выполнен в разрешённой test-only границе 2026-07-10.
    - Удалены временные beta seed/staging, 18 env-дублей устранены без изменения effective config.
@@ -90,6 +93,10 @@
 9. **Пакет для первых 20 участников** - технически подготовлен, ждёт owner gate.
    - Добавлен защищённый генератор одноразовых кодов и tracker; коды до real-device/payment/legal smoke намеренно не создавались.
    - Runbook аудитории, приглашений, касаний, метрик и stop-условий: `docs/PAID_BETA_FIRST20_RUNBOOK_2026_07_10_RU.md`.
+
+## Текущая точка остановки
+
+Техническая часть доступная без владельца завершена. Android real-device gate закрыт. До генерации 20 кодов владелец должен: установить Windows beta на реальный ПК, провести один реальный платёж 149 RUB и подтвердить terms/privacy. Production до этих действий остаётся замороженным.
 
 ## Критерии beta
 

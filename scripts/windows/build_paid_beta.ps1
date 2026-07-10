@@ -1,9 +1,11 @@
 param(
     [ValidateSet("android", "windows", "both")]
     [string]$Mode = "both",
-    [string]$AppVersion = "0.3.0-paid-beta.2",
+    [string]$AppVersion = "0.3.0-paid-beta.5",
     [string]$AndroidBuildName = "0.3.0",
-    [string]$AndroidBuildNumber = "2026071002",
+    [string]$AndroidBuildNumber = "2026071005",
+    [string]$AndroidApplicationId = "pro.greenvpn.app.beta",
+    [string]$AndroidAppLabel = "Green VPN Beta",
     [string]$ApiBaseUrl = "https://api.greenvpn.pro/paid-beta-api",
     [string]$ApiFallbackBaseUrls = "https://176-113-81-35.sslip.io/paid-beta-api",
     [string]$ClientMarker = "green-vpn-paid-beta-v1",
@@ -25,6 +27,15 @@ if (-not $ApiFallbackBaseUrls.Contains("/paid-beta-api")) {
 }
 if ($ClientMarker -ne "green-vpn-paid-beta-v1") {
     throw "Unexpected paid beta client marker."
+}
+if ($AndroidApplicationId -eq "pro.greenvpn.app") {
+    throw "Paid beta Android must not replace the production application ID."
+}
+if ($AndroidApplicationId -notmatch '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$') {
+    throw "Invalid paid beta Android application ID: $AndroidApplicationId"
+}
+if ([string]::IsNullOrWhiteSpace($AndroidAppLabel) -or $AndroidAppLabel -eq "Green VPN") {
+    throw "Paid beta Android must use a distinct launcher label."
 }
 if (-not (Get-Command flutter -ErrorAction SilentlyContinue)) {
     throw "flutter was not found in PATH."
@@ -58,14 +69,26 @@ if ($Mode -in @("android", "both")) {
     $oldAndroidSdkRoot = $env:ANDROID_SDK_ROOT
     $oldJavaHome = $env:JAVA_HOME
     $oldPath = $env:Path
-    $hadAppVersion = Test-Path Env:\GREENVPN_APP_VERSION
-    $oldAppVersion = $env:GREENVPN_APP_VERSION
+    $androidBuildEnvironment = [ordered]@{
+        GREENVPN_APP_VERSION = $AppVersion
+        GREENVPN_ANDROID_APPLICATION_ID = $AndroidApplicationId
+        GREENVPN_ANDROID_APP_LABEL = $AndroidAppLabel
+        GREENVPN_ANDROID_API_BASE_URL = $ApiBaseUrl
+        GREENVPN_ANDROID_API_FALLBACK_BASE_URLS = $ApiFallbackBaseUrls
+    }
+    $oldAndroidBuildEnvironment = @{}
     try {
         $env:ANDROID_HOME = $androidSdk
         $env:ANDROID_SDK_ROOT = $androidSdk
         $env:JAVA_HOME = $jdkDir
         $env:Path = "$jdkDir\bin;$androidSdk\platform-tools;$env:Path"
-        $env:GREENVPN_APP_VERSION = $AppVersion
+        foreach ($name in $androidBuildEnvironment.Keys) {
+            $oldAndroidBuildEnvironment[$name] = [pscustomobject]@{
+                existed = Test-Path -LiteralPath "Env:$name"
+                value = [Environment]::GetEnvironmentVariable($name, "Process")
+            }
+            Set-Item -LiteralPath "Env:$name" -Value $androidBuildEnvironment[$name]
+        }
 
         flutter build apk --release --no-pub `
             --build-name $AndroidBuildName `
@@ -84,10 +107,13 @@ if ($Mode -in @("android", "both")) {
         $env:ANDROID_SDK_ROOT = $oldAndroidSdkRoot
         $env:JAVA_HOME = $oldJavaHome
         $env:Path = $oldPath
-        if ($hadAppVersion) {
-            $env:GREENVPN_APP_VERSION = $oldAppVersion
-        } else {
-            Remove-Item Env:\GREENVPN_APP_VERSION -ErrorAction SilentlyContinue
+        foreach ($name in $androidBuildEnvironment.Keys) {
+            $previous = $oldAndroidBuildEnvironment[$name]
+            if ($previous.existed) {
+                Set-Item -LiteralPath "Env:$name" -Value $previous.value
+            } else {
+                Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+            }
         }
     }
 
@@ -102,11 +128,25 @@ if ($Mode -in @("android", "both")) {
     & $apksigner.FullName verify --verbose --print-certs $androidPath | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "Android paid beta signature verification failed" }
 
+    $aapt = Get-ChildItem -LiteralPath (Join-Path $androidSdk "build-tools") `
+        -Filter "aapt.exe" -Recurse | Sort-Object FullName -Descending | Select-Object -First 1
+    if ($null -eq $aapt) { throw "aapt.exe not found" }
+    $badging = (& $aapt.FullName dump badging $androidPath) -join "`n"
+    if ($LASTEXITCODE -ne 0) { throw "Android paid beta badging inspection failed" }
+    if ($badging -notmatch "package: name='$([regex]::Escape($AndroidApplicationId))'") {
+        throw "Android paid beta package ID does not match $AndroidApplicationId."
+    }
+    if ($badging -notmatch "application-label:'$([regex]::Escape($AndroidAppLabel))'") {
+        throw "Android paid beta launcher label does not match $AndroidAppLabel."
+    }
+
     $item = Get-Item -LiteralPath $androidPath
     $artifacts.Add([pscustomobject]@{
         platform = "android"
         version = $AppVersion
         buildNumber = $AndroidBuildNumber
+        applicationId = $AndroidApplicationId
+        appLabel = $AndroidAppLabel
         path = $item.FullName
         fileName = $item.Name
         sizeBytes = $item.Length
@@ -149,6 +189,8 @@ $manifest = [pscustomobject]@{
     isolated = $true
     productionPublished = $false
     appVersion = $AppVersion
+    androidApplicationId = $AndroidApplicationId
+    androidAppLabel = $AndroidAppLabel
     clientMarker = $ClientMarker
     apiBaseUrl = $ApiBaseUrl
     apiFallbackBaseUrls = $ApiFallbackBaseUrls

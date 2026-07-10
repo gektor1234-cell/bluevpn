@@ -4,12 +4,13 @@
 
 ## Gate до первого приглашения
 
-Все четыре пункта обязательны:
+Android real-device gate закрыт: Samsung Android 13 прошёл login, background/recents, connect/disconnect, social-only, custom app picker, YouTube и реальный fallback.
 
-1. Android APK установлен на реальный телефон поверх текущей версии; проверены login, background, закрытие окна, reboot, connect/disconnect, смена сервера и social-only.
-2. Windows installer установлен на реальный ПК; проверены login, connect/disconnect, reboot, восстановление статуса и отсутствие поломки сети после uninstall. Установщик пока unsigned, поэтому не отдавать холодной аудитории.
-3. Владелец проводит один реальный платёж 149 RUB, возвращается в приложение, ждёт polling и подтверждает активацию на primary и fallback. Затем отдельно проверяет сценарий возврата/отмены по правилам YooKassa.
-4. Владелец принимает текущие beta terms/privacy либо отдаёт их профильному юристу. До этого только личные приглашения знакомым тестировщикам.
+Остались три обязательных пункта:
+
+1. Windows installer установлен на реальный ПК; проверены login, connect/disconnect, reboot, восстановление статуса и отсутствие поломки сети после uninstall. Он unsigned и не side-by-side isolated, поэтому может заменить локальный stable-клиент.
+2. Владелец проводит один реальный платёж 149 RUB, возвращается в приложение, ждёт polling и подтверждает активацию на primary и fallback. Затем отдельно проверяет возврат/отмену по правилам YooKassa.
+3. Владелец принимает текущие beta terms/privacy либо отдаёт их профильному юристу. До этого только личные приглашения знакомым тестировщикам.
 
 Пока gate не закрыт, 20 кодов не создаются: код показывается один раз и имеет ограниченный срок.
 
@@ -18,7 +19,7 @@
 После gate генератор запускается на Timeweb primary, пишет коды только в root-only каталог и никогда не выводит их в stdout:
 
 ```bash
-python3 scripts/ops/create_paid_beta_first20_package.py \
+/opt/bluevpn-paid-beta/.venv/bin/python /opt/bluevpn-paid-beta/current/ops/create_paid_beta_first20_package.py \
   --api-base http://127.0.0.1:8010 \
   --admin-token-file /opt/bluevpn-paid-beta/data/admin_token.txt \
   --output-dir /root/greenvpn-paid-beta-first20/first20-20260710 \

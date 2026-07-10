@@ -1,6 +1,6 @@
 # Green VPN: изолированный тестовый paid beta-контур
 
-Дата: 2026-07-10. Статус: работает только как закрытый тестовый контур. Этот документ не разрешает замену production stable или публичный массовый запуск.
+Дата: 2026-07-10. Статус: технически готов к действиям владельца, но не к публичному запуску.
 
 ## Размещение
 
@@ -11,86 +11,63 @@
 
 На каждом control-plane:
 
-- service: `greenvpn-paid-beta.service`;
-- bind: только `127.0.0.1:8010`;
-- release root: `/opt/bluevpn-paid-beta/releases`;
-- current symlink: `/opt/bluevpn-paid-beta/current`;
-- data: `/opt/bluevpn-paid-beta/data/bluevpn.db`;
+- `greenvpn-paid-beta.service`, bind только `127.0.0.1:8010`;
+- current: `/opt/bluevpn-paid-beta/current`;
+- DB: `/opt/bluevpn-paid-beta/data/bluevpn.db`;
 - root-only env: `/etc/bluevpn/paid-beta.env`;
-- static current symlink: `/var/www/paid-beta`;
-- DB sync: `greenvpn-paid-beta-db-sync.timer`, каждые 10 секунд;
-- sync state: `/var/lib/greenvpn-paid-beta-db-sync`.
+- site: `/var/www/paid-beta`;
+- sync: `greenvpn-paid-beta-db-sync.timer`, 10 секунд;
+- probe: `greenvpn-paid-beta-service-probe.timer`, 300 секунд.
 
-Production продолжает использовать отдельные `bluevpn-backend.service`, `127.0.0.1:8000`, `/opt/bluevpn/backend`, production DB и `/var/www/greenvpn/downloads`.
+Production использует отдельные service/DB/site/download paths и backend `0.9.105` на `127.0.0.1:8000`.
 
 ## Текущий release
 
-- App: `0.3.0-paid-beta.2`, Android build `2026071002`.
-- Backend: `0.9.106-paid-beta.2`.
-- Release directory: `paid-beta-0.3.0-paid-beta.2-2026071002-r2`.
-- Bundle SHA-256: `440671161C710AD6BA7A47D4A5DC77CB96D3451F9FF26E3C233EF58853295B17`.
-- Android SHA-256: `29252A8AE44BA4487363E669A0ED31DDAC159289A49254EBBED34F123D20AB50`.
-- Windows SHA-256: `41F96CB95118507AACA861721F83B2972CF419E2F10BA2FCF38CB73800988332`.
-- Windows Authenticode: `NotSigned`.
-- Client IP pool: `10.10.0.180-10.10.0.229`, проверен свободным относительно production DB и live peers перед запуском.
+- Android: `0.3.0-paid-beta.5`, build `2026071005`, package `pro.greenvpn.app.beta`.
+- Windows: `0.3.0-paid-beta.2`.
+- Backend: `0.9.106-paid-beta.4`.
+- Release directory на обоих узлах: `paid-beta-0.3.0-paid-beta.5-2026071005-r5`.
+- Bundle SHA-256: `5955F5A884A7E847A09F9DA43A226F6A78603107EDEDFA0E17C5D1EA2337AF07`.
+- Android SHA-256: `90E42FB6CE5A06247E620E5DC3302B7C7C86A0F9A8FEBDC523876A622B9C6580`.
+- Windows SHA-256: `41F96CB95118507AACA861721F83B2972CF419E2F10BA2FCF38CB73800988332` (`NotSigned`).
+- Client IP pool: `10.10.0.180-10.10.0.229`.
 
-Beta-env создан из уже работающей серверной конфигурации, но получает отдельные auth/admin/invite peppers, отдельные пути, beta URLs и принудительно выключенные рекламу, session timer, auto-renew и beta alert-шум. Оба узла используют один beta invite/auth contract и отдельный одинаковый admin token. Значения не выводились и не попадали в Git.
-
-## Nginx
-
-В существующие TLS virtual hosts добавлены только includes:
-
-- `/etc/nginx/snippets/greenvpn-paid-beta-api.conf`;
-- `/etc/nginx/snippets/greenvpn-paid-beta-site.conf`.
-
-API prefix срезается перед proxy на `127.0.0.1:8010`. Static path использует отдельный `/var/www/paid-beta`. Для beta routes выставлены `noindex`, `noarchive`, `nosniff` и `no-store`; directory listing выключен. Production root locations и downloads не заменялись.
+Update API на Timeweb выдаёт primary download URLs; RUVDS выдаёт собственные fallback URLs. Оба возвращают Android `.5`/Windows `.2`, правильные SHA и `required=false`.
 
 ## Проверки
 
-- 26 backend/DB-sync/package unit tests: OK.
-- Flutter smoke: OK; release APK/EXE: OK.
-- Release gate: 0 предупреждений, 0 ошибок.
-- Оба local/public beta health возвращают `0.9.106-paid-beta.2`.
-- Оба production health одновременно возвращают `0.9.105`.
-- Каталог на обоих beta-узлах содержит 5 managed записей и 3 доступных config-ready сервера.
-- DB sync на обоих узлах активен; последние summary: 0 conflicts, 0 errors.
-- Отдельный `greenvpn-paid-beta-service-probe.timer` активен на обоих control-plane и не заменяет production probe.
-- Оба beta API имеют отдельные свежие service observations; все 3 config-ready VPN endpoint имеют `healthy` observations с Timeweb и RUVDS.
-- Stateful HTTP smoke: login primary/fallback, beta denial до claim, персональный invite, Trial, quote 149 RUB, 2 устройства, без рекламы/timer, app-open/funnel, bootstrap и config на обоих API: OK.
-- Primary/fallback выдали один и тот же config и `10.10.0.180`; тестовый peer затем удалён live и из `wg0.conf`.
-- После cleanup на обоих control-plane: 0 smoke users/devices/subscriptions/invites/redemptions/events.
-- При остановке только Timeweb beta primary вернул 502, selector выбрал RUVDS fallback; production `0.9.105` продолжил отвечать. После запуска primary восстановился.
-- Android и Windows полностью скачаны по обоим HTTPS-маршрутам; размеры и SHA совпали.
-- Production Android SHA остался `308320429991A3278E3BA903155482D6613425D46681F180338ECB8C0929248F`.
-- Production Windows SHA остался `0B2FEAA2232582207CFB998902B04107067C8DDE1C4243A003FF979C2F2B5F15`.
+- 28 backend/DB-sync/first20 tests: OK.
+- Flutter test: OK; analyze без новых fatal issues.
+- Android release build/signature/package/label: OK.
+- Release gate: 0 warnings, 0 errors.
+- Local/public beta health: `0.9.106-paid-beta.4`; production health: `0.9.105`.
+- DB `quick_check=ok` на обоих узлах.
+- Stateful HTTP smoke: marker denial, primary/fallback login, invite, Trial, 149/299, 2 devices, no ads/timer, bootstrap/config/fallback: OK.
+- Smoke peer удалён; после синхронизации на обоих узлах 0 smoke users/devices/invites.
+- Site readiness 8/8; payment readiness green; real payment smoke остаётся owner action.
+- Оба service probe завершились `Result=success`, timers active.
+- Реальный Timeweb beta outage переключил Android-клиент на RUVDS без потери сессии.
+- Реальный Samsung SM-A226B: YouTube playback через VPN, recents swipe/reopen, корректный disconnect: OK.
+- Custom app picker: поиск Chrome, сохранение, active reconfigure и UID allowlist: OK. После удаления Chrome его UID исчез из VPN network capabilities, `tun0` остался поднят.
+- Stable Android `0.2.44` и beta `.5` установлены рядом; stable не заменён.
 
 ## Backups и rollback
 
-Installer сделал root-only backups:
+- Stable snapshots: `/root/greenvpn-pre-paid-beta-20260710T103821`.
+- Previous technical-ready snapshots: `/root/greenvpn-paid-beta-technical-ready-20260710T110614Z`.
+- Final deploy backups:
+  - Timeweb: `/root/greenvpn-paid-beta-backups/20260710T125718Z-timeweb-paid-beta-0.3.0-paid-beta.5-2026071005-r5`;
+  - RUVDS: `/root/greenvpn-paid-beta-backups/20260710T125730Z-ruvds-paid-beta-0.3.0-paid-beta.5-2026071005-r5`.
+- Final owner-gate snapshots: `/root/greenvpn-paid-beta-owner-gate-ready-20260710`.
+- Local checkpoint: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_owner_gate_ready_20260710`.
+- Git tag: `greenvpn-paid-beta-owner-gate-ready-20260710`.
 
-- Timeweb first install: `/root/greenvpn-paid-beta-backups/20260710T094349Z-timeweb-paid-beta-0.3.0-paid-beta.2-2026071002`;
-- RUVDS first install: `/root/greenvpn-paid-beta-backups/20260710T094428Z-ruvds-paid-beta-0.3.0-paid-beta.2-2026071002`;
-- Timeweb r2: `/root/greenvpn-paid-beta-backups/20260710T101011Z-timeweb-paid-beta-0.3.0-paid-beta.2-2026071002-r2`;
-- RUVDS r2: `/root/greenvpn-paid-beta-backups/20260710T101015Z-ruvds-paid-beta-0.3.0-paid-beta.2-2026071002-r2`.
-- Timeweb env dedupe: `/root/greenvpn-paid-beta-backups/20260710T103801Z-env-dedupe`;
-- RUVDS env dedupe: `/root/greenvpn-paid-beta-backups/20260710T103751Z-env-dedupe`;
-- Timeweb beta probe: `/root/greenvpn-paid-beta-backups/20260710T104147Z-timeweb-paid-beta-probe`;
-- RUVDS beta probe: `/root/greenvpn-paid-beta-backups/20260710T104206Z-ruvds-paid-beta-probe`.
-- Technical-ready snapshot на обоих control-plane: `/root/greenvpn-paid-beta-technical-ready-20260710T110614Z`.
-- Локальный checkpoint с Git bundle и release artifacts: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_technical_ready_20260710T110614Z`.
-- Git tag: `greenvpn-paid-beta-technical-ready-20260710`.
+Разрешённый beta rollback: повторно развернуть проверенный `r5` либо остановить только beta service/sync/probe. Production service/DB/downloads не трогать. Android `.2/.3/.4` и server revisions до `r5` оставлены только для forensic comparison.
 
-Первый backend release сохранён только для forensic comparison: в нём известна ошибка удаления peer для managed `current_wg0`, поэтому он не является разрешённой rollback-целью. На NL1 есть отдельная backup конфигурации перед ручной очисткой первого smoke peer: `/root/greenvpn-paid-beta-smoke-cleanup-20260710T100214Z`.
+## Ограничения
 
-Разрешённый rollback beta: остановить beta sync/probe и сам beta backend либо повторно развернуть проверенный r2 bundle с SHA `440671161C710AD6BA7A47D4A5DC77CB96D3451F9FF26E3C233EF58853295B17`. На r1 не переключаться. Production service/DB/downloads при beta rollback не трогать.
-
-Временный `/root/greenvpn-paid-beta-stage` удалён на обоих control-plane после проверки current/site symlink и SHA r2. Установленные releases, сайт, DB и backups сохранены.
-
-## Оставшиеся ограничения
-
-- Два SQLite-узла не дают глобальную транзакционную блокировку при строго одновременном claim до sync. Для 20 персональных кодов используется primary-normal/fallback-only; массовый запуск требует общего transactional storage или одного write authority.
-- Реальный платёж YooKassa не создавался. Webhook production не перенастраивался; beta пока рассчитывает на client polling. Владелец должен провести один реальный платёж и сверку активации/возврата.
-- Windows installer не подписан Authenticode.
-- Android и Windows beta ещё нужно установить на реальные устройства владельца и проверить upgrade/background/reboot.
-- Beta legal/privacy тексты не проверены профильным юристом.
-- `noindex` не является контролем доступа к бинарникам; продуктовый доступ защищает marker + персональный invite + cohort.
+- SQLite sync не даёт глобальную транзакционную блокировку и не реплицирует delete tombstones. Для первых 20: primary-normal/fallback-only; массовый запуск требует write authority или общей transactional DB.
+- Windows installer не подписан и ещё не прошёл реальную установку/reboot/uninstall/network-recovery проверку владельцем.
+- Реальный платёж 149 RUB, activation/refund/cancel не проверен.
+- Terms/privacy не подтверждены владельцем/юристом.
+- `noindex` не является контролем доступа; доступ защищают marker, invite и cohort.

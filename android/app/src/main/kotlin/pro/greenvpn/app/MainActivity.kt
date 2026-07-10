@@ -3,6 +3,8 @@ package pro.greenvpn.app
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
@@ -43,11 +45,23 @@ class MainActivity : FlutterActivity() {
         const val OWN_VPN_ACTIVE_WALL_AT_KEY = "greenvpn_android_own_vpn_active_wall_at_v1"
         const val OWN_VPN_ACTIVE_ELAPSED_AT_KEY = "greenvpn_android_own_vpn_active_elapsed_at_v1"
         const val OWN_VPN_MARKER_MAX_AGE_MS = 7L * 24L * 60L * 60L * 1000L
+        val BACKEND_LOCK = Any()
+
+        @Volatile
+        var sharedBackend: GoBackend? = null
+
+        @Volatile
+        var sharedTunnel: GreenVpnTunnel? = null
     }
 
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
-    private var backend: GoBackend? = null
-    private var tunnel = GreenVpnTunnel("GreenVPN")
+    private val tunnel: GreenVpnTunnel
+        get() {
+            sharedTunnel?.let { return it }
+            return synchronized(BACKEND_LOCK) {
+                sharedTunnel ?: GreenVpnTunnel("GreenVPN").also { sharedTunnel = it }
+            }
+        }
     private var pendingConnectResult: MethodChannel.Result? = null
     private var pendingConfig: Config? = null
     private var pendingInstallApkPath: String? = null
@@ -68,6 +82,7 @@ class MainActivity : FlutterActivity() {
                 "secureRead" -> handleSecureRead(call, result)
                 "secureWrite" -> handleSecureWrite(call, result)
                 "secureDelete" -> handleSecureDelete(call, result)
+                "listInstalledApps" -> handleListInstalledApps(result)
                 "openUrl" -> handleOpenUrl(call, result)
                 "getUpdateCacheDir" -> handleGetUpdateCacheDir(result)
                 "installApk" -> handleInstallApk(call, result)
@@ -112,11 +127,10 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun backend(): GoBackend {
-        val current = backend
-        if (current != null) return current
-        val created = GoBackend(applicationContext)
-        backend = created
-        return created
+        sharedBackend?.let { return it }
+        return synchronized(BACKEND_LOCK) {
+            sharedBackend ?: GoBackend(applicationContext).also { sharedBackend = it }
+        }
     }
 
     private fun handleConnect(call: MethodCall, result: MethodChannel.Result) {
@@ -174,7 +188,9 @@ class MainActivity : FlutterActivity() {
                 val currentBackend = backend()
                 if (currentBackend.getRunningTunnelNames().contains(tunnel.getName())) {
                     currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
-                    Thread.sleep(250)
+                    if (!waitForOwnVpnNetworkInactive(2_500L)) {
+                        throw IllegalStateException("Android не завершил предыдущее VPN-подключение")
+                    }
                 }
                 val state = currentBackend.setState(tunnel, Tunnel.State.UP, config)
                 if (state == Tunnel.State.UP) {
@@ -215,16 +231,18 @@ class MainActivity : FlutterActivity() {
                 val currentBackend = backend()
                 val state = currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
                 val runningNames = currentBackend.getRunningTunnelNames().toList()
-                val stillRunning = runningNames.contains(tunnel.getName())
-                if (state == Tunnel.State.DOWN && !stillRunning) {
+                val stillRunning = runningNames.contains(tunnel.getName()) ||
+                    !waitForOwnVpnNetworkInactive(2_500L)
+                val disconnected = state == Tunnel.State.DOWN && !stillRunning
+                if (disconnected) {
                     markOwnVpnInactive()
                 }
                 runOnUiThread {
                     result.success(
                         response(
-                            ok = state == Tunnel.State.DOWN && !stillRunning,
+                            ok = disconnected,
                             connected = state == Tunnel.State.UP || stillRunning,
-                            message = if (state == Tunnel.State.DOWN && !stillRunning) {
+                            message = if (disconnected) {
                                 "VPN выключен."
                             } else {
                                 "Android вернул состояние VPN: $state"
@@ -244,6 +262,14 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+    }
+
+    private fun waitForOwnVpnNetworkInactive(timeoutMs: Long): Boolean {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (isOwnVpnNetworkActive() && SystemClock.elapsedRealtime() < deadline) {
+            Thread.sleep(50L)
+        }
+        return !isOwnVpnNetworkActive()
     }
 
     private fun handleStatus(call: MethodCall, result: MethodChannel.Result) {
@@ -286,6 +312,7 @@ class MainActivity : FlutterActivity() {
         executor.execute {
             val requestedName = call.argument<String>("name").orEmpty()
             val systemVpnActive = isAnyVpnNetworkActive()
+            val systemOwnVpnActive = systemVpnActive && isOwnVpnNetworkActive()
             if (!systemVpnActive) {
                 markOwnVpnInactive()
             }
@@ -313,10 +340,10 @@ class MainActivity : FlutterActivity() {
 
             val backendOwnRunning = systemVpnActive &&
                 (state == Tunnel.State.UP || runningNames.contains(tunnel.getName()))
-            val markerOwnRunning = !backendOwnRunning &&
+            val markerOwnRunning = !backendOwnRunning && !systemOwnVpnActive &&
                 systemVpnActive &&
                 hasOwnVpnActiveMarker(systemVpnActive)
-            val ownRunning = backendOwnRunning || markerOwnRunning
+            val ownRunning = backendOwnRunning || systemOwnVpnActive || markerOwnRunning
             val markerAgeMs = ownVpnMarkerAgeMs()
             val stats = try {
                 if (backendOwnRunning && currentBackend != null) currentBackend.getStatistics(tunnel) else null
@@ -338,7 +365,7 @@ class MainActivity : FlutterActivity() {
                         "ok" to (currentBackend != null),
                         "connected" to ownRunning,
                         "ownTunnelRunning" to ownRunning,
-                        "state" to if (markerOwnRunning) "up" else (state?.name?.lowercase() ?: "unknown"),
+                        "state" to if (systemOwnVpnActive || markerOwnRunning) "up" else (state?.name?.lowercase() ?: "unknown"),
                         "rxBytes" to (stats?.totalRx() ?: 0L),
                         "txBytes" to (stats?.totalTx() ?: 0L),
                         "version" to version,
@@ -346,10 +373,11 @@ class MainActivity : FlutterActivity() {
                         "systemVpnActive" to systemVpnActive,
                         "systemVpnActiveWithoutOwnTunnel" to (systemVpnActive && !ownRunning),
                         "externalVpnActive" to (systemVpnActive && !ownRunning),
-                        "lastGreenVpnActive" to markerOwnRunning,
+                        "lastGreenVpnActive" to (systemOwnVpnActive || markerOwnRunning),
                         "lastGreenVpnActiveAgeMs" to markerAgeMs,
                         "ownTunnelSource" to when {
                             backendOwnRunning -> "backend"
+                            systemOwnVpnActive -> "system_owner"
                             markerOwnRunning -> "marker"
                             else -> "none"
                         },
@@ -427,6 +455,56 @@ class MainActivity : FlutterActivity() {
             true
         } catch (_: Exception) {
             false
+        }
+    }
+
+    private fun handleListInstalledApps(result: MethodChannel.Result) {
+        executor.execute {
+            try {
+                val launcherIntent = Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_LAUNCHER)
+                }
+                val resolved = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    packageManager.queryIntentActivities(
+                        launcherIntent,
+                        PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_ALL.toLong())
+                    )
+                } else {
+                    @Suppress("DEPRECATION")
+                    packageManager.queryIntentActivities(launcherIntent, PackageManager.MATCH_ALL)
+                }
+                val apps = resolved
+                    .mapNotNull { info ->
+                        val appInfo = info.activityInfo?.applicationInfo ?: return@mapNotNull null
+                        val packageName = appInfo.packageName?.trim().orEmpty()
+                        if (packageName.isEmpty() || packageName == applicationContext.packageName) {
+                            return@mapNotNull null
+                        }
+                        val label = info.loadLabel(packageManager)?.toString()?.trim()
+                            ?.takeIf { it.isNotEmpty() }
+                            ?: packageName
+                        mapOf(
+                            "packageName" to packageName,
+                            "label" to label,
+                            "system" to ((appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0)
+                        )
+                    }
+                    .distinctBy { it["packageName"] }
+                    .sortedWith(
+                        compareBy<Map<String, Any>> {
+                            it["label"].toString().lowercase()
+                        }.thenBy { it["packageName"].toString() }
+                    )
+                runOnUiThread { result.success(apps) }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    result.error(
+                        "GREENVPN_INSTALLED_APPS",
+                        "Не удалось получить список приложений: ${safeError(e)}",
+                        null
+                    )
+                }
+            }
         }
     }
 
@@ -724,6 +802,21 @@ class MainActivity : FlutterActivity() {
             connectivity.allNetworks.any { network ->
                 connectivity.getNetworkCapabilities(network)
                     ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun isOwnVpnNetworkActive(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
+        return try {
+            val connectivity = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            connectivity.allNetworks.any { network ->
+                val capabilities = connectivity.getNetworkCapabilities(network)
+                    ?: return@any false
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                    capabilities.ownerUid == applicationInfo.uid
             }
         } catch (_: Exception) {
             false

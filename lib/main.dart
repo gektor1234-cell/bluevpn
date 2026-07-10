@@ -2292,6 +2292,7 @@ class Prefs {
 
   final bool socialOnlyEnabled;
   final List<String> socialOnlyApps; // SocialApp.name
+  final List<String> socialOnlyCustomPackages; // Android package names
 
   final List<String> selectedApps; // TariffApp.name
   final String trafficPack; // TrafficPack.name
@@ -2309,6 +2310,7 @@ class Prefs {
     required this.serverId,
     required this.socialOnlyEnabled,
     required this.socialOnlyApps,
+    required this.socialOnlyCustomPackages,
     required this.selectedApps,
     required this.trafficPack,
     required this.trafficGb,
@@ -2325,6 +2327,7 @@ class Prefs {
     serverId: 'auto',
     socialOnlyEnabled: false,
     socialOnlyApps: ['telegram', 'instagram'],
+    socialOnlyCustomPackages: [],
     selectedApps: [],
     trafficPack: 'gb20',
     trafficGb: 20,
@@ -2341,6 +2344,7 @@ class Prefs {
     String? serverId,
     bool? socialOnlyEnabled,
     List<String>? socialOnlyApps,
+    List<String>? socialOnlyCustomPackages,
     List<String>? selectedApps,
     String? trafficPack,
     double? trafficGb,
@@ -2356,6 +2360,8 @@ class Prefs {
       serverId: serverId ?? this.serverId,
       socialOnlyEnabled: socialOnlyEnabled ?? this.socialOnlyEnabled,
       socialOnlyApps: socialOnlyApps ?? this.socialOnlyApps,
+      socialOnlyCustomPackages:
+          socialOnlyCustomPackages ?? this.socialOnlyCustomPackages,
       selectedApps: selectedApps ?? this.selectedApps,
       trafficPack: trafficPack ?? this.trafficPack,
       trafficGb: trafficGb ?? this.trafficGb,
@@ -2373,6 +2379,7 @@ class Prefs {
     'serverId': serverId,
     'socialOnlyEnabled': socialOnlyEnabled,
     'socialOnlyApps': socialOnlyApps,
+    'socialOnlyCustomPackages': socialOnlyCustomPackages,
     'selectedApps': selectedApps,
     'trafficPack': trafficPack,
     'trafficGb': trafficGb,
@@ -2447,6 +2454,10 @@ class Prefs {
       serverId: _s('serverId', d.serverId),
       socialOnlyEnabled: _b('socialOnlyEnabled', d.socialOnlyEnabled),
       socialOnlyApps: _ls('socialOnlyApps', d.socialOnlyApps),
+      socialOnlyCustomPackages: _ls(
+        'socialOnlyCustomPackages',
+        d.socialOnlyCustomPackages,
+      ),
       selectedApps: _ls('selectedApps', d.selectedApps),
       trafficPack: _s('trafficPack', d.trafficPack),
       trafficGb: _d('trafficGb', d.trafficGb).clamp(1.0, 800.0),
@@ -5976,6 +5987,39 @@ enum SocialApp {
   final IconData icon;
 }
 
+final RegExp _androidPackageNamePattern = RegExp(
+  r'^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$',
+);
+
+bool _isValidAndroidPackageName(String value) {
+  final clean = value.trim();
+  return clean.length <= 255 && _androidPackageNamePattern.hasMatch(clean);
+}
+
+class _AndroidLaunchableApp {
+  final String packageName;
+  final String label;
+  final bool system;
+
+  const _AndroidLaunchableApp({
+    required this.packageName,
+    required this.label,
+    required this.system,
+  });
+
+  static _AndroidLaunchableApp? fromPlatform(Object? raw) {
+    if (raw is! Map) return null;
+    final packageName = (raw['packageName'] ?? '').toString().trim();
+    if (!_isValidAndroidPackageName(packageName)) return null;
+    final rawLabel = (raw['label'] ?? '').toString().trim();
+    return _AndroidLaunchableApp(
+      packageName: packageName,
+      label: rawLabel.isEmpty ? packageName : rawLabel,
+      system: raw['system'] == true,
+    );
+  }
+}
+
 class RootShell extends StatefulWidget {
   final ThemeMode themeMode;
   final void Function(ThemeMode mode) onThemeModeChanged;
@@ -6161,6 +6205,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     SocialApp.telegram,
     SocialApp.instagram,
   };
+  final Set<String> socialOnlyCustomPackages = <String>{};
+  final Map<String, String> _androidInstalledAppLabels = <String, String>{};
 
   // Сервер
   List<ServerLocation> servers = _fallbackServerCatalogForCurrentChannel();
@@ -6808,6 +6854,20 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       if (socialOnlyApps.isEmpty) {
         socialOnlyApps.addAll({SocialApp.telegram, SocialApp.instagram});
       }
+      socialOnlyCustomPackages
+        ..clear()
+        ..addAll(
+          p.socialOnlyCustomPackages
+              .map((value) => value.trim())
+              .where(_isValidAndroidPackageName),
+        );
+      if (Platform.isAndroid && socialOnlyCustomPackages.isNotEmpty) {
+        try {
+          await _loadAndroidLaunchableApps();
+        } catch (_) {
+          // Stored package names remain usable even if Android hides an app label.
+        }
+      }
 
       // Apply tariff settings
       selectedApps
@@ -6898,6 +6958,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           'serverId': selectedServer.id,
           'socialOnlyEnabled': socialOnlyEnabled,
           'socialOnlyApps': socialOnlyApps.map((e) => e.name).toList(),
+          'socialOnlyCustomPackages': socialOnlyCustomPackages.toList()..sort(),
           'selectedApps': selectedApps.map((e) => e.name).toList(),
           'trafficPack': trafficPack.name,
           'trafficGb': trafficGb,
@@ -7691,9 +7752,6 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         out.addAll(packages);
       }
     }
-    if (out.isEmpty) {
-      out.addAll(_androidSocialPackageNames[SocialApp.telegram] ?? const []);
-    }
     final list = out.toList()..sort();
     return list;
   }
@@ -7731,7 +7789,15 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   String _buildAndroidSocialOnlyConfig(String baseConfig) {
-    final packageNames = _resolveAndroidSocialPackageNames(socialOnlyApps);
+    final packageNames = <String>{
+      ..._resolveAndroidSocialPackageNames(socialOnlyApps),
+      ...socialOnlyCustomPackages.where(_isValidAndroidPackageName),
+    }.toList()..sort();
+    if (packageNames.isEmpty) {
+      packageNames.addAll(
+        _androidSocialPackageNames[SocialApp.telegram] ?? const <String>[],
+      );
+    }
     final fullTunnelConfig = preserveFullTunnelAllowedIps(baseConfig);
     final withoutExcluded = _removeWireGuardInterfaceField(
       fullTunnelConfig,
@@ -7880,21 +7946,41 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     await _cfg.writeManagedConfig(_buildManagedConfigFromBase(base));
 
     if (reconnectIfNeeded && vpnEnabled) {
-      final off = await _vpnBackend.disconnect();
-      if (!off.ok) {
-        _toast(context, off.message ?? 'Не удалось переподключить VPN.');
-        await _syncVpnStatus();
-        return false;
-      }
+      if (!kIsWeb && Platform.isAndroid) {
+        final applied = await _vpnBackend.connect(
+          configPath: _cfg.managedConfigPath,
+        );
+        if (!applied.ok) {
+          _toast(
+            context,
+            applied.message ?? 'Не удалось применить список приложений.',
+          );
+          await _syncVpnStatus();
+          return false;
+        }
+      } else {
+        final off = await _vpnBackend.disconnect();
+        if (!off.ok) {
+          _toast(context, off.message ?? 'Не удалось переподключить VPN.');
+          await _syncVpnStatus();
+          return false;
+        }
 
-      final on = await _vpnBackend.connect(configPath: _cfg.managedConfigPath);
-      if (!on.ok) {
-        _toast(context, on.message ?? 'Не удалось заново подключить VPN.');
-        await _syncVpnStatus();
-        return false;
+        final on = await _vpnBackend.connect(
+          configPath: _cfg.managedConfigPath,
+        );
+        if (!on.ok) {
+          _toast(context, on.message ?? 'Не удалось заново подключить VPN.');
+          await _syncVpnStatus();
+          return false;
+        }
       }
 
       await _syncVpnStatus();
+      if (!vpnEnabled) {
+        _toast(context, 'Android не подтвердил новое VPN-подключение.');
+        return false;
+      }
     }
 
     if (showToastOnSuccess) {
@@ -9841,39 +9927,241 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _openSocialAppsPicker(BuildContext context) async {
-    final temp = Set<SocialApp>.from(socialOnlyApps);
+  Future<List<_AndroidLaunchableApp>> _loadAndroidLaunchableApps() async {
+    if (kIsWeb || !Platform.isAndroid) return const <_AndroidLaunchableApp>[];
 
-    final picked = await showDialog<Set<SocialApp>>(
+    final raw = await kAndroidPlatformChannel.invokeMethod<List<dynamic>>(
+      'listInstalledApps',
+    );
+    final byPackage = <String, _AndroidLaunchableApp>{};
+    for (final item in raw ?? const <dynamic>[]) {
+      final app = _AndroidLaunchableApp.fromPlatform(item);
+      if (app != null) byPackage[app.packageName] = app;
+    }
+    final apps = byPackage.values.toList()
+      ..sort((a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()));
+    _androidInstalledAppLabels
+      ..clear()
+      ..addEntries(apps.map((app) => MapEntry(app.packageName, app.label)));
+    return apps;
+  }
+
+  Future<Set<String>?> _openInstalledAppsPicker(
+    BuildContext context,
+    Set<String> current,
+  ) async {
+    final apps = await _loadAndroidLaunchableApps();
+    if (!mounted || !context.mounted) return null;
+    if (apps.isEmpty) {
+      _toast(context, 'Android не вернул список установленных приложений.');
+      return null;
+    }
+
+    final presetPackages = _androidSocialPackageNames.values
+        .expand((packages) => packages)
+        .toSet();
+    final available = apps
+        .where((app) => !presetPackages.contains(app.packageName))
+        .toList();
+    final selected = Set<String>.from(current);
+    final searchController = TextEditingController();
+
+    try {
+      return await showDialog<Set<String>>(
+        context: context,
+        builder: (ctx) {
+          var query = '';
+          return StatefulBuilder(
+            builder: (ctx, setLocal) {
+              final normalizedQuery = query.trim().toLowerCase();
+              final filtered = normalizedQuery.isEmpty
+                  ? available
+                  : available.where((app) {
+                      return app.label.toLowerCase().contains(
+                            normalizedQuery,
+                          ) ||
+                          app.packageName.toLowerCase().contains(
+                            normalizedQuery,
+                          );
+                    }).toList();
+              return AlertDialog(
+                title: const Text('Добавить приложение'),
+                content: SizedBox(
+                  width: 460,
+                  height: min(MediaQuery.of(ctx).size.height * 0.62, 540.0),
+                  child: Column(
+                    children: [
+                      TextField(
+                        controller: searchController,
+                        autofocus: true,
+                        onChanged: (value) => setLocal(() => query = value),
+                        decoration: const InputDecoration(
+                          hintText: 'Поиск',
+                          prefixIcon: Icon(Icons.search_rounded),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Expanded(
+                        child: filtered.isEmpty
+                            ? const Center(child: Text('Ничего не найдено'))
+                            : ListView.builder(
+                                itemCount: filtered.length,
+                                itemBuilder: (ctx, index) {
+                                  final app = filtered[index];
+                                  return CheckboxListTile(
+                                    value: selected.contains(app.packageName),
+                                    onChanged: (value) {
+                                      setLocal(() {
+                                        if (value == true) {
+                                          selected.add(app.packageName);
+                                        } else {
+                                          selected.remove(app.packageName);
+                                        }
+                                      });
+                                    },
+                                    title: Text(
+                                      app.label,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    secondary: const Icon(Icons.apps_rounded),
+                                    controlAffinity:
+                                        ListTileControlAffinity.trailing,
+                                    contentPadding: EdgeInsets.zero,
+                                  );
+                                },
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    child: const Text('Отмена'),
+                  ),
+                  ElevatedButton(
+                    onPressed: () =>
+                        Navigator.of(ctx).pop(Set<String>.from(selected)),
+                    child: const Text('Добавить'),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+    } finally {
+      searchController.dispose();
+    }
+  }
+
+  Future<void> _openSocialAppsPicker(BuildContext context) async {
+    final tempPresets = Set<SocialApp>.from(socialOnlyApps);
+    final tempCustomPackages = Set<String>.from(socialOnlyCustomPackages);
+
+    final picked = await showDialog<bool>(
       context: context,
       builder: (ctx) {
         return StatefulBuilder(
           builder: (ctx, setLocal) {
+            final sortedCustomPackages = tempCustomPackages.toList()
+              ..sort(
+                (a, b) => (_androidInstalledAppLabels[a] ?? a)
+                    .toLowerCase()
+                    .compareTo(
+                      (_androidInstalledAppLabels[b] ?? b).toLowerCase(),
+                    ),
+              );
             return AlertDialog(
-              title: const Text('Соцсети через VPN'),
+              title: const Text('Приложения через VPN'),
               content: SizedBox(
                 width: 460,
                 child: SingleChildScrollView(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
-                    children: SocialApp.values.map((app) {
-                      return CheckboxListTile(
-                        value: temp.contains(app),
-                        onChanged: (v) {
-                          setLocal(() {
-                            if (v == true) {
-                              temp.add(app);
-                            } else {
-                              temp.remove(app);
-                            }
-                          });
-                        },
-                        title: Text(app.title),
-                        secondary: Icon(app.icon, color: kBrandPrimary),
-                        controlAffinity: ListTileControlAffinity.trailing,
-                        contentPadding: EdgeInsets.zero,
-                      );
-                    }).toList(),
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Рекомендуемые',
+                        style: Theme.of(ctx).textTheme.labelLarge,
+                      ),
+                      ...SocialApp.values.map((app) {
+                        return CheckboxListTile(
+                          value: tempPresets.contains(app),
+                          onChanged: (v) {
+                            setLocal(() {
+                              if (v == true) {
+                                tempPresets.add(app);
+                              } else {
+                                tempPresets.remove(app);
+                              }
+                            });
+                          },
+                          title: Text(app.title),
+                          secondary: Icon(app.icon, color: kBrandPrimary),
+                          controlAffinity: ListTileControlAffinity.trailing,
+                          contentPadding: EdgeInsets.zero,
+                        );
+                      }),
+                      if (tempCustomPackages.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          'Добавленные',
+                          style: Theme.of(ctx).textTheme.labelLarge,
+                        ),
+                        ...sortedCustomPackages.map(
+                          (packageName) => ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(Icons.apps_rounded),
+                            title: Text(
+                              _androidInstalledAppLabels[packageName] ??
+                                  packageName,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            trailing: IconButton(
+                              tooltip: 'Убрать',
+                              onPressed: () => setLocal(
+                                () => tempCustomPackages.remove(packageName),
+                              ),
+                              icon: const Icon(Icons.close_rounded),
+                            ),
+                          ),
+                        ),
+                      ],
+                      if (!kIsWeb && Platform.isAndroid) ...[
+                        const SizedBox(height: 8),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: () async {
+                              try {
+                                final selected = await _openInstalledAppsPicker(
+                                  ctx,
+                                  tempCustomPackages,
+                                );
+                                if (selected == null || !ctx.mounted) return;
+                                setLocal(() {
+                                  tempCustomPackages
+                                    ..clear()
+                                    ..addAll(selected);
+                                });
+                              } catch (e) {
+                                if (ctx.mounted) {
+                                  _toast(
+                                    ctx,
+                                    'Не удалось открыть список приложений: $e',
+                                  );
+                                }
+                              }
+                            },
+                            icon: const Icon(Icons.add_rounded),
+                            label: const Text('Добавить приложение'),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
               ),
@@ -9884,11 +10172,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                 ),
                 ElevatedButton(
                   onPressed: () {
-                    if (temp.isEmpty) {
+                    if (tempPresets.isEmpty && tempCustomPackages.isEmpty) {
                       _toast(ctx, 'Выбери хотя бы одно приложение.');
                       return;
                     }
-                    Navigator.of(ctx).pop(Set<SocialApp>.from(temp));
+                    Navigator.of(ctx).pop(true);
                   },
                   child: const Text('Готово'),
                 ),
@@ -9899,20 +10187,42 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       },
     );
 
-    if (picked == null) return;
+    if (picked != true) return;
 
     setState(() {
       socialOnlyApps
         ..clear()
-        ..addAll(picked);
+        ..addAll(tempPresets);
+      socialOnlyCustomPackages
+        ..clear()
+        ..addAll(tempCustomPackages);
     });
     _schedulePrefsSave();
 
     if (socialOnlyEnabled) {
-      await _applyCurrentConfigMode(
-        reconnectIfNeeded: true,
-        showToastOnSuccess: true,
-      );
+      if (mounted) {
+        setState(() {
+          vpnBusy = vpnEnabled;
+          _vpnBusyStage = vpnEnabled ? 'Применяем список...' : null;
+          _vpnBusyHint = vpnEnabled
+              ? 'Переподключаем VPN с новым набором приложений.'
+              : null;
+        });
+      }
+      try {
+        await _applyCurrentConfigMode(
+          reconnectIfNeeded: true,
+          showToastOnSuccess: true,
+        );
+      } finally {
+        if (mounted) {
+          setState(() {
+            vpnBusy = false;
+            _vpnBusyStage = null;
+            if (!_vpnTapCooldown) _vpnBusyHint = null;
+          });
+        }
+      }
     }
   }
 
@@ -10231,6 +10541,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         socialOnlyEnabled: socialOnlyEnabled,
         socialOnlyAllowed: optSmartRouting,
         socialOnlyApps: socialOnlyApps,
+        socialOnlyCustomPackages: socialOnlyCustomPackages,
+        socialOnlyCustomLabels: _androidInstalledAppLabels,
         onToggleSocialOnly: (v) async {
           if (_vpnInteractionLocked) return;
 
@@ -10519,6 +10831,8 @@ class VpnPage extends StatelessWidget {
   final bool socialOnlyEnabled;
   final bool socialOnlyAllowed;
   final Set<SocialApp> socialOnlyApps;
+  final Set<String> socialOnlyCustomPackages;
+  final Map<String, String> socialOnlyCustomLabels;
   final ValueChanged<bool> onToggleSocialOnly;
   final VoidCallback onConfigureSocialApps;
 
@@ -10543,6 +10857,8 @@ class VpnPage extends StatelessWidget {
     required this.socialOnlyEnabled,
     required this.socialOnlyAllowed,
     required this.socialOnlyApps,
+    required this.socialOnlyCustomPackages,
+    required this.socialOnlyCustomLabels,
     required this.onToggleSocialOnly,
     required this.onConfigureSocialApps,
   });
@@ -10564,9 +10880,15 @@ class VpnPage extends StatelessWidget {
         ? 'Самая быстрая локация'
         : greenVpnPublicServerTitle(selectedServer);
     final serverSub = greenVpnPublicServerSubtitle(selectedServer);
-    final appsText = socialOnlyApps.isEmpty
+    final selectedAppTitles = <String>[
+      ...socialOnlyApps.map((app) => app.title),
+      ...socialOnlyCustomPackages.map(
+        (packageName) => socialOnlyCustomLabels[packageName] ?? packageName,
+      ),
+    ]..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    final appsText = selectedAppTitles.isEmpty
         ? 'Не выбрано'
-        : socialOnlyApps.map((e) => e.title).join(', ');
+        : selectedAppTitles.join(', ');
 
     return ListView(
       padding: const EdgeInsets.all(16),

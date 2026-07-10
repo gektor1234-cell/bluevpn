@@ -177,6 +177,15 @@ if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{4,120}", value):
 print(value)
 PY
 )"
+BACKEND_VERSION="$(python3 - "${BUNDLE_DIR}/bundle-manifest.json" <<'PY'
+import json, re, sys
+with open(sys.argv[1], encoding="utf-8-sig") as fh:
+    value = str(json.load(fh).get("backendVersion") or "")
+if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+-paid-beta\.[0-9]+", value):
+    raise SystemExit("unsafe or missing paid beta backendVersion")
+print(value)
+PY
+)"
 
 if [[ -n "${SEED_ENV}" && ! -f "${SEED_ENV}" ]]; then
   echo "Seed env not found: ${SEED_ENV}" >&2
@@ -222,6 +231,7 @@ echo "Green VPN paid beta contour plan"
 echo "mode=$([[ ${APPLY} -eq 1 ]] && echo apply || echo dry-run)"
 echo "role=${ROLE}"
 echo "release_id=${RELEASE_ID}"
+echo "backend_version=${BACKEND_VERSION}"
 echo "bundle_dir=${BUNDLE_DIR}"
 echo "backend=127.0.0.1:8010"
 echo "data_dir=${DATA_DIR}"
@@ -315,6 +325,9 @@ cp -a "${BUNDLE_DIR}/bundle-manifest.json" "${release_dir}/bundle-manifest.json"
 chmod 755 "${release_dir}/ops/greenvpn_db_sync_from_peer.sh"
 chmod 755 "${release_dir}/ops/greenvpn_sqlite_snapshot_stdout.py"
 chmod 755 "${release_dir}/ops/greenvpn_sqlite_state_sync.py"
+if [[ -f "${release_dir}/ops/create_paid_beta_first20_package.py" ]]; then
+  chmod 755 "${release_dir}/ops/create_paid_beta_first20_package.py"
+fi
 if [[ -f "${release_dir}/monitoring/service_probe.py" ]]; then
   chmod 755 "${release_dir}/monitoring/service_probe.py"
 fi
@@ -332,6 +345,112 @@ fi
 if [[ ! -f "${ENV_FILE}" || "${REPLACE_ENV}" -eq 1 ]]; then
   install -m 600 "${SEED_ENV}" "${ENV_FILE}"
 fi
+chown root:root "${ENV_FILE}"
+chmod 600 "${ENV_FILE}"
+
+python3 - "${ENV_FILE}" "${BACKEND_VERSION}" <<'PY'
+import os
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+backend_version = sys.argv[2]
+lines = path.read_text(encoding="utf-8").splitlines()
+pattern = re.compile(r"^(?:export\s+)?GREENVPN_BACKEND_VERSION\s*=")
+out = []
+replaced = False
+for raw in lines:
+    if pattern.match(raw.strip()):
+        if not replaced:
+            out.append(f"GREENVPN_BACKEND_VERSION={backend_version}")
+            replaced = True
+        continue
+    out.append(raw)
+if not replaced:
+    out.append(f"GREENVPN_BACKEND_VERSION={backend_version}")
+temporary = path.with_name(path.name + ".version.tmp")
+temporary.write_text("\n".join(out) + "\n", encoding="utf-8")
+os.chmod(temporary, 0o600)
+os.replace(temporary, path)
+print(f"beta backend version: {backend_version}")
+PY
+chown root:root "${ENV_FILE}"
+chmod 600 "${ENV_FILE}"
+
+python3 - "${ENV_FILE}" "${BUNDLE_DIR}/site/downloads/manifest.json" "${ROLE}" <<'PY'
+import json
+import os
+import pathlib
+import re
+import sys
+
+env_path = pathlib.Path(sys.argv[1])
+manifest_path = pathlib.Path(sys.argv[2])
+role = sys.argv[3]
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+artifacts = {
+    str(item.get("platform") or "").strip().lower(): item
+    for item in manifest.get("artifacts") or []
+    if isinstance(item, dict)
+}
+android = artifacts.get("android") or {}
+windows = artifacts.get("windows") or {}
+for platform, artifact in (("android", android), ("windows", windows)):
+    version = str(artifact.get("version") or "").strip()
+    sha256 = re.sub(r"\s+", "", str(artifact.get("sha256") or "")).upper()
+    if "paid-beta" not in version or not re.fullmatch(r"[0-9A-F]{64}", sha256):
+        raise SystemExit(f"Invalid {platform} paid beta artifact metadata")
+
+download_base = (
+    "https://greenvpn.pro/paid-beta/downloads"
+    if role == "timeweb"
+    else "https://176-113-81-35.sslip.io/paid-beta/downloads"
+)
+released_at = str(manifest.get("generatedAt") or "").strip()
+updates = {
+    "GREENVPN_ANDROID_PAID_BETA_LATEST_VERSION": str(android["version"]).strip(),
+    "GREENVPN_ANDROID_PAID_BETA_UPDATE_URL": f"{download_base}/GreenVPN_Android.apk",
+    "GREENVPN_ANDROID_PAID_BETA_UPDATE_SHA256": str(android["sha256"]).strip().upper(),
+    "GREENVPN_ANDROID_PAID_BETA_UPDATE_REQUIRED": "0",
+    "GREENVPN_ANDROID_PAID_BETA_UPDATE_RELEASED_AT": released_at,
+    "GREENVPN_ANDROID_PAID_BETA_UPDATE_CHANGELOG": (
+        "Закрытая paid beta: выбор любых установленных приложений для VPN."
+    ),
+    "GREENVPN_WINDOWS_PAID_BETA_LATEST_VERSION": str(windows["version"]).strip(),
+    "GREENVPN_WINDOWS_PAID_BETA_UPDATE_URL": f"{download_base}/GreenVPN_Setup.exe",
+    "GREENVPN_WINDOWS_PAID_BETA_UPDATE_SHA256": str(windows["sha256"]).strip().upper(),
+    "GREENVPN_WINDOWS_PAID_BETA_UPDATE_REQUIRED": "0",
+    "GREENVPN_WINDOWS_PAID_BETA_UPDATE_RELEASED_AT": released_at,
+    "GREENVPN_WINDOWS_PAID_BETA_UPDATE_CHANGELOG": (
+        "Закрытая paid beta: персональные инвайты и фиксированный тариф."
+    ),
+}
+
+assignment = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
+out = []
+for raw in env_path.read_text(encoding="utf-8").splitlines():
+    match = assignment.match(raw.strip())
+    if match and match.group(1) in updates:
+        continue
+    out.append(raw)
+
+safe_value = re.compile(r"^[A-Za-z0-9_./:@+,-]*$")
+for key, value in updates.items():
+    rendered = value if safe_value.fullmatch(value) else '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    out.append(f"{key}={rendered}")
+
+temporary = env_path.with_name(env_path.name + ".release.tmp")
+temporary.write_text("\n".join(out) + "\n", encoding="utf-8")
+os.chmod(temporary, 0o600)
+os.replace(temporary, env_path)
+print(
+    "beta client releases: "
+    f"android={updates['GREENVPN_ANDROID_PAID_BETA_LATEST_VERSION']} "
+    f"windows={updates['GREENVPN_WINDOWS_PAID_BETA_LATEST_VERSION']} "
+    f"role={role}"
+)
+PY
 chown root:root "${ENV_FILE}"
 chmod 600 "${ENV_FILE}"
 
@@ -369,9 +488,10 @@ PY
 chown root:root "${ENV_FILE}"
 chmod 600 "${ENV_FILE}"
 
-python3 - "${ENV_FILE}" <<'PY'
+python3 - "${ENV_FILE}" "${BACKEND_VERSION}" <<'PY'
 import pathlib, sys
 path = pathlib.Path(sys.argv[1])
+backend_version = sys.argv[2]
 values = {}
 for raw in path.read_text(encoding="utf-8").splitlines():
     line = raw.strip()
@@ -389,6 +509,7 @@ expected = {
     "GREENVPN_PAID_BETA_ENABLED": "1",
     "GREENVPN_PAID_BETA_CLIENT_MARKER": "green-vpn-paid-beta-v1",
     "GREENVPN_PAID_BETA_RELEASE_CHANNEL": "paid-beta",
+    "GREENVPN_BACKEND_VERSION": backend_version,
     "GREENVPN_PUBLIC_API_BASE_URL": "https://api.greenvpn.pro/paid-beta-api",
     "GREENVPN_PUBLIC_BASE_URL": "https://api.greenvpn.pro/paid-beta-api",
     "GREENVPN_FREE_AD_GATE_ENABLED": "0",
@@ -404,8 +525,6 @@ for key in (
 ):
     if len(values.get(key, "")) < 24:
         bad.append(key)
-if "paid-beta" not in values.get("GREENVPN_BACKEND_VERSION", ""):
-    bad.append("GREENVPN_BACKEND_VERSION")
 if bad:
     print("Invalid beta env keys: " + ", ".join(sorted(set(bad))), file=sys.stderr)
     raise SystemExit(2)

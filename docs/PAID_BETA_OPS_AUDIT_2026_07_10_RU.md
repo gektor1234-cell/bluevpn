@@ -24,7 +24,7 @@
 - В обе beta-БД добавлена отдельная цель `green_api_fallback_1_healthz` для RUVDS fallback API. Она синхронизировалась штатным beta DB sync.
 - После двух probe-циклов на каждом узле есть по 21 service observations, 6 server-health observations и 21 route observations. Все три выдаваемых VPN endpoint имеют статус `healthy` с обоих российских probe.
 - Timeweb видит 11/11 service targets зелёными. RUVDS видит оба beta API зелёными, а недоступность части YouTube/Instagram из российской сети фиксирует отдельно и не смешивает с состоянием VPN endpoint.
-- После каждой операции local health подтвердил beta `0.9.106-paid-beta.2` на `:8010` и production `0.9.105` на `:8000`.
+- После каждой финальной операции local health подтвердил beta `0.9.106-paid-beta.4` на `:8010` и production `0.9.105` на `:8000`.
 - На обоих control-plane создан root-only technical-ready snapshot `/root/greenvpn-paid-beta-technical-ready-20260710T110614Z`: env, admin token, sync/probe units, Nginx snippets, probe, manifests и согласованная SQLite backup. Обе backup DB проходят quick check и содержат 0 users/0 invites.
 
 ## Control-plane production: read-only результат
@@ -87,3 +87,16 @@
 4. После real-device beta smoke решить, закрывать ли восемь старых support reports как исправленные; запись пользователя `34` проверить отдельно.
 
 До этих решений production остаётся без изменений.
+
+## Финальная owner-gate ревизия
+
+- На Timeweb и RUVDS current переключён на `paid-beta-0.3.0-paid-beta.5-2026071005-r5`.
+- Installer теперь обновляет release metadata в root-only env при каждом deploy. Timeweb update API выдаёт primary download URL, RUVDS - независимый fallback URL.
+- Android `.5` имеет отдельный package `pro.greenvpn.app.beta`, custom app picker и исправленный active reconfigure.
+- Физический Samsung подтвердил, что Chrome входит в VPN UID allowlist только при выборе; MAX и другие невыбранные приложения остаются на прямом маршруте.
+- Stateful smoke полностью прошёл. Старые smoke users/devices/invites удалены на обоих узлах при остановленных sync timers; после очистки timers снова `active`.
+- Финальное состояние каждой beta DB: 1 owner user/token/subscription/device/invite/redemption, 0 billing orders, 0 smoke users/devices/invites; `PRAGMA quick_check=ok`.
+- Final deploy backups:
+  - Timeweb: `/root/greenvpn-paid-beta-backups/20260710T125718Z-timeweb-paid-beta-0.3.0-paid-beta.5-2026071005-r5`;
+  - RUVDS: `/root/greenvpn-paid-beta-backups/20260710T125730Z-ruvds-paid-beta-0.3.0-paid-beta.5-2026071005-r5`.
+- SQLite sync не распространяет delete tombstones. Для operational cleanup тестовых/удалённых сущностей оба узла очищаются одновременно при paused sync; для first20 сохраняется primary-normal/fallback-only.

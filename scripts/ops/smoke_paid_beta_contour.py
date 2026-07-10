@@ -18,8 +18,9 @@ from typing import Any, Callable
 
 CLIENT_MARKER = "green-vpn-paid-beta-v1"
 RELEASE_CHANNEL = "paid-beta"
-APP_VERSION = "0.3.0-paid-beta.2"
-EXPECTED_ANDROID_SHA256 = "29252A8AE44BA4487363E669A0ED31DDAC159289A49254EBBED34F123D20AB50"
+APP_VERSION = "0.3.0-paid-beta.5"
+WINDOWS_APP_VERSION = "0.3.0-paid-beta.2"
+EXPECTED_ANDROID_SHA256 = "90E42FB6CE5A06247E620E5DC3302B7C7C86A0F9A8FEBDC523876A622B9C6580"
 EXPECTED_WINDOWS_SHA256 = "41F96CB95118507AACA861721F83B2972CF419E2F10BA2FCF38CB73800988332"
 
 
@@ -118,7 +119,12 @@ def write_context(path: pathlib.Path, values: dict[str, Any]) -> None:
     path.chmod(0o600)
 
 
-def check_update_manifest(base_url: str, platform: str, expected_sha256: str) -> None:
+def check_update_manifest(
+    base_url: str,
+    platform: str,
+    expected_version: str,
+    expected_sha256: str,
+) -> None:
     result = request_json(
         base_url,
         "/api/v1/updates/manifest"
@@ -127,7 +133,7 @@ def check_update_manifest(base_url: str, platform: str, expected_sha256: str) ->
     )
     manifest = result.get("manifest") or {}
     require(manifest.get("channel") == RELEASE_CHANNEL, f"{platform} update channel mismatch")
-    require(manifest.get("latestVersion") == APP_VERSION, f"{platform} update version mismatch")
+    require(manifest.get("latestVersion") == expected_version, f"{platform} update version mismatch")
     require(manifest.get("sha256") == expected_sha256, f"{platform} update hash mismatch")
     require(bool(manifest.get("fileReady")), f"{platform} update artifact is not ready")
     require(not bool(manifest.get("required")), f"{platform} update must not be forced")
@@ -342,10 +348,15 @@ def main() -> int:
     require(len(admin_token) >= 24, "beta admin token is not ready")
     admin_headers = {"X-Admin-Token": admin_token}
 
-    check_update_manifest(primary, "android", EXPECTED_ANDROID_SHA256)
-    check_update_manifest(primary, "windows", EXPECTED_WINDOWS_SHA256)
-    check_update_manifest(fallback, "android", EXPECTED_ANDROID_SHA256)
-    check_update_manifest(fallback, "windows", EXPECTED_WINDOWS_SHA256)
+    check_update_manifest(primary, "android", APP_VERSION, EXPECTED_ANDROID_SHA256)
+    check_update_manifest(primary, "windows", WINDOWS_APP_VERSION, EXPECTED_WINDOWS_SHA256)
+    check_update_manifest(fallback, "android", APP_VERSION, EXPECTED_ANDROID_SHA256)
+    check_update_manifest(
+        fallback,
+        "windows",
+        WINDOWS_APP_VERSION,
+        EXPECTED_WINDOWS_SHA256,
+    )
 
     login_payload = {"email": email, "password": password}
     primary_login = request_json(primary, "/api/v1/auth/login", method="POST", payload=login_payload)
