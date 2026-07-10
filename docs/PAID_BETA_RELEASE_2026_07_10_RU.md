@@ -15,10 +15,11 @@
 | Платформа | Файл | Размер | SHA-256 | Подпись |
 | --- | --- | ---: | --- | --- |
 | Android | `GreenVPN_Android_0.3.0-paid-beta.5_2026071005.apk` | 65 756 723 | `90E42FB6CE5A06247E620E5DC3302B7C7C86A0F9A8FEBDC523876A622B9C6580` | APK v2, Green VPN |
-| Windows | `GreenVPN_Setup_0.3.0-paid-beta.2.exe` | 12 827 136 | `41F96CB95118507AACA861721F83B2972CF419E2F10BA2FCF38CB73800988332` | `NotSigned` |
+| Windows local candidate | `GreenVPN_Beta_Setup_0.3.0-paid-beta.3.exe` | 12 818 944 | `559C66438BD319E010631061C7ABF024DAE4DAAA2EAA15697B7DAFAA62CD7604` | `NotSigned` |
 
 - Android directory: `C:\BlueVPN_Builds\paid_beta_20260710_v5`.
-- Windows source directory: `C:\BlueVPN_Builds\paid_beta_20260710_v2`.
+- Windows candidate directory: `C:\BlueVPN_Builds\paid_beta_20260710_v6`.
+- Серверный bundle и update manifests пока содержат Windows `.2`; `.3` не развёрнут до real-PC smoke.
 - Final deploy bundle: `C:\BlueVPN_Builds\paid_beta_20260710_v5\paid-beta-0.3.0-paid-beta.5-2026071005-r5.tar.gz`.
 - Bundle size/SHA-256: 44 367 657 / `5955F5A884A7E847A09F9DA43A226F6A78603107EDEDFA0E17C5D1EA2337AF07`.
 - Backend in bundle: `0.9.106-paid-beta.4`.
@@ -50,6 +51,7 @@
 - Chrome active add/remove: network UID set менялся с `{Chrome, Telegram}` на `{Telegram}` без потери `tun0`.
 - Public manifests/downloads на Timeweb и RUVDS совпадают с SHA.
 - Stateful primary/fallback/invite/config smoke: OK; cleanup выполнен на обоих узлах.
+- Windows `.3`: real EXE extraction, side-by-side identity, payload, parser, PE metadata and Defender static gates: OK.
 
 ## Сборка
 
@@ -71,6 +73,6 @@ Bundle создаётся `prepare_paid_beta_bundle.ps1 -BundleRevision 5`. Уп
 
 ## Ограничения
 
-- Windows `.2` не side-by-side isolated, не подписан и ждёт owner installation smoke.
+- Windows `.3` side-by-side isolated, но не подписан и ждёт owner installation/reboot/uninstall smoke; серверы до этого продолжают отдавать `.2`.
 - Реальный платёж и legal acceptance остаются owner gate.
 - Эти beta-файлы нельзя публиковать как production aliases.

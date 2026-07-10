@@ -8,6 +8,8 @@ param(
     [string]$ApiFallbackBaseUrls = "https://176-113-81-35.sslip.io",
     [bool]$TrialOnlyNoAdsBuild = $true,
     [bool]$PaidBetaBuild = $false,
+    [ValidateSet('stable', 'paid-beta')]
+    [string]$WindowsRuntimeScope = 'stable',
     [switch]$SkipBuild,
     [switch]$OpenFolder
 )
@@ -218,6 +220,40 @@ if ($PaidBetaBuild) {
     if (-not $ApiFallbackBaseUrls.Contains('/paid-beta-api')) {
         throw "Paid beta fallback API must use the isolated /paid-beta-api contour."
     }
+    if ($WindowsRuntimeScope -ne 'paid-beta') {
+        throw "Paid beta Windows build must use the isolated paid-beta runtime scope."
+    }
+    if ($SkipBuild -or -not [string]::IsNullOrWhiteSpace($ReleaseZip)) {
+        throw "Paid beta Windows must be built cleanly from source; reused release payloads are not allowed."
+    }
+} elseif ($WindowsRuntimeScope -ne 'stable') {
+    throw "The paid-beta Windows runtime scope requires PaidBetaBuild=true."
+}
+
+$runtime = if ($WindowsRuntimeScope -eq 'paid-beta') {
+    [ordered]@{
+        GREENVPN_WINDOWS_RUNTIME_SCOPE = 'paid-beta'
+        GREENVPN_WINDOWS_TUNNEL_NAME = 'GreenVPNBeta'
+        GREENVPN_WINDOWS_SERVICE_NAME = 'GreenVPNBetaService'
+        GREENVPN_WINDOWS_PROGRAM_DATA_SUBDIR = 'BlueVPNBeta'
+        GREENVPN_WINDOWS_USER_DATA_SUBDIR = 'GreenVPNBeta'
+        GREENVPN_WINDOWS_LOCAL_SERVICE_PORT = '48738'
+        GREENVPN_WINDOWS_INSTANCE_ID = 'GreenVPNBeta'
+        GREENVPN_WINDOWS_EXECUTABLE_NAME = 'greenvpn_beta.exe'
+        GREENVPN_PRODUCT_NAME = 'Green VPN Beta'
+    }
+} else {
+    [ordered]@{
+        GREENVPN_WINDOWS_RUNTIME_SCOPE = 'stable'
+        GREENVPN_WINDOWS_TUNNEL_NAME = 'BlueVPNDev1'
+        GREENVPN_WINDOWS_SERVICE_NAME = 'GreenVPNService'
+        GREENVPN_WINDOWS_PROGRAM_DATA_SUBDIR = 'BlueVPN'
+        GREENVPN_WINDOWS_USER_DATA_SUBDIR = 'GreenVPN'
+        GREENVPN_WINDOWS_LOCAL_SERVICE_PORT = '48737'
+        GREENVPN_WINDOWS_INSTANCE_ID = 'GreenVPN'
+        GREENVPN_WINDOWS_EXECUTABLE_NAME = 'bluevpn.exe'
+        GREENVPN_PRODUCT_NAME = 'Green VPN'
+    }
 }
 
 New-Item -ItemType Directory -Force -Path $OutBase | Out-Null
@@ -237,12 +273,33 @@ if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
         Write-Section 'BUILD WINDOWS RELEASE'
         $trialOnlyDefine = $TrialOnlyNoAdsBuild.ToString().ToLowerInvariant()
         $paidBetaDefine = $PaidBetaBuild.ToString().ToLowerInvariant()
+        $previousRuntimeEnvironment = @{}
+        foreach ($name in $runtime.Keys) {
+            $previousRuntimeEnvironment[$name] = [pscustomobject]@{
+                existed = Test-Path -LiteralPath "Env:$name"
+                value = [Environment]::GetEnvironmentVariable($name, 'Process')
+            }
+            Set-Item -LiteralPath "Env:$name" -Value $runtime[$name]
+        }
+
+        $windowsBuildRoot = Join-Path $ProjectRoot 'build\windows\x64'
+        Assert-SafeChildPath -BasePath $ProjectRoot -CandidatePath $windowsBuildRoot
+        if (Test-Path -LiteralPath $windowsBuildRoot) {
+            Remove-Item -LiteralPath $windowsBuildRoot -Recurse -Force
+        }
         Push-Location $ProjectRoot
         try {
             flutter build windows --release -t .\lib\main.dart `
                 --dart-define="GREENVPN_APP_VERSION=$AppVersion" `
                 --dart-define="GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=$trialOnlyDefine" `
                 --dart-define="GREENVPN_PAID_BETA_BUILD=$paidBetaDefine" `
+                --dart-define="GREENVPN_WINDOWS_RUNTIME_SCOPE=$($runtime.GREENVPN_WINDOWS_RUNTIME_SCOPE)" `
+                --dart-define="GREENVPN_WINDOWS_TUNNEL_NAME=$($runtime.GREENVPN_WINDOWS_TUNNEL_NAME)" `
+                --dart-define="GREENVPN_WINDOWS_SERVICE_NAME=$($runtime.GREENVPN_WINDOWS_SERVICE_NAME)" `
+                --dart-define="GREENVPN_WINDOWS_PROGRAM_DATA_SUBDIR=$($runtime.GREENVPN_WINDOWS_PROGRAM_DATA_SUBDIR)" `
+                --dart-define="GREENVPN_WINDOWS_USER_DATA_SUBDIR=$($runtime.GREENVPN_WINDOWS_USER_DATA_SUBDIR)" `
+                --dart-define="GREENVPN_WINDOWS_LOCAL_SERVICE_PORT=$($runtime.GREENVPN_WINDOWS_LOCAL_SERVICE_PORT)" `
+                --dart-define="GREENVPN_PRODUCT_NAME=$($runtime.GREENVPN_PRODUCT_NAME)" `
                 --dart-define="GREENVPN_YANDEX_REWARDED_ADS_ENABLED=false" `
                 --dart-define="BLUEVPN_API_BASE_URL=$ApiBaseUrl" `
                 --dart-define="BLUEVPN_API_BASE_URLS=$ApiFallbackBaseUrls"
@@ -252,6 +309,14 @@ if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
         }
         finally {
             Pop-Location
+            foreach ($name in $runtime.Keys) {
+                $previous = $previousRuntimeEnvironment[$name]
+                if ($previous.existed) {
+                    Set-Item -LiteralPath "Env:$name" -Value $previous.value
+                } else {
+                    Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+                }
+            }
         }
     }
 
@@ -274,39 +339,65 @@ if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
 
     Copy-Item -Path (Join-Path $releaseRuntimeDir '*') -Destination $generatedAppDir -Recurse -Force
     $generatedLegacyExe = Join-Path $generatedAppDir 'bluevpn.exe'
-    $generatedGreenExe = Join-Path $generatedAppDir 'greenvpn.exe'
+    $generatedGreenExe = Join-Path $generatedAppDir $(if ($WindowsRuntimeScope -eq 'paid-beta') { 'greenvpn_beta.exe' } else { 'greenvpn.exe' })
     if (Test-Path -LiteralPath $generatedLegacyExe) {
         Move-Item -LiteralPath $generatedLegacyExe -Destination $generatedGreenExe -Force
     }
+    if ($WindowsRuntimeScope -eq 'paid-beta') {
+        $generatedServiceExe = Join-Path $generatedAppDir 'greenvpn_service.exe'
+        if (-not (Test-Path -LiteralPath $generatedServiceExe)) {
+            throw "Paid beta service executable was not built: $generatedServiceExe"
+        }
+        Move-Item -LiteralPath $generatedServiceExe -Destination (Join-Path $generatedAppDir 'greenvpn_beta_service.exe') -Force
+    }
 
     $readme = Join-Path $ProjectRoot 'docs\README_RELEASE.txt'
-    if (Test-Path -LiteralPath $readme) {
+    if ($WindowsRuntimeScope -eq 'stable' -and (Test-Path -LiteralPath $readme)) {
         Copy-Item -LiteralPath $readme -Destination (Join-Path $generatedDocsDir 'README_RELEASE.txt') -Force
     }
 
-    $doctor = Join-Path $ProjectRoot 'scripts\windows\doctor_bluevpn.ps1'
-    if (Test-Path -LiteralPath $doctor) {
-        Copy-Item -LiteralPath $doctor -Destination (Join-Path $generatedToolsDir 'doctor_greenvpn.ps1') -Force
-    }
+    if ($WindowsRuntimeScope -eq 'stable') {
+        $doctor = Join-Path $ProjectRoot 'scripts\windows\doctor_bluevpn.ps1'
+        if (Test-Path -LiteralPath $doctor) {
+            Copy-Item -LiteralPath $doctor -Destination (Join-Path $generatedToolsDir 'doctor_greenvpn.ps1') -Force
+        }
 
-    $recover = Join-Path $ProjectRoot 'scripts\windows\bluevpn_network_recover.ps1'
-    if (Test-Path -LiteralPath $recover) {
-        Copy-Item -LiteralPath $recover -Destination (Join-Path $generatedToolsDir 'greenvpn_network_recover.ps1') -Force
-    }
+        $recover = Join-Path $ProjectRoot 'scripts\windows\bluevpn_network_recover.ps1'
+        if (Test-Path -LiteralPath $recover) {
+            Copy-Item -LiteralPath $recover -Destination (Join-Path $generatedToolsDir 'greenvpn_network_recover.ps1') -Force
+        }
 
-    $bootRepair = Join-Path $ProjectRoot 'scripts\windows\greenvpn_boot_repair.ps1'
-    if (Test-Path -LiteralPath $bootRepair) {
-        Copy-Item -LiteralPath $bootRepair -Destination (Join-Path $generatedToolsDir 'greenvpn_boot_repair.ps1') -Force
+        $bootRepair = Join-Path $ProjectRoot 'scripts\windows\greenvpn_boot_repair.ps1'
+        if (Test-Path -LiteralPath $bootRepair) {
+            Copy-Item -LiteralPath $bootRepair -Destination (Join-Path $generatedToolsDir 'greenvpn_boot_repair.ps1') -Force
+        }
     }
 
     $vpnTask = Join-Path $ProjectRoot 'scripts\windows\greenvpn_vpn_task.ps1'
     if (Test-Path -LiteralPath $vpnTask) {
-        Copy-Item -LiteralPath $vpnTask -Destination (Join-Path $generatedToolsDir 'greenvpn_vpn_task.ps1') -Force
+        $packagedVpnTask = Join-Path $generatedToolsDir 'greenvpn_vpn_task.ps1'
+        Copy-Item -LiteralPath $vpnTask -Destination $packagedVpnTask -Force
+        if ($WindowsRuntimeScope -eq 'paid-beta') {
+            $taskContent = Get-Content -LiteralPath $packagedVpnTask -Raw
+            $taskContent = $taskContent.Replace('BlueVPNDev1', 'GreenVPNBeta').Replace("'BlueVPN'", "'BlueVPNBeta'")
+            Set-Content -LiteralPath $packagedVpnTask -Value $taskContent -Encoding UTF8
+        }
     }
 
     $networkProtection = Join-Path $ProjectRoot 'scripts\windows\check_windows_network_protection.ps1'
     if (Test-Path -LiteralPath $networkProtection) {
-        Copy-Item -LiteralPath $networkProtection -Destination (Join-Path $generatedToolsDir 'check_windows_network_protection.ps1') -Force
+        $packagedNetworkProtection = Join-Path $generatedToolsDir 'check_windows_network_protection.ps1'
+        Copy-Item -LiteralPath $networkProtection -Destination $packagedNetworkProtection -Force
+        if ($WindowsRuntimeScope -eq 'paid-beta') {
+            $protectionContent = Get-Content -LiteralPath $packagedNetworkProtection -Raw
+            $protectionContent = $protectionContent.Replace('BlueVPNDev1', 'GreenVPNBeta').Replace('BlueVPN\', 'BlueVPNBeta\')
+            Set-Content -LiteralPath $packagedNetworkProtection -Value $protectionContent -Encoding UTF8
+        }
+    }
+
+    if ($WindowsRuntimeScope -eq 'paid-beta') {
+        Copy-Item -LiteralPath (Join-Path $ProjectRoot 'scripts\windows\uninstall_paid_beta_side_by_side.ps1') `
+            -Destination (Join-Path $generatedToolsDir 'uninstall_greenvpn_beta.ps1') -Force
     }
 
 @"
@@ -860,6 +951,11 @@ finally {
 }
 '@ | Set-Content -LiteralPath $installPs1 -Encoding UTF8
 
+if ($WindowsRuntimeScope -eq 'paid-beta') {
+    Copy-Item -LiteralPath (Join-Path $ProjectRoot 'scripts\windows\install_paid_beta_side_by_side.ps1') `
+        -Destination $installPs1 -Force
+}
+
 @'
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -1122,10 +1218,17 @@ $form.Add_FormClosed({
 exit $script:exitCode
 '@ | Set-Content -LiteralPath $installUiPs1 -Encoding UTF8
 
+if ($WindowsRuntimeScope -eq 'paid-beta') {
+    $uiContent = Get-Content -LiteralPath $installUiPs1 -Raw
+    $uiContent = $uiContent.Replace('Green VPN', 'Green VPN Beta')
+    Set-Content -LiteralPath $installUiPs1 -Value $uiContent -Encoding UTF8
+}
+
 Write-Section 'CREATE IEXPRESS SED'
 $sedPath = Join-Path $workRoot 'greenvpn_installer.sed'
 $targetEscaped = $installerPath
 $payloadEscaped = $payloadDir
+$installerFriendlyName = if ($WindowsRuntimeScope -eq 'paid-beta') { 'Green VPN Beta Installer' } else { 'Green VPN Installer' }
 
 @"
 [Version]
@@ -1145,7 +1248,7 @@ InstallPrompt=
 DisplayLicense=
 FinishMessage=
 TargetName=$targetEscaped
-FriendlyName=Green VPN Installer
+FriendlyName=$installerFriendlyName
 AppLaunched=powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy RemoteSigned -File install_ui.ps1
 PostInstallCmd=<None>
 AdminQuietInstCmd=
@@ -1190,7 +1293,8 @@ try {
     Write-Warning "Installer resource update failed: $($_.Exception.Message)"
 }
 
-$latestAliasPath = Join-Path $OutBase 'GreenVPN_Setup_LATEST.exe'
+$latestAliasName = if ($WindowsRuntimeScope -eq 'paid-beta') { 'GreenVPN_Beta_Setup_LATEST.exe' } else { 'GreenVPN_Setup_LATEST.exe' }
+$latestAliasPath = Join-Path $OutBase $latestAliasName
 Copy-Item -LiteralPath $installerPath -Destination $latestAliasPath -Force
 
 Write-Section 'DONE'

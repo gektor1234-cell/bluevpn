@@ -21,6 +21,7 @@ Last updated: 2026-07-10.
 - Stable server snapshots: `/root/greenvpn-pre-paid-beta-20260710T103821`.
 - Previous beta tag/checkpoint: `greenvpn-paid-beta-technical-ready-20260710` and `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_technical_ready_20260710T110614Z`.
 - Final owner-gate checkpoint/tag: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_owner_gate_ready_20260710`, `/root/greenvpn-paid-beta-owner-gate-ready-20260710`, `greenvpn-paid-beta-owner-gate-ready-20260710`.
+- Windows candidate checkpoint/tag: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_windows_candidate_ready_20260710`, `greenvpn-paid-beta-windows-candidate-ready-20260710`.
 
 ## Frozen production stable
 
@@ -50,8 +51,9 @@ Last updated: 2026-07-10.
 - Android package/label: `pro.greenvpn.app.beta` / `Green VPN Beta`.
 - Android SHA-256: `90E42FB6CE5A06247E620E5DC3302B7C7C86A0F9A8FEBDC523876A622B9C6580`.
 - Android signer SHA-256: `1ea2c985890e9010aa3b76aee676624ec45398fd86a5e40dd95c76cdfc6a0fbc`.
-- Windows: `C:\BlueVPN_Builds\paid_beta_20260710_v2\GreenVPN_Setup_0.3.0-paid-beta.2.exe`.
-- Windows SHA-256: `41F96CB95118507AACA861721F83B2972CF419E2F10BA2FCF38CB73800988332`; Authenticode `NotSigned`.
+- Local Windows side-by-side candidate: `C:\BlueVPN_Builds\paid_beta_20260710_v6\GreenVPN_Beta_Setup_0.3.0-paid-beta.3.exe`.
+- Local Windows SHA-256: `559C66438BD319E010631061C7ABF024DAE4DAAA2EAA15697B7DAFAA62CD7604`; Authenticode `NotSigned`.
+- Server-published Windows remains `.2` with SHA-256 `41F96CB95118507AACA861721F83B2972CF419E2F10BA2FCF38CB73800988332` until the `.3` real-PC smoke passes.
 - Final bundle: `C:\BlueVPN_Builds\paid_beta_20260710_v5\paid-beta-0.3.0-paid-beta.5-2026071005-r5.tar.gz`.
 - Bundle SHA-256: `5955F5A884A7E847A09F9DA43A226F6A78603107EDEDFA0E17C5D1EA2337AF07`.
 - Android `.2/.3/.4` and server revisions before `r5` are forensic/superseded, not approved rollback targets.
@@ -67,12 +69,13 @@ Last updated: 2026-07-10.
 - Stable Android and beta coexist; stable remains `pro.greenvpn.app`, beta is `pro.greenvpn.app.beta`.
 - Android custom-app picker lists launchable apps with search. Active add/remove of Chrome rebuilt `tun0`; VPN UID list contained Chrome only while selected. Chrome, MAX and all unselected apps route directly.
 - Device was restored after testing: Chrome removed from VPN list, beta VPN off, `stay_on_while_plugged_in=0`.
+- Windows `.3` static gate passed: isolated install/data/service/tunnel/port/process/window identifiers, clean EXE extraction, 0 stable identifier matches, 0 PowerShell parse errors and 0 Defender detections. It has not been installed.
 
 ## Owner gate
 
 Do not create/send the first 20 codes yet. Remaining owner actions:
 
-1. Install and smoke Windows beta on a real PC, including reboot, uninstall and network recovery. The current Windows beta is not side-by-side isolated and may replace the local stable client.
+1. Install and smoke local Windows beta `.3` on a real PC, including VPN connect, reboot, uninstall and network recovery. It is side-by-side isolated and does not target stable paths, but still requires UAC and is unsigned.
 2. Make one real 149 RUB YooKassa payment and verify activation polling plus refund/cancel handling.
 3. Accept or legally review beta terms/privacy.
 

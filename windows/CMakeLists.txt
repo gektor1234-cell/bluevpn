@@ -6,6 +6,36 @@ project(bluevpn_ui LANGUAGES CXX)
 # the on-disk name of your application.
 set(BINARY_NAME "bluevpn")
 
+function(GREENVPN_ENV_OR_DEFAULT OUTPUT_NAME ENV_NAME DEFAULT_VALUE)
+  if(DEFINED ENV{${ENV_NAME}} AND NOT "$ENV{${ENV_NAME}}" STREQUAL "")
+    set(${OUTPUT_NAME} "$ENV{${ENV_NAME}}" PARENT_SCOPE)
+  else()
+    set(${OUTPUT_NAME} "${DEFAULT_VALUE}" PARENT_SCOPE)
+  endif()
+endfunction()
+
+GREENVPN_ENV_OR_DEFAULT(GREENVPN_RUNTIME_SERVICE_NAME
+  GREENVPN_WINDOWS_SERVICE_NAME "GreenVPNService")
+GREENVPN_ENV_OR_DEFAULT(GREENVPN_RUNTIME_TUNNEL_NAME
+  GREENVPN_WINDOWS_TUNNEL_NAME "BlueVPNDev1")
+GREENVPN_ENV_OR_DEFAULT(GREENVPN_RUNTIME_PROGRAM_DATA_SUBDIR
+  GREENVPN_WINDOWS_PROGRAM_DATA_SUBDIR "BlueVPN")
+GREENVPN_ENV_OR_DEFAULT(GREENVPN_RUNTIME_LOCAL_SERVICE_PORT
+  GREENVPN_WINDOWS_LOCAL_SERVICE_PORT "48737")
+GREENVPN_ENV_OR_DEFAULT(GREENVPN_RUNTIME_PRODUCT_NAME
+  GREENVPN_PRODUCT_NAME "Green VPN")
+GREENVPN_ENV_OR_DEFAULT(GREENVPN_RUNTIME_INSTANCE_ID
+  GREENVPN_WINDOWS_INSTANCE_ID "GreenVPN")
+GREENVPN_ENV_OR_DEFAULT(GREENVPN_RUNTIME_EXECUTABLE_NAME
+  GREENVPN_WINDOWS_EXECUTABLE_NAME "bluevpn.exe")
+
+set(GREENVPN_RUNTIME_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${GREENVPN_RUNTIME_GENERATED_DIR}")
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/green_vpn_runtime_config.h.in"
+  "${GREENVPN_RUNTIME_GENERATED_DIR}/green_vpn_runtime_config.h"
+  @ONLY
+)
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.
@@ -52,6 +82,8 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
+target_include_directories(${BINARY_NAME} PRIVATE
+  "${GREENVPN_RUNTIME_GENERATED_DIR}")
 
 # Native privileged helper installed as a Windows Service. The Flutter UI talks
 # to it over localhost so the UI itself does not need to run elevated.
@@ -62,6 +94,8 @@ target_compile_features(greenvpn_service PUBLIC cxx_std_17)
 target_compile_options(greenvpn_service PRIVATE /W4 /WX /EHsc)
 target_compile_definitions(greenvpn_service PRIVATE "_HAS_EXCEPTIONS=0")
 target_compile_definitions(greenvpn_service PRIVATE "NOMINMAX")
+target_include_directories(greenvpn_service PRIVATE
+  "${GREENVPN_RUNTIME_GENERATED_DIR}")
 target_link_libraries(greenvpn_service PRIVATE advapi32 ws2_32)
 
 

@@ -2,6 +2,7 @@
 //
 #pragma code_page(65001)
 #include "resource.h"
+#include "green_vpn_runtime_config.h"
 
 #define APSTUDIO_READONLY_SYMBOLS
 /////////////////////////////////////////////////////////////////////////////
@@ -90,12 +91,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "Green VPN" "\0"
-            VALUE "FileDescription", "Green VPN Windows Client" "\0"
+            VALUE "FileDescription", GREENVPN_RUNTIME_PRODUCT_NAME_A " Windows Client\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "bluevpn" "\0"
+            VALUE "InternalName", GREENVPN_RUNTIME_INSTANCE_ID_A "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 Green VPN. All rights reserved." "\0"
-            VALUE "OriginalFilename", "bluevpn.exe" "\0"
-            VALUE "ProductName", "Green VPN" "\0"
+            VALUE "OriginalFilename", GREENVPN_RUNTIME_EXECUTABLE_NAME_A "\0"
+            VALUE "ProductName", GREENVPN_RUNTIME_PRODUCT_NAME_A "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

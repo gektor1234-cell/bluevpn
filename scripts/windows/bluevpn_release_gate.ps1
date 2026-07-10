@@ -55,6 +55,7 @@ if (-not (Test-Path -LiteralPath $ProjectRoot)) {
 }
 
 $mainPath = Join-Path $ProjectRoot "lib\main.dart"
+$runtimeConfigPath = Join-Path $ProjectRoot "lib\runtime_config.dart"
 $backendPath = Join-Path $ProjectRoot "backend_live\app\main.py"
 $installerPath = Join-Path $ProjectRoot "scripts\windows\build_installer.ps1"
 $signScriptPath = Join-Path $ProjectRoot "scripts\windows\sign_release_artifacts.ps1"
@@ -67,6 +68,7 @@ $transportCanaryPath = Join-Path $ProjectRoot "scripts\server\install_transport_
 $transportCanaryCheckPath = Join-Path $ProjectRoot "scripts\server\check_transport_canary_readiness.sh"
 
 $main = Read-Text $mainPath
+$runtimeConfig = Read-Text $runtimeConfigPath
 $backend = Read-Text $backendPath
 $installer = Read-Text $installerPath
 $signScript = Read-Text $signScriptPath
@@ -96,8 +98,11 @@ foreach ($pattern in $forbiddenClientPatterns) {
     }
 }
 
-if ($main -match "const String kTunnelName = 'BlueVPNDev1';") {
-    Add-Pass "Tunnel name remains BlueVPNDev1"
+if (
+    $main -match "const String kTunnelName = greenVpnTunnelName;" -and
+    $runtimeConfig -match "defaultValue: 'BlueVPNDev1'"
+) {
+    Add-Pass "Stable tunnel name defaults to BlueVPNDev1 through runtime config"
 }
 else {
     Add-Error "Tunnel name invariant was changed or could not be verified."
@@ -118,15 +123,16 @@ else {
 }
 
 $localServiceClientFragments = @(
-    '_localTokenPath',
+    'greenVpnServiceTokenPathSync',
     'X-GreenVPN-Local-Token',
     '_requiresLocalToken',
     '_readLocalToken',
     'service_token'
 )
+$localServiceClientSource = $main + "`n" + $runtimeConfig
 
 foreach ($fragment in $localServiceClientFragments) {
-    if ($main.Contains($fragment)) {
+    if ($localServiceClientSource.Contains($fragment)) {
         Add-Pass "Client local service token support present: $fragment"
     }
     else {

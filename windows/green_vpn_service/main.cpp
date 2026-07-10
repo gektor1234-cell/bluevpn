@@ -13,15 +13,25 @@
 #include <string>
 #include <vector>
 
+#include "green_vpn_runtime_config.h"
+
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "ws2_32.lib")
 
 namespace {
 
-constexpr wchar_t kServiceName[] = L"GreenVPNService";
-constexpr wchar_t kTunnelServiceName[] = L"WireGuardTunnel$BlueVPNDev1";
-constexpr unsigned short kPort = 48737;
-constexpr char kLocalTokenPath[] = "C:\\ProgramData\\BlueVPN\\service_token";
+constexpr wchar_t kServiceName[] = GREENVPN_RUNTIME_SERVICE_NAME_W;
+constexpr char kServiceNameUtf8[] = GREENVPN_RUNTIME_SERVICE_NAME_A;
+constexpr wchar_t kTunnelServiceName[] =
+    L"WireGuardTunnel$" GREENVPN_RUNTIME_TUNNEL_NAME_W;
+constexpr char kTunnelServiceNameUtf8[] =
+    "WireGuardTunnel$" GREENVPN_RUNTIME_TUNNEL_NAME_A;
+constexpr unsigned short kPort = GREENVPN_RUNTIME_LOCAL_SERVICE_PORT;
+constexpr wchar_t kProgramDataRoot[] = GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_W;
+constexpr wchar_t kBackendLogPath[] =
+    GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_W L"\\backend.log";
+constexpr char kLocalTokenPath[] =
+    GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\service_token";
 constexpr char kLocalTokenHeader[] = "x-greenvpn-local-token";
 
 SERVICE_STATUS_HANDLE g_status_handle = nullptr;
@@ -112,7 +122,7 @@ std::wstring DefaultTaskScriptPath() {
 }
 
 void EnsureProgramDataDirectory() {
-  CreateDirectoryW(L"C:\\ProgramData\\BlueVPN", nullptr);
+  CreateDirectoryW(kProgramDataRoot, nullptr);
 }
 
 void AppendLog(const std::wstring& message) {
@@ -126,7 +136,7 @@ void AppendLog(const std::wstring& message) {
              st.wMilliseconds);
 
   std::string line = WideToUtf8(std::wstring(prefix) + message + L"\r\n");
-  HANDLE file = CreateFileW(L"C:\\ProgramData\\BlueVPN\\backend.log",
+  HANDLE file = CreateFileW(kBackendLogPath,
                             FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
                             nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (file == INVALID_HANDLE_VALUE) {
@@ -454,8 +464,8 @@ std::string QueryTunnelStatusJson() {
     CloseServiceHandle(scm);
   }
 
-  return std::string("{\"ok\":true,\"service\":\"GreenVPNService\",") +
-         "\"tunnelService\":\"WireGuardTunnel$BlueVPNDev1\"," +
+  return std::string("{\"ok\":true,\"service\":\"") + kServiceNameUtf8 +
+         "\",\"tunnelService\":\"" + kTunnelServiceNameUtf8 + "\"," +
          "\"tunnelState\":\"" + state + "\"}";
 }
 
@@ -478,9 +488,8 @@ void HandleRequest(SOCKET client, const std::string& request) {
   }
 
   if (method == "get" && path == "/ping") {
-    SendHttp(client, 200, "OK",
-             "{\"ok\":true,\"service\":\"GreenVPNService\","
-             "\"authRequired\":true}");
+    SendHttp(client, 200, "OK", std::string("{\"ok\":true,\"service\":\"") +
+             kServiceNameUtf8 + "\",\"authRequired\":true}");
     return;
   }
 
@@ -566,7 +575,7 @@ DWORD WINAPI HttpWorkerThread(LPVOID) {
 
   if (bind(listen_socket, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) ==
       SOCKET_ERROR) {
-    AppendLog(L"bind failed on 127.0.0.1:48737");
+    AppendLog(L"bind failed on 127.0.0.1:" + std::to_wstring(kPort));
     closesocket(listen_socket);
     WSACleanup();
     return 1;
@@ -580,7 +589,8 @@ DWORD WINAPI HttpWorkerThread(LPVOID) {
   }
 
   g_listen_socket = listen_socket;
-  AppendLog(L"listening on 127.0.0.1:48737 task=" + g_task_script_path);
+  AppendLog(L"listening on 127.0.0.1:" + std::to_wstring(kPort) +
+            L" task=" + g_task_script_path);
 
   while (WaitForSingleObject(g_stop_event, 0) == WAIT_TIMEOUT) {
     SOCKET client = accept(listen_socket, nullptr, nullptr);

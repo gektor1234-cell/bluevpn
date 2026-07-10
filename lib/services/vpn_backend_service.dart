@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'config_service.dart';
+import '../runtime_config.dart';
 
 class BackendApplyResult {
   final bool ok;
@@ -11,8 +12,9 @@ class BackendApplyResult {
 }
 
 class VpnBackendService {
-  static final Uri _localServiceBase = Uri.parse('http://127.0.0.1:48737');
-  static const String _localTokenPath = r'C:\ProgramData\BlueVPN\service_token';
+  static final Uri _localServiceBase = Uri.parse(
+    'http://127.0.0.1:$greenVpnLocalServicePort',
+  );
   static const String _localTokenHeader = 'X-GreenVPN-Local-Token';
 
   Future<BackendApplyResult> applyManagedConfig({
@@ -183,7 +185,7 @@ class VpnBackendService {
 
   static Future<String?> _readLocalToken() async {
     try {
-      final file = File(_localTokenPath);
+      final file = File(greenVpnServiceTokenPathSync());
       if (!file.existsSync()) return null;
       final token = (await file.readAsString()).trim();
       if (token.length < 24) return null;

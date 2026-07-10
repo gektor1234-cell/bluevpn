@@ -24,15 +24,17 @@ Production использует отдельные service/DB/site/download path
 ## Текущий release
 
 - Android: `0.3.0-paid-beta.5`, build `2026071005`, package `pro.greenvpn.app.beta`.
-- Windows: `0.3.0-paid-beta.2`.
+- Windows на серверах: `0.3.0-paid-beta.2`; локальный side-by-side кандидат: `0.3.0-paid-beta.3`.
 - Backend: `0.9.106-paid-beta.4`.
 - Release directory на обоих узлах: `paid-beta-0.3.0-paid-beta.5-2026071005-r5`.
 - Bundle SHA-256: `5955F5A884A7E847A09F9DA43A226F6A78603107EDEDFA0E17C5D1EA2337AF07`.
 - Android SHA-256: `90E42FB6CE5A06247E620E5DC3302B7C7C86A0F9A8FEBDC523876A622B9C6580`.
-- Windows SHA-256: `41F96CB95118507AACA861721F83B2972CF419E2F10BA2FCF38CB73800988332` (`NotSigned`).
+- Локальный Windows `.3` SHA-256: `559C66438BD319E010631061C7ABF024DAE4DAAA2EAA15697B7DAFAA62CD7604` (`NotSigned`).
 - Client IP pool: `10.10.0.180-10.10.0.229`.
 
 Update API на Timeweb выдаёт primary download URLs; RUVDS выдаёт собственные fallback URLs. Оба возвращают Android `.5`/Windows `.2`, правильные SHA и `required=false`.
+
+Windows `.3` намеренно не загружен на серверы: распаковка реального installer EXE, beta-only identifiers, PE metadata, PowerShell parser и Defender прошли; real install/reboot/uninstall остаётся owner gate.
 
 ## Проверки
 

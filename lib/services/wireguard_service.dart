@@ -1,8 +1,10 @@
 import 'dart:io';
 
+import '../runtime_config.dart';
+
 class WireGuardService {
   // Твой реальный сервис:
-  static const String tunnelServiceName = r'WireGuardTunnel$BlueVPNDev1';
+  static String get tunnelServiceName => greenVpnTunnelServiceName;
 
   // CLI WireGuard (для логов):
   static const String wireguardExe =

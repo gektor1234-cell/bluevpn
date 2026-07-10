@@ -2,6 +2,7 @@ param(
     [ValidateSet("android", "windows", "both")]
     [string]$Mode = "both",
     [string]$AppVersion = "0.3.0-paid-beta.5",
+    [string]$WindowsAppVersion = "0.3.0-paid-beta.3",
     [string]$AndroidBuildName = "0.3.0",
     [string]$AndroidBuildNumber = "2026071005",
     [string]$AndroidApplicationId = "pro.greenvpn.app.beta",
@@ -54,6 +55,7 @@ if (-not $SkipChecks) {
 
 $artifacts = New-Object System.Collections.Generic.List[object]
 $safeVersion = $AppVersion -replace "[^A-Za-z0-9._-]", "_"
+$safeWindowsVersion = $WindowsAppVersion -replace "[^A-Za-z0-9._-]", "_"
 
 if ($Mode -in @("android", "both")) {
     $androidSdk = Join-Path $env:LOCALAPPDATA "Android\Sdk"
@@ -156,16 +158,17 @@ if ($Mode -in @("android", "both")) {
 }
 
 if ($Mode -in @("windows", "both")) {
-    $windowsName = "GreenVPN_Setup_${safeVersion}.exe"
+    $windowsName = "GreenVPN_Beta_Setup_${safeWindowsVersion}.exe"
     & (Join-Path $PSScriptRoot "build_installer.ps1") `
         -ProjectRoot $repo `
         -OutBase $OutDir `
         -InstallerName $windowsName `
-        -AppVersion $AppVersion `
+        -AppVersion $WindowsAppVersion `
         -ApiBaseUrl $ApiBaseUrl `
         -ApiFallbackBaseUrls $ApiFallbackBaseUrls `
         -TrialOnlyNoAdsBuild $false `
-        -PaidBetaBuild $true
+        -PaidBetaBuild $true `
+        -WindowsRuntimeScope 'paid-beta'
     if ($LASTEXITCODE -ne 0) { throw "Windows paid beta installer build failed" }
 
     $windowsPath = Join-Path $OutDir $windowsName
@@ -173,7 +176,7 @@ if ($Mode -in @("windows", "both")) {
     $signature = Get-AuthenticodeSignature -LiteralPath $item.FullName
     $artifacts.Add([pscustomobject]@{
         platform = "windows"
-        version = $AppVersion
+        version = $WindowsAppVersion
         buildNumber = ""
         path = $item.FullName
         fileName = $item.Name
@@ -189,6 +192,7 @@ $manifest = [pscustomobject]@{
     isolated = $true
     productionPublished = $false
     appVersion = $AppVersion
+    windowsAppVersion = $WindowsAppVersion
     androidApplicationId = $AndroidApplicationId
     androidAppLabel = $AndroidAppLabel
     clientMarker = $ClientMarker

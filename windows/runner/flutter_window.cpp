@@ -1,5 +1,7 @@
 #include "flutter_window.h"
 
+#include "green_vpn_runtime_config.h"
+
 #include <optional>
 #include <string>
 #include <windows.h>
@@ -142,7 +144,7 @@ void FlutterWindow::AddTrayIcon(HWND window) {
   tray_icon_data_.uCallbackMessage = kTrayCallbackMessage;
   tray_icon_data_.hIcon =
       LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_APP_ICON));
-  wcscpy_s(tray_icon_data_.szTip, L"Green VPN");
+  wcscpy_s(tray_icon_data_.szTip, GREENVPN_RUNTIME_PRODUCT_NAME_W);
 
   tray_icon_added_ = Shell_NotifyIconW(NIM_ADD, &tray_icon_data_) == TRUE;
   if (tray_icon_added_) {
@@ -170,7 +172,8 @@ void FlutterWindow::ShowTrayMenu(HWND window) {
     return;
   }
 
-  AppendMenuW(menu, MF_STRING, kTrayMenuOpen, L"Open Green VPN");
+  AppendMenuW(menu, MF_STRING, kTrayMenuOpen,
+              L"Open " GREENVPN_RUNTIME_PRODUCT_NAME_W);
   AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
   AppendMenuW(menu, MF_STRING, kTrayMenuConnect, L"Connect VPN");
   AppendMenuW(menu, MF_STRING, kTrayMenuDisconnect, L"Disconnect VPN");
@@ -213,7 +216,7 @@ void FlutterWindow::RunVpnTask(const wchar_t* task_name) {
     return;
   }
 
-  HINTERNET session = WinHttpOpen(L"Green VPN tray/1.0",
+  HINTERNET session = WinHttpOpen(GREENVPN_RUNTIME_PRODUCT_NAME_W L" tray/1.0",
                                   WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                   WINHTTP_NO_PROXY_NAME,
                                   WINHTTP_NO_PROXY_BYPASS, 0);
@@ -221,7 +224,8 @@ void FlutterWindow::RunVpnTask(const wchar_t* task_name) {
     return;
   }
 
-  HINTERNET connect = WinHttpConnect(session, L"127.0.0.1", 48737, 0);
+  HINTERNET connect = WinHttpConnect(
+      session, L"127.0.0.1", GREENVPN_RUNTIME_LOCAL_SERVICE_PORT, 0);
   if (!connect) {
     WinHttpCloseHandle(session);
     return;

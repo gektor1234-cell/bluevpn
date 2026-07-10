@@ -3,15 +3,16 @@
 #include <windows.h>
 
 #include "flutter_window.h"
+#include "green_vpn_runtime_config.h"
 #include "utils.h"
 
 namespace {
 
 constexpr const wchar_t kSingleInstanceMutexName[] =
-    L"Local\\GreenVPN.SingleInstance";
+    L"Local\\" GREENVPN_RUNTIME_INSTANCE_ID_W L".SingleInstance";
 constexpr const wchar_t kRunnerWindowClassName[] =
     L"FLUTTER_RUNNER_WIN32_WINDOW";
-constexpr const wchar_t kAppWindowTitle[] = L"Green VPN";
+constexpr const wchar_t kAppWindowTitle[] = GREENVPN_RUNTIME_PRODUCT_NAME_W;
 
 bool IsBackgroundLaunch(const std::wstring& raw_command_line,
                         int show_command) {
@@ -109,7 +110,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(980, 720);
 
-  if (!window.Create(L"Green VPN", origin, size)) {
+  if (!window.Create(kAppWindowTitle, origin, size)) {
 
     return EXIT_FAILURE;
   }

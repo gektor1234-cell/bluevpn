@@ -54,10 +54,10 @@
    - Cohort и DB-sync покрыты отдельными backend-тестами.
 4. **Paid-beta clients** - выполнен локально 2026-07-10, без публикации.
    - Отдельный channel `paid-beta`, финальный Android `0.3.0-paid-beta.5`, build `2026071005`, package `pro.greenvpn.app.beta`.
-   - Windows остаётся `0.3.0-paid-beta.2`: артефакт собран и проверен, но ждёт реальной установки владельцем.
+   - Серверы пока отдают Windows `0.3.0-paid-beta.2`; локально собран отдельный side-by-side кандидат `0.3.0-paid-beta.3`, который ждёт реальной установки владельцем.
    - Primary/fallback указывают только на изолированный path `/paid-beta-api`.
    - YooKassa UI включён; rewarded ads и session timer выключены compile-time.
-   - Android APK подписан и проверен; Windows installer собран, но остаётся без Authenticode-подписи.
+   - Android APK подписан и проверен; Windows `.3` изолирован по install/data/service/tunnel/port/process/window, но остаётся без Authenticode-подписи.
    - Stable APK/EXE после сборки сохранили исходные SHA-256.
    - Локальный release manifest: `docs/PAID_BETA_RELEASE_2026_07_10_RU.md`.
 5. **Инвайты и воронка** - выполнен локально 2026-07-10, без развёртывания.
@@ -96,7 +96,7 @@
 
 ## Текущая точка остановки
 
-Техническая часть доступная без владельца завершена. Android real-device gate закрыт. До генерации 20 кодов владелец должен: установить Windows beta на реальный ПК, провести один реальный платёж 149 RUB и подтвердить terms/privacy. Production до этих действий остаётся замороженным.
+Техническая часть доступная без владельца завершена. Android real-device gate и Windows static isolation gate закрыты. До генерации 20 кодов владелец должен: установить локальную Windows `.3` на реальный ПК, провести один реальный платёж 149 RUB и подтвердить terms/privacy. Production до этих действий остаётся замороженным.
 
 ## Критерии beta
 

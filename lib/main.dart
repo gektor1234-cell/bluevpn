@@ -11,6 +11,8 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:yandex_mobileads/mobile_ads.dart';
 
+import 'runtime_config.dart';
+
 /*
   Green VPN — режим "как пользовательский продукт":
   - Первый запуск: регистрация/вход (через сервер)
@@ -21,8 +23,8 @@ import 'package:yandex_mobileads/mobile_ads.dart';
   ВАЖНО: в VPN-экране НЕТ карточки "Профиль" (дырка закрыта).
 */
 
-const String kTunnelName = 'BlueVPNDev1';
-const String kProductName = 'Green VPN';
+const String kTunnelName = greenVpnTunnelName;
+const String kProductName = greenVpnProductName;
 const String kIntelligentSmewHost = '37.220.85.211';
 const String kAppVersion = String.fromEnvironment(
   'GREENVPN_APP_VERSION',
@@ -1339,11 +1341,7 @@ class BlueVpnLocalPaths {
     if (!Platform.isWindows) {
       return '${Directory.systemTemp.path}/greenvpn_state';
     }
-    final base = Platform.environment['ProgramData'];
-    if (base != null && base.trim().isNotEmpty) {
-      return '$base\\BlueVPN\\state';
-    }
-    return r'C:\ProgramData\BlueVPN\state';
+    return '${greenVpnProgramDataRootSync()}\\state';
   }
 
   static String userStateDirSync() {
@@ -1351,15 +1349,7 @@ class BlueVpnLocalPaths {
     if (!Platform.isWindows) {
       return sharedStateDirSync();
     }
-    final appData = Platform.environment['APPDATA'];
-    if (appData != null && appData.trim().isNotEmpty) {
-      return '$appData\\GreenVPN\\state';
-    }
-    final userProfile = Platform.environment['USERPROFILE'];
-    if (userProfile != null && userProfile.trim().isNotEmpty) {
-      return '$userProfile\\AppData\\Roaming\\GreenVPN\\state';
-    }
-    return '${Directory.systemTemp.path}\\GreenVPN\\state';
+    return '${greenVpnUserDataRootSync()}\\state';
   }
 
   static Future<String> userStateDir() async {
@@ -1394,6 +1384,7 @@ class BlueVpnLocalPaths {
 
   static Future<List<Directory>> legacyStateDirs() async {
     if (kIsWeb || !Platform.isWindows) return const <Directory>[];
+    if (greenVpnWindowsRuntimeIsIsolated) return const <Directory>[];
     final out = <Directory>[];
     final seen = <String>{};
 
@@ -2010,7 +2001,7 @@ class PendingVpnActionStore {
 Future<void> appendBlueVpnClientLog(String message) async {
   if (kIsWeb || !Platform.isWindows) return;
   try {
-    final f = File(r'C:\ProgramData\BlueVPN\auth.log');
+    final f = File(greenVpnAuthLogPathSync());
     final ts = DateTime.now().toIso8601String();
     await f.writeAsString('[$ts] UI $message\n', mode: FileMode.append);
   } catch (_) {}
@@ -3424,7 +3415,7 @@ while True:
 
   File? _authLogFile() {
     if (kIsWeb || !Platform.isWindows) return null;
-    return File(r'C:\ProgramData\BlueVPN\auth.log');
+    return File(greenVpnAuthLogPathSync());
   }
 
   Future<void> _authLog(String s) async {
@@ -4778,7 +4769,7 @@ class ConfigStore {
     if (kIsWeb) return '';
     if (_usesMobileSecureConfig) return 'greenvpn://mobile/managed.conf';
     if (!Platform.isWindows) return '';
-    return r'C:\ProgramData\BlueVPN\BlueVPNDev1.conf';
+    return greenVpnManagedConfigPathSync();
   }
 
   // Hidden base config received from server/dev seed. We never apply it directly.
@@ -4786,7 +4777,7 @@ class ConfigStore {
     if (kIsWeb) return '';
     if (_usesMobileSecureConfig) return 'greenvpn://mobile/base.conf';
     if (!Platform.isWindows) return '';
-    return r'C:\ProgramData\BlueVPN\BlueVPNDev1.base.conf';
+    return greenVpnBaseConfigPathSync();
   }
 
   String serverBaseConfigPath(String serverId) {
@@ -4795,7 +4786,7 @@ class ConfigStore {
       return 'greenvpn://mobile/server/${_safeServerCacheKey(serverId)}.conf';
     }
     if (!Platform.isWindows) return '';
-    return 'C:\\ProgramData\\BlueVPN\\server-cache\\${_safeServerCacheKey(serverId)}.base.conf';
+    return '${greenVpnProgramDataRootSync()}\\server-cache\\${_safeServerCacheKey(serverId)}.base.conf';
   }
 
   Future<bool> hasManagedConfig() async {
@@ -5235,7 +5226,7 @@ class _AuthPageState extends State<AuthPage>
   Future<void> _authLog(String text) async {
     if (kIsWeb || !Platform.isWindows) return;
     try {
-      final f = File(r'C:\ProgramData\BlueVPN\auth.log');
+      final f = File(greenVpnAuthLogPathSync());
       final ts = DateTime.now().toIso8601String();
       await f.writeAsString('[$ts] $text\n', mode: FileMode.append);
     } catch (_) {}
@@ -7593,6 +7584,15 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       }
     }
 
+    if (greenVpnWindowsRuntimeIsIsolated) {
+      final root = greenVpnProgramDataRootSync();
+      addCandidate(greenVpnBaseConfigPathSync());
+      addCandidate(greenVpnManagedConfigPathSync());
+      addCandidate('$root\\$greenVpnTunnelName.real.conf');
+      addCandidate('$root\\$greenVpnTunnelName.seed.conf');
+      return out;
+    }
+
     final programData = Platform.environment['ProgramData'];
     if (programData != null && programData.isNotEmpty) {
       final bluevpnDir = Directory('$programData\\BlueVPN');
@@ -7716,7 +7716,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     await _writeProvisionedConfig(preferred.content, server: effectiveServer);
 
     if (showToast && mounted) {
-      _toast(context, 'BlueVPNDev1 конфиг восстановлен из ${preferred.path}');
+      _toast(context, '$kTunnelName конфиг восстановлен из ${preferred.path}');
     }
     return true;
   }
@@ -15375,10 +15375,10 @@ class WireGuardRuntimeStatus {
       return 'Есть другой активный VPN-интерфейс или сервис. Он может мешать подключению Green VPN.';
     }
     if (routeOwnerLabel != 'unknown' && routeOwnerLabel != tunnelName) {
-      return 'Основной IPv4-маршрут сейчас принадлежит не BlueVPNDev1, а $routeOwnerLabel.';
+      return 'Основной IPv4-маршрут сейчас принадлежит не $kTunnelName, а $routeOwnerLabel.';
     }
     if (routeOwnerLabel == tunnelName) {
-      return 'Основной IPv4-маршрут уже у BlueVPNDev1.';
+      return 'Основной IPv4-маршрут уже у $kTunnelName.';
     }
     return 'Владелец основного IPv4-маршрута определить не удалось.';
   }
@@ -16374,8 +16374,9 @@ class _GreenVpnSystemServiceResponse {
 class _GreenVpnSystemServiceClient {
   const _GreenVpnSystemServiceClient();
 
-  static final Uri _baseUri = Uri.parse('http://127.0.0.1:48737');
-  static const String _localTokenPath = r'C:\ProgramData\BlueVPN\service_token';
+  static final Uri _baseUri = Uri.parse(
+    'http://127.0.0.1:$greenVpnLocalServicePort',
+  );
   static const String _localTokenHeader = 'X-GreenVPN-Local-Token';
 
   Future<_GreenVpnSystemServiceResponse> ping() => _request(
@@ -16481,7 +16482,7 @@ class _GreenVpnSystemServiceClient {
   static Future<String?> _readLocalToken() async {
     if (kIsWeb || !Platform.isWindows) return null;
     try {
-      final file = File(_localTokenPath);
+      final file = File(greenVpnServiceTokenPathSync());
       if (!file.existsSync()) return null;
       final token = (await file.readAsString()).trim();
       if (token.length < 24) return null;
@@ -16639,7 +16640,7 @@ if ($null -eq $svc) { exit 0 }
   @override
   Future<VpnBackendResult> connect({required String configPath}) async {
     _lastConfigPath = configPath;
-    final logFile = File(r'C:\ProgramData\BlueVPN\backend.log');
+    final logFile = File(greenVpnBackendLogPathSync());
 
     Future<void> log(String s) async {
       try {
@@ -16916,7 +16917,7 @@ if ($null -eq $svc) { exit 0 }
 
   @override
   Future<VpnBackendResult> disconnect() async {
-    final logFile = File(r'C:\ProgramData\BlueVPN\backend.log');
+    final logFile = File(greenVpnBackendLogPathSync());
 
     Future<void> log(String s) async {
       try {
@@ -17048,7 +17049,7 @@ if ($null -eq $svc) { exit 0 }
         return const VpnBackendResult(
           ok: false,
           message:
-              'BlueVPNDev1 всё ещё держит адаптер или маршрут после отключения. Закрой приложение, разреши UAC и повтори. См. backend.log.',
+              '$kTunnelName всё ещё держит адаптер или маршрут после отключения. Закрой приложение, разреши UAC и повтори. См. backend.log.',
         );
       }
 
@@ -17068,8 +17069,7 @@ if ($null -eq $svc) { exit 0 }
     try {
       final status = await WireGuardRuntimeStatus.query(
         tunnelName: tunnelName,
-        configPath:
-            _lastConfigPath ?? r'C:\ProgramData\BlueVPN\BlueVPNDev1.conf',
+        configPath: _lastConfigPath ?? greenVpnManagedConfigPathSync(),
         wireguardExePath: _exe,
       );
       return status.isReallyConnected;
