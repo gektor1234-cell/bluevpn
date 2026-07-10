@@ -1,5 +1,7 @@
 const DEFAULT_API_BASE = 'https://api.greenvpn.pro';
 const STORAGE_KEY = 'greenvpn.admin.session.v1';
+const ADMIN_REQUEST_CONCURRENCY = 6;
+const ADMIN_REQUEST_TIMEOUT_MS = 45000;
 
 const state = {
   apiBase: DEFAULT_API_BASE,
@@ -3475,6 +3477,7 @@ function incidentFilterParams() {
     status: $('incidentStatusFilter')?.value || 'all',
     severity: $('incidentSeverityFilter')?.value || 'all',
     assignee: $('incidentAssigneeFilter')?.value || 'all',
+    refresh: 'false',
     limit: 100,
   };
 }
@@ -3790,8 +3793,36 @@ async function refreshAdminContext() {
 
 function addAllowedRequest(requests, key, permission, factory) {
   if (can(permission)) {
-    requests[key] = factory();
+    requests[key] = factory;
   }
+}
+
+async function runRequestFactories(requests) {
+  const items = Object.entries(requests);
+  const results = new Array(items.length);
+  let cursor = 0;
+
+  async function worker() {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      const [key, factory] = items[index];
+      try {
+        const value = typeof factory === 'function' ? await factory() : await factory;
+        results[index] = { status: 'fulfilled', value: [key, value] };
+      } catch (error) {
+        const detail = error?.message || String(error);
+        results[index] = { status: 'rejected', reason: new Error(`${key}: ${detail}`) };
+      }
+    }
+  }
+
+  const workers = Array.from(
+    { length: Math.min(ADMIN_REQUEST_CONCURRENCY, Math.max(1, items.length)) },
+    () => worker(),
+  );
+  await Promise.all(workers);
+  return results;
 }
 
 function resetLoadedData() {
@@ -3858,12 +3889,119 @@ function resetLoadedData() {
   });
 }
 
+function queueSectionRequests(requests, section) {
+  const currentSection = section || 'dashboard';
+
+  if (state.sessionToken && ['dashboard', 'auth', 'staff'].includes(currentSection)) {
+    requests.adminSessions = () => apiGet('/api/v1/admin/auth/sessions');
+  }
+
+  if (currentSection === 'dashboard') {
+    addAllowedRequest(requests, 'overview', 'dashboard.read', () => apiGet('/api/v1/admin/overview'));
+    return;
+  }
+
+  if (currentSection === 'analytics') {
+    addAllowedRequest(requests, 'analytics', 'analytics.read', () => apiGet('/api/v1/admin/analytics/summary'));
+    return;
+  }
+
+  if (currentSection === 'readiness') {
+    addAllowedRequest(requests, 'launchReadiness', 'readiness.read', () => apiGet('/api/v1/admin/launch/readiness'));
+    addAllowedRequest(requests, 'advertisingReadiness', 'readiness.read', () => apiGet('/api/v1/admin/launch/advertising-readiness'));
+    addAllowedRequest(requests, 'launchClosurePlan', 'readiness.read', () => apiGet('/api/v1/admin/launch/closure-plan'));
+    addAllowedRequest(requests, 'launchOwnerPacket', 'readiness.read', () => apiGet('/api/v1/admin/launch/owner-packet'));
+    addAllowedRequest(requests, 'readiness', 'readiness.read', () => apiGet('/api/v1/admin/readiness'));
+    addAllowedRequest(requests, 'siteReadiness', 'readiness.read', () => apiGet('/api/v1/admin/site/readiness'));
+    addAllowedRequest(requests, 'networkReadiness', 'readiness.read', () => apiGet('/api/v1/admin/network/readiness'));
+    addAllowedRequest(requests, 'networkSplitPlan', 'readiness.read', () => apiGet('/api/v1/admin/network/split-plan'));
+    addAllowedRequest(requests, 'userAuthReadiness', 'readiness.read', () => apiGet('/api/v1/admin/auth/user-flow/readiness?limit=10'));
+    addAllowedRequest(requests, 'adminTwoFactorReadiness', 'staff.manage', () => apiGet('/api/v1/admin/auth/2fa/readiness'));
+    addAllowedRequest(requests, 'externalActions', 'readiness.read', () => apiGet('/api/v1/admin/external-actions'));
+    return;
+  }
+
+  if (currentSection === 'support') {
+    addAllowedRequest(requests, 'support', 'support.read', () => apiGet(`/api/v1/admin/support/reports${encodeQuery(supportFilterParams())}`));
+    addAllowedRequest(requests, 'supportSla', 'support.read', () => apiGet('/api/v1/admin/support/sla?limit=25'));
+    addAllowedRequest(requests, 'supportWorkflow', 'support.read', () => apiGet('/api/v1/admin/support/workflow'));
+    addAllowedRequest(requests, 'supportActions', 'support_actions.read', () => apiGet(`/api/v1/admin/support/actions${encodeQuery(supportActionFilterParams())}`));
+    addAllowedRequest(requests, 'supportActionWorkflow', 'support_actions.read', () => apiGet('/api/v1/admin/support/actions/workflow'));
+    return;
+  }
+
+  if (currentSection === 'users') {
+    addAllowedRequest(requests, 'users', 'users.read', () => apiGet(`/api/v1/admin/users${encodeQuery(userFilterParams())}`));
+    return;
+  }
+
+  if (currentSection === 'orders') {
+    addAllowedRequest(requests, 'subscriptionExpiry', 'billing.read', () => apiGet('/api/v1/admin/subscriptions/expiry-readiness?limit=25'));
+    addAllowedRequest(requests, 'orders', 'billing.read', () => apiGet('/api/v1/admin/billing/orders?status=all'));
+    addAllowedRequest(requests, 'billingPromos', 'billing.read', () => apiGet('/api/v1/admin/billing/promos'));
+    addAllowedRequest(requests, 'billingPromoReadiness', 'billing.read', () => apiGet('/api/v1/admin/billing/promos/readiness'));
+    addAllowedRequest(requests, 'billingPaymentSmoke', 'billing.read', () => apiGet('/api/v1/admin/billing/payment-smoke/readiness?limit=10'));
+    addAllowedRequest(requests, 'billingRenewals', 'billing.read', () => apiGet('/api/v1/admin/billing/renewals/readiness?limit=25'));
+    return;
+  }
+
+  if (currentSection === 'auth') {
+    addAllowedRequest(requests, 'auth', 'audit.read', () => apiGet(`/api/v1/admin/auth/events${encodeQuery(authFilterParams())}`));
+    return;
+  }
+
+  if (currentSection === 'staff') {
+    addAllowedRequest(requests, 'roles', 'staff.manage', () => apiGet('/api/v1/admin/roles'));
+    addAllowedRequest(requests, 'staff', 'staff.manage', () => apiGet('/api/v1/admin/staff'));
+    addAllowedRequest(requests, 'adminTwoFactorReadiness', 'staff.manage', () => apiGet('/api/v1/admin/auth/2fa/readiness'));
+    return;
+  }
+
+  if (currentSection === 'audit') {
+    addAllowedRequest(requests, 'audit', 'audit.read', () => apiGet('/api/v1/admin/audit?limit=80'));
+    return;
+  }
+
+  if (currentSection === 'incidents') {
+    addAllowedRequest(requests, 'incidents', 'incidents.read', () => apiGet(`/api/v1/admin/incidents${encodeQuery(incidentFilterParams())}`));
+    addAllowedRequest(requests, 'alertEvents', 'incidents.read', () => apiGet('/api/v1/admin/alerts/events?limit=40'));
+    return;
+  }
+
+  if (currentSection === 'updates') {
+    addAllowedRequest(requests, 'updateReadiness', 'updates.read', () => apiGet(`/api/v1/admin/updates/readiness${encodeQuery(updateReadinessFilterParams())}`));
+    addAllowedRequest(requests, 'releases', 'updates.read', () => apiGet(`/api/v1/admin/updates/releases${encodeQuery(releaseFilterParams())}`));
+    return;
+  }
+
+  if (currentSection === 'servers') {
+    addAllowedRequest(requests, 'servers', 'servers.read', () => apiGet(`/api/v1/admin/server-catalog${encodeQuery(serverFilterParams())}`));
+    addAllowedRequest(requests, 'serverPublicationReadiness', 'servers.read', () => apiGet('/api/v1/admin/server-catalog/publication-readiness'));
+    addAllowedRequest(requests, 'serverProvisioningReadiness', 'servers.read', () => apiGet('/api/v1/admin/server-catalog/provisioning-readiness'));
+    addAllowedRequest(requests, 'serverHealth', 'monitoring.read', () => apiGet(`/api/v1/admin/server-health${encodeQuery(serverHealthFilterParams())}`));
+    return;
+  }
+
+  if (currentSection === 'monitoring') {
+    addAllowedRequest(requests, 'serverHealth', 'monitoring.read', () => apiGet(`/api/v1/admin/server-health${encodeQuery(serverHealthFilterParams())}`));
+    addAllowedRequest(requests, 'resilienceRoutes', 'monitoring.read', () => apiGet('/api/v1/admin/resilience/routes'));
+    addAllowedRequest(requests, 'resilienceTransportRollout', 'monitoring.read', () => apiGet('/api/v1/admin/resilience/transport-rollout'));
+    addAllowedRequest(requests, 'monitoringTargets', 'monitoring.read', () => apiGet(`/api/v1/admin/monitoring/targets${encodeQuery(monitoringTargetFilterParams())}`));
+    addAllowedRequest(requests, 'serviceObservations', 'monitoring.read', () => apiGet(`/api/v1/admin/monitoring/service-observations${encodeQuery(serviceObservationFilterParams())}`));
+    addAllowedRequest(requests, 'clientRouteEvents', 'monitoring.read', () => apiGet(`/api/v1/admin/resilience/client-route-events${encodeQuery(clientRouteEventFilterParams())}`));
+    addAllowedRequest(requests, 'monitoringProbes', 'monitoring.read', () => apiGet('/api/v1/admin/monitoring/probes?limit=100'));
+    addAllowedRequest(requests, 'monitoringReadiness', 'monitoring.read', () => apiGet('/api/v1/admin/monitoring/readiness'));
+    addAllowedRequest(requests, 'monitoring', 'dashboard.read', () => apiGet('/api/v1/monitoring/status', false));
+    addAllowedRequest(requests, 'services', 'monitoring.read', () => apiGet('/api/v1/monitoring/services', false));
+  }
+}
+
 async function apiGet(path, admin = true) {
   const headers = { Accept: 'application/json' };
   if (admin && (state.sessionToken || state.adminToken)) {
     Object.assign(headers, adminHeaders());
   }
-  const response = await fetch(`${state.apiBase}${path}`, { headers });
+  const response = await fetchWithTimeout(`${state.apiBase}${path}`, { headers }, path);
   const text = await response.text();
   let data = null;
   try {
@@ -3886,11 +4024,11 @@ async function apiPost(path, body = {}, admin = true) {
   if (admin && (state.sessionToken || state.adminToken)) {
     Object.assign(headers, adminHeaders());
   }
-  const response = await fetch(`${state.apiBase}${path}`, {
+  const response = await fetchWithTimeout(`${state.apiBase}${path}`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
-  });
+  }, path);
   const text = await response.text();
   let data = null;
   try {
@@ -3903,6 +4041,24 @@ async function apiPost(path, body = {}, admin = true) {
     throw new Error(`${response.status}: ${detail}`);
   }
   return data;
+}
+
+async function fetchWithTimeout(url, options, path) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), ADMIN_REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error(`${path}: timeout ${Math.round(ADMIN_REQUEST_TIMEOUT_MS / 1000)}s`);
+    }
+    throw new Error(`${path}: ${error?.message || 'network error'}`);
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 }
 
 function renderMetrics(overview) {
@@ -6322,59 +6478,9 @@ async function loadDashboardData() {
 
   resetLoadedData();
   const requests = {};
-  if (state.sessionToken) {
-    requests.adminSessions = apiGet('/api/v1/admin/auth/sessions');
-  }
-  addAllowedRequest(requests, 'overview', 'dashboard.read', () => apiGet('/api/v1/admin/overview'));
-  addAllowedRequest(requests, 'analytics', 'analytics.read', () => apiGet('/api/v1/admin/analytics/summary'));
-  addAllowedRequest(requests, 'launchReadiness', 'readiness.read', () => apiGet('/api/v1/admin/launch/readiness'));
-  addAllowedRequest(requests, 'advertisingReadiness', 'readiness.read', () => apiGet('/api/v1/admin/launch/advertising-readiness'));
-  addAllowedRequest(requests, 'launchClosurePlan', 'readiness.read', () => apiGet('/api/v1/admin/launch/closure-plan'));
-  addAllowedRequest(requests, 'launchOwnerPacket', 'readiness.read', () => apiGet('/api/v1/admin/launch/owner-packet'));
-  addAllowedRequest(requests, 'readiness', 'readiness.read', () => apiGet('/api/v1/admin/readiness'));
-  addAllowedRequest(requests, 'siteReadiness', 'readiness.read', () => apiGet('/api/v1/admin/site/readiness'));
-  addAllowedRequest(requests, 'networkReadiness', 'readiness.read', () => apiGet('/api/v1/admin/network/readiness'));
-  addAllowedRequest(requests, 'networkSplitPlan', 'readiness.read', () => apiGet('/api/v1/admin/network/split-plan'));
-  addAllowedRequest(requests, 'userAuthReadiness', 'readiness.read', () => apiGet('/api/v1/admin/auth/user-flow/readiness?limit=10'));
-  addAllowedRequest(requests, 'adminTwoFactorReadiness', 'staff.manage', () => apiGet('/api/v1/admin/auth/2fa/readiness'));
-  addAllowedRequest(requests, 'externalActions', 'readiness.read', () => apiGet('/api/v1/admin/external-actions'));
-  addAllowedRequest(requests, 'support', 'support.read', () => apiGet(`/api/v1/admin/support/reports${encodeQuery(supportFilterParams())}`));
-  addAllowedRequest(requests, 'supportSla', 'support.read', () => apiGet('/api/v1/admin/support/sla?limit=25'));
-  addAllowedRequest(requests, 'users', 'users.read', () => apiGet(`/api/v1/admin/users${encodeQuery(userFilterParams())}`));
-  addAllowedRequest(requests, 'subscriptionExpiry', 'billing.read', () => apiGet('/api/v1/admin/subscriptions/expiry-readiness?limit=25'));
-  addAllowedRequest(requests, 'orders', 'billing.read', () => apiGet('/api/v1/admin/billing/orders?status=all'));
-  addAllowedRequest(requests, 'billingPromos', 'billing.read', () => apiGet('/api/v1/admin/billing/promos'));
-  addAllowedRequest(requests, 'billingPromoReadiness', 'billing.read', () => apiGet('/api/v1/admin/billing/promos/readiness'));
-  addAllowedRequest(requests, 'billingPaymentSmoke', 'billing.read', () => apiGet('/api/v1/admin/billing/payment-smoke/readiness?limit=10'));
-  addAllowedRequest(requests, 'billingRenewals', 'billing.read', () => apiGet('/api/v1/admin/billing/renewals/readiness?limit=25'));
-  addAllowedRequest(requests, 'auth', 'audit.read', () => apiGet(`/api/v1/admin/auth/events${encodeQuery(authFilterParams())}`));
-  addAllowedRequest(requests, 'audit', 'audit.read', () => apiGet('/api/v1/admin/audit?limit=80'));
-  addAllowedRequest(requests, 'roles', 'staff.manage', () => apiGet('/api/v1/admin/roles'));
-  addAllowedRequest(requests, 'staff', 'staff.manage', () => apiGet('/api/v1/admin/staff'));
-  addAllowedRequest(requests, 'supportWorkflow', 'support.read', () => apiGet('/api/v1/admin/support/workflow'));
-  addAllowedRequest(requests, 'supportActions', 'support_actions.read', () => apiGet(`/api/v1/admin/support/actions${encodeQuery(supportActionFilterParams())}`));
-  addAllowedRequest(requests, 'supportActionWorkflow', 'support_actions.read', () => apiGet('/api/v1/admin/support/actions/workflow'));
-  addAllowedRequest(requests, 'incidents', 'incidents.read', () => apiGet(`/api/v1/admin/incidents${encodeQuery(incidentFilterParams())}`));
-  addAllowedRequest(requests, 'alertEvents', 'incidents.read', () => apiGet('/api/v1/admin/alerts/events?limit=40'));
-  addAllowedRequest(requests, 'updateReadiness', 'updates.read', () => apiGet(`/api/v1/admin/updates/readiness${encodeQuery(updateReadinessFilterParams())}`));
-  addAllowedRequest(requests, 'releases', 'updates.read', () => apiGet(`/api/v1/admin/updates/releases${encodeQuery(releaseFilterParams())}`));
-  addAllowedRequest(requests, 'servers', 'servers.read', () => apiGet(`/api/v1/admin/server-catalog${encodeQuery(serverFilterParams())}`));
-  addAllowedRequest(requests, 'serverPublicationReadiness', 'servers.read', () => apiGet('/api/v1/admin/server-catalog/publication-readiness'));
-  addAllowedRequest(requests, 'serverProvisioningReadiness', 'servers.read', () => apiGet('/api/v1/admin/server-catalog/provisioning-readiness'));
-  addAllowedRequest(requests, 'serverHealth', 'monitoring.read', () => apiGet(`/api/v1/admin/server-health${encodeQuery(serverHealthFilterParams())}`));
-  addAllowedRequest(requests, 'resilienceRoutes', 'monitoring.read', () => apiGet('/api/v1/admin/resilience/routes'));
-  addAllowedRequest(requests, 'resilienceTransportRollout', 'monitoring.read', () => apiGet('/api/v1/admin/resilience/transport-rollout'));
-  addAllowedRequest(requests, 'monitoringTargets', 'monitoring.read', () => apiGet(`/api/v1/admin/monitoring/targets${encodeQuery(monitoringTargetFilterParams())}`));
-  addAllowedRequest(requests, 'serviceObservations', 'monitoring.read', () => apiGet(`/api/v1/admin/monitoring/service-observations${encodeQuery(serviceObservationFilterParams())}`));
-  addAllowedRequest(requests, 'clientRouteEvents', 'monitoring.read', () => apiGet(`/api/v1/admin/resilience/client-route-events${encodeQuery(clientRouteEventFilterParams())}`));
-  addAllowedRequest(requests, 'monitoringProbes', 'monitoring.read', () => apiGet('/api/v1/admin/monitoring/probes?limit=100'));
-  addAllowedRequest(requests, 'monitoringReadiness', 'monitoring.read', () => apiGet('/api/v1/admin/monitoring/readiness'));
-  addAllowedRequest(requests, 'monitoring', 'dashboard.read', () => apiGet('/api/v1/monitoring/status', false));
-  addAllowedRequest(requests, 'services', 'monitoring.read', () => apiGet('/api/v1/monitoring/services', false));
+  queueSectionRequests(requests, state.section);
 
-  const entries = await Promise.allSettled(
-    Object.entries(requests).map(async ([key, promise]) => [key, await promise]),
-  );
+  const entries = await runRequestFactories(requests);
 
   const errors = [];
   for (const result of entries) {
@@ -7492,7 +7598,10 @@ function bindEvents() {
   });
 
   document.querySelectorAll('.nav-link').forEach((button) => {
-    button.addEventListener('click', () => switchSection(button.dataset.section));
+    button.addEventListener('click', async () => {
+      switchSection(button.dataset.section);
+      await loadDashboardData();
+    });
   });
 
   document.body.addEventListener('change', (event) => {

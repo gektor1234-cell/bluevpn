@@ -32,7 +32,7 @@ from pydantic import BaseModel
 
 
 APP_TITLE = "Green VPN Backend"
-APP_VERSION = "0.9.103"
+APP_VERSION = "0.9.105"
 DEFAULT_PUBLIC_API_BASE_URL = "https://api.greenvpn.pro"
 
 
@@ -46,6 +46,16 @@ def split_env_list(value: str) -> list[str]:
 
 def clean_base_url(value: str) -> str:
     return (value or "").strip().rstrip("/")
+
+
+def env_float(name: str, default: float, min_value: Optional[float] = None) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    if min_value is not None:
+        value = max(min_value, value)
+    return value
 
 
 PUBLIC_API_BASE_URL = (
@@ -102,6 +112,10 @@ SERVER_CATALOG_API_BASE_URLS = split_env_list(
     os.getenv("GREENVPN_API_BASE_URLS", PUBLIC_API_BASE_URL)
 )
 SERVER_CATALOG_EMERGENCY_URL = os.getenv("GREENVPN_EMERGENCY_CATALOG_URL", "").strip()
+DISABLE_BUILTIN_WG0_CATALOG = (
+    os.getenv("GREENVPN_DISABLE_BUILTIN_WG0_CATALOG", "").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
 PREVIEW_SERVER_IDS = {
     item.strip()
     for item in split_env_list(os.getenv("GREENVPN_PREVIEW_SERVER_IDS", ""))
@@ -154,6 +168,14 @@ ADMIN_2FA_MAX_ATTEMPTS = max(
 BASE_DIR = Path(os.getenv("BLUEVPN_BASE_DIR", "/opt/bluevpn/backend")).resolve()
 DATA_DIR = Path(os.getenv("BLUEVPN_DATA_DIR", str(BASE_DIR / "data"))).resolve()
 DB_PATH = DATA_DIR / "bluevpn.db"
+DB_BUSY_TIMEOUT_SECONDS = env_float("BLUEVPN_DB_BUSY_TIMEOUT_SECONDS", 30.0, min_value=1.0)
+DB_BUSY_TIMEOUT_MS = int(DB_BUSY_TIMEOUT_SECONDS * 1000)
+SQLITE_ENABLE_WAL = os.getenv("BLUEVPN_SQLITE_ENABLE_WAL", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 ADMIN_TOKEN_PATH = DATA_DIR / "admin_token.txt"
 
 WG_INTERFACE = os.getenv("BLUEVPN_WG_INTERFACE", "wg0")
@@ -182,6 +204,14 @@ VPN_NODE_CONFIG_DIR = Path(
     os.getenv("GREENVPN_VPN_NODE_CONFIG_DIR", "/etc/bluevpn/vpn_nodes")
 )
 VPN_NODE_SSH_TIMEOUT_SECONDS = int(os.getenv("GREENVPN_VPN_NODE_SSH_TIMEOUT_SECONDS", "12"))
+VPN_NODE_SSH_ATTEMPTS = max(
+    1,
+    min(8, int(os.getenv("GREENVPN_VPN_NODE_SSH_ATTEMPTS", "4"))),
+)
+VPN_NODE_SSH_CONTROL_PATH = (
+    os.getenv("GREENVPN_VPN_NODE_SSH_CONTROL_PATH", "/tmp/greenvpn-ssh-%C").strip()
+    or "/tmp/greenvpn-ssh-%C"
+)
 
 DEFAULT_PLAN_NAME = "Trial"
 DEFAULT_PLAN_CODE = "trial"
@@ -207,6 +237,17 @@ FREE_AD_GRANT_TTL_MINUTES = max(
     int(os.getenv("GREENVPN_FREE_AD_GRANT_TTL_MINUTES", "360")),
 )
 FREE_AD_GRANT_CONNECTS = max(1, int(os.getenv("GREENVPN_FREE_AD_GRANT_CONNECTS", "1")))
+FREE_AD_SESSION_TIMER_ENABLED = (
+    os.getenv("GREENVPN_FREE_AD_SESSION_TIMER_ENABLED", "true").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+FREE_AD_SESSION_SECONDS = max(0, int(os.getenv("GREENVPN_FREE_AD_SESSION_SECONDS", "7200")))
+if FREE_AD_SESSION_SECONDS <= 0:
+    FREE_AD_SESSION_TIMER_ENABLED = False
+FREE_AD_SESSION_MAX_CONNECTS = max(
+    1,
+    int(os.getenv("GREENVPN_FREE_AD_SESSION_MAX_CONNECTS", "1000")),
+)
 FREE_AD_ANDROID_REWARDED_ENABLED = (
     os.getenv("GREENVPN_YANDEX_REWARDED_ANDROID_ENABLED", "").strip().lower()
     in {"1", "true", "yes", "on"}
@@ -1564,9 +1605,18 @@ def ensure_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def configure_sqlite_connection(conn: sqlite3.Connection, apply_wal: bool = False) -> None:
+    conn.execute(f"PRAGMA busy_timeout = {DB_BUSY_TIMEOUT_MS}")
+    conn.execute("PRAGMA foreign_keys = ON")
+    if apply_wal and SQLITE_ENABLE_WAL:
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+
+
 def db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=DB_BUSY_TIMEOUT_SECONDS)
     conn.row_factory = sqlite3.Row
+    configure_sqlite_connection(conn)
     return conn
 
 
@@ -1580,6 +1630,7 @@ def ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -
 def init_db() -> None:
     ensure_dirs()
     with db() as conn:
+        configure_sqlite_connection(conn, apply_wal=True)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -2982,13 +3033,21 @@ def free_access_grant_payload(row) -> Optional[dict]:
     if row is None:
         return None
     remaining = max(0, int(row["max_connects"] or 1) - int(row["connects_used"] or 0))
+    expires_at = row["expires_at"]
+    expires_dt = parse_dt(expires_at)
+    seconds_remaining = None
+    if expires_dt is not None:
+        seconds_remaining = max(0, int((expires_dt - utc_now()).total_seconds()))
     return {
         "grantId": row["public_id"],
         "status": row["status"],
         "source": row["source"],
         "deviceUid": row["device_uid"],
         "startsAt": row["starts_at"],
-        "expiresAt": row["expires_at"],
+        "expiresAt": expires_at,
+        "sessionTimerEnabled": FREE_AD_SESSION_TIMER_ENABLED,
+        "sessionExpiresAt": expires_at if FREE_AD_SESSION_TIMER_ENABLED else None,
+        "sessionSecondsRemaining": seconds_remaining if FREE_AD_SESSION_TIMER_ENABLED else None,
         "maxConnects": int(row["max_connects"] or 1),
         "connectsUsed": int(row["connects_used"] or 0),
         "connectsRemaining": remaining,
@@ -3043,6 +3102,7 @@ def free_ad_gate_policy(
 
     has_grant = grant is not None
     required = required_by_plan and not has_grant
+    grant_payload = free_access_grant_payload(grant)
     return {
         "enabled": FREE_AD_GATE_ENABLED,
         "required": required,
@@ -3057,9 +3117,17 @@ def free_ad_gate_policy(
             if required
             else "Реклама перед подключением не требуется."
         ),
-        "grant": free_access_grant_payload(grant),
+        "grant": grant_payload,
         "grantTtlMinutes": FREE_AD_GRANT_TTL_MINUTES,
-        "grantMaxConnects": FREE_AD_GRANT_CONNECTS,
+        "grantMaxConnects": FREE_AD_SESSION_MAX_CONNECTS,
+        "sessionTimerEnabled": FREE_AD_SESSION_TIMER_ENABLED,
+        "sessionTtlSeconds": FREE_AD_SESSION_SECONDS if FREE_AD_SESSION_TIMER_ENABLED else 0,
+        "sessionMaxConnects": FREE_AD_SESSION_MAX_CONNECTS,
+        "sessionExpiresAt": (
+            grant_payload.get("sessionExpiresAt")
+            if grant_payload and FREE_AD_SESSION_TIMER_ENABLED
+            else None
+        ),
         "androidRewarded": {
             "enabled": bool(
                 platform_normalized == "android"
@@ -3235,7 +3303,12 @@ def complete_ad_challenge(public_id: str, token: str) -> dict:
         if existing_grant is None:
             grant_id = "grant_" + secrets.token_urlsafe(18).replace("-", "").replace("_", "")[:24]
             starts_at = now
-            expires_at = now + timedelta(minutes=FREE_AD_GRANT_TTL_MINUTES)
+            grant_seconds = (
+                FREE_AD_SESSION_SECONDS
+                if FREE_AD_SESSION_SECONDS > 0
+                else FREE_AD_GRANT_TTL_MINUTES * 60
+            )
+            expires_at = now + timedelta(seconds=grant_seconds)
             conn.execute(
                 """
                 INSERT INTO free_access_grants(
@@ -3252,7 +3325,7 @@ def complete_ad_challenge(public_id: str, token: str) -> dict:
                     row["device_uid"],
                     row["provider"],
                     "active",
-                    FREE_AD_GRANT_CONNECTS,
+                    FREE_AD_SESSION_MAX_CONNECTS,
                     0,
                     starts_at.isoformat(),
                     expires_at.isoformat(),
@@ -3299,6 +3372,13 @@ def complete_ad_challenge(public_id: str, token: str) -> dict:
         "ok": True,
         "challenge": ad_challenge_payload(challenge),
         "grant": free_access_grant_payload(existing_grant),
+        "adGate": free_ad_gate_policy(
+            int(challenge["user_id"]),
+            challenge["device_uid"],
+            challenge["platform"],
+            subscription_status(get_subscription_row(int(challenge["user_id"]))),
+            app_version=challenge["app_version"],
+        ),
         "message": "Просмотр засчитан. Можно вернуться в Green VPN и подключиться.",
     }
 
@@ -6696,7 +6776,9 @@ def builtin_wireguard_runtime_ready() -> bool:
 
 
 def builtin_server_catalog_entry() -> dict:
-    runtime_ready = builtin_wireguard_runtime_ready()
+    runtime_ready = (
+        False if DISABLE_BUILTIN_WG0_CATALOG else builtin_wireguard_runtime_ready()
+    )
     endpoint = {
         "host": WG_ENDPOINT_HOST,
         "port": WG_ENDPOINT_PORT,
@@ -6846,7 +6928,10 @@ def managed_catalog_entry_to_public_server(
         and str(entry.get("status") or "").strip().lower() == "healthy"
         and client_config_ready
     )
-    public_available = bool(entry.get("available")) and bool(entry.get("publicEligible"))
+    public_available = bool(entry.get("available")) and (
+        bool(entry.get("publicEligible"))
+        or managed_catalog_entry_has_resilient_client_visibility(entry)
+    )
     return {
         "id": entry.get("serverId") or "",
         "title": entry.get("title") or "VPN-узел Green VPN",
@@ -6881,6 +6966,29 @@ def managed_catalog_entry_to_public_server(
     }
 
 
+def managed_catalog_entry_has_resilient_client_visibility(entry: dict) -> bool:
+    """Keep remote WireGuard nodes visible when only monitoring freshness is stale."""
+    if bool(entry.get("publicEligible")):
+        return True
+    if not bool(entry.get("clientConfigReady")):
+        return False
+    if not bool(entry.get("available")):
+        return False
+    if not bool(entry.get("isActive")) or not bool(entry.get("isPublic")):
+        return False
+    if str(entry.get("clientConfigProfile") or "") != "remote_ssh_wg0":
+        return False
+    if str(entry.get("status") or "").strip().lower() != "healthy":
+        return False
+    if str(entry.get("publicationPausedAt") or "").strip():
+        return False
+    try:
+        health_score = int(entry.get("healthScore") or 0)
+    except Exception:
+        health_score = 0
+    return health_score >= SERVER_PUBLIC_MIN_HEALTH_SCORE
+
+
 def list_public_client_catalog_servers() -> list[dict]:
     try:
         managed_entries = list_managed_server_catalog_entries(
@@ -6895,7 +7003,11 @@ def list_public_client_catalog_servers() -> list[dict]:
     return [
         managed_catalog_entry_to_public_server(entry)
         for entry in managed_entries
-        if entry.get("publicEligible") and entry.get("clientConfigReady")
+        if entry.get("clientConfigReady")
+        and (
+            entry.get("publicEligible")
+            or managed_catalog_entry_has_resilient_client_visibility(entry)
+        )
     ]
 
 
@@ -11008,17 +11120,20 @@ def client_route_event_summary(
 
 def latest_resilience_route_observations(limit: int = 5000) -> list[dict]:
     cutoff = (utc_now() - timedelta(seconds=RESILIENCE_ROUTE_STALE_AFTER_SECONDS)).isoformat()
-    with db() as conn:
-        rows = conn.execute(
-            """
-            SELECT *
-            FROM resilience_route_observations
-            WHERE observed_at >= ?
-            ORDER BY observed_at DESC, id DESC
-            LIMIT ?
-            """,
-            (cutoff, max(1, min(int(limit or 5000), 10000))),
-        ).fetchall()
+    try:
+        with db() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM resilience_route_observations
+                WHERE observed_at >= ?
+                ORDER BY observed_at DESC, id DESC
+                LIMIT ?
+                """,
+                (cutoff, max(1, min(int(limit or 5000), 10000))),
+            ).fetchall()
+    except sqlite3.DatabaseError:
+        return []
     return [resilience_route_observation_payload(row) for row in rows]
 
 
@@ -11272,9 +11387,19 @@ def latest_service_status_score(target_ids: list[str]) -> dict:
 def build_resilience_route_decision(servers: Optional[list[dict]] = None) -> dict:
     servers = servers or [builtin_server_catalog_entry()]
     endpoint_by_protocol = public_endpoint_protocol_map(servers)
-    targets = list_monitoring_targets(status="active", service="all", limit=500)
+    try:
+        targets = list_monitoring_targets(status="active", service="all", limit=500)
+    except sqlite3.OperationalError as exc:
+        if "database is locked" not in str(exc).lower():
+            raise
+        targets = []
     target_ids = required_public_target_ids(targets)
-    route_observations = latest_resilience_route_observations()
+    try:
+        route_observations = latest_resilience_route_observations()
+    except sqlite3.OperationalError as exc:
+        if "database is locked" not in str(exc).lower():
+            raise
+        route_observations = []
     service_score = latest_service_status_score(target_ids)
     latest_by_protocol_target: dict[tuple[str, str], dict] = {}
     for observation in route_observations:
@@ -12277,7 +12402,57 @@ def build_service_quality_summary(latest: list[dict]) -> dict:
     }
 
 
+def build_service_availability_observation_summary_unavailable(reason: str) -> dict:
+    summary = {
+        "targetTotal": 0,
+        "activeTargets": 0,
+        "totalObservations": 0,
+        "targetsObserved": 0,
+        "greenTargets": 0,
+        "problemTargets": 0,
+        "failed24h": 0,
+        "averageGreenLatencyMs": None,
+        "latestByTarget": [],
+        "problemLatest": [],
+        "byStatus": [],
+        "byTargetStatus": [],
+        "byService": [],
+        "probeAgents": [],
+        "probeAgentsTotal": 0,
+        "activeProbeAgents": 0,
+        "staleProbeAgents": 0,
+        "problemProbeAgents": 0,
+        "degraded": True,
+        "degradedReason": reason,
+        "workflow": {
+            "targetStatuses": list(MONITORING_TARGET_STATUSES),
+            "targetTypes": list(MONITORING_TARGET_TYPES),
+            "observationStatuses": list(SERVICE_AVAILABILITY_STATUSES),
+            "probeStaleAfterSeconds": 900,
+            "agentMode": "admin_internal",
+            "publicSafety": (
+                "Managed service observations are internal support/ops data. "
+                "They are not shown in the user client."
+            ),
+        },
+    }
+    summary["serviceQuality"] = build_service_quality_summary([])
+    summary["probeReadiness"] = service_monitoring_probe_readiness(summary)
+    return summary
+
+
 def build_service_availability_observation_summary() -> dict:
+    try:
+        return build_service_availability_observation_summary_from_db()
+    except sqlite3.OperationalError as exc:
+        if "database is locked" in str(exc).lower():
+            return build_service_availability_observation_summary_unavailable(
+                "sqlite_database_locked"
+            )
+        raise
+
+
+def build_service_availability_observation_summary_from_db() -> dict:
     since_24h = (utc_now() - timedelta(hours=24)).isoformat()
     with db() as conn:
         target_total = int(
@@ -16875,10 +17050,15 @@ def ensure_device_row(
     app_version: str,
 ):
     with db() as conn:
-        existing = conn.execute(
-            "SELECT * FROM devices WHERE device_uid = ?",
-            (device_uid,),
-        ).fetchone()
+        now = utc_now_iso()
+
+        def fetch_existing():
+            return conn.execute(
+                "SELECT * FROM devices WHERE device_uid = ?",
+                (device_uid,),
+            ).fetchone()
+
+        existing = fetch_existing()
 
         if existing is not None and existing["user_id"] != user_id:
             raise HTTPException(
@@ -16886,21 +17066,7 @@ def ensure_device_row(
                 detail="This device is already attached to another user.",
             )
 
-        now = utc_now_iso()
-
-        if existing is None:
-            conn.execute(
-                """
-                INSERT INTO devices(
-                    user_id, device_uid, device_name, platform, app_version,
-                    created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (user_id, device_uid, device_name, platform, app_version, now, now),
-            )
-            conn.commit()
-        else:
+        if existing is not None:
             conn.execute(
                 """
                 UPDATE devices
@@ -16910,6 +17076,39 @@ def ensure_device_row(
                 (device_name, platform, app_version, now, device_uid),
             )
             conn.commit()
+        else:
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO devices(
+                        user_id, device_uid, device_name, platform, app_version,
+                        created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (user_id, device_uid, device_name, platform, app_version, now, now),
+                )
+                conn.commit()
+            except sqlite3.IntegrityError:
+                # Concurrent bootstrap calls for the same device can race between
+                # SELECT and INSERT. Treat the winner's row as the canonical device.
+                existing = fetch_existing()
+                if existing is None:
+                    raise
+                if existing["user_id"] != user_id:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="This device is already attached to another user.",
+                    )
+                conn.execute(
+                    """
+                    UPDATE devices
+                    SET device_name = ?, platform = ?, app_version = ?, updated_at = ?
+                    WHERE device_uid = ?
+                    """,
+                    (device_name, platform, app_version, now, device_uid),
+                )
+                conn.commit()
 
         row = conn.execute(
             "SELECT * FROM devices WHERE device_uid = ?",
@@ -17180,6 +17379,28 @@ block = (
 
 with open(config_path, "r", encoding="utf-8") as fh:
     text = fh.read()
+
+managed_peer_pattern = re.compile(
+    r"# BEGIN GREENVPN MANAGED PEER (?P<uid>[^\n]+)\n"
+    r"\[Peer\]\n"
+    r"(?P<body>.*?)"
+    r"# END GREENVPN MANAGED PEER (?P=uid)\n?",
+    re.S,
+)
+stale_blocks_removed = 0
+
+
+def drop_stale_same_key_block(match):
+    global stale_blocks_removed
+    marker = match.group("uid").strip()
+    body = match.group("body")
+    if marker != safe_uid and f"PublicKey = {public_key}" in body:
+        stale_blocks_removed += 1
+        return ""
+    return match.group(0)
+
+
+text = managed_peer_pattern.sub(drop_stale_same_key_block, text)
 pattern = re.compile(re.escape(begin) + r".*?" + re.escape(end) + r"\n?", re.S)
 if pattern.search(text):
     text = pattern.sub(block, text)
@@ -17208,7 +17429,7 @@ finally:
         except FileNotFoundError:
             pass
 
-print(json.dumps({"ok": True, "peer": public_key[-8:], "ip": ip}, ensure_ascii=False))
+print(json.dumps({"ok": True, "peer": public_key[-8:], "ip": ip, "staleBlocksRemoved": stale_blocks_removed}, ensure_ascii=False))
 """
 
 
@@ -17316,6 +17537,12 @@ def run_remote_vpn_node_script(config: dict, script: str, payload: dict) -> dict
         "-o",
         "StrictHostKeyChecking=accept-new",
         "-o",
+        "ControlMaster=auto",
+        "-o",
+        "ControlPersist=120",
+        "-o",
+        f"ControlPath={VPN_NODE_SSH_CONTROL_PATH}",
+        "-o",
         f"ConnectTimeout={VPN_NODE_SSH_TIMEOUT_SECONDS}",
         "-o",
         "ServerAliveInterval=5",
@@ -17324,21 +17551,63 @@ def run_remote_vpn_node_script(config: dict, script: str, payload: dict) -> dict
         f"{config.get('sshUser') or 'root'}@{config['sshHost']}",
         remote_command,
     ]
-    try:
-        res = subprocess.run(
-            args,
-            input=json.dumps(payload, ensure_ascii=False),
-            text=True,
-            capture_output=True,
-            timeout=VPN_NODE_SSH_TIMEOUT_SECONDS + 8,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise HTTPException(
-            status_code=504,
-            detail="Удалённый VPN-узел не ответил на SSH-команду вовремя.",
-        ) from exc
+    last_result: Optional[subprocess.CompletedProcess[str]] = None
+    last_timeout: Optional[subprocess.TimeoutExpired] = None
+    transient_stderr_markers = (
+        "timed out during banner exchange",
+        "connection timed out",
+        "connection closed",
+        "connection reset",
+        "no route to host",
+        "network is unreachable",
+    )
+    for attempt in range(1, VPN_NODE_SSH_ATTEMPTS + 1):
+        try:
+            res = subprocess.run(
+                args,
+                input=json.dumps(payload, ensure_ascii=False),
+                text=True,
+                capture_output=True,
+                timeout=VPN_NODE_SSH_TIMEOUT_SECONDS + 8,
+            )
+            last_result = res
+            last_timeout = None
+        except subprocess.TimeoutExpired as exc:
+            last_timeout = exc
+            if attempt < VPN_NODE_SSH_ATTEMPTS:
+                time.sleep(min(3, attempt))
+                continue
+            raise HTTPException(
+                status_code=504,
+                detail="Удалённый VPN-узел не ответил на SSH-команду вовремя.",
+            ) from exc
 
-    if res.returncode != 0:
+        if res.returncode == 0:
+            break
+
+        stderr_lower = (res.stderr or "").lower()
+        is_transient = any(marker in stderr_lower for marker in transient_stderr_markers)
+        if attempt < VPN_NODE_SSH_ATTEMPTS and is_transient:
+            time.sleep(min(3, attempt))
+            continue
+
+        raise HTTPException(
+            status_code=502,
+            detail="Не удалось применить команду на удалённом VPN-узле.",
+        )
+    else:
+        if last_timeout is not None:
+            raise HTTPException(
+                status_code=504,
+                detail="Удалённый VPN-узел не ответил на SSH-команду вовремя.",
+            ) from last_timeout
+        raise HTTPException(
+            status_code=502,
+            detail="Не удалось применить команду на удалённом VPN-узле.",
+        )
+
+    res = last_result
+    if res is None:
         raise HTTPException(
             status_code=502,
             detail="Не удалось применить команду на удалённом VPN-узле.",
@@ -17754,6 +18023,7 @@ def probe_public_service(target: dict) -> dict:
         title,
         status,
         message,
+        ok=status != "red",
         host=host,
         url=url,
         resolvedIp=ip,
@@ -17767,8 +18037,74 @@ def probe_public_service(target: dict) -> dict:
     )
 
 
-def build_service_availability_status() -> dict:
-    checks = [probe_public_service(target) for target in SERVICE_CHECK_TARGETS]
+def service_check_from_observation(target: dict, observation: Optional[dict]) -> dict:
+    code = str(target["code"])
+    title = str(target["title"])
+    host = str(target["host"])
+    url = str(target["url"])
+    if observation is None:
+        return monitoring_check(
+            code,
+            title,
+            "yellow",
+            "Нет сохранённой проверки сервиса; live probe запускается отдельно.",
+            host=host,
+            url=url,
+            ok=False,
+            cached=True,
+            observedAt="",
+        )
+
+    status = str(observation.get("status") or "unknown").strip().lower()
+    if status not in {"green", "yellow", "red"}:
+        status = "yellow"
+    return monitoring_check(
+        code,
+        title,
+        status,
+        observation.get("message") or "Последняя сохранённая проверка сервиса.",
+        host=host,
+        url=url,
+        ok=bool(observation.get("ok")),
+        cached=True,
+        observedAt=observation.get("observedAt") or "",
+        latencyMs=observation.get("latencyMs"),
+        errorCode=observation.get("errorCode") or "",
+        probeId=observation.get("probeId") or "",
+        probeRegion=observation.get("probeRegion") or "",
+    )
+
+
+def build_cached_service_availability_checks() -> list[dict]:
+    target_ids = {str(target["code"]): f"{target['code']}_web" for target in SERVICE_CHECK_TARGETS}
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM service_availability_observations
+            WHERE target_id IN ({})
+            ORDER BY observed_at DESC, id DESC
+            """.format(",".join("?" for _ in target_ids.values())),
+            tuple(target_ids.values()),
+        ).fetchall() if target_ids else []
+
+    latest_by_target: dict[str, dict] = {}
+    for row in rows:
+        payload = service_availability_observation_payload(row)
+        latest_by_target.setdefault(payload.get("targetId") or "", payload)
+
+    return [
+        service_check_from_observation(target, latest_by_target.get(target_ids[str(target["code"])]))
+        for target in SERVICE_CHECK_TARGETS
+    ]
+
+
+def build_service_availability_status(live: bool = False) -> dict:
+    checks = (
+        [probe_public_service(target) for target in SERVICE_CHECK_TARGETS]
+        if live
+        else build_cached_service_availability_checks()
+    )
     red_count = len([c for c in checks if c["status"] == "red"])
     yellow_count = len([c for c in checks if c["status"] == "yellow"])
     state = "red" if red_count else ("yellow" if yellow_count else "green")
@@ -17784,11 +18120,17 @@ def build_service_availability_status() -> dict:
     return {
         "ok": red_count == 0,
         "generatedAt": utc_now_iso(),
+        "live": bool(live),
         "probeLocation": {
             "type": "vpn_server_egress",
             "serverId": "intelligent_smew",
             "endpoint": f"{WG_ENDPOINT_HOST}:{WG_ENDPOINT_PORT}",
-            "note": "Проверка сейчас идет с backend/VPN-сервера. Позже добавим агенты, которые подключаются через Green VPN как реальные клиенты.",
+            "note": (
+                "Обычные страницы админки читают последние сохранённые observations. "
+                "Живая проверка с backend/VPN-сервера запускается только явно."
+                if not live
+                else "Проверка сейчас идет с backend/VPN-сервера."
+            ),
         },
         "summary": {
             "state": state,
@@ -23139,8 +23481,8 @@ def monitoring_status():
 
 
 @app.get("/api/v1/monitoring/services")
-def monitoring_services():
-    return build_service_availability_status()
+def monitoring_services(live: bool = False):
+    return build_service_availability_status(live=live)
 
 
 @app.get("/api/v1/catalog/tariffs")
@@ -24465,7 +24807,6 @@ def build_admin_analytics_summary() -> dict:
     since_30d = (now - timedelta(days=30)).isoformat()
     expires_7d = (now + timedelta(days=7)).isoformat()
 
-    readiness = build_product_readiness()
     with db() as conn:
         users_total = db_count(conn, "users")
         users_email_verified = db_count(conn, "users", "email_verified = 1")
@@ -24723,8 +25064,11 @@ def build_admin_analytics_summary() -> dict:
                 "alerts": readiness_signal(admin_alert_readiness()),
                 "apiVpnSplit": readiness_signal(api_vpn_endpoint_separation_readiness()),
                 "product": {
-                    "productionReady": bool(readiness.get("productionReady")),
-                    "summary": readiness.get("summary") or {},
+                    "productionReady": False,
+                    "deferred": True,
+                    "summary": {
+                        "message": "Полная готовность продукта загружается отдельной ручкой /api/v1/admin/readiness.",
+                    },
                 },
             },
             "timeseries": {
@@ -24929,10 +25273,6 @@ def admin_analytics_summary(
     authorization: Optional[str] = Header(default=None),
 ):
     require_admin(x_admin_token, authorization, "analytics.read")
-    sync_monitoring_incidents(
-        monitoring=build_monitoring_status(),
-        services=build_service_availability_status(),
-    )
     return build_admin_analytics_summary()
 
 
@@ -24951,10 +25291,6 @@ def admin_overview(
     authorization: Optional[str] = Header(default=None),
 ):
     require_admin(x_admin_token, authorization, "dashboard.read")
-    sync_monitoring_incidents(
-        monitoring=build_monitoring_status(),
-        services=build_service_availability_status(),
-    )
 
     with db() as conn:
         users_count = conn.execute("SELECT COUNT(*) AS cnt FROM users").fetchone()["cnt"]
@@ -25024,8 +25360,6 @@ def admin_overview(
         "alertReadiness": admin_alert_readiness(),
         "publicSiteReadiness": public_site_readiness(),
         "apiVpnEndpointSeparationReadiness": api_vpn_endpoint_separation_readiness(),
-        "productReadiness": build_product_readiness()["summary"],
-        "launchClosurePlan": build_launch_closure_plan(),
     }
 
 
@@ -26306,11 +26640,12 @@ def admin_monitoring_targets(
     authorization: Optional[str] = Header(default=None),
 ):
     require_admin(x_admin_token, authorization, "monitoring.read")
+    summary = build_service_availability_observation_summary()
     return {
         "ok": True,
         "version": APP_VERSION,
-        "workflow": build_service_availability_observation_summary()["workflow"],
-        "summary": build_service_availability_observation_summary(),
+        "workflow": summary["workflow"],
+        "summary": summary,
         "targets": list_monitoring_targets(status=status, service=service, limit=limit),
     }
 
@@ -26763,7 +27098,7 @@ def admin_incidents(
     status: Optional[str] = None,
     severity: Optional[str] = None,
     assignee: Optional[str] = None,
-    refresh: bool = True,
+    refresh: bool = False,
     limit: int = 100,
     offset: int = 0,
     x_admin_token: Optional[str] = Header(default=None),

@@ -56,6 +56,7 @@ YOUTUBE_MEDIA_FALLBACK_URL = os.getenv(
 ).strip()
 YOUTUBE_MEDIA_GREEN_MBPS = max(0.1, env_float("GREENVPN_YOUTUBE_MEDIA_GREEN_MBPS", 5.0))
 YOUTUBE_MEDIA_YELLOW_MBPS = max(0.05, env_float("GREENVPN_YOUTUBE_MEDIA_YELLOW_MBPS", 1.0))
+API_REQUEST_TIMEOUT_SECONDS = max(10.0, env_float("GREENVPN_PROBE_API_TIMEOUT_SECONDS", 60.0))
 
 ALLOWED_ROUTE_PROTOCOLS = {
     "wireguard_udp",
@@ -149,6 +150,11 @@ def parse_args() -> argparse.Namespace:
         help="Run checks but do not post observations.",
     )
     parser.add_argument(
+        "--fail-on-post-error",
+        action="store_true",
+        help="Exit non-zero when an observation POST fails. Disabled by default for systemd probes.",
+    )
+    parser.add_argument(
         "--server-health",
         action="store_true",
         help=(
@@ -227,8 +233,14 @@ def api_request(
         headers=headers,
         method=method,
     )
-    with urllib.request.urlopen(request, timeout=20) as response:
+    with urllib.request.urlopen(request, timeout=API_REQUEST_TIMEOUT_SECONDS) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def api_error_code(error: Exception) -> str:
+    if isinstance(error, urllib.error.HTTPError):
+        return f"HTTPError_{error.code}"
+    return type(error).__name__
 
 
 def target_host(target: dict[str, Any]) -> str:
@@ -1250,7 +1262,7 @@ def main() -> int:
                     "routeHealthEnabled": bool(args.route_health),
                     "routeCandidates": route_candidates,
                     "stage": "fetch_targets",
-                    "errorCode": type(error).__name__,
+                    "errorCode": api_error_code(error),
                     "message": "Could not fetch monitoring targets from backend.",
                     "targetsChecked": 0,
                     "serverHealthChecked": 0,
@@ -1311,7 +1323,7 @@ def main() -> int:
                 posted = True
             except Exception as error:
                 failed_posts += 1
-                post_error = type(error).__name__
+                post_error = api_error_code(error)
         for route_candidate in route_candidates:
             route_posted = False
             route_post_error = ""
@@ -1360,7 +1372,7 @@ def main() -> int:
                     route_observations_posted += 1
                 except Exception as error:
                     route_observation_failed_posts += 1
-                    route_post_error = type(error).__name__
+                    route_post_error = api_error_code(error)
             route_health_results.append(
                 {
                     "endpointId": route_candidate["endpointId"],
@@ -1410,7 +1422,7 @@ def main() -> int:
                     "ok": False,
                     "latencyMs": None,
                     "posted": False,
-                    "postError": type(error).__name__,
+                    "postError": api_error_code(error),
                     "message": "Could not fetch server catalog for endpoint health.",
                 }
             )
@@ -1448,7 +1460,7 @@ def main() -> int:
                     posted = True
                 except Exception as error:
                     server_health_failed_posts += 1
-                    post_error = type(error).__name__
+                    post_error = api_error_code(error)
             server_health_results.append(
                 {
                     "endpointId": entry.get("serverId"),
@@ -1496,13 +1508,16 @@ def main() -> int:
         "routeHealth": route_health_results,
     }
     print(json.dumps(summary, ensure_ascii=False, indent=2))
-    return (
-        0
-        if failed_posts == 0
-        and server_health_failed_posts == 0
-        and route_observation_failed_posts == 0
-        else 2
-    )
+    if (
+        args.fail_on_post_error
+        and (
+            failed_posts > 0
+            or server_health_failed_posts > 0
+            or route_observation_failed_posts > 0
+        )
+    ):
+        return 2
+    return 0
 
 
 if __name__ == "__main__":

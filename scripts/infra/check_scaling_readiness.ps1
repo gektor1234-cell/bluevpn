@@ -171,7 +171,7 @@ $result = [ordered]@{
         timewebKazakhstan = [ordered]@{
             readyByBalance = $timewebKzReadyByBalance
             recommended = $false
-            reason = "Existing KZ node has unreliable full smoke; do not create more KZ before the provider/route issue is understood."
+            reason = "Existing KZ node is already in preview. Do not create more KZ before real-device testing confirms value."
             currentBalanceRub = $timewebKzQuote.plan.currentBalanceRub
             quotedMonthlyRub = $timewebKzQuote.plan.quotedPreset.price
             presetId = $timewebKzQuote.plan.quotedPreset.id
@@ -203,7 +203,7 @@ $result = [ordered]@{
         "If RUVDS browser balance is funded but accessCandidates.readyCandidateFound is false, put a token from that same funded account into GREENVPN_RUVDS_API_KEY, GREENVPN_RUVDS_API_KEY_*, or GREENVPN_RUVDS_API_KEYS and rerun this script.",
         "When ruvdsZurich.readyToCreate is true, run continue_ruvds_preview_rollout.ps1 with -CreateWhenReady -ConfirmPaidCreate; if the API does not return IPv4, rerun rollout_ruvds_zurich_preview.ps1 with -NodeIPv4 <public-ip> -ApplyBootstrap -ConfirmRemoteProvision -AddToPreview.",
         "Do not spend Timeweb NL balance unless the owner explicitly accepts the production-balance risk; use rollout_timeweb_nl_preview.ps1 for the protected emergency path.",
-        "Keep KZ out of preview/stable until repeated full smoke checks pass."
+        "Keep KZ in preview only until real-device testing confirms it is useful; do not publish KZ to stable yet."
     )
 }
 

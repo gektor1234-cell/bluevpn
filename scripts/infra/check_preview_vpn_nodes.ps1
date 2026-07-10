@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $false)]
-    [string[]]$ServerId = @("tw-7879598-nl1", "ruvds-2584554-ld8"),
+    [string[]]$ServerId = @("tw-7879598-nl1", "ruvds-2584554-ld8", "tw-kz1-test-01"),
 
     [Parameter(Mandatory = $false)]
     [string]$ApiBaseUrl = "https://api.greenvpn.pro",

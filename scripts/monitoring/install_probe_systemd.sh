@@ -8,6 +8,7 @@ API_BASE="${GREENVPN_API_BASE:-https://api.greenvpn.pro}"
 PROBE_ID="${GREENVPN_PROBE_ID:-$(hostname -s 2>/dev/null || echo probe)}"
 PROBE_REGION="${GREENVPN_PROBE_REGION:-external}"
 INTERVAL_SECONDS="${GREENVPN_PROBE_INTERVAL_SECONDS:-300}"
+API_TIMEOUT_SECONDS="${GREENVPN_PROBE_API_TIMEOUT_SECONDS:-60}"
 TOKEN_FILE="${ENV_DIR}/admin_token"
 SOURCE_SCRIPT=""
 TOKEN_FROM_STDIN="0"
@@ -28,6 +29,7 @@ Options:
   --probe-id ID              Stable probe id. Default: ${PROBE_ID}
   --probe-region REGION      Human region/network label. Default: ${PROBE_REGION}
   --interval SECONDS         systemd timer interval. Default: ${INTERVAL_SECONDS}
+  --api-timeout SECONDS      Backend admin API request timeout. Default: ${API_TIMEOUT_SECONDS}
   --token-file PATH          Existing admin_token file to copy into ${TOKEN_FILE}
   --token-stdin              Read admin_token from stdin and save only on this machine.
   --server-health            Also post VPN endpoint health observations. Default: on.
@@ -68,6 +70,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --interval)
       INTERVAL_SECONDS="${2:-}"
+      shift 2
+      ;;
+    --api-timeout)
+      API_TIMEOUT_SECONDS="${2:-}"
       shift 2
       ;;
     --token-file)
@@ -134,6 +140,11 @@ if [[ ! "${INTERVAL_SECONDS}" =~ ^[0-9]+$ ]] || [[ "${INTERVAL_SECONDS}" -lt 60 
   exit 2
 fi
 
+if [[ ! "${API_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]] || [[ "${API_TIMEOUT_SECONDS}" -lt 10 ]]; then
+  echo "--api-timeout must be an integer >= 10 seconds." >&2
+  exit 2
+fi
+
 if [[ "${DRY_RUN}" == "1" ]]; then
   cat <<DRYRUN
 [Green VPN probe install] dry-run
@@ -143,6 +154,7 @@ api_base=${API_BASE}
 probe_id=${PROBE_ID}
 probe_region=${PROBE_REGION}
 interval_seconds=${INTERVAL_SECONDS}
+api_timeout_seconds=${API_TIMEOUT_SECONDS}
 source_script=${SOURCE_SCRIPT}
 server_health=${SERVER_HEALTH}
 server_health_server_ids=${SERVER_HEALTH_SERVER_IDS[*]:-(none)}
@@ -179,6 +191,7 @@ GREENVPN_API_BASE="${API_BASE}"
 GREENVPN_PROBE_ID="${PROBE_ID}"
 GREENVPN_PROBE_REGION="${PROBE_REGION}"
 GREENVPN_ADMIN_TOKEN_FILE="${TOKEN_FILE}"
+GREENVPN_PROBE_API_TIMEOUT_SECONDS="${API_TIMEOUT_SECONDS}"
 EOF
 chmod 600 "${ENV_DIR}/probe.env"
 
