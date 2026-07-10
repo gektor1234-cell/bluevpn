@@ -395,7 +395,7 @@ Write-Section "SUPPORT REPORT CLIENT FLOW CHECKS"
 $requiredSupportReportClientFragments = @(
     'Future<ApiResult<Map<String, dynamic>>> sendSupportReport',
     "path: '/api/v1/support/reports'",
-    'String _buildSupportReportCode()',
+    'Future<String> _buildSupportReportCode() async',
     "return 'GVPN1.",
     'Future<void> _sendReport()',
     '_fallbackReportCode = result.ok ? null : reportCode',
