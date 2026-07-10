@@ -218,6 +218,28 @@ DEFAULT_PLAN_CODE = "trial"
 DEFAULT_MAX_DEVICES = int(os.getenv("BLUEVPN_DEFAULT_MAX_DEVICES", "5"))
 DEFAULT_TRIAL_DAYS = int(os.getenv("BLUEVPN_DEFAULT_TRIAL_DAYS", "3"))
 PAID_PLAN_DAYS = int(os.getenv("BLUEVPN_PAID_PLAN_DAYS", "30"))
+PAID_BETA_ENABLED = (
+    os.getenv("GREENVPN_PAID_BETA_ENABLED", "").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+PAID_BETA_CLIENT_MARKER = (
+    os.getenv("GREENVPN_PAID_BETA_CLIENT_MARKER", "green-vpn-paid-beta-v1")
+    .strip()
+    .lower()
+)
+PAID_BETA_RELEASE_CHANNEL = (
+    os.getenv("GREENVPN_PAID_BETA_RELEASE_CHANNEL", "paid-beta")
+    .strip()
+    .lower()
+)
+PAID_BETA_POLICY_VERSION = "2026-07-10-paid-beta-v1"
+PAID_BETA_PLAN_CODE = "paid_beta_30d"
+PAID_BETA_PLAN_NAME = "Beta"
+PAID_BETA_PRICE_RUB = 299
+PAID_BETA_INVITE_PRICE_RUB = 149
+PAID_BETA_MAX_DEVICES = 2
+PAID_BETA_TRIAL_DAYS = 3
+PAID_BETA_PERIOD_DAYS = 30
 FREE_AD_GATE_ENABLED = (
     os.getenv("GREENVPN_FREE_AD_GATE_ENABLED", "").strip().lower()
     in {"1", "true", "yes", "on"}
@@ -1153,6 +1175,7 @@ PROMO_PLAN_CODES = {
     "optimal",
     "active",
     "maximum",
+    PAID_BETA_PLAN_CODE,
 }
 PROMO_LAUNCH_RECOMMENDED_CODE = "START20"
 PROMO_LAUNCH_RECOMMENDED_PERCENT = 20
@@ -1234,6 +1257,8 @@ class TariffSelectionIn(BaseModel):
     dedicatedIp: bool = False
     autoRenew: bool = True
     promoCode: Optional[str] = None
+    clientMarker: Optional[str] = None
+    releaseChannel: Optional[str] = None
 
 
 class AdminMarkOrderPaidIn(BaseModel):
@@ -2954,8 +2979,10 @@ def subscription_status(row) -> dict:
         "autoRenew": auto_renew,
         "paymentMethodSaved": payment_method_saved,
         "selection": selection,
-        "includedFeatures": INCLUDED_FEATURES,
-        "policyVersion": TARIFF_POLICY_VERSION,
+        "includedFeatures": (current_quote or {}).get("includedFeatures", INCLUDED_FEATURES),
+        "policyVersion": (current_quote or {}).get("policyVersion", TARIFF_POLICY_VERSION),
+        "pricingModel": (current_quote or {}).get("pricingModel"),
+        "periodDays": (current_quote or {}).get("periodDays"),
         "trafficLimitGb": (current_quote or {}).get("trafficLimitGb"),
         "speedSustainedMbps": (current_quote or {}).get("speedSustainedMbps"),
         "speedBurstMbps": (current_quote or {}).get("speedBurstMbps"),
@@ -3759,7 +3786,57 @@ def list_admin_traffic_usage(period_key: Optional[str] = None, limit: int = 100)
     }
 
 
-def build_tariff_catalog() -> dict:
+def paid_beta_request_allowed(
+    client_marker: Optional[str],
+    release_channel: Optional[str],
+) -> bool:
+    if not PAID_BETA_ENABLED:
+        return False
+    marker = str(client_marker or "").strip().lower()
+    channel = str(release_channel or "").strip().lower()
+    return bool(
+        PAID_BETA_CLIENT_MARKER
+        and PAID_BETA_RELEASE_CHANNEL
+        and hmac.compare_digest(marker, PAID_BETA_CLIENT_MARKER)
+        and hmac.compare_digest(channel, PAID_BETA_RELEASE_CHANNEL)
+    )
+
+
+def build_paid_beta_tariff_catalog() -> dict:
+    return {
+        "policyVersion": PAID_BETA_POLICY_VERSION,
+        "pricingModel": "fixed_paid_beta",
+        "paidBeta": True,
+        "trial": {
+            "days": PAID_BETA_TRIAL_DAYS,
+            "priceRub": 0,
+            "maxDevices": PAID_BETA_MAX_DEVICES,
+        },
+        "plan": {
+            "code": PAID_BETA_PLAN_CODE,
+            "title": PAID_BETA_PLAN_NAME,
+            "periodDays": PAID_BETA_PERIOD_DAYS,
+            "priceRub": PAID_BETA_PRICE_RUB,
+            "inviteFirstPeriodPriceRub": PAID_BETA_INVITE_PRICE_RUB,
+            "maxDevices": PAID_BETA_MAX_DEVICES,
+            "autoRenew": False,
+            "ads": False,
+        },
+        "includedFeatures": ["vpn_access", "social_routing", "no_ads"],
+        "unsupportedOptions": [
+            "traffic_packs",
+            "speed_classes",
+            "network_priority",
+            "dedicated_ip",
+            "paid_app_bundles",
+            "auto_renew",
+        ],
+    }
+
+
+def build_tariff_catalog(paid_beta: bool = False) -> dict:
+    if paid_beta:
+        return build_paid_beta_tariff_catalog()
     return {
         "policyVersion": TARIFF_POLICY_VERSION,
         "pricingModel": "free_start_plus_configurable_paid_plan",
@@ -4460,6 +4537,24 @@ def _apps_price(codes: list[str]) -> int:
 
 
 def normalize_tariff_selection(payload: TariffSelectionIn) -> dict:
+    if paid_beta_request_allowed(payload.clientMarker, payload.releaseChannel):
+        return {
+            "policyMode": "paid_beta",
+            "policyVersion": PAID_BETA_POLICY_VERSION,
+            "planCode": PAID_BETA_PLAN_CODE,
+            "trafficPack": "paid_beta",
+            "trafficGb": 0,
+            "paidEffectiveGb": 0,
+            "devices": PAID_BETA_MAX_DEVICES,
+            "unlimitedApps": [],
+            "dedicatedIp": False,
+            "autoRenew": False,
+            "promoCode": normalize_promo_code(payload.promoCode),
+            "clientMarker": PAID_BETA_CLIENT_MARKER,
+            "releaseChannel": PAID_BETA_RELEASE_CHANNEL,
+            "includedFeatures": ["vpn_access", "social_routing", "no_ads"],
+        }
+
     traffic_pack = payload.trafficPack.strip().lower()
     if traffic_pack not in TRAFFIC_PACK_BASE:
         traffic_pack = "gb50"
@@ -4502,6 +4597,37 @@ def normalize_tariff_selection(payload: TariffSelectionIn) -> dict:
 
 
 def quote_tariff(selection: dict, strict_promo: bool = False) -> dict:
+    if selection.get("policyMode") == "paid_beta":
+        quote = {
+            "planCode": PAID_BETA_PLAN_CODE,
+            "planName": PAID_BETA_PLAN_NAME,
+            "policyVersion": PAID_BETA_POLICY_VERSION,
+            "pricingModel": "fixed_paid_beta",
+            "periodDays": PAID_BETA_PERIOD_DAYS,
+            "devices": PAID_BETA_MAX_DEVICES,
+            "includedDevices": PAID_BETA_MAX_DEVICES,
+            "unlimitedApps": [],
+            "dedicatedIp": False,
+            "autoRenew": False,
+            "adsEnabled": False,
+            "includedFeatures": ["vpn_access", "social_routing", "no_ads"],
+            "lineItems": [
+                {
+                    "code": "paid_beta_access",
+                    "title": f"Доступ Green VPN на {PAID_BETA_PERIOD_DAYS} дней",
+                    "priceRub": PAID_BETA_PRICE_RUB,
+                },
+            ],
+            "monthlyPriceRub": PAID_BETA_PRICE_RUB,
+            "summary": {
+                "periodDays": PAID_BETA_PERIOD_DAYS,
+                "maxDevices": PAID_BETA_MAX_DEVICES,
+                "ads": False,
+                "autoRenew": False,
+            },
+        }
+        return apply_promo_to_quote(quote, selection, strict=strict_promo)
+
     traffic_pack = selection["trafficPack"]
     traffic_gb = int(selection["trafficGb"])
     paid_effective_gb = max(20, int(selection.get("paidEffectiveGb") or traffic_gb))
@@ -14767,14 +14893,23 @@ def apply_tariff_for_user(
     payload: TariffSelectionIn,
     provider_payment_method_id: Optional[str] = None,
     quote_override: Optional[dict] = None,
+    selection_override: Optional[dict] = None,
 ) -> dict:
-    normalized = normalize_tariff_selection(payload)
+    normalized = (
+        dict(selection_override)
+        if isinstance(selection_override, dict) and selection_override
+        else normalize_tariff_selection(payload)
+    )
     quote = quote_override or quote_tariff(
         normalized,
         strict_promo=bool(normalized.get("promoCode")),
     )
     now = utc_now()
-    expires_at = (now + timedelta(days=PAID_PLAN_DAYS)).isoformat()
+    period_days = (
+        PAID_BETA_PERIOD_DAYS
+        if normalized.get("policyMode") == "paid_beta"
+        else PAID_PLAN_DAYS
+    )
     selection_json = json.dumps(normalized, ensure_ascii=False)
     auto_renew = bool(normalized.get("autoRenew", False))
     saved_payment_method_id = provider_payment_method_id if auto_renew else None
@@ -14782,7 +14917,7 @@ def apply_tariff_for_user(
     with db() as conn:
         current = conn.execute(
             """
-            SELECT id
+            SELECT id, plan_code, expires_at
             FROM subscriptions
             WHERE user_id = ?
             ORDER BY id DESC
@@ -14790,6 +14925,21 @@ def apply_tariff_for_user(
             """,
             (user_id,),
         ).fetchone()
+
+        period_start = now
+        if (
+            normalized.get("policyMode") == "paid_beta"
+            and current is not None
+            and str(current["plan_code"] or "").strip().lower()
+            == PAID_BETA_PLAN_CODE
+        ):
+            current_expires_at = parse_dt(current["expires_at"])
+            if current_expires_at is not None:
+                if current_expires_at.tzinfo is None:
+                    current_expires_at = current_expires_at.replace(tzinfo=timezone.utc)
+                if current_expires_at > now:
+                    period_start = current_expires_at
+        expires_at = (period_start + timedelta(days=period_days)).isoformat()
 
         if current is None:
             conn.execute(
@@ -16989,6 +17139,8 @@ def mark_billing_order_paid_and_activate(
         dedicatedIp=bool(selection.get("dedicatedIp")),
         autoRenew=bool(selection.get("autoRenew", True)),
         promoCode=selection.get("promoCode"),
+        clientMarker=selection.get("clientMarker"),
+        releaseChannel=selection.get("releaseChannel"),
     )
     effective_payment_method_id = (
         provider_payment_method_id
@@ -17003,6 +17155,7 @@ def mark_billing_order_paid_and_activate(
         payload,
         provider_payment_method_id=effective_payment_method_id,
         quote_override=order_quote if isinstance(order_quote, dict) and order_quote else None,
+        selection_override=selection,
     )
     now = utc_now_iso()
 
@@ -23486,10 +23639,14 @@ def monitoring_services(live: bool = False):
 
 
 @app.get("/api/v1/catalog/tariffs")
-def tariff_catalog():
+def tariff_catalog(
+    clientMarker: Optional[str] = None,
+    releaseChannel: Optional[str] = None,
+):
+    paid_beta = paid_beta_request_allowed(clientMarker, releaseChannel)
     return {
         "ok": True,
-        "catalog": build_tariff_catalog(),
+        "catalog": build_tariff_catalog(paid_beta=paid_beta),
     }
 
 
@@ -24057,7 +24214,9 @@ def subscription_quote(payload: TariffSelectionIn):
     quote = quote_tariff(normalized)
     return {
         "ok": True,
-        "catalog": build_tariff_catalog(),
+        "catalog": build_tariff_catalog(
+            paid_beta=normalized.get("policyMode") == "paid_beta"
+        ),
         "selection": normalized,
         "quote": quote,
     }

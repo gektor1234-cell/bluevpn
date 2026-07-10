@@ -32,6 +32,16 @@ const bool kTrialOnlyNoAdsBuild = bool.fromEnvironment(
   'GREENVPN_TRIAL_ONLY_NO_ADS_BUILD',
   defaultValue: true,
 );
+const bool kPaidBetaBuild = bool.fromEnvironment(
+  'GREENVPN_PAID_BETA_BUILD',
+  defaultValue: false,
+);
+const String kPaidBetaClientMarker = String.fromEnvironment(
+  'GREENVPN_PAID_BETA_CLIENT_MARKER',
+  defaultValue: 'green-vpn-paid-beta-v1',
+);
+const String kPaidBetaReleaseChannel = 'paid-beta';
+const bool kAdsDisabledBuild = kTrialOnlyNoAdsBuild || kPaidBetaBuild;
 const bool kYandexRewardedAdsEnabled = bool.fromEnvironment(
   'GREENVPN_YANDEX_REWARDED_ADS_ENABLED',
   defaultValue: false,
@@ -90,6 +100,7 @@ bool greenVpnUpdateManifestMatchesCurrentPlatform(
 }
 
 String greenVpnUpdateChannel() {
+  if (kPaidBetaBuild) return kPaidBetaReleaseChannel;
   final version = kAppVersion.toLowerCase();
   if (version.contains('preview') || version.contains('adgate')) {
     return 'preview';
@@ -182,7 +193,7 @@ bool get greenVpnHasNativeVpnBackend {
 }
 
 bool greenVpnIsAdRewardRequiredMessage(String? message) {
-  if (kTrialOnlyNoAdsBuild) return false;
+  if (kAdsDisabledBuild) return false;
   final raw = (message ?? '').toLowerCase();
   return raw.contains('ad_reward_required') ||
       raw.contains('нужно посмотреть рекламу') ||
@@ -214,7 +225,7 @@ String greenVpnAdChallengeTokenFromRewardUrl(String rewardUrl) {
 }
 
 String greenVpnAndroidYandexRewardedAdUnitId(Map<String, dynamic> bootMap) {
-  if (kTrialOnlyNoAdsBuild) return '';
+  if (kAdsDisabledBuild) return '';
   if (kIsWeb || !Platform.isAndroid || !kYandexRewardedAdsEnabled) return '';
   if (kYandexRewardedAdsUseDemo) return kYandexRewardedDemoAdUnitId;
 
@@ -257,7 +268,7 @@ class GreenVpnYandexRewardedAds {
     Future<void> Function()? onRewarded,
   }) async {
     final unit = adUnitId.trim();
-    if (kTrialOnlyNoAdsBuild || unit.isEmpty) {
+    if (kAdsDisabledBuild || unit.isEmpty) {
       await log('rewarded ads are disabled for this build');
       return false;
     }
@@ -3567,20 +3578,16 @@ while True:
     String? platform,
     String? appVersion,
   }) async {
-    return _postSession(
-      '/api/v1/auth/challenge/verify',
-      {
-        'method': method,
-        'code': code,
-        if (phone != null) 'phone': phone,
-        if (email != null) 'email': email,
-        if (deviceUid != null) 'deviceUid': deviceUid,
-        if (deviceName != null) 'deviceName': deviceName,
-        if (platform != null) 'platform': platform,
-        if (appVersion != null) 'appVersion': appVersion,
-      },
-      preferredApiBaseUrl: _pendingAuthApiBaseUrl,
-    );
+    return _postSession('/api/v1/auth/challenge/verify', {
+      'method': method,
+      'code': code,
+      if (phone != null) 'phone': phone,
+      if (email != null) 'email': email,
+      if (deviceUid != null) 'deviceUid': deviceUid,
+      if (deviceName != null) 'deviceName': deviceName,
+      if (platform != null) 'platform': platform,
+      if (appVersion != null) 'appVersion': appVersion,
+    }, preferredApiBaseUrl: _pendingAuthApiBaseUrl);
   }
 
   Future<ApiResult<Map<String, dynamic>>> fetchWindowsBootstrap() async {
@@ -3761,10 +3768,15 @@ while True:
   }
 
   Future<ApiResult<Map<String, dynamic>>> fetchTariffCatalog() async {
-    final res = await _jsonRequest(
-      method: 'GET',
+    final query = <String, String>{
+      if (kPaidBetaBuild) 'clientMarker': kPaidBetaClientMarker,
+      if (kPaidBetaBuild) 'releaseChannel': kPaidBetaReleaseChannel,
+    };
+    final path = Uri(
       path: '/api/v1/catalog/tariffs',
-    );
+      queryParameters: query.isEmpty ? null : query,
+    ).toString();
+    final res = await _jsonRequest(method: 'GET', path: path);
     if (!res.ok) return ApiResult.err(res.message);
     if (res.data is! Map) {
       return const ApiResult.err('Некорректный ответ catalog/tariffs.');
@@ -3865,6 +3877,8 @@ while True:
         'unlimitedApps': unlimitedApps,
         'devices': devices,
         'dedicatedIp': dedicatedIp,
+        if (kPaidBetaBuild) 'clientMarker': kPaidBetaClientMarker,
+        if (kPaidBetaBuild) 'releaseChannel': kPaidBetaReleaseChannel,
       },
     );
     if (!res.ok) return ApiResult.err(res.message);
@@ -3894,6 +3908,8 @@ while True:
         'devices': devices,
         'dedicatedIp': dedicatedIp,
         'autoRenew': autoRenew,
+        if (kPaidBetaBuild) 'clientMarker': kPaidBetaClientMarker,
+        if (kPaidBetaBuild) 'releaseChannel': kPaidBetaReleaseChannel,
       },
     );
     if (!res.ok) return ApiResult.err(res.message);
@@ -4290,55 +4306,55 @@ while True:
   }) async {
     try {
       await _authLog('API $method $path start');
-      final body = await _withHttpRetry<String>((
-        client,
-        direct,
-        resolvedBaseUrl,
-      ) async {
-        final uri = _uFor(resolvedBaseUrl, path);
-        final req = method == 'GET'
-            ? await client.getUrl(uri)
-            : await client.postUrl(uri);
+      final body = await _withHttpRetry<String>(
+        (client, direct, resolvedBaseUrl) async {
+          final uri = _uFor(resolvedBaseUrl, path);
+          final req = method == 'GET'
+              ? await client.getUrl(uri)
+              : await client.postUrl(uri);
 
-        req.headers.set(
-          HttpHeaders.userAgentHeader,
-          'GreenVPN/$kAppVersion (${greenVpnClientPlatform()}; flutter)',
-        );
-        req.headers.set('X-GreenVPN-Platform', greenVpnClientPlatform());
-        req.headers.set('X-GreenVPN-Version', kAppVersion);
-        req.headers.set('X-GreenVPN-Release-Channel', greenVpnUpdateChannel());
-        if (bearerToken != null && bearerToken.trim().isNotEmpty) {
-          req.headers.set('Authorization', 'Bearer $bearerToken');
-        }
-        if (adminToken != null && adminToken.trim().isNotEmpty) {
-          req.headers.set('X-Admin-Token', adminToken.trim());
-        }
-        if (payload != null) {
-          req.headers.contentType = ContentType.json;
-          req.write(jsonEncode(payload));
-        }
-
-        final res = await req.close().timeout(const Duration(seconds: 8));
-        final body = await utf8
-            .decodeStream(res)
-            .timeout(const Duration(seconds: 5));
-        await _authLog(
-          'API $method $path status=${res.statusCode} route=${direct ? 'direct' : 'system'} base=$resolvedBaseUrl',
-        );
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          throw GreenVpnHttpStatusException(
-            statusCode: res.statusCode,
-            body: body,
-            uri: uri,
-            message: 'Ошибка сервера (${res.statusCode}): $body',
+          req.headers.set(
+            HttpHeaders.userAgentHeader,
+            'GreenVPN/$kAppVersion (${greenVpnClientPlatform()}; flutter)',
           );
-        }
-        onSuccessBaseUrl?.call(resolvedBaseUrl);
-        return body;
-      },
-      preferredBaseUrl:
-          preferredBaseUrl ?? _preferredApiBaseUrlForBearer(bearerToken),
-    );
+          req.headers.set('X-GreenVPN-Platform', greenVpnClientPlatform());
+          req.headers.set('X-GreenVPN-Version', kAppVersion);
+          req.headers.set(
+            'X-GreenVPN-Release-Channel',
+            greenVpnUpdateChannel(),
+          );
+          if (bearerToken != null && bearerToken.trim().isNotEmpty) {
+            req.headers.set('Authorization', 'Bearer $bearerToken');
+          }
+          if (adminToken != null && adminToken.trim().isNotEmpty) {
+            req.headers.set('X-Admin-Token', adminToken.trim());
+          }
+          if (payload != null) {
+            req.headers.contentType = ContentType.json;
+            req.write(jsonEncode(payload));
+          }
+
+          final res = await req.close().timeout(const Duration(seconds: 8));
+          final body = await utf8
+              .decodeStream(res)
+              .timeout(const Duration(seconds: 5));
+          await _authLog(
+            'API $method $path status=${res.statusCode} route=${direct ? 'direct' : 'system'} base=$resolvedBaseUrl',
+          );
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            throw GreenVpnHttpStatusException(
+              statusCode: res.statusCode,
+              body: body,
+              uri: uri,
+              message: 'Ошибка сервера (${res.statusCode}): $body',
+            );
+          }
+          onSuccessBaseUrl?.call(resolvedBaseUrl);
+          return body;
+        },
+        preferredBaseUrl:
+            preferredBaseUrl ?? _preferredApiBaseUrlForBearer(bearerToken),
+      );
 
       if (body.trim().isEmpty) {
         return const ApiResult.ok(<String, dynamic>{});
@@ -6105,12 +6121,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   final Set<TariffApp> selectedApps = {};
   TrafficPack trafficPack = TrafficPack.gb20; // "режим" (по ГБ / безлимит)
   double trafficGb = 20; // любой объём ГБ
-  int devices = 1;
+  int devices = kPaidBetaBuild ? 2 : 1;
 
   bool optNoAds = true;
   bool optSmartRouting = true; // этим флагом управляем доступностью "соцсетей"
   bool optDedicatedIp = false;
-  bool optAutoRenew = true;
+  bool optAutoRenew = !kPaidBetaBuild;
 
   // ===== SETTINGS (косметика) =====
   String sLanguage = 'Русский';
@@ -6748,18 +6764,20 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               .toSet(),
         );
 
-      trafficPack = TrafficPack.values.firstWhere(
-        (e) => e.name == p.trafficPack,
-        orElse: () => TrafficPack.gb20,
-      );
-      trafficGb = p.trafficGb.clamp(1.0, 800.0);
-      devices = p.devices.clamp(1, 5);
+      trafficPack = kPaidBetaBuild
+          ? TrafficPack.gb20
+          : TrafficPack.values.firstWhere(
+              (e) => e.name == p.trafficPack,
+              orElse: () => TrafficPack.gb20,
+            );
+      trafficGb = kPaidBetaBuild ? 20 : p.trafficGb.clamp(1.0, 800.0);
+      devices = kPaidBetaBuild ? 2 : p.devices.clamp(1, 5);
 
       optNoAds = true;
       optSmartRouting =
           true; // временно всегда разрешаем режим соцсетей в Windows-клиенте
-      optDedicatedIp = p.optDedicatedIp;
-      optAutoRenew = p.optAutoRenew;
+      optDedicatedIp = kPaidBetaBuild ? false : p.optDedicatedIp;
+      optAutoRenew = kPaidBetaBuild ? false : p.optAutoRenew;
 
       await _repairProvisionedConfigFromPreferredDevSource(showToast: false);
       await _cfg.ensureBaseSeededFromManagedIfMissing();
@@ -6862,11 +6880,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     setState(() {
       trafficPack = nextPack;
       trafficGb = nextGb.clamp(1.0, 800.0);
-      devices = nextDevices.clamp(1, 5);
+      devices = kPaidBetaBuild ? 2 : nextDevices.clamp(1, 5);
       optNoAds = true;
       optSmartRouting = true;
-      optDedicatedIp = nextDedicatedIp;
-      optAutoRenew = nextAutoRenew;
+      optDedicatedIp = kPaidBetaBuild ? false : nextDedicatedIp;
+      optAutoRenew = kPaidBetaBuild ? false : nextAutoRenew;
       selectedApps
         ..clear()
         ..addAll(nextApps);
@@ -7080,7 +7098,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
   Future<void> _createTariffOrderOnServer() async {
     if (kIsWeb) return;
-    if (kTrialOnlyNoAdsBuild) {
+    if (kTrialOnlyNoAdsBuild && !kPaidBetaBuild) {
       setState(() {
         _tariffStatus =
             'В этой версии Green VPN работает Trial без оплаты и рекламы.';
@@ -8144,7 +8162,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   bool _bootAdGateRequiresReward(Map<String, dynamic> bootMap) {
-    if (kTrialOnlyNoAdsBuild) return false;
+    if (kAdsDisabledBuild) return false;
     final adGateRaw = bootMap['adGate'];
     if (adGateRaw is! Map) return false;
     final adGate = Map<String, dynamic>.from(adGateRaw);
@@ -8166,7 +8184,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     Map<String, dynamic> adGate, {
     required String source,
   }) {
-    if (kTrialOnlyNoAdsBuild || adGate['enabled'] != true) {
+    if (kAdsDisabledBuild || adGate['enabled'] != true) {
       _cancelFreeAdSessionTimer();
       return;
     }
@@ -8233,7 +8251,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   Future<void> _restoreFreeAdSessionTimer() async {
-    if (!mounted || kTrialOnlyNoAdsBuild) return;
+    if (!mounted || kAdsDisabledBuild) return;
     try {
       final prefs = await SharedPreferences.getInstance();
       final expiresAt = _parseServerDateTime(
@@ -8263,7 +8281,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   Future<void> _expireFreeAdSession({required String source}) async {
-    if (!mounted || kTrialOnlyNoAdsBuild) return;
+    if (!mounted || kAdsDisabledBuild) return;
     if (vpnBusy) {
       _freeAdSessionTimer?.cancel();
       _freeAdSessionTimer = Timer(const Duration(seconds: 15), () {
@@ -8401,7 +8419,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     String deviceId, {
     Future<void> Function()? onRewardGranted,
   }) async {
-    if (kTrialOnlyNoAdsBuild) return true;
+    if (kAdsDisabledBuild) return true;
     if (!_bootAdGateRequiresReward(bootMap)) return true;
     final yandexRewardedAdUnitId = greenVpnAndroidYandexRewardedAdUnitId(
       bootMap,
@@ -9095,8 +9113,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           if (_shouldRunPostConnectProbe) {
             _setVpnBusyUi(
               stage: 'Проверяем YouTube...',
-              hint:
-                  'VPN включён. Проверяем, что YouTube открывается.',
+              hint: 'VPN включён. Проверяем, что YouTube открывается.',
             );
             final probe = await _probeConnectedTunnelRoute(candidate);
             unawaited(
@@ -9124,7 +9141,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               ),
             );
             if (!probe.ok) {
-              lastError = 'YouTube не открылся через ${greenVpnPublicServerTitle(candidate)}';
+              lastError =
+                  'YouTube не открылся через ${greenVpnPublicServerTitle(candidate)}';
               await appendBlueVpnClientLog(
                 'post connect probe rejected server=${candidate.id}; disconnecting before next candidate',
               );
@@ -9439,8 +9457,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
     _setVpnBusyUi(
       stage: 'Переключаем сервер...',
-      hint:
-          'Останавливаем текущее подключение и запускаем VPN заново.',
+      hint: 'Останавливаем текущее подключение и запускаем VPN заново.',
     );
 
     try {
@@ -9556,12 +9573,14 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         await _syncVpnStatus();
         if (!on.ok) {
           lastError =
-              on.message ?? 'не удалось подключить ${greenVpnPublicServerTitle(effectiveServer)}';
+              on.message ??
+              'не удалось подключить ${greenVpnPublicServerTitle(effectiveServer)}';
           if (canTryNext) continue;
           break;
         }
         if (!vpnEnabled) {
-          lastError = 'VPN не подтвердился через ${greenVpnPublicServerTitle(effectiveServer)}';
+          lastError =
+              'VPN не подтвердился через ${greenVpnPublicServerTitle(effectiveServer)}';
           if (canTryNext) continue;
           break;
         }
@@ -9569,8 +9588,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         if (_shouldRunPostConnectProbe) {
           _setVpnBusyUi(
             stage: 'Проверяем YouTube...',
-            hint:
-                'VPN включён. Проверяем, что YouTube открывается.',
+            hint: 'VPN включён. Проверяем, что YouTube открывается.',
           );
           final probe = await _probeConnectedTunnelRoute(effectiveServer);
           unawaited(
@@ -9598,7 +9616,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             ),
           );
           if (!probe.ok) {
-            lastError = 'YouTube не открылся через ${greenVpnPublicServerTitle(effectiveServer)}';
+            lastError =
+                'YouTube не открылся через ${greenVpnPublicServerTitle(effectiveServer)}';
             await appendBlueVpnClientLog(
               'server switch post connect probe rejected server=${effectiveServer.id}; disconnecting before next candidate',
             );
@@ -9613,7 +9632,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           hint:
               'VPN только что переключился. Кнопка разблокируется через секунду.',
         );
-        _toast(context, 'VPN переключён на ${greenVpnPublicServerTitle(effectiveServer)}.');
+        _toast(
+          context,
+          'VPN переключён на ${greenVpnPublicServerTitle(effectiveServer)}.',
+        );
         return;
       }
 
@@ -10197,7 +10219,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.star_rounded),
-            label: kTrialOnlyNoAdsBuild ? 'Trial' : 'Тариф',
+            label: kPaidBetaBuild
+                ? 'Beta'
+                : (kTrialOnlyNoAdsBuild ? 'Trial' : 'Тариф'),
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.settings_rounded),
@@ -10916,12 +10940,257 @@ class TariffPage extends StatelessWidget {
     return '$day.$month.${dt.year}';
   }
 
+  Widget _buildPaidBeta(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final textColor = theme.colorScheme.onSurface;
+    final mutedColor = textColor.withOpacity(isDark ? 0.72 : 0.62);
+    final quoteRaw = tariffQuote?['quote'];
+    final quote = quoteRaw is Map
+        ? Map<String, dynamic>.from(quoteRaw)
+        : <String, dynamic>{};
+    final catalogPlanRaw = tariffCatalog?['plan'];
+    final catalogPlan = catalogPlanRaw is Map
+        ? Map<String, dynamic>.from(catalogPlanRaw)
+        : <String, dynamic>{};
+    final priceRaw = quote['monthlyPriceRub'] ?? catalogPlan['priceRub'];
+    final price = priceRaw is num ? priceRaw.toInt() : 299;
+    final originalRaw = quote['originalMonthlyPriceRub'];
+    final originalPrice = originalRaw is num ? originalRaw.toInt() : price;
+    final inviteRaw = catalogPlan['inviteFirstPeriodPriceRub'];
+    final invitePrice = inviteRaw is num ? inviteRaw.toInt() : 149;
+    final pendingStatus = (pendingBillingOrder?['status'] ?? '')
+        .toString()
+        .trim()
+        .toLowerCase();
+    final hasPendingOrder =
+        pendingBillingOrder != null &&
+        !{
+          'activated',
+          'canceled',
+          'cancelled',
+          'failed',
+        }.contains(pendingStatus);
+    final currentPlan = _hasPaidPlan
+        ? _currentPlanText()
+        : subscriptionActive
+        ? 'Trial активен'
+        : 'Trial завершён';
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const _PageTitle(
+          title: 'Beta',
+          subtitle: 'Закрытый тест тарифа Green VPN',
+          icon: Icons.science_rounded,
+        ),
+        const SizedBox(height: 12),
+        _Card(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Сейчас',
+                style: TextStyle(
+                  color: mutedColor,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 12,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                currentPlan,
+                style: TextStyle(
+                  color: textColor,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 18,
+                ),
+              ),
+              if (!_hasPaidPlan &&
+                  subscriptionExpiresAt != null &&
+                  subscriptionExpiresAt!.trim().isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Trial до ${_formatCompactDate(subscriptionExpiresAt!)}',
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        _Card(
+          tint: isDark ? kBrandDarkSurface : kBrandPrimarySoft,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const _SectionTitle('Beta на 30 дней'),
+              const SizedBox(height: 10),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '$price ₽',
+                    style: const TextStyle(
+                      color: kBrandPrimary,
+                      fontSize: 34,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 5),
+                    child: Text(
+                      'за 30 дней',
+                      style: TextStyle(
+                        color: mutedColor,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (originalPrice > price) ...[
+                const SizedBox(height: 4),
+                Text(
+                  'Обычная цена $originalPrice ₽',
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                    decoration: TextDecoration.lineThrough,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 12),
+              const Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _IncludedBadge(
+                    icon: Icons.devices_rounded,
+                    text: '2 устройства',
+                  ),
+                  _IncludedBadge(
+                    icon: Icons.block_rounded,
+                    text: 'Без рекламы',
+                  ),
+                  _IncludedBadge(
+                    icon: Icons.event_repeat_rounded,
+                    text: 'Без автопродления',
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Первый период по персональному beta-инвайту: $invitePrice ₽.',
+                style: TextStyle(
+                  color: mutedColor,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
+              ),
+              if (hasPendingOrder) ...[
+                const Divider(height: 24),
+                Text(
+                  'Ожидает оплаты',
+                  style: TextStyle(
+                    color: textColor,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  'Заказ ${_shortOrderId(pendingBillingOrder!['orderId'])} • '
+                  '${pendingBillingOrder!['amountRub'] ?? price} ₽',
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                if ((pendingBillingOrder!['paymentUrl'] ?? '')
+                    .toString()
+                    .trim()
+                    .isNotEmpty) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: tariffBusy
+                          ? null
+                          : () => onOpenPaymentUrl(
+                              pendingBillingOrder!['paymentUrl'].toString(),
+                            ),
+                      icon: const Icon(Icons.open_in_browser_rounded),
+                      label: const Text('Открыть оплату'),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: tariffBusy
+                        ? null
+                        : () => onCheckPendingBillingOrder(),
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: const Text('Проверить оплату'),
+                  ),
+                ),
+              ],
+              if (tariffStatus != null && tariffStatus!.trim().isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Text(
+                  tariffStatus!,
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: tariffBusy || hasPendingOrder
+                      ? null
+                      : () => onApplyTariff(),
+                  icon: tariffBusy
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.payment_rounded),
+                  label: Text(
+                    _hasPaidPlan ? 'Продлить на 30 дней' : 'Перейти к оплате',
+                    style: const TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 110),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final textColor = theme.colorScheme.onSurface;
     final mutedColor = textColor.withOpacity(isDark ? 0.72 : 0.62);
+
+    if (kPaidBetaBuild) {
+      return _buildPaidBeta(context);
+    }
 
     if (kTrialOnlyNoAdsBuild) {
       return ListView(
@@ -11727,7 +11996,7 @@ class SettingsPage extends StatelessWidget {
         children: [
           _PageTitle(
             title: 'Настройки',
-            subtitle: kTrialOnlyNoAdsBuild
+            subtitle: kTrialOnlyNoAdsBuild && !kPaidBetaBuild
                 ? 'Аккаунт и параметры приложения'
                 : 'Аккаунт, оплата и параметры приложения',
             icon: Icons.settings_rounded,
@@ -11757,7 +12026,37 @@ class SettingsPage extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          if (!kTrialOnlyNoAdsBuild) ...[
+          if (kPaidBetaBuild) ...[
+            _Card(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const _SectionTitle('Beta и оплата'),
+                  const SizedBox(height: 8),
+                  _SettingsNavRow(
+                    title: 'Тариф Beta',
+                    subtitle: subscriptionActive
+                        ? 'Текущий доступ и оплата'
+                        : 'Оплатить 30 дней',
+                    icon: Icons.payment_rounded,
+                    onTap: onOpenTariff,
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Автопродление выключено. Новое списание создаётся только вручную.',
+                    style: TextStyle(
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.onSurface.withOpacity(0.62),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+          ] else if (!kTrialOnlyNoAdsBuild) ...[
             _Card(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
