@@ -29,7 +29,13 @@ def _load_env(path: pathlib.Path) -> dict[str, str]:
 
 
 def _db_path() -> pathlib.Path:
-    env = _load_env(pathlib.Path("/etc/bluevpn/backend.env"))
+    explicit_db = os.getenv("GREENVPN_SNAPSHOT_DB_PATH", "").strip()
+    if explicit_db:
+        return pathlib.Path(explicit_db).resolve()
+    env_file = pathlib.Path(
+        os.getenv("GREENVPN_SNAPSHOT_ENV_FILE", "/etc/bluevpn/backend.env")
+    )
+    env = _load_env(env_file)
     base = pathlib.Path(env.get("BLUEVPN_BASE_DIR", "/opt/bluevpn/backend")).resolve()
     data = pathlib.Path(env.get("BLUEVPN_DATA_DIR", str(base / "data"))).resolve()
     return data / "bluevpn.db"

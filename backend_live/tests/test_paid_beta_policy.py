@@ -1,4 +1,5 @@
 import os
+import copy
 import tempfile
 import unittest
 from datetime import datetime
@@ -121,6 +122,34 @@ class PaidBetaPolicyTests(unittest.TestCase):
                 "paid-beta",
             )
         )
+
+    def test_paid_beta_update_channel_uses_isolated_artifact(self) -> None:
+        previous = copy.deepcopy(main.PAID_BETA_UPDATE_CONFIG["android"])
+        main.PAID_BETA_UPDATE_CONFIG["android"] = {
+            "latestVersion": "0.3.0-paid-beta.1",
+            "downloadUrl": "https://example.test/private/GreenVPN_Beta.apk",
+            "sha256": "A" * 64,
+            "required": False,
+            "releasedAt": "2026-07-10T00:00:00+00:00",
+            "changelog": ["Beta"],
+        }
+        try:
+            manifest = main.build_update_manifest(
+                platform="android",
+                channel="paid-beta",
+                current_version="0.2.99-paid-beta",
+                client_id="beta-test-device",
+            )
+        finally:
+            main.PAID_BETA_UPDATE_CONFIG["android"] = previous
+
+        self.assertEqual(manifest["channel"], "paid-beta")
+        self.assertEqual(manifest["latestVersion"], "0.3.0-paid-beta.1")
+        self.assertEqual(
+            manifest["downloadUrl"],
+            "https://example.test/private/GreenVPN_Beta.apk",
+        )
+        self.assertTrue(manifest["fileReady"])
 
     def test_beta_quote_ignores_unsupported_options(self) -> None:
         selection = main.normalize_tariff_selection(self.beta_payload())

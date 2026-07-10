@@ -361,6 +361,64 @@ ANDROID_PREVIEW_UPDATE_CHANGELOG = [
     )
     if item.strip(" -")
 ]
+PAID_BETA_UPDATE_CONFIG = {
+    "android": {
+        "latestVersion": os.getenv("GREENVPN_ANDROID_PAID_BETA_LATEST_VERSION", "").strip(),
+        "downloadUrl": os.getenv("GREENVPN_ANDROID_PAID_BETA_UPDATE_URL", "").strip(),
+        "sha256": re.sub(
+            r"\s+",
+            "",
+            os.getenv("GREENVPN_ANDROID_PAID_BETA_UPDATE_SHA256", "").strip(),
+        ).upper(),
+        "required": os.getenv("GREENVPN_ANDROID_PAID_BETA_UPDATE_REQUIRED", "")
+        .strip()
+        .lower()
+        in {"1", "true", "yes", "on"},
+        "releasedAt": os.getenv(
+            "GREENVPN_ANDROID_PAID_BETA_UPDATE_RELEASED_AT",
+            "",
+        ).strip(),
+        "changelog": [
+            item.strip(" -")
+            for item in re.split(
+                r"\r?\n|\s*;\s*",
+                os.getenv(
+                    "GREENVPN_ANDROID_PAID_BETA_UPDATE_CHANGELOG",
+                    "Закрытая paid beta Green VPN.",
+                ),
+            )
+            if item.strip(" -")
+        ],
+    },
+    "windows": {
+        "latestVersion": os.getenv("GREENVPN_WINDOWS_PAID_BETA_LATEST_VERSION", "").strip(),
+        "downloadUrl": os.getenv("GREENVPN_WINDOWS_PAID_BETA_UPDATE_URL", "").strip(),
+        "sha256": re.sub(
+            r"\s+",
+            "",
+            os.getenv("GREENVPN_WINDOWS_PAID_BETA_UPDATE_SHA256", "").strip(),
+        ).upper(),
+        "required": os.getenv("GREENVPN_WINDOWS_PAID_BETA_UPDATE_REQUIRED", "")
+        .strip()
+        .lower()
+        in {"1", "true", "yes", "on"},
+        "releasedAt": os.getenv(
+            "GREENVPN_WINDOWS_PAID_BETA_UPDATE_RELEASED_AT",
+            "",
+        ).strip(),
+        "changelog": [
+            item.strip(" -")
+            for item in re.split(
+                r"\r?\n|\s*;\s*",
+                os.getenv(
+                    "GREENVPN_WINDOWS_PAID_BETA_UPDATE_CHANGELOG",
+                    "Закрытая paid beta Green VPN.",
+                ),
+            )
+            if item.strip(" -")
+        ],
+    },
+}
 PUBLIC_IOS_DOWNLOAD_URL = os.getenv("GREENVPN_PUBLIC_IOS_DOWNLOAD_URL", "").strip()
 LEGAL_OWNER_NAME = os.getenv("GREENVPN_LEGAL_OWNER_NAME", "Владелец Green VPN").strip()
 LEGAL_OWNER_INN = os.getenv("GREENVPN_LEGAL_OWNER_INN", "").strip()
@@ -470,7 +528,7 @@ ADMIN_CORS_ORIGINS = [
     if item.strip()
 ]
 APP_RELEASE_PLATFORMS = ["windows", "android"]
-APP_RELEASE_CHANNELS = ["stable", "beta", "internal", "preview"]
+APP_RELEASE_CHANNELS = ["stable", "beta", "internal", "preview", "paid-beta"]
 APP_RELEASE_STATUSES = ["draft", "published", "paused", "retired"]
 SERVER_CATALOG_STATUSES = ["draft", "healthy", "degraded", "maintenance", "disabled"]
 SERVER_CATALOG_PROTOCOLS = [
@@ -14379,12 +14437,21 @@ def build_update_manifest(
         }
         return apply_update_artifact_guard(manifest, configured_required)
 
+    paid_beta_config = PAID_BETA_UPDATE_CONFIG.get(platform, {})
+    paid_beta_channel = channel == PAID_BETA_RELEASE_CHANNEL
     android_preview = (
         platform == "android"
         and ANDROID_PREVIEW_UPDATE_DOWNLOAD_URL
         and ("adgate" in current_marker or "preview" in current_marker)
     )
-    if android_preview:
+    if paid_beta_channel:
+        latest = str(paid_beta_config.get("latestVersion") or current or APP_VERSION)
+        download_url = str(paid_beta_config.get("downloadUrl") or "")
+        sha256 = str(paid_beta_config.get("sha256") or "")
+        required = bool(paid_beta_config.get("required"))
+        released_at = str(paid_beta_config.get("releasedAt") or "")
+        changelog = list(paid_beta_config.get("changelog") or [])
+    elif android_preview:
         latest = ANDROID_PREVIEW_UPDATE_LATEST_VERSION or (current or APP_VERSION)
         download_url = ANDROID_PREVIEW_UPDATE_DOWNLOAD_URL
         sha256 = ANDROID_PREVIEW_UPDATE_SHA256

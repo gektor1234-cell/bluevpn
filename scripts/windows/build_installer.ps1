@@ -6,6 +6,8 @@ param(
     [string]$AppVersion = "0.2.39-windows-clean-server-ui",
     [string]$ApiBaseUrl = "https://api.greenvpn.pro",
     [string]$ApiFallbackBaseUrls = "https://176-113-81-35.sslip.io",
+    [bool]$TrialOnlyNoAdsBuild = $true,
+    [bool]$PaidBetaBuild = $false,
     [switch]$SkipBuild,
     [switch]$OpenFolder
 )
@@ -206,6 +208,18 @@ if (-not (Test-Path -LiteralPath $ProjectRoot)) {
     throw "ProjectRoot does not exist: $ProjectRoot"
 }
 
+if ($PaidBetaBuild) {
+    if ($TrialOnlyNoAdsBuild) {
+        throw "Paid beta build cannot also be a Trial-only build."
+    }
+    if (-not $ApiBaseUrl.Contains('/paid-beta-api')) {
+        throw "Paid beta primary API must use the isolated /paid-beta-api contour."
+    }
+    if (-not $ApiFallbackBaseUrls.Contains('/paid-beta-api')) {
+        throw "Paid beta fallback API must use the isolated /paid-beta-api contour."
+    }
+}
+
 New-Item -ItemType Directory -Force -Path $OutBase | Out-Null
 
 $workRoot = Join-Path $OutBase '_installer_work'
@@ -221,11 +235,15 @@ New-Item -ItemType Directory -Force -Path $payloadDir | Out-Null
 if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
     if (-not $SkipBuild) {
         Write-Section 'BUILD WINDOWS RELEASE'
+        $trialOnlyDefine = $TrialOnlyNoAdsBuild.ToString().ToLowerInvariant()
+        $paidBetaDefine = $PaidBetaBuild.ToString().ToLowerInvariant()
         Push-Location $ProjectRoot
         try {
             flutter build windows --release -t .\lib\main.dart `
                 --dart-define="GREENVPN_APP_VERSION=$AppVersion" `
-                --dart-define="GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=true" `
+                --dart-define="GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=$trialOnlyDefine" `
+                --dart-define="GREENVPN_PAID_BETA_BUILD=$paidBetaDefine" `
+                --dart-define="GREENVPN_YANDEX_REWARDED_ADS_ENABLED=false" `
                 --dart-define="BLUEVPN_API_BASE_URL=$ApiBaseUrl" `
                 --dart-define="BLUEVPN_API_BASE_URLS=$ApiFallbackBaseUrls"
             if ($LASTEXITCODE -ne 0) {

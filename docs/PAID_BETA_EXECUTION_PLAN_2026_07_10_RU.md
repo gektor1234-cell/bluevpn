@@ -52,10 +52,14 @@
    - Реклама и session timer принудительно выключены для всего beta-scope на клиенте и backend.
    - Cohort/email/phone mutations получили `users.updated_at`; DB-sync переносит только более новую запись.
    - Четырнадцать backend/DB-sync тестов проходят.
-4. **Paid-beta clients** - выполняется.
-   - Отдельные Android и Windows версии/channel.
-   - YooKassa UI включен, ad gate выключен.
-5. **Инвайты и воронка** - ожидает.
+4. **Paid-beta clients** - выполнен локально 2026-07-10, без публикации.
+   - Отдельный channel `paid-beta`, версия `0.3.0-paid-beta.1`, Android build `2026071001`.
+   - Primary/fallback указывают только на изолированный path `/paid-beta-api`.
+   - YooKassa UI включён; rewarded ads и session timer выключены compile-time.
+   - Android APK подписан и проверен; Windows installer собран, но остаётся без Authenticode-подписи.
+   - Stable APK/EXE после сборки сохранили исходные SHA-256.
+   - Локальный release manifest: `docs/PAID_BETA_RELEASE_2026_07_10_RU.md`.
+5. **Инвайты и воронка** - выполняется.
    - Уникальные коды, источник, лимит, cohort и funnel events.
 6. **Закрытая beta-страница** - ожидает.
    - `noindex`, factual wording, legal links, beta download links.
