@@ -25,6 +25,7 @@
 - После двух probe-циклов на каждом узле есть по 21 service observations, 6 server-health observations и 21 route observations. Все три выдаваемых VPN endpoint имеют статус `healthy` с обоих российских probe.
 - Timeweb видит 11/11 service targets зелёными. RUVDS видит оба beta API зелёными, а недоступность части YouTube/Instagram из российской сети фиксирует отдельно и не смешивает с состоянием VPN endpoint.
 - После каждой операции local health подтвердил beta `0.9.106-paid-beta.2` на `:8010` и production `0.9.105` на `:8000`.
+- На обоих control-plane создан root-only technical-ready snapshot `/root/greenvpn-paid-beta-technical-ready-20260710T110614Z`: env, admin token, sync/probe units, Nginx snippets, probe, manifests и согласованная SQLite backup. Обе backup DB проходят quick check и содержат 0 users/0 invites.
 
 ## Control-plane production: read-only результат
 

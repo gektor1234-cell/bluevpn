@@ -19,6 +19,9 @@ Last updated: 2026-07-10.
 - Stable tag: `greenvpn-stable-pre-paid-beta-20260710`.
 - Stable checkpoint: `C:\Users\gekto\GreenVPN_Checkpoints\pre_paid_beta_20260710_103722`.
 - Server stable snapshots: `/root/greenvpn-pre-paid-beta-20260710T103821`.
+- Paid beta technical-ready tag: `greenvpn-paid-beta-technical-ready-20260710`.
+- Paid beta local checkpoint: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_technical_ready_20260710T110614Z`.
+- Paid beta server snapshots: `/root/greenvpn-paid-beta-technical-ready-20260710T110614Z` on both Russian control-plane nodes.
 - Current paid beta plan: `docs/PAID_BETA_EXECUTION_PLAN_2026_07_10_RU.md`.
 
 ## Frozen production stable
@@ -65,6 +68,7 @@ Last updated: 2026-07-10.
 - All beta downloads were fetched through both HTTPS routes and matched expected SHA.
 - Both beta probes see all three public VPN endpoints as healthy; both beta API health targets are green.
 - Beta staging and temporary seed copies were removed; live beta env contains one assignment per key.
+- Root-only technical-ready snapshots pass SQLite quick check and contain zero users/invites before owner testing.
 
 ## Owner gate: next action
 

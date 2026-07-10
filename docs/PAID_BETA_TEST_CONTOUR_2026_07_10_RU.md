@@ -76,6 +76,9 @@ Installer сделал root-only backups:
 - RUVDS env dedupe: `/root/greenvpn-paid-beta-backups/20260710T103751Z-env-dedupe`;
 - Timeweb beta probe: `/root/greenvpn-paid-beta-backups/20260710T104147Z-timeweb-paid-beta-probe`;
 - RUVDS beta probe: `/root/greenvpn-paid-beta-backups/20260710T104206Z-ruvds-paid-beta-probe`.
+- Technical-ready snapshot на обоих control-plane: `/root/greenvpn-paid-beta-technical-ready-20260710T110614Z`.
+- Локальный checkpoint с Git bundle и release artifacts: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_technical_ready_20260710T110614Z`.
+- Git tag: `greenvpn-paid-beta-technical-ready-20260710`.
 
 Первый backend release сохранён только для forensic comparison: в нём известна ошибка удаления peer для managed `current_wg0`, поэтому он не является разрешённой rollback-целью. На NL1 есть отдельная backup конфигурации перед ручной очисткой первого smoke peer: `/root/greenvpn-paid-beta-smoke-cleanup-20260710T100214Z`.
 
