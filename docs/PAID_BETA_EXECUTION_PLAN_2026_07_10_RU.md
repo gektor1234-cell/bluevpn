@@ -42,7 +42,7 @@
    - Beta-клиент не показывает конструктор трафика, скоростей, приложений, устройств и выделенного IP.
    - Цена первого периода по инвайту 149 RUB зафиксирована в policy; персональные инвайты создаются на этапе 5.
    - Policy требует отдельные server flag, release channel и client marker; production default выключен.
-   - Шесть backend-тестов покрывают нормализацию, изоляцию stable, заказ, активацию, смену server flag и продление.
+   - Backend-тесты покрывают нормализацию, изоляцию stable, заказ, активацию, смену server flag и продление.
 3. **Marker/cohort enforcement** - выполнен 2026-07-10 в коде тестового контура.
    - Beta требует точные server flag, release channel, client marker и cohort пользователя.
    - Non-cohort beta-клиент не получает конфиг и не может создать платежный заказ.
@@ -51,7 +51,7 @@
    - Enrolment идемпотентно выдаёт 3-дневный Trial на 2 устройства и не перезаписывает активную платную подписку.
    - Реклама и session timer принудительно выключены для всего beta-scope на клиенте и backend.
    - Cohort/email/phone mutations получили `users.updated_at`; DB-sync переносит только более новую запись.
-   - Четырнадцать backend/DB-sync тестов проходят.
+   - Cohort и DB-sync покрыты отдельными backend-тестами.
 4. **Paid-beta clients** - выполнен локально 2026-07-10, без публикации.
    - Отдельный channel `paid-beta`, версия `0.3.0-paid-beta.1`, Android build `2026071001`.
    - Primary/fallback указывают только на изолированный path `/paid-beta-api`.
@@ -59,9 +59,16 @@
    - Android APK подписан и проверен; Windows installer собран, но остаётся без Authenticode-подписи.
    - Stable APK/EXE после сборки сохранили исходные SHA-256.
    - Локальный release manifest: `docs/PAID_BETA_RELEASE_2026_07_10_RU.md`.
-5. **Инвайты и воронка** - выполняется.
-   - Уникальные коды, источник, лимит, cohort и funnel events.
-6. **Закрытая beta-страница** - ожидает.
+5. **Инвайты и воронка** - выполнен локально 2026-07-10, без развёртывания.
+   - Код показывается администратору один раз; в БД хранится только HMAC-SHA256 и безопасная подсказка.
+   - Claim идемпотентен, учитывает срок/лимит и включает cohort с 3-дневным Trial.
+   - Первый заказ по инвайту стоит 149 RUB; повторный запрос возвращает тот же pending order; продление стоит 299 RUB.
+   - Активация заказа защищена атомарным статусом `activating` от двойного продления при гонке webhook/polling.
+   - Funnel считает app open, claim, bootstrap, order, activation и подтверждённое VPN-подключение по источникам.
+   - Инвайты, погашения и funnel events добавлены в межсерверный SQLite state sync.
+   - Двадцать backend/DB-sync тестов, Flutter smoke и локальный HTTP-contract проходят.
+   - Контракт и ограничения: `docs/PAID_BETA_INVITES_AND_FUNNEL_2026_07_10_RU.md`.
+6. **Закрытая beta-страница** - выполняется.
    - `noindex`, factual wording, legal links, beta download links.
    - Main Trial site до beta smoke не заменять.
 7. **Тесты и smoke** - ожидает.

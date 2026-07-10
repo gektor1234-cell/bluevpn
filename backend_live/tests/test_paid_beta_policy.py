@@ -2,7 +2,9 @@ import os
 import copy
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from threading import Event
 from unittest.mock import patch
 
 
@@ -15,6 +17,7 @@ os.environ["BLUEVPN_DATA_DIR"] = os.path.join(_TEST_ROOT.name, "data")
 os.environ["GREENVPN_PAID_BETA_ENABLED"] = "1"
 os.environ["GREENVPN_PAID_BETA_CLIENT_MARKER"] = "green-vpn-paid-beta-v1"
 os.environ["GREENVPN_PAID_BETA_RELEASE_CHANNEL"] = "paid-beta"
+os.environ["GREENVPN_PAID_BETA_INVITE_PEPPER"] = "paid-beta-test-pepper-2026-at-least-24-chars"
 os.environ["YOOKASSA_SHOP_ID"] = ""
 os.environ["YOOKASSA_SECRET_KEY"] = ""
 
@@ -33,6 +36,9 @@ class PaidBetaPolicyTests(unittest.TestCase):
     def setUp(self) -> None:
         main.PAID_BETA_ENABLED = True
         with main.db() as conn:
+            conn.execute("DELETE FROM beta_funnel_events")
+            conn.execute("DELETE FROM beta_invite_redemptions")
+            conn.execute("DELETE FROM beta_invites")
             conn.execute("DELETE FROM promo_redemptions")
             conn.execute("DELETE FROM billing_orders")
             conn.execute("DELETE FROM subscriptions")
@@ -53,6 +59,30 @@ class PaidBetaPolicyTests(unittest.TestCase):
             self.user_id,
             enabled=True,
             source="test-suite",
+        )
+
+    def create_invite(self, *, max_uses: int = 1):
+        return main.create_paid_beta_invite_batch(
+            main.AdminPaidBetaInviteBatchIn(
+                count=1,
+                labelPrefix="Test invite",
+                source="test-invite",
+                maxUses=max_uses,
+            ),
+            created_by="test-suite",
+        )[0]
+
+    def claim_invite(self, code: str, *, user_id: int | None = None):
+        return main.claim_paid_beta_invite(
+            user_id or self.user_id,
+            main.PaidBetaInviteClaimIn(
+                code=code,
+                deviceUid="test-invite-device",
+                platform="android",
+                appVersion="0.3.0-paid-beta.1",
+                clientMarker="green-vpn-paid-beta-v1",
+                releaseChannel="paid-beta",
+            ),
         )
 
     def bootstrap(self, *, paid_beta: bool, device_uid: str):
@@ -168,6 +198,95 @@ class PaidBetaPolicyTests(unittest.TestCase):
         self.assertNotIn("speedSustainedMbps", quote)
         self.assertNotIn("trafficLimitGb", quote)
 
+    def test_invite_is_hashed_idempotent_and_not_relisted_as_plaintext(self) -> None:
+        invite = self.create_invite()
+        raw_code = invite["code"]
+        self.assertTrue(raw_code.startswith("GREEN-"))
+        self.assertNotIn("codeHash", invite)
+
+        claimed = self.claim_invite(raw_code)
+        repeated = self.claim_invite(raw_code.lower().replace("-", " "))
+        self.assertTrue(claimed["claimed"])
+        self.assertFalse(claimed["idempotent"])
+        self.assertTrue(repeated["idempotent"])
+        self.assertEqual(claimed["accessCohort"], "paid_beta_v1")
+        self.assertTrue(claimed["offer"]["firstPeriodEligible"])
+
+        listed = main.list_paid_beta_invites()
+        self.assertEqual(len(listed), 1)
+        self.assertNotIn("code", listed[0])
+        self.assertNotIn("codeHash", listed[0])
+        self.assertEqual(listed[0]["usedCount"], 1)
+        with main.db() as conn:
+            stored = conn.execute(
+                "SELECT code_hash, code_hint FROM beta_invites WHERE public_id = ?",
+                (invite["inviteId"],),
+            ).fetchone()
+        self.assertNotEqual(stored["code_hash"], raw_code)
+        self.assertNotIn(raw_code, stored["code_hint"])
+
+    def test_single_use_invite_rejects_second_user(self) -> None:
+        invite = self.create_invite(max_uses=1)
+        self.claim_invite(invite["code"])
+        with main.db() as conn:
+            conn.execute(
+                "INSERT INTO users(email, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                (
+                    "second-beta@example.test",
+                    main.hash_password("test-password"),
+                    main.utc_now_iso(),
+                    main.utc_now_iso(),
+                ),
+            )
+            second_user_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+            main.create_trial_subscription(conn, second_user_id)
+            conn.commit()
+
+        with self.assertRaises(main.HTTPException) as raised:
+            self.claim_invite(invite["code"], user_id=second_user_id)
+        self.assertEqual(raised.exception.status_code, 409)
+
+    def test_invite_first_order_is_149_then_renewal_is_299(self) -> None:
+        invite = self.create_invite()
+        self.claim_invite(invite["code"])
+
+        quote_response = main.subscription_quote(
+            self.beta_payload(),
+            authorization=f"Bearer {self.access_token}",
+        )
+        self.assertEqual(quote_response["quote"]["monthlyPriceRub"], 149)
+        self.assertTrue(quote_response["quote"]["inviteApplied"])
+
+        first = main.create_billing_order_for_user(self.user_id, self.beta_payload())
+        duplicate = main.create_billing_order_for_user(self.user_id, self.beta_payload())
+        self.assertEqual(first["amountRub"], 149)
+        self.assertTrue(first["betaInviteApplied"])
+        self.assertEqual(first["orderId"], duplicate["orderId"])
+
+        activated = main.mark_billing_order_paid_and_activate(
+            first["orderId"],
+            provider_payment_id="invite-payment-1",
+        )
+        self.assertEqual(activated["subscription"]["monthlyPriceRub"], 149)
+        repeated_activation = main.mark_billing_order_paid_and_activate(
+            first["orderId"],
+            provider_payment_id="invite-payment-1",
+        )
+        self.assertEqual(
+            activated["subscription"]["expiresAt"],
+            repeated_activation["subscription"]["expiresAt"],
+        )
+        self.assertFalse(main.paid_beta_offer_for_user(self.user_id)["firstPeriodEligible"])
+
+        renewal = main.create_billing_order_for_user(self.user_id, self.beta_payload())
+        self.assertEqual(renewal["amountRub"], 299)
+        self.assertFalse(renewal["betaInviteApplied"])
+
+        funnel = main.paid_beta_funnel_summary()
+        self.assertEqual(funnel["stages"]["claimedUsers"], 1)
+        self.assertEqual(funnel["stages"]["orderCreatedUsers"], 1)
+        self.assertEqual(funnel["stages"]["paymentActivatedUsers"], 1)
+
     def test_stable_marker_keeps_legacy_policy(self) -> None:
         selection = main.normalize_tariff_selection(
             self.beta_payload(clientMarker="stable-client")
@@ -233,6 +352,39 @@ class PaidBetaPolicyTests(unittest.TestCase):
             30 * 24 * 60 * 60,
             delta=2,
         )
+
+    def test_concurrent_activation_applies_subscription_once(self) -> None:
+        self.enroll_beta()
+        order = main.create_billing_order_for_user(self.user_id, self.beta_payload())
+        entered = Event()
+        release = Event()
+        calls = []
+        original_apply = main.apply_tariff_for_user
+
+        def slow_apply(*args, **kwargs):
+            calls.append(order["orderId"])
+            entered.set()
+            self.assertTrue(release.wait(timeout=5))
+            return original_apply(*args, **kwargs)
+
+        with patch.object(main, "apply_tariff_for_user", side_effect=slow_apply):
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                first_future = executor.submit(
+                    main.mark_billing_order_paid_and_activate,
+                    order["orderId"],
+                    "concurrent-payment",
+                )
+                self.assertTrue(entered.wait(timeout=5))
+                second = main.mark_billing_order_paid_and_activate(
+                    order["orderId"],
+                    provider_payment_id="concurrent-payment",
+                )
+                self.assertTrue(second["activationPending"])
+                release.set()
+                first = first_future.result(timeout=10)
+
+        self.assertEqual(calls, [order["orderId"]])
+        self.assertEqual(first["order"]["status"], "activated")
 
     def test_beta_enrollment_grants_one_idempotent_three_day_trial(self) -> None:
         first = self.enroll_beta()

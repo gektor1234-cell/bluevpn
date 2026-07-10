@@ -511,6 +511,10 @@ AUTH_CODE_PEPPER = (
     or SMS_CODE_PEPPER
     or "greenvpn-dev-auth-code-pepper-not-for-production"
 )
+PAID_BETA_INVITE_PEPPER = (
+    os.getenv("GREENVPN_PAID_BETA_INVITE_PEPPER", "").strip()
+    or AUTH_CODE_PEPPER
+)
 ADMIN_2FA_CODE_PEPPER = (
     os.getenv("GREENVPN_ADMIN_2FA_CODE_PEPPER", "").strip()
     or AUTH_CODE_PEPPER
@@ -1310,6 +1314,36 @@ class AdminSubscriptionIn(BaseModel):
 class AdminPaidBetaCohortIn(BaseModel):
     enabled: bool = True
     source: Optional[str] = None
+    reason: str
+
+
+class PaidBetaInviteClaimIn(BaseModel):
+    code: str
+    deviceUid: Optional[str] = None
+    platform: Optional[str] = None
+    appVersion: Optional[str] = None
+    clientMarker: Optional[str] = None
+    releaseChannel: Optional[str] = None
+
+
+class PaidBetaFunnelEventIn(BaseModel):
+    eventType: str
+    deviceUid: Optional[str] = None
+    platform: Optional[str] = None
+    appVersion: Optional[str] = None
+    clientMarker: Optional[str] = None
+    releaseChannel: Optional[str] = None
+
+
+class AdminPaidBetaInviteBatchIn(BaseModel):
+    count: int = 1
+    labelPrefix: Optional[str] = None
+    source: str = "closed-beta"
+    maxUses: int = 1
+    expiresAt: Optional[str] = None
+
+
+class AdminPaidBetaInviteDeactivateIn(BaseModel):
     reason: str
 
 
@@ -2843,6 +2877,12 @@ def init_db() -> None:
             "original_amount_rub",
             "original_amount_rub INTEGER",
         )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "beta_invite_public_id",
+            "beta_invite_public_id TEXT",
+        )
 
         conn.execute(
             """
@@ -2887,6 +2927,96 @@ def init_db() -> None:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_promo_redemptions_code_user ON promo_redemptions(code, user_id)"
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS beta_invites (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                public_id TEXT NOT NULL UNIQUE,
+                code_hash TEXT NOT NULL UNIQUE,
+                code_hint TEXT NOT NULL,
+                label TEXT NOT NULL,
+                source TEXT NOT NULL,
+                cohort TEXT NOT NULL,
+                max_uses INTEGER NOT NULL DEFAULT 1,
+                used_count INTEGER NOT NULL DEFAULT 0,
+                expires_at TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_by TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_beta_invites_status
+            ON beta_invites(is_active, expires_at, updated_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS beta_invite_redemptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                public_id TEXT NOT NULL UNIQUE,
+                invite_public_id TEXT NOT NULL,
+                user_id INTEGER NOT NULL UNIQUE,
+                source TEXT NOT NULL,
+                cohort TEXT NOT NULL,
+                status TEXT NOT NULL,
+                first_order_public_id TEXT,
+                first_order_discount_rub INTEGER NOT NULL DEFAULT 0,
+                redeemed_at TEXT NOT NULL,
+                converted_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_beta_invite_redemptions_invite_user
+            ON beta_invite_redemptions(invite_public_id, user_id)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_beta_invite_redemptions_status
+            ON beta_invite_redemptions(status, updated_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS beta_funnel_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT NOT NULL UNIQUE,
+                event_type TEXT NOT NULL,
+                user_id INTEGER,
+                invite_public_id TEXT,
+                device_uid TEXT,
+                source TEXT,
+                platform TEXT,
+                app_version TEXT,
+                release_channel TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_beta_funnel_events_type_created
+            ON beta_funnel_events(event_type, created_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_beta_funnel_events_user_created
+            ON beta_funnel_events(user_id, created_at)
+            """
         )
 
         conn.execute("UPDATE devices SET is_enabled = 1 WHERE is_enabled IS NULL")
@@ -4208,6 +4338,545 @@ def build_paid_beta_tariff_catalog() -> dict:
     }
 
 
+PAID_BETA_FUNNEL_EVENT_TYPES = {
+    "invite_created",
+    "invite_claimed",
+    "app_open",
+    "bootstrap_allowed",
+    "bootstrap_denied",
+    "order_created",
+    "payment_canceled",
+    "payment_activated",
+    "vpn_connected",
+}
+
+
+def paid_beta_invite_pepper_ready() -> bool:
+    return bool(
+        len(PAID_BETA_INVITE_PEPPER) >= 24
+        and PAID_BETA_INVITE_PEPPER
+        != "greenvpn-dev-auth-code-pepper-not-for-production"
+    )
+
+
+def require_paid_beta_invite_pepper() -> None:
+    if not paid_beta_invite_pepper_ready():
+        raise HTTPException(
+            status_code=503,
+            detail="Beta-инвайты временно недоступны: серверный секрет не настроен.",
+        )
+
+
+def canonical_paid_beta_invite_code(value: Optional[str]) -> str:
+    return re.sub(r"[^A-Z0-9]+", "", str(value or "").upper())[:64]
+
+
+def paid_beta_invite_code_hash(value: str) -> str:
+    canonical = canonical_paid_beta_invite_code(value)
+    material = canonical.encode("utf-8")
+    return hmac.new(
+        PAID_BETA_INVITE_PEPPER.encode("utf-8"),
+        material,
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def generate_paid_beta_invite_code() -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    body = "".join(secrets.choice(alphabet) for _ in range(12))
+    return f"GREEN-{body[:4]}-{body[4:8]}-{body[8:]}"
+
+
+def paid_beta_invite_status(row) -> dict:
+    expires_at = parse_dt(row["expires_at"])
+    now = utc_now()
+    current = bool(row["is_active"])
+    reason = "active"
+    if not bool(row["is_active"]):
+        current = False
+        reason = "inactive"
+    elif expires_at is not None and expires_at <= now:
+        current = False
+        reason = "expired"
+    elif int(row["used_count"] or 0) >= int(row["max_uses"] or 1):
+        current = False
+        reason = "limit_reached"
+    return {
+        "inviteId": row["public_id"],
+        "codeHint": row["code_hint"],
+        "label": row["label"],
+        "source": row["source"],
+        "cohort": row["cohort"],
+        "maxUses": int(row["max_uses"] or 1),
+        "usedCount": int(row["used_count"] or 0),
+        "remainingUses": max(
+            0,
+            int(row["max_uses"] or 1) - int(row["used_count"] or 0),
+        ),
+        "expiresAt": row["expires_at"],
+        "isActive": bool(row["is_active"]),
+        "isCurrent": current,
+        "statusReason": reason,
+        "createdBy": row["created_by"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def list_paid_beta_invites(limit: int = 200) -> list[dict]:
+    safe_limit = max(1, min(500, int(limit or 200)))
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM beta_invites
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+    return [paid_beta_invite_status(row) for row in rows]
+
+
+def record_paid_beta_funnel_event(
+    event_type: str,
+    *,
+    user_id: Optional[int] = None,
+    invite_public_id: Optional[str] = None,
+    device_uid: Optional[str] = None,
+    source: Optional[str] = None,
+    platform: Optional[str] = None,
+    app_version: Optional[str] = None,
+    release_channel: Optional[str] = None,
+    metadata: Optional[dict] = None,
+    event_id: Optional[str] = None,
+) -> Optional[dict]:
+    clean_type = re.sub(r"[^a-z0-9_]+", "_", str(event_type or "").lower()).strip("_")
+    if clean_type not in PAID_BETA_FUNNEL_EVENT_TYPES:
+        return None
+    clean_event_id = clean_limited_text(event_id, 160).strip()
+    if not clean_event_id:
+        clean_event_id = "evt_" + secrets.token_urlsafe(18).replace("-", "").replace("_", "")[:24]
+    safe_metadata = {}
+    for key, value in (metadata or {}).items():
+        clean_key = re.sub(r"[^A-Za-z0-9_]+", "", str(key or ""))[:40]
+        if not clean_key:
+            continue
+        if isinstance(value, bool) or value is None:
+            safe_metadata[clean_key] = value
+        elif isinstance(value, (int, float)):
+            safe_metadata[clean_key] = value
+        else:
+            safe_metadata[clean_key] = clean_limited_text(value, 160)
+    now = utc_now_iso()
+    try:
+        with db() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO beta_funnel_events(
+                    event_id, event_type, user_id, invite_public_id, device_uid,
+                    source, platform, app_version, release_channel, metadata_json,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    clean_event_id,
+                    clean_type,
+                    int(user_id) if user_id is not None else None,
+                    clean_limited_text(invite_public_id, 80).strip() or None,
+                    clean_limited_text(device_uid, 160).strip() or None,
+                    clean_limited_text(source, 80).strip() or None,
+                    clean_limited_text(platform, 40).strip().lower() or None,
+                    clean_limited_text(app_version, 80).strip() or None,
+                    clean_limited_text(release_channel, 40).strip().lower() or None,
+                    json.dumps(safe_metadata, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM beta_funnel_events WHERE event_id = ?",
+                (clean_event_id,),
+            ).fetchone()
+    except sqlite3.Error:
+        return None
+    if row is None:
+        return None
+    return {
+        "eventId": row["event_id"],
+        "eventType": row["event_type"],
+        "createdAt": row["created_at"],
+    }
+
+
+def create_paid_beta_invite_batch(
+    payload: AdminPaidBetaInviteBatchIn,
+    *,
+    created_by: str,
+) -> list[dict]:
+    require_paid_beta_invite_pepper()
+    count = max(1, min(50, int(payload.count or 1)))
+    max_uses = max(1, min(100, int(payload.maxUses or 1)))
+    source = clean_limited_text(payload.source, 80).strip() or "closed-beta"
+    label_prefix = clean_limited_text(payload.labelPrefix, 100).strip() or "Closed beta"
+    expires_at = parse_dt(payload.expiresAt)
+    if payload.expiresAt and expires_at is None:
+        raise HTTPException(status_code=400, detail="Некорректная дата окончания инвайта.")
+    if expires_at is None:
+        expires_at = utc_now() + timedelta(days=30)
+    if expires_at <= utc_now():
+        raise HTTPException(status_code=400, detail="Дата окончания инвайта уже прошла.")
+
+    created: list[dict] = []
+    now = utc_now_iso()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        for index in range(count):
+            inserted = False
+            for _attempt in range(10):
+                raw_code = generate_paid_beta_invite_code()
+                public_id = "inv_" + secrets.token_urlsafe(16).replace("-", "").replace("_", "")[:22]
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO beta_invites(
+                            public_id, code_hash, code_hint, label, source, cohort,
+                            max_uses, used_count, expires_at, is_active, created_by,
+                            created_at, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, 1, ?, ?, ?)
+                        """,
+                        (
+                            public_id,
+                            paid_beta_invite_code_hash(raw_code),
+                            f"GREEN-****-****-{raw_code[-4:]}",
+                            f"{label_prefix} {index + 1}" if count > 1 else label_prefix,
+                            source,
+                            PAID_BETA_COHORT_CODE,
+                            max_uses,
+                            expires_at.isoformat(),
+                            clean_limited_text(created_by, 120).strip() or "admin",
+                            now,
+                            now,
+                        ),
+                    )
+                except sqlite3.IntegrityError:
+                    continue
+                row = conn.execute(
+                    "SELECT * FROM beta_invites WHERE public_id = ?",
+                    (public_id,),
+                ).fetchone()
+                created.append({**paid_beta_invite_status(row), "code": raw_code})
+                inserted = True
+                break
+            if not inserted:
+                raise HTTPException(status_code=500, detail="Не удалось создать уникальный beta-инвайт.")
+        conn.commit()
+
+    for invite in created:
+        record_paid_beta_funnel_event(
+            "invite_created",
+            invite_public_id=invite["inviteId"],
+            source=source,
+            event_id=f"invite_created:{invite['inviteId']}",
+        )
+    return created
+
+
+def get_paid_beta_redemption_offer_row(conn: sqlite3.Connection, user_id: int):
+    return conn.execute(
+        """
+        SELECT
+            r.*,
+            i.source AS invite_source,
+            i.label AS invite_label,
+            o.status AS order_status
+        FROM beta_invite_redemptions r
+        JOIN beta_invites i ON i.public_id = r.invite_public_id
+        LEFT JOIN billing_orders o ON o.public_id = r.first_order_public_id
+        WHERE r.user_id = ?
+        LIMIT 1
+        """,
+        (int(user_id),),
+    ).fetchone()
+
+
+def paid_beta_offer_for_user(user_id: int) -> dict:
+    with db() as conn:
+        row = get_paid_beta_redemption_offer_row(conn, int(user_id))
+    if row is None:
+        return {
+            "inviteClaimed": False,
+            "firstPeriodEligible": False,
+            "firstPeriodPriceRub": PAID_BETA_INVITE_PRICE_RUB,
+            "regularPriceRub": PAID_BETA_PRICE_RUB,
+            "status": "invite_required",
+        }
+    order_status = str(row["order_status"] or "").strip().lower()
+    converted = bool(row["converted_at"]) or str(row["status"] or "") == "converted"
+    if order_status == "activated":
+        converted = True
+    eligible = not converted and order_status not in {"paid", "activated"}
+    return {
+        "inviteClaimed": True,
+        "firstPeriodEligible": eligible,
+        "firstPeriodPriceRub": PAID_BETA_INVITE_PRICE_RUB,
+        "regularPriceRub": PAID_BETA_PRICE_RUB,
+        "status": "eligible" if eligible else "used",
+    }
+
+
+def apply_paid_beta_invite_offer_to_quote(quote: dict) -> dict:
+    result = dict(quote)
+    result["lineItems"] = [dict(item) for item in quote.get("lineItems", [])]
+    discount = max(0, PAID_BETA_PRICE_RUB - PAID_BETA_INVITE_PRICE_RUB)
+    result["originalMonthlyPriceRub"] = PAID_BETA_PRICE_RUB
+    result["discountRub"] = discount
+    result["monthlyPriceRub"] = PAID_BETA_INVITE_PRICE_RUB
+    result["inviteApplied"] = True
+    result["lineItems"].append(
+        {
+            "code": "paid_beta_invite",
+            "title": "Персональный beta-инвайт",
+            "priceRub": -discount,
+        }
+    )
+    return result
+
+
+def claim_paid_beta_invite(user_id: int, payload: PaidBetaInviteClaimIn) -> dict:
+    if not paid_beta_request_allowed(payload.clientMarker, payload.releaseChannel):
+        raise HTTPException(status_code=403, detail="Инвайт доступен только в beta-версии Green VPN.")
+    require_paid_beta_invite_pepper()
+    canonical = canonical_paid_beta_invite_code(payload.code)
+    if len(canonical) != 17 or not canonical.startswith("GREEN"):
+        raise HTTPException(status_code=400, detail="Некорректный beta-инвайт.")
+    code_hash = paid_beta_invite_code_hash(canonical)
+    now = utc_now()
+    now_iso = now.isoformat()
+    created_redemption = False
+
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        user = conn.execute("SELECT id FROM users WHERE id = ?", (int(user_id),)).fetchone()
+        if user is None:
+            raise HTTPException(status_code=404, detail="Пользователь не найден.")
+        existing = conn.execute(
+            """
+            SELECT r.*, i.code_hash, i.source AS invite_source
+            FROM beta_invite_redemptions r
+            JOIN beta_invites i ON i.public_id = r.invite_public_id
+            WHERE r.user_id = ?
+            """,
+            (int(user_id),),
+        ).fetchone()
+        if existing is not None:
+            if not hmac.compare_digest(str(existing["code_hash"]), code_hash):
+                raise HTTPException(status_code=409, detail="Для аккаунта уже активирован другой beta-инвайт.")
+            invite_public_id = existing["invite_public_id"]
+            source = existing["invite_source"]
+        else:
+            invite = conn.execute(
+                "SELECT * FROM beta_invites WHERE code_hash = ?",
+                (code_hash,),
+            ).fetchone()
+            if invite is None:
+                raise HTTPException(status_code=404, detail="Beta-инвайт не найден.")
+            expires_at = parse_dt(invite["expires_at"])
+            if not bool(invite["is_active"]):
+                raise HTTPException(status_code=410, detail="Beta-инвайт отключён.")
+            if expires_at is not None and expires_at <= now:
+                raise HTTPException(status_code=410, detail="Срок beta-инвайта истёк.")
+            if int(invite["used_count"] or 0) >= int(invite["max_uses"] or 1):
+                raise HTTPException(status_code=409, detail="Лимит beta-инвайта исчерпан.")
+
+            invite_public_id = invite["public_id"]
+            source = invite["source"]
+            redemption_public_id = "red_" + secrets.token_urlsafe(16).replace("-", "").replace("_", "")[:22]
+            conn.execute(
+                """
+                INSERT INTO beta_invite_redemptions(
+                    public_id, invite_public_id, user_id, source, cohort, status,
+                    first_order_public_id, first_order_discount_rub, redeemed_at,
+                    converted_at, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, 'redeemed', NULL, 0, ?, NULL, ?, ?)
+                """,
+                (
+                    redemption_public_id,
+                    invite_public_id,
+                    int(user_id),
+                    source,
+                    PAID_BETA_COHORT_CODE,
+                    now_iso,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE beta_invites
+                SET used_count = used_count + 1, updated_at = ?
+                WHERE public_id = ?
+                """,
+                (now_iso, invite_public_id),
+            )
+            created_redemption = True
+        conn.commit()
+
+    cohort = set_user_paid_beta_cohort(
+        int(user_id),
+        enabled=True,
+        source=clean_limited_text(source, 80).strip() or "beta-invite",
+    )
+    record_paid_beta_funnel_event(
+        "invite_claimed",
+        user_id=int(user_id),
+        invite_public_id=invite_public_id,
+        device_uid=payload.deviceUid,
+        source=source,
+        platform=payload.platform,
+        app_version=payload.appVersion,
+        release_channel=payload.releaseChannel,
+        metadata={"newRedemption": created_redemption},
+        event_id=f"invite_claimed:{invite_public_id}:{int(user_id)}",
+    )
+    return {
+        "ok": True,
+        "claimed": True,
+        "idempotent": not created_redemption,
+        "accessCohort": cohort["accessCohort"],
+        "subscription": cohort["subscription"],
+        "offer": paid_beta_offer_for_user(int(user_id)),
+    }
+
+
+def deactivate_paid_beta_invite(invite_public_id: str) -> dict:
+    clean_id = clean_limited_text(invite_public_id, 80).strip()
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM beta_invites WHERE public_id = ?",
+            (clean_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Beta-инвайт не найден.")
+        conn.execute(
+            "UPDATE beta_invites SET is_active = 0, updated_at = ? WHERE public_id = ?",
+            (utc_now_iso(), clean_id),
+        )
+        conn.commit()
+        updated = conn.execute(
+            "SELECT * FROM beta_invites WHERE public_id = ?",
+            (clean_id,),
+        ).fetchone()
+    return paid_beta_invite_status(updated)
+
+
+def paid_beta_funnel_summary(limit: int = 100) -> dict:
+    safe_limit = max(1, min(500, int(limit or 100)))
+    with db() as conn:
+        def scalar(sql: str, args: tuple = ()) -> int:
+            row = conn.execute(sql, args).fetchone()
+            return int(row[0] or 0) if row else 0
+
+        stage_users = {}
+        for event_type in [
+            "app_open",
+            "bootstrap_allowed",
+            "order_created",
+            "payment_activated",
+            "vpn_connected",
+        ]:
+            stage_users[event_type] = scalar(
+                "SELECT COUNT(DISTINCT user_id) FROM beta_funnel_events WHERE event_type = ? AND user_id IS NOT NULL",
+                (event_type,),
+            )
+        cohort_users = scalar(
+            "SELECT COUNT(*) FROM users WHERE access_cohort = ?",
+            (PAID_BETA_COHORT_CODE,),
+        )
+        claimed_users = scalar("SELECT COUNT(DISTINCT user_id) FROM beta_invite_redemptions")
+        source_rows = conn.execute(
+            """
+            SELECT source, COUNT(*) AS claimed,
+                   SUM(CASE WHEN status = 'converted' THEN 1 ELSE 0 END) AS converted
+            FROM beta_invite_redemptions
+            GROUP BY source
+            ORDER BY claimed DESC, source ASC
+            """
+        ).fetchall()
+        recent = conn.execute(
+            """
+            SELECT e.event_id, e.event_type, e.user_id, e.invite_public_id,
+                   e.source, e.platform, e.app_version, e.created_at, u.email
+            FROM beta_funnel_events e
+            LEFT JOIN users u ON u.id = e.user_id
+            ORDER BY e.id DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        ).fetchall()
+
+        invites_created = scalar("SELECT COUNT(*) FROM beta_invites")
+        invite_capacity = scalar("SELECT COALESCE(SUM(max_uses), 0) FROM beta_invites")
+
+    activated = stage_users["payment_activated"]
+    ordered = stage_users["order_created"]
+    connected = stage_users["vpn_connected"]
+    return {
+        "ok": True,
+        "cohort": PAID_BETA_COHORT_CODE,
+        "invites": {
+            "created": invites_created,
+            "capacity": invite_capacity,
+            "claimedUsers": claimed_users,
+        },
+        "stages": {
+            "appOpenUsers": stage_users["app_open"],
+            "cohortUsers": cohort_users,
+            "claimedUsers": claimed_users,
+            "bootstrapAllowedUsers": stage_users["bootstrap_allowed"],
+            "orderCreatedUsers": ordered,
+            "paymentActivatedUsers": activated,
+            "vpnConnectedUsers": connected,
+        },
+        "conversion": {
+            "claimToPaymentPercent": round((activated / claimed_users) * 100, 1) if claimed_users else 0.0,
+            "orderToPaymentPercent": round((activated / ordered) * 100, 1) if ordered else 0.0,
+            "paymentToConnectionPercent": round((connected / activated) * 100, 1) if activated else 0.0,
+        },
+        "security": {
+            "invitePepperReady": paid_beta_invite_pepper_ready(),
+            "rawCodesStored": False,
+            "rawCodesRetrievableAfterCreation": False,
+        },
+        "sources": [
+            {
+                "source": row["source"],
+                "claimed": int(row["claimed"] or 0),
+                "converted": int(row["converted"] or 0),
+            }
+            for row in source_rows
+        ],
+        "recentEvents": [
+            {
+                "eventId": row["event_id"],
+                "eventType": row["event_type"],
+                "userId": row["user_id"],
+                "email": row["email"],
+                "inviteId": row["invite_public_id"],
+                "source": row["source"],
+                "platform": row["platform"],
+                "appVersion": row["app_version"],
+                "createdAt": row["created_at"],
+            }
+            for row in recent
+        ],
+    }
+
+
 def build_tariff_catalog(paid_beta: bool = False) -> dict:
     if paid_beta:
         return build_paid_beta_tariff_catalog()
@@ -4923,7 +5592,7 @@ def normalize_tariff_selection(payload: TariffSelectionIn) -> dict:
             "unlimitedApps": [],
             "dedicatedIp": False,
             "autoRenew": False,
-            "promoCode": normalize_promo_code(payload.promoCode),
+            "promoCode": "",
             "clientMarker": PAID_BETA_CLIENT_MARKER,
             "releaseChannel": PAID_BETA_RELEASE_CHANNEL,
             "includedFeatures": ["vpn_access", "social_routing", "no_ads"],
@@ -5024,7 +5693,7 @@ def quote_tariff(selection: dict, strict_promo: bool = False) -> dict:
                 "autoRenew": False,
             },
         }
-        return apply_promo_to_quote(quote, selection, strict=strict_promo)
+        return quote
 
     traffic_pack = selection["trafficPack"]
     traffic_gb = int(selection["trafficGb"])
@@ -15474,6 +16143,16 @@ def billing_order_status(row) -> dict:
                 else selection.get("promoCode")
             )
         ),
+        "betaInviteApplied": bool(
+            row["beta_invite_public_id"]
+            if "beta_invite_public_id" in row.keys()
+            else False
+        ),
+        "betaInvitePublicId": (
+            row["beta_invite_public_id"]
+            if "beta_invite_public_id" in row.keys()
+            else None
+        ),
         "currency": row["currency"],
         "selection": selection,
         "quote": quote,
@@ -15492,6 +16171,7 @@ def public_billing_order_status(order: dict) -> dict:
     public_order = dict(order)
     public_order.pop("providerPaymentId", None)
     public_order.pop("providerPaymentMethodId", None)
+    public_order.pop("betaInvitePublicId", None)
     return public_order
 
 
@@ -16212,50 +16892,134 @@ def create_billing_order_for_user(user_id: int, payload: TariffSelectionIn) -> d
     )
     now = utc_now_iso()
     public_id = "ord_" + secrets.token_urlsafe(18).replace("-", "").replace("_", "")[:24]
-    selection_json = json.dumps(normalized, ensure_ascii=False)
-    quote_json = json.dumps(quote, ensure_ascii=False)
+    beta_invite_public_id: Optional[str] = None
+    reused_existing_order = False
 
     with db() as conn:
+        if beta_request:
+            conn.execute("BEGIN IMMEDIATE")
         user = conn.execute("SELECT email FROM users WHERE id = ?", (user_id,)).fetchone()
         user_email = user["email"] if user else ""
-        conn.execute(
-            """
-            INSERT INTO billing_orders(
-                public_id, user_id, status, auto_renew, amount_rub, currency,
-                selection_json, quote_json, promo_code, discount_rub,
-                original_amount_rub, payment_url, provider,
-                created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                public_id,
-                user_id,
-                "pending",
-                1 if normalized.get("autoRenew", True) else 0,
-                int(quote["monthlyPriceRub"]),
-                "RUB",
-                selection_json,
-                quote_json,
-                normalized.get("promoCode") or None,
-                int(quote.get("discountRub") or 0),
-                int(quote.get("originalMonthlyPriceRub") or quote["monthlyPriceRub"]),
-                None,
-                "yookassa" if yookassa_configured() else "manual_mvp",
-                now,
-                now,
-            ),
+        row = None
+        redemption = (
+            get_paid_beta_redemption_offer_row(conn, int(user_id))
+            if beta_request
+            else None
         )
+        if redemption is not None:
+            order_status = str(redemption["order_status"] or "").strip().lower()
+            first_order_id = str(redemption["first_order_public_id"] or "").strip()
+            converted = bool(redemption["converted_at"]) or str(
+                redemption["status"] or ""
+            ).strip().lower() == "converted"
+
+            if first_order_id and order_status in {"pending", "paid"}:
+                row = conn.execute(
+                    "SELECT * FROM billing_orders WHERE public_id = ? AND user_id = ?",
+                    (first_order_id, int(user_id)),
+                ).fetchone()
+                reused_existing_order = row is not None
+            elif first_order_id and not order_status and not converted:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Состояние beta-заказа синхронизируется. Повторите через несколько секунд.",
+                )
+            elif order_status in {"canceled", "cancelled", "failed"} and not converted:
+                conn.execute(
+                    """
+                    UPDATE beta_invite_redemptions
+                    SET status = 'redeemed', first_order_public_id = NULL,
+                        first_order_discount_rub = 0, updated_at = ?
+                    WHERE user_id = ?
+                    """,
+                    (now, int(user_id)),
+                )
+                first_order_id = ""
+
+            if row is None and not converted and not first_order_id:
+                quote = apply_paid_beta_invite_offer_to_quote(quote)
+                beta_invite_public_id = str(redemption["invite_public_id"])
+
+        if row is None:
+            selection_json = json.dumps(normalized, ensure_ascii=False)
+            quote_json = json.dumps(quote, ensure_ascii=False)
+            conn.execute(
+                """
+                INSERT INTO billing_orders(
+                    public_id, user_id, status, auto_renew, amount_rub, currency,
+                    selection_json, quote_json, promo_code, discount_rub,
+                    original_amount_rub, beta_invite_public_id, payment_url, provider,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    public_id,
+                    user_id,
+                    "pending",
+                    1 if normalized.get("autoRenew", True) else 0,
+                    int(quote["monthlyPriceRub"]),
+                    "RUB",
+                    selection_json,
+                    quote_json,
+                    normalized.get("promoCode") or None,
+                    int(quote.get("discountRub") or 0),
+                    int(quote.get("originalMonthlyPriceRub") or quote["monthlyPriceRub"]),
+                    beta_invite_public_id,
+                    None,
+                    "yookassa" if yookassa_configured() else "manual_mvp",
+                    now,
+                    now,
+                ),
+            )
+            if beta_invite_public_id:
+                conn.execute(
+                    """
+                    UPDATE beta_invite_redemptions
+                    SET status = 'order_created', first_order_public_id = ?,
+                        first_order_discount_rub = ?, updated_at = ?
+                    WHERE user_id = ? AND invite_public_id = ?
+                    """,
+                    (
+                        public_id,
+                        max(0, PAID_BETA_PRICE_RUB - PAID_BETA_INVITE_PRICE_RUB),
+                        now,
+                        int(user_id),
+                        beta_invite_public_id,
+                    ),
+                )
+            row = conn.execute(
+                "SELECT * FROM billing_orders WHERE public_id = ?",
+                (public_id,),
+            ).fetchone()
         conn.commit()
-        row = conn.execute(
-            "SELECT * FROM billing_orders WHERE public_id = ?",
-            (public_id,),
-        ).fetchone()
+
+    order = billing_order_status(row)
+    if beta_request and not reused_existing_order:
+        record_paid_beta_funnel_event(
+            "order_created",
+            user_id=int(user_id),
+            invite_public_id=beta_invite_public_id,
+            source=(
+                redemption["invite_source"]
+                if redemption is not None
+                else user_access["acquisition_source"]
+            ),
+            release_channel=payload.releaseChannel,
+            metadata={
+                "orderId": order["orderId"],
+                "amountRub": order["amountRub"],
+                "inviteApplied": bool(beta_invite_public_id),
+            },
+            event_id=f"order_created:{order['orderId']}",
+        )
 
     if yookassa_configured():
-        return create_yookassa_payment_for_order(row, user_email=user_email)
+        if not order.get("paymentUrl") and order.get("status") == "pending":
+            return create_yookassa_payment_for_order(row, user_email=user_email)
+        return order
 
-    return billing_order_status(row)
+    return order
 
 
 def get_billing_order_row(public_id: str, user_id: Optional[int] = None):
@@ -16313,13 +17077,37 @@ def mark_billing_order_canceled(public_id: str, provider_payment_id: Optional[st
             """,
             ("canceled", provider_payment_id or None, utc_now_iso(), public_id),
         )
-        conn.commit()
         row = conn.execute(
             "SELECT * FROM billing_orders WHERE public_id = ?",
             (public_id,),
         ).fetchone()
+        invite_public_id = (
+            row["beta_invite_public_id"]
+            if row is not None and "beta_invite_public_id" in row.keys()
+            else None
+        )
+        if invite_public_id:
+            conn.execute(
+                """
+                UPDATE beta_invite_redemptions
+                SET status = 'redeemed', first_order_public_id = NULL,
+                    first_order_discount_rub = 0, updated_at = ?
+                WHERE invite_public_id = ? AND first_order_public_id = ?
+                  AND converted_at IS NULL
+                """,
+                (utc_now_iso(), invite_public_id, public_id),
+            )
+        conn.commit()
     if row is None:
         raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
+    if invite_public_id:
+        record_paid_beta_funnel_event(
+            "payment_canceled",
+            user_id=int(row["user_id"]),
+            invite_public_id=invite_public_id,
+            metadata={"orderId": public_id},
+            event_id=f"payment_canceled:{public_id}",
+        )
     return {"order": billing_order_status(row)}
 
 
@@ -17561,19 +18349,15 @@ def mark_billing_order_paid_and_activate(
     provider_payment_method_id: Optional[str] = None,
 ) -> dict:
     with db() as conn:
-        row = conn.execute(
+        initial_row = conn.execute(
             "SELECT * FROM billing_orders WHERE public_id = ?",
             (public_id,),
         ).fetchone()
 
-    if row is None:
+    if initial_row is None:
         raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
 
-    if row["status"] == "activated":
-        return {
-            "order": billing_order_status(row),
-            "subscription": subscription_status(get_subscription_row(row["user_id"])),
-        }
+    row = initial_row
     if str(row["status"] or "").strip().lower() in {"failed", "canceled", "cancelled"}:
         raise HTTPException(
             status_code=409,
@@ -17581,11 +18365,11 @@ def mark_billing_order_paid_and_activate(
         )
 
     try:
-        selection = json.loads(row["selection_json"])
+        selection = json.loads(initial_row["selection_json"])
     except Exception:
         raise HTTPException(status_code=500, detail="Выбор тарифа в платёжном заказе повреждён.")
     try:
-        order_quote = json.loads(row["quote_json"])
+        order_quote = json.loads(initial_row["quote_json"])
     except Exception:
         order_quote = {}
 
@@ -17603,19 +18387,80 @@ def mark_billing_order_paid_and_activate(
     effective_payment_method_id = (
         provider_payment_method_id
         or (
-            row["provider_payment_method_id"]
-            if "provider_payment_method_id" in row.keys()
+            initial_row["provider_payment_method_id"]
+            if "provider_payment_method_id" in initial_row.keys()
             else None
         )
     )
-    result = apply_tariff_for_user(
-        int(row["user_id"]),
-        payload,
-        provider_payment_method_id=effective_payment_method_id,
-        quote_override=order_quote if isinstance(order_quote, dict) and order_quote else None,
-        selection_override=selection,
-    )
     now = utc_now_iso()
+
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT * FROM billing_orders WHERE public_id = ?",
+            (public_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
+        status = str(row["status"] or "").strip().lower()
+        if status == "activated":
+            conn.commit()
+            return {
+                "order": billing_order_status(row),
+                "subscription": subscription_status(get_subscription_row(row["user_id"])),
+            }
+        if status == "activating":
+            conn.commit()
+            return {
+                "order": billing_order_status(row),
+                "subscription": subscription_status(get_subscription_row(row["user_id"])),
+                "activationPending": True,
+            }
+        if status in {"failed", "canceled", "cancelled"}:
+            raise HTTPException(
+                status_code=409,
+                detail="Ошибочный или отменённый платёжный заказ нельзя активировать вручную.",
+            )
+        conn.execute(
+            """
+            UPDATE billing_orders
+            SET status = 'activating',
+                provider_payment_id = COALESCE(?, provider_payment_id),
+                provider_payment_method_id = COALESCE(?, provider_payment_method_id),
+                paid_at = COALESCE(paid_at, ?),
+                updated_at = ?
+            WHERE public_id = ?
+            """,
+            (
+                provider_payment_id,
+                provider_payment_method_id,
+                now,
+                now,
+                public_id,
+            ),
+        )
+        conn.commit()
+
+    try:
+        result = apply_tariff_for_user(
+            int(row["user_id"]),
+            payload,
+            provider_payment_method_id=effective_payment_method_id,
+            quote_override=order_quote if isinstance(order_quote, dict) and order_quote else None,
+            selection_override=selection,
+        )
+    except Exception:
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE billing_orders
+                SET status = 'paid', updated_at = ?
+                WHERE public_id = ? AND status = 'activating'
+                """,
+                (utc_now_iso(), public_id),
+            )
+            conn.commit()
+        raise
 
     with db() as conn:
         conn.execute(
@@ -17636,14 +18481,40 @@ def mark_billing_order_paid_and_activate(
                 public_id,
             ),
         )
-        conn.commit()
         updated = conn.execute(
             "SELECT * FROM billing_orders WHERE public_id = ?",
             (public_id,),
         ).fetchone()
+        invite_public_id = (
+            updated["beta_invite_public_id"]
+            if updated is not None and "beta_invite_public_id" in updated.keys()
+            else None
+        )
+        if invite_public_id:
+            conn.execute(
+                """
+                UPDATE beta_invite_redemptions
+                SET status = 'converted', converted_at = COALESCE(converted_at, ?),
+                    updated_at = ?
+                WHERE invite_public_id = ? AND first_order_public_id = ?
+                """,
+                (now, now, invite_public_id, public_id),
+            )
+        conn.commit()
 
     updated_status = billing_order_status(updated)
     record_promo_redemption(updated, updated_status)
+    if invite_public_id:
+        record_paid_beta_funnel_event(
+            "payment_activated",
+            user_id=int(updated["user_id"]),
+            invite_public_id=invite_public_id,
+            metadata={
+                "orderId": public_id,
+                "amountRub": updated_status["amountRub"],
+            },
+            event_id=f"payment_activated:{public_id}",
+        )
 
     return {
         "order": updated_status,
@@ -24651,6 +25522,7 @@ def subscription_me(authorization: Optional[str] = Header(default=None)):
     user = get_user_by_token(authorization)
     sub = subscription_status(get_subscription_row(user["id"]))
     traffic_usage = subscription_traffic_usage_status(int(user["id"]), sub)
+    beta_offer = paid_beta_offer_for_user(int(user["id"])) if PAID_BETA_ENABLED else None
 
     return {
         "email": user["email"],
@@ -24667,13 +25539,23 @@ def subscription_me(authorization: Optional[str] = Header(default=None)):
         "trafficUsage": traffic_usage,
         "accessCohort": user_access_cohort(user),
         "paidBeta": user_is_paid_beta_cohort(user),
+        "betaOffer": beta_offer,
     }
 
 
 @app.post("/api/v1/subscription/quote")
-def subscription_quote(payload: TariffSelectionIn):
+def subscription_quote(
+    payload: TariffSelectionIn,
+    authorization: Optional[str] = Header(default=None),
+):
     normalized = normalize_tariff_selection(payload)
     quote = quote_tariff(normalized)
+    beta_offer = None
+    if normalized.get("policyMode") == "paid_beta" and authorization:
+        user = get_user_by_token(authorization)
+        beta_offer = paid_beta_offer_for_user(int(user["id"]))
+        if beta_offer.get("firstPeriodEligible"):
+            quote = apply_paid_beta_invite_offer_to_quote(quote)
     return {
         "ok": True,
         "catalog": build_tariff_catalog(
@@ -24681,7 +25563,44 @@ def subscription_quote(payload: TariffSelectionIn):
         ),
         "selection": normalized,
         "quote": quote,
+        "betaOffer": beta_offer,
     }
+
+
+@app.post("/api/v1/paid-beta/invite/claim")
+def paid_beta_invite_claim(
+    payload: PaidBetaInviteClaimIn,
+    authorization: Optional[str] = Header(default=None),
+):
+    user = get_user_by_token(authorization)
+    return claim_paid_beta_invite(int(user["id"]), payload)
+
+
+@app.post("/api/v1/paid-beta/events")
+def paid_beta_event_create(
+    payload: PaidBetaFunnelEventIn,
+    authorization: Optional[str] = Header(default=None),
+):
+    user = get_user_by_token(authorization)
+    if not paid_beta_request_allowed(payload.clientMarker, payload.releaseChannel):
+        raise HTTPException(status_code=403, detail="Событие доступно только beta-клиенту.")
+    event_type = re.sub(
+        r"[^a-z0-9_]+",
+        "_",
+        str(payload.eventType or "").strip().lower(),
+    ).strip("_")
+    if event_type not in {"app_open", "vpn_connected"}:
+        raise HTTPException(status_code=400, detail="Неизвестное beta-событие.")
+    event = record_paid_beta_funnel_event(
+        event_type,
+        user_id=int(user["id"]),
+        device_uid=payload.deviceUid,
+        source=user["acquisition_source"] if "acquisition_source" in user.keys() else None,
+        platform=payload.platform,
+        app_version=payload.appVersion,
+        release_channel=payload.releaseChannel,
+    )
+    return {"ok": True, "event": event}
 
 
 @app.post("/api/v1/billing/orders")
@@ -24864,6 +25783,17 @@ def client_bootstrap(
         platform=device["platform"],
         app_version=device["app_version"],
     )
+    if access_policy["paidBetaClient"]:
+        record_paid_beta_funnel_event(
+            "bootstrap_allowed" if can_connect else "bootstrap_denied",
+            user_id=int(user["id"]),
+            device_uid=device["device_uid"],
+            source=user["acquisition_source"],
+            platform=device["platform"],
+            app_version=device["app_version"],
+            release_channel=payload.releaseChannel,
+            metadata={"reason": reason, "canConnect": can_connect},
+        )
 
     return {
         "ok": True,
@@ -28503,6 +29433,93 @@ def admin_billing_orders(
         "reconciliation": billing_reconciliation_payload(),
         "promos": list_promo_codes(),
     }
+
+
+@app.get("/api/v1/admin/paid-beta/invites")
+def admin_paid_beta_invites(
+    limit: int = 200,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "billing.read")
+    return {
+        "ok": True,
+        "invites": list_paid_beta_invites(limit=limit),
+    }
+
+
+@app.post("/api/v1/admin/paid-beta/invites/batch")
+def admin_create_paid_beta_invites(
+    payload: AdminPaidBetaInviteBatchIn,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    context = require_admin(
+        x_admin_token,
+        authorization,
+        "billing.manage",
+        request=request,
+    )
+    invites = create_paid_beta_invite_batch(
+        payload,
+        created_by=str(context.get("actor") or "admin"),
+    )
+    write_admin_audit(
+        "paid_beta_invites_created",
+        "paid_beta_invite_batch",
+        str(len(invites)),
+        {
+            "count": len(invites),
+            "source": clean_limited_text(payload.source, 80),
+            "maxUses": max(1, min(100, int(payload.maxUses or 1))),
+            "inviteIds": [item["inviteId"] for item in invites],
+        },
+        request=request,
+    )
+    return {
+        "ok": True,
+        "codesShownOnce": True,
+        "invites": invites,
+    }
+
+
+@app.post("/api/v1/admin/paid-beta/invites/{invite_id}/deactivate")
+def admin_deactivate_paid_beta_invite(
+    invite_id: str,
+    payload: AdminPaidBetaInviteDeactivateIn,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(
+        x_admin_token,
+        authorization,
+        "billing.manage",
+        request=request,
+    )
+    reason = clean_limited_text(payload.reason, 500).strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="reason обязателен.")
+    invite = deactivate_paid_beta_invite(invite_id)
+    write_admin_audit(
+        "paid_beta_invite_deactivated",
+        "paid_beta_invite",
+        invite["inviteId"],
+        {"reason": reason, "usedCount": invite["usedCount"]},
+        request=request,
+    )
+    return {"ok": True, "invite": invite}
+
+
+@app.get("/api/v1/admin/paid-beta/funnel")
+def admin_paid_beta_funnel(
+    limit: int = 100,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, ["billing.read", "analytics.read"])
+    return paid_beta_funnel_summary(limit=limit)
 
 
 @app.get("/api/v1/admin/billing/promos")

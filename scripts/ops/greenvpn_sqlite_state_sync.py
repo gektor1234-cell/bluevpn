@@ -38,6 +38,9 @@ NATURAL_KEYS: dict[str, tuple[str, ...]] = {
     "billing_orders": ("public_id",),
     "promo_codes": ("code",),
     "promo_redemptions": ("code", "user_id", "order_public_id"),
+    "beta_invites": ("public_id",),
+    "beta_invite_redemptions": ("user_id",),
+    "beta_funnel_events": ("event_id",),
     "admin_staff": ("email",),
     "admin_sessions": ("token_hash",),
     "admin_2fa_challenges": ("challenge_id",),
@@ -57,6 +60,7 @@ NEVER_UPDATE_TABLES = {
     "sms_outbox",
     "support_report_comments",
     "admin_sessions",
+    "beta_funnel_events",
 }
 CHANGE_COLUMNS = ("updated_at", "last_seen_at", "last_config_at", "consumed_at", "sent_at", "verified_at")
 PRESERVE_ID_TABLES = {

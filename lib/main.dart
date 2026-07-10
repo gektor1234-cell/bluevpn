@@ -3862,6 +3862,7 @@ while True:
   }
 
   Future<ApiResult<Map<String, dynamic>>> quoteTariff({
+    String? accessToken,
     required String trafficPack,
     required int trafficGb,
     required List<String> unlimitedApps,
@@ -3871,6 +3872,7 @@ while True:
     final res = await _jsonRequest(
       method: 'POST',
       path: '/api/v1/subscription/quote',
+      bearerToken: accessToken,
       payload: {
         'trafficPack': trafficPack,
         'trafficGb': trafficGb,
@@ -3915,6 +3917,58 @@ while True:
     if (!res.ok) return ApiResult.err(res.message);
     if (res.data is! Map) {
       return const ApiResult.err('Некорректный ответ billing/orders.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> claimPaidBetaInvite({
+    required String accessToken,
+    required String code,
+    required String deviceId,
+    required String platform,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'POST',
+      path: '/api/v1/paid-beta/invite/claim',
+      bearerToken: accessToken,
+      payload: {
+        'code': code,
+        'deviceUid': deviceId,
+        'platform': platform,
+        'appVersion': kAppVersion,
+        'clientMarker': kPaidBetaClientMarker,
+        'releaseChannel': kPaidBetaReleaseChannel,
+      },
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ paid-beta/invite/claim.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> postPaidBetaEvent({
+    required String accessToken,
+    required String eventType,
+    required String deviceId,
+    required String platform,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'POST',
+      path: '/api/v1/paid-beta/events',
+      bearerToken: accessToken,
+      payload: {
+        'eventType': eventType,
+        'deviceUid': deviceId,
+        'platform': platform,
+        'appVersion': kAppVersion,
+        'clientMarker': kPaidBetaClientMarker,
+        'releaseChannel': kPaidBetaReleaseChannel,
+      },
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ paid-beta/events.');
     }
     return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
   }
@@ -6194,6 +6248,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _phoneVerified = widget.session.phoneVerified;
 
     _loadPrefsAndApply();
+    if (kPaidBetaBuild) {
+      unawaited(_recordPaidBetaEvent('app_open'));
+    }
 
     _syncVpnStatus();
     unawaited(_restoreFreeAdSessionTimer());
@@ -7049,6 +7106,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     try {
       final catalogRes = await _api.fetchTariffCatalog();
       final quoteRes = await _api.quoteTariff(
+        accessToken: widget.session.accessToken,
         trafficPack: trafficPack.name,
         trafficGb: trafficGb.round(),
         unlimitedApps: _selectedTariffAppCodes(),
@@ -7093,6 +7151,91 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       if (showToast) {
         _toast(context, _tariffStatus!);
       }
+    } finally {
+      if (mounted) setState(() => _tariffBusy = false);
+    }
+  }
+
+  Future<void> _claimPaidBetaInvite() async {
+    if (!kPaidBetaBuild || kIsWeb) return;
+    var inviteCode = '';
+    final submitted = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Beta-инвайт'),
+        content: TextField(
+          autofocus: true,
+          textCapitalization: TextCapitalization.characters,
+          autocorrect: false,
+          enableSuggestions: false,
+          decoration: const InputDecoration(
+            labelText: 'Код',
+            hintText: 'GREEN-XXXX-XXXX-XXXX',
+            prefixIcon: Icon(Icons.key_rounded),
+          ),
+          onChanged: (value) => inviteCode = value,
+          onSubmitted: (value) => Navigator.of(dialogContext).pop(value),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Отмена'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.of(dialogContext).pop(inviteCode),
+            icon: const Icon(Icons.check_rounded),
+            label: const Text('Применить'),
+          ),
+        ],
+      ),
+    );
+    final code = (submitted ?? '').trim();
+    if (code.isEmpty || !mounted) return;
+
+    setState(() => _tariffBusy = true);
+    try {
+      final deviceId = await _ensureDeviceId();
+      if (deviceId == null || deviceId.isEmpty) {
+        if (mounted) _toast(context, 'Не удалось определить устройство.');
+        return;
+      }
+      final res = await _api.claimPaidBetaInvite(
+        accessToken: widget.session.accessToken,
+        code: code,
+        deviceId: deviceId,
+        platform: greenVpnClientPlatform(),
+      );
+      if (greenVpnIsInvalidSessionMessage(res.message)) {
+        await _noteInvalidSession(
+          source: 'paid_beta_invite',
+          message: res.message,
+        );
+        return;
+      }
+      if (!mounted) return;
+      if (!res.ok || res.data == null) {
+        final message = res.message ?? 'Не удалось применить beta-инвайт.';
+        setState(() => _tariffStatus = message);
+        _toast(context, message);
+        return;
+      }
+
+      final rawSubscription = res.data!['subscription'];
+      final subscription = rawSubscription is Map
+          ? Map<String, dynamic>.from(rawSubscription)
+          : <String, dynamic>{};
+      setState(() {
+        final nextPlan = (subscription['planName'] ?? '').toString().trim();
+        if (nextPlan.isNotEmpty) planName = nextPlan;
+        _applySubscriptionUiState(const <String, dynamic>{}, subscription);
+      });
+      await _refreshTariffServerState(showToast: false);
+      if (!mounted) return;
+      setState(() {
+        _tariffStatus = 'Инвайт применён. Первый период доступен за 149 ₽.';
+      });
+      unawaited(_ensureProvisionedConfigSilently());
+      _toast(context, 'Beta-инвайт применён.');
     } finally {
       if (mounted) setState(() => _tariffBusy = false);
     }
@@ -8039,6 +8182,24 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     if (kIsWeb) return null;
     _deviceId ??= await _deviceStore.getOrCreate();
     return _deviceId;
+  }
+
+  Future<void> _recordPaidBetaEvent(String eventType) async {
+    if (!kPaidBetaBuild ||
+        kIsWeb ||
+        widget.session.accessToken == 'dev-token') {
+      return;
+    }
+    try {
+      final deviceId = await _ensureDeviceId();
+      if (deviceId == null || deviceId.isEmpty) return;
+      await _api.postPaidBetaEvent(
+        accessToken: widget.session.accessToken,
+        eventType: eventType,
+        deviceId: deviceId,
+        platform: greenVpnClientPlatform(),
+      );
+    } catch (_) {}
   }
 
   Future<void> _syncPlanSilently() async {
@@ -9190,6 +9351,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           await appendBlueVpnClientLog(
             'post connect checks accepted tunnel server=${candidate.id}',
           );
+          if (kPaidBetaBuild) {
+            unawaited(_recordPaidBetaEvent('vpn_connected'));
+          }
           _startVpnTapCooldown(
             hint:
                 'VPN только что включился. Кнопка разблокируется через секунду, чтобы избежать случайного двойного нажатия.',
@@ -10124,6 +10288,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         subscriptionExpiresAt: _subscriptionExpiresAt,
         subscriptionMonthlyPriceRub: _subscriptionMonthlyPriceRub,
         tariffBusy: _tariffBusy,
+        onClaimPaidBetaInvite: _claimPaidBetaInvite,
         onApplyTariff: _createTariffOrderOnServer,
         onCheckPendingBillingOrder: () =>
             _checkPendingBillingOrder(showToast: true),
@@ -10801,6 +10966,7 @@ class TariffPage extends StatelessWidget {
   final void Function(bool) onOptDedicatedIp;
   final void Function(bool) onOptAutoRenew;
   final Future<void> Function() onApplyTariff;
+  final Future<void> Function() onClaimPaidBetaInvite;
   final Future<void> Function() onCheckPendingBillingOrder;
   final Future<void> Function() onCancelAutoRenew;
   final void Function(String url) onOpenPaymentUrl;
@@ -10826,6 +10992,7 @@ class TariffPage extends StatelessWidget {
     required this.subscriptionExpiresAt,
     required this.subscriptionMonthlyPriceRub,
     required this.tariffBusy,
+    required this.onClaimPaidBetaInvite,
     required this.onToggleApp,
     required this.onTrafficChanged,
     required this.onTrafficGbChanged,
@@ -10912,6 +11079,7 @@ class TariffPage extends StatelessWidget {
   bool get _hasPaidPlan {
     final code = planName.trim().toLowerCase();
     if (!subscriptionActive) return false;
+    if (kPaidBetaBuild && code.contains('trial')) return false;
     return code.isNotEmpty &&
         code != 'base' &&
         code != 'trial' &&
@@ -10982,6 +11150,12 @@ class TariffPage extends StatelessWidget {
     final originalPrice = originalRaw is num ? originalRaw.toInt() : price;
     final inviteRaw = catalogPlan['inviteFirstPeriodPriceRub'];
     final invitePrice = inviteRaw is num ? inviteRaw.toInt() : 149;
+    final betaOfferRaw = tariffQuote?['betaOffer'];
+    final betaOffer = betaOfferRaw is Map
+        ? Map<String, dynamic>.from(betaOfferRaw)
+        : <String, dynamic>{};
+    final inviteApplied = quote['inviteApplied'] == true;
+    final inviteClaimed = betaOffer['inviteClaimed'] == true;
     final pendingStatus = (pendingBillingOrder?['status'] ?? '')
         .toString()
         .trim()
@@ -11109,13 +11283,30 @@ class TariffPage extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               Text(
-                'Первый период по персональному beta-инвайту: $invitePrice ₽.',
+                inviteApplied
+                    ? 'Персональный инвайт применён: первый период $invitePrice ₽.'
+                    : inviteClaimed
+                    ? 'Персональная цена первого периода уже использована.'
+                    : 'Первый период по персональному beta-инвайту: $invitePrice ₽.',
                 style: TextStyle(
                   color: mutedColor,
                   fontWeight: FontWeight.w700,
                   fontSize: 12,
                 ),
               ),
+              if (!inviteClaimed) ...[
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: tariffBusy
+                        ? null
+                        : () => onClaimPaidBetaInvite(),
+                    icon: const Icon(Icons.key_rounded),
+                    label: const Text('Ввести beta-инвайт'),
+                  ),
+                ),
+              ],
               if (hasPendingOrder) ...[
                 const Divider(height: 24),
                 Text(
