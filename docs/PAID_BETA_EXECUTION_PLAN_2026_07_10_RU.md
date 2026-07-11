@@ -52,12 +52,12 @@
    - Реклама и session timer принудительно выключены для всего beta-scope на клиенте и backend.
    - Cohort/email/phone mutations получили `users.updated_at`; DB-sync переносит только более новую запись.
    - Cohort и DB-sync покрыты отдельными backend-тестами.
-4. **Paid-beta clients** - выполнен локально 2026-07-10, без публикации.
+4. **Paid-beta clients** - выполнен и опубликован только в изолированном beta-контуре.
    - Отдельный channel `paid-beta`, финальный Android `0.3.0-paid-beta.5`, build `2026071005`, package `pro.greenvpn.app.beta`.
-   - Серверы пока отдают Windows `0.3.0-paid-beta.2`; локально собран отдельный side-by-side кандидат `0.3.0-paid-beta.3`, который ждёт реальной установки владельцем.
+   - Оба beta-сервера отдают Windows `0.3.0-paid-beta.10`; этот же side-by-side артефакт прошёл полный физический install/reboot/VPN/DNS/uninstall/network-recovery/reinstall gate.
    - Primary/fallback указывают только на изолированный path `/paid-beta-api`.
    - YooKassa UI включён; rewarded ads и session timer выключены compile-time.
-   - Android APK подписан и проверен; Windows `.3` изолирован по install/data/service/tunnel/port/process/window, но остаётся без Authenticode-подписи.
+   - Android APK подписан и проверен; Windows `.10` изолирован по install/data/service/tunnel/port/process/window, но остаётся без Authenticode-подписи.
    - Stable APK/EXE после сборки сохранили исходные SHA-256.
    - Локальный release manifest: `docs/PAID_BETA_RELEASE_2026_07_10_RU.md`.
 5. **Инвайты и воронка** - выполнен локально 2026-07-10, без развёртывания.
@@ -76,7 +76,7 @@
    - Desktop/mobile visual QA, локальные ссылки, якоря и ресурсы проверены; release-файлы добавляются только на этапе 7.
    - Манифест страницы: `docs/PAID_BETA_SITE_2026_07_10_RU.md`.
 7. **Тесты и smoke** - выполнено в изолированном тестовом контуре 2026-07-10.
-   - Backend `0.9.106-paid-beta.4` работает отдельно на `127.0.0.1:8010` у Timeweb и RUVDS; current release `paid-beta-0.3.0-paid-beta.5-2026071005-r5`.
+   - Backend `0.9.106-paid-beta.4` работает отдельно на `127.0.0.1:8010` у Timeweb и RUVDS; current release `paid-beta-0.3.0-paid-beta.5-2026071005-r6`.
    - Auth, marker/cohort denial, invite claim, quote 149, no-ads, expiry policy, primary/fallback bootstrap/config, update manifests, DB sync и funnel прошли.
    - Реальный beta peer получил `10.10.0.180`, одинаковый config на primary/fallback и был штатно удалён после smoke.
    - Остановка только Timeweb beta дала `502` на primary, selector выбрал RUVDS, production `0.9.105` не прервался; primary затем восстановлен.
@@ -96,7 +96,7 @@
 
 ## Текущая точка остановки
 
-Техническая часть доступная без владельца завершена. Android real-device gate и Windows static isolation gate закрыты. До генерации 20 кодов владелец должен: установить локальную Windows `.3` на реальный ПК, провести один реальный платёж 149 RUB и подтвердить terms/privacy. Production до этих действий остаётся замороженным.
+Техническая часть доступная без владельца завершена. Android real-device gate и полный Windows `.10` physical/recovery gate закрыты; `.10` опубликована только в beta-контуре. До генерации 20 кодов владелец должен провести один реальный платёж 149 RUB и подтвердить terms/privacy. Production до этих действий остаётся замороженным.
 
 ## Критерии beta
 

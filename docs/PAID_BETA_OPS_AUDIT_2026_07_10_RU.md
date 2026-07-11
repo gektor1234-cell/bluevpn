@@ -100,3 +100,13 @@
   - Timeweb: `/root/greenvpn-paid-beta-backups/20260710T125718Z-timeweb-paid-beta-0.3.0-paid-beta.5-2026071005-r5`;
   - RUVDS: `/root/greenvpn-paid-beta-backups/20260710T125730Z-ruvds-paid-beta-0.3.0-paid-beta.5-2026071005-r5`.
 - SQLite sync не распространяет delete tombstones. Для operational cleanup тестовых/удалённых сущностей оба узла очищаются одновременно при paused sync; для first20 сохраняется primary-normal/fallback-only.
+
+## Windows `.10` и server `r6`, 2026-07-11
+
+- Один и тот же Windows `.10` артефакт прошёл static/Defender, install, reboot, session/DPAPI, VPN/DNS transition, destructive uninstall/network recovery и clean reinstall проверки на ПК владельца.
+- SHA-256 Windows: `A87F527D910CF50C075518270C221F7890963A5893D7FAB2637EC60FB3A2B170`; Authenticode: `NotSigned`.
+- Timeweb и RUVDS переключены только в beta-контуре на `paid-beta-0.3.0-paid-beta.5-2026071005-r6`; production service/DB/site/downloads не изменены.
+- Оба beta update API возвращают Windows `.10`, `required=false`, собственные primary/fallback download URL и одинаковый проверенный SHA-256.
+- После deploy beta/production/sync/probe services активны, обе SQLite имеют `quick_check=ok`, billing orders `0`, временные upload/stage удалены.
+- Rollback backups: Timeweb `/root/greenvpn-paid-beta-backups/20260711T004246Z-timeweb-paid-beta-0.3.0-paid-beta.5-2026071005-r6`; RUVDS `/root/greenvpn-paid-beta-backups/20260711T004336Z-ruvds-paid-beta-0.3.0-paid-beta.5-2026071005-r6`.
+- Bundle SHA-256: `DA6F1D07AA1DFB6330A08E116F0F0EC0AB223430D7D210359B2ED8520C3139AA`.

@@ -24,17 +24,17 @@ Production использует отдельные service/DB/site/download path
 ## Текущий release
 
 - Android: `0.3.0-paid-beta.5`, build `2026071005`, package `pro.greenvpn.app.beta`.
-- Windows на серверах: `0.3.0-paid-beta.2`; локальный side-by-side кандидат: `0.3.0-paid-beta.3`.
+- Windows на серверах и локально: `0.3.0-paid-beta.10`, side-by-side beta, `NotSigned`, `required=false`.
 - Backend: `0.9.106-paid-beta.4`.
-- Release directory на обоих узлах: `paid-beta-0.3.0-paid-beta.5-2026071005-r5`.
-- Bundle SHA-256: `5955F5A884A7E847A09F9DA43A226F6A78603107EDEDFA0E17C5D1EA2337AF07`.
+- Release directory на обоих узлах: `paid-beta-0.3.0-paid-beta.5-2026071005-r6`.
+- Bundle SHA-256: `DA6F1D07AA1DFB6330A08E116F0F0EC0AB223430D7D210359B2ED8520C3139AA`.
 - Android SHA-256: `90E42FB6CE5A06247E620E5DC3302B7C7C86A0F9A8FEBDC523876A622B9C6580`.
-- Локальный Windows `.3` SHA-256: `559C66438BD319E010631061C7ABF024DAE4DAAA2EAA15697B7DAFAA62CD7604` (`NotSigned`).
+- Windows `.10` SHA-256: `A87F527D910CF50C075518270C221F7890963A5893D7FAB2637EC60FB3A2B170` (`NotSigned`).
 - Client IP pool: `10.10.0.180-10.10.0.229`.
 
-Update API на Timeweb выдаёт primary download URLs; RUVDS выдаёт собственные fallback URLs. Оба возвращают Android `.5`/Windows `.2`, правильные SHA и `required=false`.
+Update API на Timeweb выдаёт primary download URLs; RUVDS выдаёт собственные fallback URLs. Оба возвращают Android `.5`/Windows `.10`, правильные SHA и `required=false`.
 
-Windows `.3` намеренно не загружен на серверы: распаковка реального installer EXE, beta-only identifiers, PE metadata, PowerShell parser и Defender прошли; real install/reboot/uninstall остаётся owner gate.
+Windows `.10` прошёл real install/reboot/session/DPAPI/VPN/DNS/uninstall/network-recovery/reinstall на ПК владельца и опубликован только в изолированном beta-контуре.
 
 ## Проверки
 
@@ -69,7 +69,7 @@ Windows `.3` намеренно не загружен на серверы: ра�
 ## Ограничения
 
 - SQLite sync не даёт глобальную транзакционную блокировку и не реплицирует delete tombstones. Для первых 20: primary-normal/fallback-only; массовый запуск требует write authority или общей transactional DB.
-- Windows installer не подписан и ещё не прошёл реальную установку/reboot/uninstall/network-recovery проверку владельцем.
+- Windows installer не подписан, но полный физический installation/reboot/VPN/DNS/uninstall/network-recovery/reinstall gate пройден.
 - Реальный платёж 149 RUB, activation/refund/cancel не проверен.
 - Terms/privacy не подтверждены владельцем/юристом.
 - `noindex` не является контролем доступа; доступ защищают marker, invite и cohort.

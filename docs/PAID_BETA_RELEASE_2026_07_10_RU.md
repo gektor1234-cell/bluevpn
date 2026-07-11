@@ -15,13 +15,13 @@
 | Платформа | Файл | Размер | SHA-256 | Подпись |
 | --- | --- | ---: | --- | --- |
 | Android | `GreenVPN_Android_0.3.0-paid-beta.5_2026071005.apk` | 65 756 723 | `90E42FB6CE5A06247E620E5DC3302B7C7C86A0F9A8FEBDC523876A622B9C6580` | APK v2, Green VPN |
-| Windows local candidate | `GreenVPN_Beta_Setup_0.3.0-paid-beta.3.exe` | 12 818 944 | `559C66438BD319E010631061C7ABF024DAE4DAAA2EAA15697B7DAFAA62CD7604` | `NotSigned` |
+| Windows beta | `GreenVPN_Beta_Setup_0.3.0-paid-beta.10.exe` | 12 822 016 | `A87F527D910CF50C075518270C221F7890963A5893D7FAB2637EC60FB3A2B170` | `NotSigned` |
 
 - Android directory: `C:\BlueVPN_Builds\paid_beta_20260710_v5`.
-- Windows candidate directory: `C:\BlueVPN_Builds\paid_beta_20260710_v6`.
-- Серверный bundle и update manifests пока содержат Windows `.2`; `.3` не развёрнут до real-PC smoke.
-- Final deploy bundle: `C:\BlueVPN_Builds\paid_beta_20260710_v5\paid-beta-0.3.0-paid-beta.5-2026071005-r5.tar.gz`.
-- Bundle size/SHA-256: 44 367 657 / `5955F5A884A7E847A09F9DA43A226F6A78603107EDEDFA0E17C5D1EA2337AF07`.
+- Windows candidate directory: `C:\BlueVPN_Builds\paid_beta_20260711_v13`.
+- Серверный bundle и оба update manifest содержат проверенную Windows `.10`; production aliases не изменены.
+- Final deploy bundle: `C:\BlueVPN_Builds\paid_beta_20260711_v14\paid-beta-0.3.0-paid-beta.5-2026071005-r6.tar.gz`.
+- Bundle size/SHA-256: 44 363 051 / `DA6F1D07AA1DFB6330A08E116F0F0EC0AB223430D7D210359B2ED8520C3139AA`.
 - Backend in bundle: `0.9.106-paid-beta.4`.
 
 ## Android identity
@@ -69,10 +69,10 @@ Bundle создаётся `prepare_paid_beta_bundle.ps1 -BundleRevision 5`. Уп
 - Android `.2`: отклонён как same-package candidate.
 - Android `.3`: отклонён из-за lifecycle/disconnect ownership bug.
 - Android `.4`: lifecycle исправлен, но версия заменена `.5` после добавления custom app picker.
-- Server `r1-r4`: forensic only; current/approved is `r5`.
+- Server `r1-r4`: forensic only; `r5` is the previous rollback, current/approved is `r6`.
 
 ## Ограничения
 
-- Windows `.3` side-by-side isolated, но не подписан и ждёт owner installation/reboot/uninstall smoke; серверы до этого продолжают отдавать `.2`.
+- Windows `.10` side-by-side isolated, не подписан, но полный real-PC installation/reboot/VPN/DNS/uninstall/network-recovery/reinstall gate пройден; серверы beta отдают `.10`.
 - Реальный платёж и legal acceptance остаются owner gate.
 - Эти beta-файлы нельзя публиковать как production aliases.
