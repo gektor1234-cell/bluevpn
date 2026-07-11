@@ -134,3 +134,17 @@
 - При остановленном Timeweb beta публичный RUVDS вернул HTTP 200 для `subscription/me` и `client/bootstrap`: активный `paid_beta_30d`, 2 устройства, `canConnect=true`, реклама не требуется. Timeweb beta затем восстановлен и прошёл local health.
 - Deploy backups: Timeweb `/root/greenvpn-paid-beta-backups/20260711T013305Z-timeweb-paid-beta-0.3.0-paid-beta.5-2026071005-r8`; RUVDS `/root/greenvpn-paid-beta-backups/20260711T013406Z-ruvds-paid-beta-0.3.0-paid-beta.5-2026071005-r8`.
 - Bundle: `C:\BlueVPN_Builds\paid_beta_20260711_v16\paid-beta-0.3.0-paid-beta.5-2026071005-r8.tar.gz`; SHA-256 `FDFB9EDE9573C16748FA1AEF65A6979135D5C7394B48566F3D94091BDF610E98`.
+
+## YooKassa billing guard `r12`, 2026-07-11
+
+- YooKassa API отклонил первый платеж 249 RUB с `save_payment_method=true`: рекуррентные платежи для магазина не подключены. Provider payment ID, payment URL и списание не создавались.
+- Backend `0.9.106-paid-beta.9` возвращает безопасный код `recurring_payments_unavailable`, не раскрывает raw provider body и отменяет локальный пустой заказ после детерминированного отказа.
+- Android `.6` и Windows `.11` не выполняют API failover для `POST /billing/orders`, поэтому RUVDS больше не маскирует исходную ошибку Timeweb ответом `billing_primary_required`.
+- Оба control-plane переключены только в beta-контуре на `paid-beta-0.3.0-paid-beta.6-2026071106-r12`; production backend/site/downloads не менялись.
+- Deploy backups: Timeweb `/root/greenvpn-paid-beta-backups/20260711T103316Z-timeweb-paid-beta-0.3.0-paid-beta.6-2026071106-r12`; RUVDS `/root/greenvpn-paid-beta-backups/20260711T103423Z-ruvds-paid-beta-0.3.0-paid-beta.6-2026071106-r12`.
+- Перед адресной отменой пустого заказа сделаны SQLite backups: Timeweb `/root/greenvpn-paid-beta-backups/20260711T103606Z-pre-yookassa-rejected-order-cleanup`; RUVDS `/root/greenvpn-paid-beta-backups/20260711T103557Z-pre-yookassa-rejected-order-cleanup`.
+- После очистки на обоих узлах `pending_count=0`, `quick_check=ok`; sync timers снова активны.
+- Публичные primary/fallback health и download manifests возвращают backend `.9`, Android `.6`, Windows `.11` и одинаковые SHA-256.
+- Backend: 41 test; Flutter: 6 tests; Android/Windows beta и stable-кандидаты собраны успешно.
+- Bundle: `C:\BlueVPN_Builds\paid_beta_20260711_v17\paid-beta-0.3.0-paid-beta.6-2026071106-r12.tar.gz`; SHA-256 `A38C8C08825042386A17230C584A0FA4C472400367FC78B277E083B947678714`.
+- HTTPS evidence `https://greenvpn.pro/paid-beta/yookassa-review-20260711/` опубликован с `noindex`; ссылка передана ЮKassa, обращение ожидает менеджера.

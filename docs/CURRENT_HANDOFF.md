@@ -9,8 +9,9 @@ Last updated: 2026-07-11.
 - Do not touch Friendly Linnet `5.129.237.163`.
 - Production stable, the main site and public downloads remain frozen until explicit owner approval.
 - Paid beta work goes only to `/paid-beta` and `/paid-beta-api`.
-- Ads, forced disconnect timer and auto-renew stay disabled in paid beta.
-- Do not create or send the first 20 invite codes before the owner gate.
+- Ads and forced disconnect timer stay disabled.
+- The public-product candidate uses opt-out auto-renew; the executor is enabled only on Timeweb beta and disabled on RUVDS.
+- The former first-20 invite launch is superseded by the public-product candidate. Do not generate old invite packages unless explicitly requested.
 
 ## Repository and checkpoints
 
@@ -25,6 +26,7 @@ Last updated: 2026-07-11.
 - Windows owner-gate checkpoint/tag: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_windows_owner_gate_passed_20260711`, `greenvpn-paid-beta-windows-owner-gate-passed-20260711`.
 - Billing guard checkpoint/tag: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_billing_single_writer_20260711`, `greenvpn-paid-beta-billing-single-writer-20260711`.
 - Real-payment/sync checkpoint/tag: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_real_payment_sync_ready_20260711`, `greenvpn-paid-beta-real-payment-sync-ready-20260711`.
+- Public billing-guard checkpoint/tag: `C:\Users\gekto\GreenVPN_Checkpoints\public_candidate_billing_guard_20260711`, `greenvpn-public-candidate-billing-guard-20260711`.
 - Private Windows session/config recovery copy: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_windows_0.3.0-paid-beta.10_private_state_20260711`; ACL is limited to the owner, SYSTEM and Administrators. Never publish or commit it.
 
 ## Frozen production stable
@@ -40,33 +42,33 @@ Last updated: 2026-07-11.
 
 - Primary API/site: `https://api.greenvpn.pro/paid-beta-api`, `https://greenvpn.pro/paid-beta/`.
 - Fallback API/site: `https://176-113-81-35.sslip.io/paid-beta-api`, `https://176-113-81-35.sslip.io/paid-beta/`.
-- Current server release on both nodes: `paid-beta-0.3.0-paid-beta.5-2026071005-r8`.
-- Backend: `0.9.106-paid-beta.5`, service `greenvpn-paid-beta.service`, bind `127.0.0.1:8010` only.
+- Current server release on both nodes: `paid-beta-0.3.0-paid-beta.6-2026071106-r12`.
+- Backend: `0.9.106-paid-beta.9`, service `greenvpn-paid-beta.service`, bind `127.0.0.1:8010` only.
 - DB: `/opt/bluevpn-paid-beta/data/bluevpn.db`; sync timer every 10 seconds.
 - Probe: `greenvpn-paid-beta-service-probe.timer`, every 300 seconds on both nodes.
 - Marker/channel/cohort: `green-vpn-paid-beta-v1` / `paid-beta` / `paid_beta_v1`.
-- Model: Trial 3 days, invited first period 149 RUB, then 299 RUB/30 days manually, 2 devices, no ads/timer/auto-renew.
-- Current state on each node: owner data only, 1 active paid subscription, 1 activated billing order, 2 tokens/devices and 0 smoke users. Payment/subscription/redemption row hashes match between nodes.
+- Model: Trial 3 days; 249/649/1099 RUB for 30/90/180 days; no ads/timer; opt-out auto-renew.
+- Current state on each node: owner data retained, the earlier 149 RUB payment remains active, the rejected 249 RUB order is canceled, and no empty pending order remains.
 - SQLite is suitable for the first 20 only in primary-normal/fallback-only mode. Deletes are not tombstone-replicated, so operational test cleanup must be performed on both nodes with sync paused.
 
 ## Paid beta artifacts
 
-- Android: `C:\BlueVPN_Builds\paid_beta_20260710_v5\GreenVPN_Android_0.3.0-paid-beta.5_2026071005.apk`.
+- Android: `C:\BlueVPN_Builds\paid_beta_20260711_v17\GreenVPN_Android_0.3.0-paid-beta.6_2026071106.apk`.
 - Android package/label: `pro.greenvpn.app.beta` / `Green VPN Beta`.
-- Android SHA-256: `90E42FB6CE5A06247E620E5DC3302B7C7C86A0F9A8FEBDC523876A622B9C6580`.
+- Android SHA-256: `5A341F48BA3C902F872D6D5984FC671F215B001654BBE55617886C262232624E`.
 - Android signer SHA-256: `1ea2c985890e9010aa3b76aee676624ec45398fd86a5e40dd95c76cdfc6a0fbc`.
-- Local Windows side-by-side candidate: `C:\BlueVPN_Builds\paid_beta_20260711_v13\GreenVPN_Beta_Setup_0.3.0-paid-beta.10.exe`.
-- Local Windows SHA-256: `A87F527D910CF50C075518270C221F7890963A5893D7FAB2637EC60FB3A2B170`; size `12,822,016`; Authenticode `NotSigned`.
-- Server-published Windows on both beta nodes: `.10`, SHA-256 `A87F527D910CF50C075518270C221F7890963A5893D7FAB2637EC60FB3A2B170`, `required=false`.
-- Final bundle: `C:\BlueVPN_Builds\paid_beta_20260711_v16\paid-beta-0.3.0-paid-beta.5-2026071005-r8.tar.gz`.
-- Bundle SHA-256: `FDFB9EDE9573C16748FA1AEF65A6979135D5C7394B48566F3D94091BDF610E98`.
+- Local Windows side-by-side candidate: `C:\BlueVPN_Builds\paid_beta_20260711_v17\GreenVPN_Beta_Setup_0.3.0-paid-beta.11.exe`.
+- Local Windows SHA-256: `ECA801FBCFED9A08CD5470E6BDC9F2FC327019D6C3DE61D50F7AECC69668FE32`; size `12,822,528`; Authenticode `NotSigned`.
+- Server-published Windows on both beta nodes: `.11`, SHA-256 `ECA801FBCFED9A08CD5470E6BDC9F2FC327019D6C3DE61D50F7AECC69668FE32`, `required=false`.
+- Final bundle: `C:\BlueVPN_Builds\paid_beta_20260711_v17\paid-beta-0.3.0-paid-beta.6-2026071106-r12.tar.gz`.
+- Bundle SHA-256: `A38C8C08825042386A17230C584A0FA4C472400367FC78B277E083B947678714`.
 - Android `.2/.3/.4` and server revisions before `r5` are forensic/superseded, not approved rollback targets.
 
 ## Verified
 
-- 31 backend/DB-sync/first20 tests pass; release gate: 0 warnings, 0 errors.
+- 41 backend tests and 6 Flutter tests pass; analyzer returns code 0 with only the pre-existing lint backlog.
 - Stateful auth/marker/invite/trial/149/299/bootstrap/config/fallback/cleanup smoke passed.
-- Both local/public beta health return `0.9.106-paid-beta.5`; production health returns `0.9.105`.
+- Both local/public beta health return `0.9.106-paid-beta.9`; production health returns `0.9.105`.
 - Site readiness is 8/8. YooKassa key was reissued, installed in root-only production/beta env on both control-plane nodes and validated with provider HTTP 200.
 - Update API returns Android `.5` and Windows `.10`; RUVDS returns its own fallback download URLs. Both downloaded Windows files match the approved SHA-256.
 - Real Samsung SM-A226B Android 13: login, invite, VPN, YouTube playback, recents swipe/reopen, disconnect and Timeweb outage fallback passed.
@@ -86,15 +88,20 @@ Last updated: 2026-07-11.
 - YooKassa HTTP notifications are configured for the production webhook endpoint, including payment success/cancel, capture waiting, payment-method activation and refund success.
 - Server `r8` fixes mixed SQLite timestamp formats by normalizing them to UTC. Both sync timers run with 0 conflicts/errors; the three critical row hashes are identical on both nodes.
 - With Timeweb beta stopped, public RUVDS returned HTTP 200 for subscription and bootstrap, reported the paid plan, allowed VPN connection and required no ad. Timeweb was restored immediately after the test.
+- YooKassa rejects `save_payment_method=true` because recurring payments are not enabled for the live shop. Backend `.9` returns a safe actionable error, cancels an empty rejected order, and the client no longer masks it with RUVDS fallback.
+- Beta `r12` is active on both control-plane nodes. Both SQLite databases pass `quick_check`, have zero pending orders, and sync timers are active.
+- Auto-renew unlink evidence is live at `https://greenvpn.pro/paid-beta/yookassa-review-20260711/`; the link was sent to YooKassa and is waiting for a manager.
 
 ## Owner gate
 
-Do not create/send the first 20 codes yet. Remaining owner actions:
+The remaining launch gate is external:
 
-1. Accept or legally review beta terms/privacy.
-2. Decide separately whether the successful owner payment should remain active or be refunded; do not refund it implicitly.
+1. YooKassa enables recurring bank-card payments.
+2. Run one real 249 RUB first-payment smoke and verify `payment_method.saved=true`.
+3. Disable auto-renew in the app and verify that the saved method link is removed on both control-plane nodes.
+4. Only then deploy the public candidate and enable the forced update.
 
-After all three, follow `docs/PAID_BETA_FIRST20_RUNBOOK_2026_07_10_RU.md`.
+The old first-20 runbook is historical and is not the current launch path.
 
 ## Separate production decisions
 

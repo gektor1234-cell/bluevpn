@@ -14,15 +14,15 @@ Last compacted: 2026-07-11.
 ## Isolated Paid Beta
 
 - Paths: `/paid-beta`, `/paid-beta-api`; keep isolated and do not promote to production before the remaining owner gates.
-- Android/backend: `0.3.0-paid-beta.5` / `0.9.106-paid-beta.5`.
-- Server-published Windows beta: `0.3.0-paid-beta.10`, SHA `A87F527D910CF50C075518270C221F7890963A5893D7FAB2637EC60FB3A2B170` (`NotSigned`, `required=false`).
+- Android/backend: `0.3.0-paid-beta.6` / `0.9.106-paid-beta.9`.
+- Server-published Windows beta: `0.3.0-paid-beta.11`, SHA `ECA801FBCFED9A08CD5470E6BDC9F2FC327019D6C3DE61D50F7AECC69668FE32` (`NotSigned`, `required=false`).
 - Local side-by-side Windows candidate is the same deployed `.10` artifact; install, reboot, VPN/DNS transition, uninstall/network recovery and clean reinstall all passed.
-- Current release on both nodes: `paid-beta-0.3.0-paid-beta.5-2026071005-r8`.
+- Current release on both nodes: `paid-beta-0.3.0-paid-beta.6-2026071106-r12`.
 - Android package: `pro.greenvpn.app.beta`, side-by-side with stable.
-- Policy: Trial 3 days, 149 RUB first invited period, then 299 RUB manually, 2 devices, no ads/timer/auto-renew.
+- Policy: Trial 3 days; 249/649/1099 RUB for 30/90/180 days; no ads/timer; opt-out auto-renew.
 - Marker + channel + personal invite + cohort enforcement active.
 - DB sync every 10 seconds; service probes every 300 seconds.
-- Current DB state on both nodes: owner data only, 1 active paid subscription, 1 activated billing order, 2 tokens/devices and no smoke rows. Payment/subscription/redemption rows have identical SHA-256 on both nodes.
+- Current DB state on both nodes: earlier owner payment/subscription retained, rejected 249 RUB order canceled, no pending billing orders, `quick_check=ok`.
 
 ## Verified
 
@@ -38,13 +38,16 @@ Last compacted: 2026-07-11.
 - One real 149 RUB YooKassa payment succeeded and activated `paid_beta_30d` through 2026-08-10. Provider reports the payment as paid and refundable; auto-renew remains disabled.
 - YooKassa cabinet webhook points to the production HTTPS endpoint and includes payment success/cancel, capture waiting, payment-method activation and refund success events.
 - DB sync `r8` normalizes naive and timezone-aware timestamps to UTC. Both sync timers complete with 0 conflicts/errors, and RUVDS served active subscription/bootstrap with Timeweb beta stopped.
+- Billing guard `r12` passed 41 backend and 6 Flutter tests. It sanitizes the YooKassa recurring-payment rejection, cancels the local empty order and prevents billing API failover from hiding the primary error.
+- Both public beta health endpoints expose backend `.9`; both beta download manifests expose Android `.6` and Windows `.11` with matching hashes.
+- YooKassa recurring payments remain externally disabled. Evidence was sent from `https://greenvpn.pro/paid-beta/yookassa-review-20260711/` and is waiting for a manager.
 
 ## Owner Gate
 
-1. Owner/legal acceptance of terms and privacy.
-2. Keep the successful real payment active; perform an actual refund only as a separate explicit financial decision.
-
-Only then create the first 20 invite package.
+1. YooKassa enables recurring bank-card payments.
+2. Real 249 RUB smoke confirms `payment_method.saved=true`.
+3. App-side cancellation clears the saved payment method on both nodes.
+4. Only then publish the stable candidate and forced update.
 
 ## Known Risks
 

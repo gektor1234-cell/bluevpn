@@ -2,7 +2,7 @@
 
 ## Статус
 
-Кандидат готов и проверен в изолированном контуре. Production backend, основной сайт и обязательное обновление не переключены. Причина остановки перед публикацией: для реального магазина ЮKassa нужно подтвердить у менеджера возможность автоплатежей.
+Кандидат готов и проверен в изолированном контуре. Production backend, основной сайт и обязательное обновление не переключены. ЮKassa API подтвердил внешний блокер: реальному магазину запрещено создавать платежи с сохранением способа оплаты, пока менеджер не подключит рекуррентные платежи.
 
 ## Продукт
 
@@ -25,39 +25,44 @@
 - Для каждой даты окончания подписки создается один `renewal_key`; повторный запуск не может создать дубль.
 - Таймер проверяет подписки каждые 15 минут и списывает не раньше чем за сутки до окончания.
 - Неуспешный платеж не продлевает подписку.
+- Детерминированный отказ ЮKassa отменяет локальный пустой заказ; `pending` не накапливаются.
+- Клиент не отправляет создание платежа на RUVDS после ответа Timeweb: fallback не скрывает исходную ошибку billing-primary.
+- Текст ответа ЮKassa и внутренние идентификаторы не передаются пользователю.
 
 ## Изолированный контур
 
-- Timeweb и RUVDS: `paid-beta-0.3.0-paid-beta.5-2026071005-r11`.
-- Backend: `0.9.106-paid-beta.8`.
+- Timeweb и RUVDS: `paid-beta-0.3.0-paid-beta.6-2026071106-r12`.
+- Backend: `0.9.106-paid-beta.9`.
 - Timeweb auto-renew executor: включен, primary, последний smoke `executed=0 failed=0`.
 - RUVDS auto-renew executor: выключен, smoke `enabled=false executed=0`.
 - Реальные списания в ходе теста не создавались.
-- Тестовый аккаунт после smoke удален с обоих control-plane.
+- Отклоненный ЮKassa пустой заказ отменен на обоих control-plane после SQLite backup; `pending_count=0`, `quick_check=ok`.
+- Страница проверки самостоятельного отключения: `https://greenvpn.pro/paid-beta/yookassa-review-20260711/`.
+- Материалы отправлены в чат ЮKassa; обращение ожидает менеджера.
 
 ## Проверки
 
-- Backend: 39 тестов.
+- Backend: 41 тест.
 - Flutter: 6 тестов.
-- Release gate: 0 предупреждений, 0 ошибок.
+- `flutter analyze --no-fatal-infos --no-fatal-warnings`: код возврата 0; новых ошибок нет, сохранены старые lint-замечания.
 - Android SM-A226B: вход, тарифы, выбор 30/90/180 дней, переключатель автопродления, Timeweb → RUVDS quote failover.
 - Preview APK: `0.3.0-preview.5`, package `pro.greenvpn.app.preview`.
 
 ## Production-артефакты
 
-Каталог: `C:\BlueVPN_Builds\public_product_20260711_final`.
+Каталог: `C:\BlueVPN_Builds\public_product_20260711_billing_guard`.
 
-- Android `GreenVPN_Android_0.3.0_2026071105.apk`:
-  - SHA-256 `36F2069C838472D8B389065CACFE38A3CFBE83E6B14D33B9FC8BD2CC01D6925E`;
+- Android `GreenVPN_Android_0.3.0_2026071106.apk`:
+  - SHA-256 `3EC9C55ABDF4F7923DAE4F4AC1E022DA575F3B28403D0316015751A45705602C`;
   - package `pro.greenvpn.app`;
   - подписан действующим сертификатом Green VPN.
 - Windows `GreenVPN_Setup_0.3.0.exe`:
-  - SHA-256 `552A584B6AB8526077C184F7114C0B8AC181144986EC377C13C6C9CF010D620C`;
+  - SHA-256 `5FF9D2F858E6EC9089075D1C993CE0B7320B50B9A263C2D03E24EFBCFA2C3EA0`;
   - Authenticode пока отсутствует.
 
 ## Перед production
 
-1. Получить от менеджера ЮKassa подтверждение, что автоплатежи разрешены для боевого магазина.
+1. Получить от менеджера ЮKassa подтверждение, что автоплатежи по банковским картам разрешены для боевого магазина.
 2. Провести один реальный первый платеж с включенным автопродлением и убедиться, что `payment_method.saved=true`.
 3. Сделать backup production DB/env/site/downloads на Timeweb и RUVDS.
 4. Развернуть backend в режиме Timeweb single-writer и RUVDS fallback.

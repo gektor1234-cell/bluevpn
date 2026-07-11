@@ -1,7 +1,9 @@
 import os
 import copy
+import io
 import tempfile
 import unittest
+import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from threading import Event
@@ -933,6 +935,75 @@ class PaidBetaPolicyTests(unittest.TestCase):
                 conn.execute("SELECT COUNT(*) FROM billing_orders").fetchone()[0],
                 0,
             )
+
+    def test_public_product_recurring_provider_rejection_cancels_order(self) -> None:
+        provider_error = main.HTTPException(
+            status_code=503,
+            detail={
+                "code": "recurring_payments_unavailable",
+                "message": "Автопродление пока не подключено платёжным оператором.",
+            },
+        )
+        with (
+            patch.object(main, "PUBLIC_PRODUCT_ENABLED", True),
+            patch.object(main, "YOOKASSA_SHOP_ID", "shop"),
+            patch.object(main, "YOOKASSA_SECRET_KEY", "secret"),
+            patch.object(
+                main,
+                "create_yookassa_payment_for_order",
+                side_effect=provider_error,
+            ),
+        ):
+            with self.assertRaises(main.HTTPException) as raised:
+                main.create_billing_order_for_user(
+                    self.user_id,
+                    self.public_product_payload(),
+                )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail["code"],
+            "recurring_payments_unavailable",
+        )
+        with main.db() as conn:
+            row = conn.execute(
+                "SELECT status, payment_url FROM billing_orders ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertEqual(row["status"], "canceled")
+        self.assertIsNone(row["payment_url"])
+
+    def test_yookassa_recurring_rejection_is_safe_and_actionable(self) -> None:
+        body = (
+            b'{"type":"error","code":"forbidden",'
+            b'"description":"This store can\'t make recurring payments. '
+            b'Contact the YooMoney manager to learn more"}'
+        )
+        provider_error = urllib.error.HTTPError(
+            url="https://api.yookassa.ru/v3/payments",
+            code=403,
+            msg="Forbidden",
+            hdrs=None,
+            fp=io.BytesIO(body),
+        )
+        with (
+            patch.object(main, "YOOKASSA_SHOP_ID", "shop"),
+            patch.object(main, "YOOKASSA_SECRET_KEY", "secret"),
+            patch.object(main.urllib.request, "urlopen", side_effect=provider_error),
+        ):
+            with self.assertRaises(main.HTTPException) as raised:
+                main.yookassa_http_request(
+                    "POST",
+                    "/payments",
+                    payload={"save_payment_method": True},
+                    idempotence_key="test-recurring-rejection",
+                )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail["code"],
+            "recurring_payments_unavailable",
+        )
+        self.assertNotIn("This store", str(raised.exception.detail))
 
     def test_public_product_enforces_trial_then_allows_paid_configuration(self) -> None:
         payload = self.public_product_payload(plan_code="green_180d")

@@ -39,6 +39,8 @@ C:\Users\gekto\projects\bluevpn
 - `docs/GREENVPN_CURRENT_TRIAGE_2026_07_05_RU.md` - текущие проблемы, порядок расследования.
 - `docs/SERVER_INFRA_AUDIT_2026_07_05_RU.md` - актуальная карта серверов, Moscow control-plane migration, RUVDS Moscow fallback, live catalog, cleanup/fix.
 - `docs/RELEASE_STATE.md` - compact stable/paid-beta release state.
+- `docs/PUBLIC_PRODUCT_CANDIDATE_2026_07_11_RU.md` - текущий публичный кандидат, тарифы, артефакты и production gate.
+- `docs/YOOKASSA_RECURRING_REVIEW_2026_07_11_RU.md` - внешний блокер рекуррентов, evidence и обязательный smoke после разрешения.
 - `docs/INFRA_PROVIDER_AUTOMATION_RU.md` - provider automation runbook.
 - `docs/WIREGUARD_MANUAL_CONFIG_NOTES_RU.md` - важная заметка по London manual configs.
 

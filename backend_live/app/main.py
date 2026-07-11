@@ -17127,9 +17127,31 @@ def yookassa_http_request(
             return json.loads(body) if body else {}
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
+        try:
+            provider_error = json.loads(body) if body else {}
+        except Exception:
+            provider_error = {}
+        provider_description = str(provider_error.get("description") or "").strip()
+        provider_code = str(provider_error.get("code") or "").strip()
+        if exc.code == 403 and "recurring payments" in provider_description.lower():
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "recurring_payments_unavailable",
+                    "message": (
+                        "Автопродление пока не подключено платёжным оператором. "
+                        "Повторите после подтверждения ЮKassa."
+                    ),
+                },
+            )
         raise HTTPException(
             status_code=502,
-            detail=f"YooKassa error ({exc.code}): {body}",
+            detail={
+                "code": "payment_provider_rejected",
+                "message": "Платёжный оператор отклонил запрос. Повторите позже.",
+                "providerStatus": int(exc.code),
+                "providerCode": provider_code or None,
+            },
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"YooKassa request failed: {exc}")
@@ -17433,7 +17455,16 @@ def create_billing_order_for_user(user_id: int, payload: TariffSelectionIn) -> d
 
     if yookassa_configured():
         if not order.get("paymentUrl") and order.get("status") == "pending":
-            return create_yookassa_payment_for_order(row, user_email=user_email)
+            try:
+                return create_yookassa_payment_for_order(row, user_email=user_email)
+            except HTTPException as exc:
+                detail = exc.detail if isinstance(exc.detail, dict) else {}
+                if detail.get("code") in {
+                    "recurring_payments_unavailable",
+                    "payment_provider_rejected",
+                }:
+                    mark_billing_order_canceled(order["orderId"])
+                raise
         return order
 
     return order

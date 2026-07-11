@@ -3410,6 +3410,7 @@ while True:
     Future<T> Function(HttpClient client, bool direct, String resolvedBaseUrl)
     action, {
     String? preferredBaseUrl,
+    bool allowApiBaseFailover = true,
   }) async {
     Object? lastError;
     final normalizedPreferredBaseUrl = _normalizeApiBaseUrl(preferredBaseUrl);
@@ -3427,16 +3428,20 @@ while True:
       }
     }
 
-    final initialCandidates = _orderedApiBaseUrlsForRetry(
-      preferredBaseUrl: normalizedPreferredBaseUrl,
-    );
-    final preferredHealthyBase = normalizedPreferredBaseUrl == null
+    final initialCandidates = allowApiBaseFailover
+        ? _orderedApiBaseUrlsForRetry(
+            preferredBaseUrl: normalizedPreferredBaseUrl,
+          )
+        : <String>[normalizedPreferredBaseUrl ?? _primaryBaseUrl()];
+    final preferredHealthyBase =
+        allowApiBaseFailover && normalizedPreferredBaseUrl == null
         ? await _quickHealthyApiBaseUrl(initialCandidates)
         : null;
-    final retryBases = <String>[
-      if (preferredHealthyBase != null) preferredHealthyBase,
-      ...initialCandidates,
-    ];
+    final retryBases = <String>[];
+    if (preferredHealthyBase != null) {
+      retryBases.add(preferredHealthyBase);
+    }
+    retryBases.addAll(initialCandidates);
     final seenRetryBases = <String>{};
 
     for (final candidateBaseUrl in retryBases) {
@@ -3980,6 +3985,8 @@ while True:
       method: 'POST',
       path: '/api/v1/billing/orders',
       bearerToken: accessToken,
+      preferredBaseUrl: _primaryBaseUrl(),
+      allowApiBaseFailover: false,
       payload: {
         'trafficPack': trafficPack,
         'trafficGb': trafficGb,
@@ -4436,6 +4443,7 @@ while True:
     String? adminToken,
     Map<String, dynamic>? payload,
     String? preferredBaseUrl,
+    bool allowApiBaseFailover = true,
     void Function(String baseUrl)? onSuccessBaseUrl,
   }) async {
     try {
@@ -4488,6 +4496,7 @@ while True:
         },
         preferredBaseUrl:
             preferredBaseUrl ?? _preferredApiBaseUrlForBearer(bearerToken),
+        allowApiBaseFailover: allowApiBaseFailover,
       );
 
       if (body.trim().isEmpty) {
