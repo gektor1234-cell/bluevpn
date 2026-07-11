@@ -39,15 +39,15 @@ Last updated: 2026-07-11.
 - Canary apply/rollback is refused on all known production/control-plane hosts and Friendly Linnet. The only owner-approved exception is the exact NL2 AmneziaWG unit/config/IP tuple; it cannot enable another transport or touch another host.
 - AmneziaWG uses a oneshot systemd unit; readiness validates root-only non-symlink config, required AWG2 fields, unique nonzero H1-H4 and a canary peer without printing secrets.
 - AmneziaWG 2 canary is active on Netherlands #2 `5.129.216.42` as `awgcanary0` UDP/1443. Existing `wg0` UDP/443 stayed active and its config matches the pre-change snapshot byte-for-byte.
-- Hysteria2 `app/v2.9.3` canary is active on the same NL2 as isolated service `greenvpn-hysteria2-canary` UDP/2443. Official Linux binary SHA-256 matches GitHub release digest; trusted ACME TLS, password auth and Salamander are enabled. Windows SOCKS smoke proved egress `5.129.216.42`, Green VPN HTTPS and YouTube `200`; public catalog still exposes no Hysteria endpoint.
+- Hysteria2 `app/v2.9.3` canary is active on the same NL2 as isolated service `greenvpn-hysteria2-canary` UDP/2443. Official Linux binary SHA-256 matches GitHub release digest; trusted ACME TLS, password auth and Salamander are enabled. Windows SOCKS smoke proved egress `5.129.216.42`, Green VPN HTTPS and YouTube `200`.
 - Real isolated WSL smoke passed handshake, tunnel IP and egress to `1.1.1.1`; rollback, interface/NAT removal, reinstall and post-reinstall smoke also passed. Public catalog still exposes only `wireguard_udp`.
 - NL2 pre-change snapshot: `/root/greenvpn-awg2-prechange/20260711T171122Z`; local root-only client checkpoint: `C:\Users\gekto\GreenVPN_Checkpoints\transport_canary_awg2_20260711`.
 - Detailed live result: `docs/AMNEZIAWG2_NL2_CANARY_2026_07_11_RU.md`.
 - Android transport preview is physically proven on Samsung SM-A226B: separate `10.202.0.2`, NL2 egress `5.129.216.42`, YouTube playback, Recents swipe survival, session persistence and accurate selected-server restoration.
-- Paid-beta control planes run isolated r15 backend `0.9.109-transport-preview.3`; transport assignments are synchronized and canonical hashes match. Production remains `0.9.105`.
+- Paid-beta control planes run isolated r16 backend `0.9.110-transport-preview.4`. Legacy clients receive no Hysteria endpoint; an explicitly capable preview receives exactly one hidden Hysteria2 canary and still defaults to `wireguard_udp`. Transport catalogs are synchronized with canonical SHA-256 `2c9fb6e8e5245ee994cfd8585b81b1d766899e536a0b7b5a8ba64cf1904584d6`. Production remains `0.9.105`.
 - Android preview artifact: `C:\BlueVPN_Builds\GreenVPN_Android_0.2.44_awg2_transport_preview4_paid_beta_debug.apk`, SHA-256 `EAC700378406484E273DFBD4892220F8D403331167BA7DEB070E5414B30B78B1`.
 - Detailed Android result and rollback: `docs/ANDROID_AWG2_PREVIEW_2026_07_11_RU.md`.
-- Verification: 52 backend tests and 6 Flutter tests pass. `flutter analyze` returns code 0 with only the pre-existing 184 lint/info items.
+- Verification: 58 backend tests and 6 Flutter tests pass. `flutter analyze` returns code 0 with only the pre-existing 184 lint/info items.
 - Detailed operator runbook: `docs/TRANSPORT_CANARY_ROLLOUT_2026_07_11_RU.md`.
 
 ## Frozen production stable
@@ -63,8 +63,8 @@ Last updated: 2026-07-11.
 
 - Primary API/site: `https://api.greenvpn.pro/paid-beta-api`, `https://greenvpn.pro/paid-beta/`.
 - Fallback API/site: `https://176-113-81-35.sslip.io/paid-beta-api`, `https://176-113-81-35.sslip.io/paid-beta/`.
-- Current server release on both nodes: `paid-beta-0.3.0-paid-beta.6-2026071106-r15-awg2-active-active`.
-- Backend: `0.9.109-transport-preview.3`, service `greenvpn-paid-beta.service`, bind `127.0.0.1:8010` only.
+- Current server release on both nodes: `paid-beta-0.3.0-paid-beta.6-2026071106-r16-hysteria-contract`.
+- Backend: `0.9.110-transport-preview.4`, service `greenvpn-paid-beta.service`, bind `127.0.0.1:8010` only.
 - DB: `/opt/bluevpn-paid-beta/data/bluevpn.db`; sync timer every 10 seconds.
 - Probe: `greenvpn-paid-beta-service-probe.timer`, every 300 seconds on both nodes.
 - Marker/channel/cohort: `green-vpn-paid-beta-v1` / `paid-beta` / `paid_beta_v1`.

@@ -46,6 +46,17 @@
   - после smoke процесс и listener остановлены.
 - Paid-beta catalog содержит три WireGuard server и `hysteria2_count=0`.
 
+## Paid-beta control-plane contract
+
+- Timeweb Moscow `72.56.32.197` and RUVDS Moscow `176.113.81.35` run the same immutable release `paid-beta-0.3.0-paid-beta.6-2026071106-r16-hysteria-contract`.
+- Backend version on both paid-beta nodes: `0.9.110-transport-preview.4`; production remained `0.9.105`.
+- The Hysteria2 base client profile is installed as root:root `0600`; its SHA-256 is `6115ef37a73c43233e4ff90481e0fd46a8748c75a502839f94aeaecc38912cbe` on NL2 and both control planes.
+- Legacy catalog returns `hysteria2_count=0`. Preview catalog returns exactly one Hysteria2 endpoint only when the client advertises `hysteria2` capability.
+- Preview auto-selection remains `current_wg0|wireguard_udp`; Hysteria2 therefore cannot replace the stable route merely because it is present.
+- Both SQLite databases pass `quick_check=ok`; their canonical seven-row catalog SHA-256 is `2c9fb6e8e5245ee994cfd8585b81b1d766899e536a0b7b5a8ba64cf1904584d6`.
+- Public primary and fallback paid-beta health endpoints return the same backend version. Production health and public stable artifacts were not changed.
+- Transaction backups: Timeweb `/root/greenvpn-hysteria2-contract-prechange/20260711T200156Z-timeweb`; RUVDS `/root/greenvpn-hysteria2-contract-prechange/20260711T200236Z-ruvds`.
+
 ## Rollback
 
 Dry-run:
