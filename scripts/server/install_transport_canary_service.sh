@@ -50,7 +50,7 @@ Examples:
 Safety:
   - intended for a separate canary node;
   - refuses apply mode on every known production/control-plane host;
-  - the only narrow exception is the owner-approved NL2 AmneziaWG canary;
+  - the only narrow exceptions are the owner-approved NL2 AWG2 and Hysteria2 canaries;
   - apply mode requires --expected-public-ip to prevent wrong-host deployment;
   - requires trusted/pinned binaries to be installed before this script runs;
   - requires a root-owned config file that is not world-readable;
@@ -184,16 +184,28 @@ fi
 PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org || true)"
 for protected_ip in "${PROTECTED_HOST_IPS[@]}"; do
   if [[ "${PUBLIC_IP}" == "${protected_ip}" && "${APPLY}" -eq 1 ]]; then
-    if ! [[ "${PUBLIC_IP}" == "5.129.216.42" \
+    approved_nl2_awg=0
+    approved_nl2_hysteria=0
+    if [[ "${PUBLIC_IP}" == "5.129.216.42" \
       && "${APPROVED_EXISTING_HOST}" == "5.129.216.42" \
       && "${PROTOCOL}" == "amneziawg" \
       && "${SERVICE_NAME}" == "greenvpn-amneziawg-canary" \
       && "${CONFIG_FILE}" == "/etc/greenvpn-transport/awgcanary0.conf" ]]; then
+      approved_nl2_awg=1
+    fi
+    if [[ "${PUBLIC_IP}" == "5.129.216.42" \
+      && "${APPROVED_EXISTING_HOST}" == "5.129.216.42" \
+      && "${PROTOCOL}" == "hysteria2" \
+      && "${SERVICE_NAME}" == "greenvpn-hysteria2-canary" \
+      && "${CONFIG_FILE}" == "/etc/greenvpn-transport/hysteria2-canary.yaml" ]]; then
+      approved_nl2_hysteria=1
+    fi
+    if [[ "${approved_nl2_awg}" -ne 1 && "${approved_nl2_hysteria}" -ne 1 ]]; then
       echo "Refusing to install canary service on protected Green VPN host ${protected_ip}." >&2
       echo "Use a separate test-only canary node." >&2
       exit 1
     fi
-    echo "Owner-approved narrow NL2 AmneziaWG canary exception accepted."
+    echo "Owner-approved narrow NL2 ${PROTOCOL} canary exception accepted."
   fi
 done
 if [[ "${APPLY}" -eq 1 ]]; then
@@ -275,6 +287,7 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now "${SERVICE_NAME}.service"
+systemctl enable "${SERVICE_NAME}.service"
+systemctl restart "${SERVICE_NAME}.service"
 systemctl is-active "${SERVICE_NAME}.service"
 echo "Canary service installed. Keep it internal until backend/admin route-health and Windows client engine are ready."

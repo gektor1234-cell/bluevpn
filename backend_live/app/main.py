@@ -658,7 +658,7 @@ SERVER_TRANSPORT_ROLLOUT_STAGES = {
     "amneziawg": "canary",
     "openvpn_tcp": "canary_prepared",
     "shadowsocks": "canary_prepared",
-    "hysteria2": "canary_prepared",
+    "hysteria2": "canary",
     "trojan_tls": "canary_prepared",
     "vless_reality": "canary_prepared",
     "masque_udp": "research",

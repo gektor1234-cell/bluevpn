@@ -70,6 +70,7 @@ $transportCanaryPath = Join-Path $ProjectRoot "scripts\server\install_transport_
 $transportCanaryCheckPath = Join-Path $ProjectRoot "scripts\server\check_transport_canary_readiness.sh"
 $transportCanaryRollbackPath = Join-Path $ProjectRoot "scripts\server\remove_transport_canary_service.sh"
 $amneziaWg2CanaryBootstrapPath = Join-Path $ProjectRoot "scripts\server\bootstrap_amneziawg2_canary.sh"
+$hysteria2CanaryBootstrapPath = Join-Path $ProjectRoot "scripts\server\bootstrap_hysteria2_canary.sh"
 
 $main = Read-Text $mainPath
 $runtimeConfig = Read-Text $runtimeConfigPath
@@ -86,6 +87,7 @@ $transportCanaryScript = Read-Text $transportCanaryPath
 $transportCanaryCheckScript = Read-Text $transportCanaryCheckPath
 $transportCanaryRollbackScript = Read-Text $transportCanaryRollbackPath
 $amneziaWg2CanaryBootstrapScript = Read-Text $amneziaWg2CanaryBootstrapPath
+$hysteria2CanaryBootstrapScript = Read-Text $hysteria2CanaryBootstrapPath
 
 Write-Section "CLIENT SAFETY CHECKS"
 $forbiddenClientPatterns = @(
@@ -538,7 +540,9 @@ $requiredTransportCanaryFragments = @(
     '--allow-current-vpn-host',
     '--expected-public-ip',
     'Refusing to install canary service on protected Green VPN host',
-    'Owner-approved narrow NL2 AmneziaWG canary exception accepted',
+    'Owner-approved narrow NL2 ${PROTOCOL} canary exception accepted',
+    'greenvpn-hysteria2-canary',
+    '/etc/greenvpn-transport/hysteria2-canary.yaml',
     'SERVICE_TYPE="oneshot"',
     'REMAIN_AFTER_EXIT="yes"',
     'trusted/pinned',
@@ -573,6 +577,9 @@ $requiredTransportCanaryCheckFragments = @(
     'config_symlink_refused',
     'amneziawg2_required_fields_missing',
     'amneziawg2_headers_invalid',
+    'hysteria2_required_fields_missing',
+    'hysteria2_insecure_tls_refused',
+    'hysteria2_obfuscation_missing',
     'service_not_active',
     'route_candidate=',
     '--json'
@@ -591,7 +598,8 @@ $requiredTransportCanaryRollbackFragments = @(
     'Green VPN guarded transport canary rollback',
     '--expected-public-ip',
     'Refusing canary rollback mutation on protected Green VPN host',
-    'Owner-approved narrow NL2 AmneziaWG rollback exception accepted',
+    'Owner-approved narrow NL2 ${PROTOCOL} rollback exception accepted',
+    'greenvpn-hysteria2-canary',
     'Refusing non-canary service name',
     'config_keys_binaries=preserved',
     'public_catalog=not_changed',
@@ -626,6 +634,32 @@ foreach ($fragment in $requiredAmneziaWg2BootstrapFragments) {
     }
     else {
         Add-Error "AmneziaWG 2 bootstrap safety marker missing: $fragment"
+    }
+}
+
+$requiredHysteria2BootstrapFragments = @(
+    'Bootstrap the owner-approved Hysteria2 canary on Green VPN NL2',
+    'CANARY_HOST="5.129.216.42"',
+    'CANARY_DOMAIN="nl2.vpn.greenvpn.pro"',
+    'CANARY_PORT="2443"',
+    'SERVICE_NAME="greenvpn-hysteria2-canary"',
+    'HYSTERIA_VERSION="2.9.3"',
+    '66dbdb0608f25f3057b433afe975a9fc1af2ca8e512479e294988b3ef363d6c1',
+    'sha256sum -c',
+    'type: salamander',
+    'insecure: false',
+    'chmod 0600 "${CLIENT_CONFIG_FILE}"',
+    'stable_wireguard=not_changed',
+    'amneziawg_canary=not_changed',
+    'public_catalog=not_changed'
+)
+
+foreach ($fragment in $requiredHysteria2BootstrapFragments) {
+    if ($hysteria2CanaryBootstrapScript.Contains($fragment)) {
+        Add-Pass "Hysteria2 bootstrap safety marker present: $fragment"
+    }
+    else {
+        Add-Error "Hysteria2 bootstrap safety marker missing: $fragment"
     }
 }
 

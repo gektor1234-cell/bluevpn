@@ -191,10 +191,21 @@ host_has_protected_ip() {
 }
 
 if host_has_protected_ip; then
-  if ! [[ "$APPROVED_EXISTING_HOST" == "5.129.216.42" \
+  approved_nl2_awg=0
+  approved_nl2_hysteria=0
+  if [[ "$APPROVED_EXISTING_HOST" == "5.129.216.42" \
     && "$PROTOCOL" == "amneziawg" \
     && "$SERVICE_NAME" == "greenvpn-amneziawg-canary" \
     && "$CONFIG_FILE" == "/etc/greenvpn-transport/awgcanary0.conf" ]]; then
+    approved_nl2_awg=1
+  fi
+  if [[ "$APPROVED_EXISTING_HOST" == "5.129.216.42" \
+    && "$PROTOCOL" == "hysteria2" \
+    && "$SERVICE_NAME" == "greenvpn-hysteria2-canary" \
+    && "$CONFIG_FILE" == "/etc/greenvpn-transport/hysteria2-canary.yaml" ]]; then
+    approved_nl2_hysteria=1
+  fi
+  if [[ "$approved_nl2_awg" -ne 1 && "$approved_nl2_hysteria" -ne 1 ]]; then
     add_blocker "protected_production_host_refused"
   fi
 fi
@@ -243,6 +254,26 @@ if [[ -n "$CONFIG_FILE" ]]; then
         || printf '%s\n' "$header_values" | grep -Evq '^[0-9]+(-[0-9]+)?$' \
         || printf '%s\n' "$header_values" | grep -qx '0'; then
         add_blocker "amneziawg2_headers_invalid"
+      fi
+    elif [[ "$PROTOCOL" == "hysteria2" ]]; then
+      for pattern in \
+        '^[[:space:]]*listen:[[:space:]]*' \
+        '^[[:space:]]*auth:[[:space:]]*$' \
+        '^[[:space:]]*obfs:[[:space:]]*$' \
+        '^[[:space:]]*masquerade:[[:space:]]*$'; do
+        if ! grep -Eq "$pattern" "$CONFIG_FILE"; then
+          add_blocker "hysteria2_required_fields_missing"
+          break
+        fi
+      done
+      if ! grep -Eq '^[[:space:]]*(tls|acme):[[:space:]]*$' "$CONFIG_FILE"; then
+        add_blocker "hysteria2_tls_material_missing"
+      fi
+      if grep -Eq '^[[:space:]]*insecure:[[:space:]]*(true|yes|1)[[:space:]]*$' "$CONFIG_FILE"; then
+        add_blocker "hysteria2_insecure_tls_refused"
+      fi
+      if ! grep -Eq '^[[:space:]]*type:[[:space:]]*salamander[[:space:]]*$' "$CONFIG_FILE"; then
+        add_blocker "hysteria2_obfuscation_missing"
       fi
     fi
   fi

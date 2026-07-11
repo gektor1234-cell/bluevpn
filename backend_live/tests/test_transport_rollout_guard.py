@@ -70,6 +70,13 @@ class TransportRolloutGuardTests(unittest.TestCase):
         self.assertFalse(item["clientReady"])
         self.assertFalse(item["publicReady"])
 
+    def test_hysteria_server_canary_stays_hidden_without_client_engine(self) -> None:
+        item = main.protocol_catalog_item("hysteria2")
+        self.assertEqual(item["rolloutStage"], "canary")
+        self.assertFalse(item["clientReady"])
+        self.assertFalse(item["serverReady"])
+        self.assertFalse(item["publicReady"])
+
     def test_catalog_drops_injected_non_negotiated_server(self) -> None:
         unsafe = catalog_server("unsafe-awg", "amneziawg")
         stable = catalog_server("safe-wg", "wireguard_udp")

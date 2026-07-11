@@ -39,6 +39,7 @@ Last updated: 2026-07-11.
 - Canary apply/rollback is refused on all known production/control-plane hosts and Friendly Linnet. The only owner-approved exception is the exact NL2 AmneziaWG unit/config/IP tuple; it cannot enable another transport or touch another host.
 - AmneziaWG uses a oneshot systemd unit; readiness validates root-only non-symlink config, required AWG2 fields, unique nonzero H1-H4 and a canary peer without printing secrets.
 - AmneziaWG 2 canary is active on Netherlands #2 `5.129.216.42` as `awgcanary0` UDP/1443. Existing `wg0` UDP/443 stayed active and its config matches the pre-change snapshot byte-for-byte.
+- Hysteria2 `app/v2.9.3` canary is active on the same NL2 as isolated service `greenvpn-hysteria2-canary` UDP/2443. Official Linux binary SHA-256 matches GitHub release digest; trusted ACME TLS, password auth and Salamander are enabled. Windows SOCKS smoke proved egress `5.129.216.42`, Green VPN HTTPS and YouTube `200`; public catalog still exposes no Hysteria endpoint.
 - Real isolated WSL smoke passed handshake, tunnel IP and egress to `1.1.1.1`; rollback, interface/NAT removal, reinstall and post-reinstall smoke also passed. Public catalog still exposes only `wireguard_udp`.
 - NL2 pre-change snapshot: `/root/greenvpn-awg2-prechange/20260711T171122Z`; local root-only client checkpoint: `C:\Users\gekto\GreenVPN_Checkpoints\transport_canary_awg2_20260711`.
 - Detailed live result: `docs/AMNEZIAWG2_NL2_CANARY_2026_07_11_RU.md`.

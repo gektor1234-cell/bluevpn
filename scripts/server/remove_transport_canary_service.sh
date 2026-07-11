@@ -90,14 +90,25 @@ fi
 PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org || true)"
 for protected_ip in "${PROTECTED_HOST_IPS[@]}"; do
   if [[ "$PUBLIC_IP" == "$protected_ip" && "$APPLY" -eq 1 ]]; then
-    if ! [[ "$PUBLIC_IP" == "5.129.216.42" \
+    approved_nl2_awg=0
+    approved_nl2_hysteria=0
+    if [[ "$PUBLIC_IP" == "5.129.216.42" \
       && "$APPROVED_EXISTING_HOST" == "5.129.216.42" \
       && "$PROTOCOL" == "amneziawg" \
       && "$SERVICE_NAME" == "greenvpn-amneziawg-canary" ]]; then
+      approved_nl2_awg=1
+    fi
+    if [[ "$PUBLIC_IP" == "5.129.216.42" \
+      && "$APPROVED_EXISTING_HOST" == "5.129.216.42" \
+      && "$PROTOCOL" == "hysteria2" \
+      && "$SERVICE_NAME" == "greenvpn-hysteria2-canary" ]]; then
+      approved_nl2_hysteria=1
+    fi
+    if [[ "$approved_nl2_awg" -ne 1 && "$approved_nl2_hysteria" -ne 1 ]]; then
       echo "Refusing canary rollback mutation on protected Green VPN host ${protected_ip}." >&2
       exit 1
     fi
-    echo "Owner-approved narrow NL2 AmneziaWG rollback exception accepted."
+    echo "Owner-approved narrow NL2 ${PROTOCOL} rollback exception accepted."
   fi
 done
 if [[ "$APPLY" -eq 1 ]]; then

@@ -22,13 +22,15 @@
 | `preview` | Есть отдельный клиентский engine и физический smoke | Только явно совместимому preview-клиенту |
 | `public` | Пройдены server, client, route-health и rollback gates | Да |
 
-Текущее состояние: `wireguard_udp=public`; `amneziawg=canary`; `wireguard_tcp`, `openvpn_tcp`, `shadowsocks`, `hysteria2`, `trojan_tls`, `vless_reality=canary_prepared`; `masque_udp=research`.
+Текущее состояние: `wireguard_udp=public`; `amneziawg=canary`; `hysteria2=canary`; `wireguard_tcp`, `openvpn_tcp`, `shadowsocks`, `trojan_tls`, `vless_reality=canary_prepared`; `masque_udp=research`.
 
 ## Защищённые серверы
 
-Canary-скрипты запрещают apply на действующих control-plane/VPN узлах и на Friendly Linnet. Единственное исключение после прямого решения владельца: `5.129.216.42`, только `amneziawg`, service `greenvpn-amneziawg-canary`, config `/etc/greenvpn-transport/awgcanary0.conf` и явный параметр `--approved-existing-host 5.129.216.42`. Исключение нельзя использовать для другого протокола, unit, config или IP.
+Canary-скрипты запрещают apply на действующих control-plane/VPN узлах и на Friendly Linnet. После прямого решения владельца для `5.129.216.42` разрешены только два точных сочетания: AWG2 с service `greenvpn-amneziawg-canary` и config `/etc/greenvpn-transport/awgcanary0.conf`; Hysteria2 с service `greenvpn-hysteria2-canary` и config `/etc/greenvpn-transport/hysteria2-canary.yaml`. Оба требуют `--approved-existing-host 5.129.216.42`; исключения нельзя использовать для другого протокола, unit, config или IP.
 
 Свободного безопасного VPS на момент первоначальной фиксации не было. Владелец явно выбрал Netherlands #2 для параллельного canary. Основной `wg0` UDP/443 сохранён; AWG2 использует отдельные interface `awgcanary0`, UDP/1443, subnet и ключи. Результат зафиксирован в `docs/AMNEZIAWG2_NL2_CANARY_2026_07_11_RU.md`.
+
+Hysteria2 использует на том же NL2 отдельные service `greenvpn-hysteria2-canary`, UDP/2443, TLS/ACME material, auth и Salamander secret. Он не публикуется в catalog до готовности клиентских engine. Результат зафиксирован в `docs/HYSTERIA2_NL2_CANARY_2026_07_11_RU.md`.
 
 ## Первый кандидат: AmneziaWG 2
 
