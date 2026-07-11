@@ -63,7 +63,8 @@ class MainActivity : FlutterActivity() {
             }
         }
     private var pendingConnectResult: MethodChannel.Result? = null
-    private var pendingConfig: Config? = null
+    private var pendingConfig: Any? = null
+    private var pendingProtocol: String = "wireguard_udp"
     private var pendingInstallApkPath: String? = null
     private val securePrefs by lazy {
         applicationContext.getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE)
@@ -108,8 +109,10 @@ class MainActivity : FlutterActivity() {
 
         val result = pendingConnectResult
         val config = pendingConfig
+        val protocol = pendingProtocol
         pendingConnectResult = null
         pendingConfig = null
+        pendingProtocol = "wireguard_udp"
 
         if (result == null) return
         if (resultCode != Activity.RESULT_OK || config == null) {
@@ -123,7 +126,7 @@ class MainActivity : FlutterActivity() {
             return
         }
 
-        connectWithConfig(config, result)
+        connectWithConfig(protocol, config, result)
     }
 
     private fun backend(): GoBackend {
@@ -146,6 +149,11 @@ class MainActivity : FlutterActivity() {
         }
 
         val configText = call.argument<String>("config").orEmpty().trim()
+        val protocol = call.argument<String>("protocol")
+            .orEmpty()
+            .trim()
+            .lowercase()
+            .ifEmpty { "wireguard_udp" }
         if (configText.isEmpty()) {
             result.success(
                 response(
@@ -158,8 +166,33 @@ class MainActivity : FlutterActivity() {
         }
 
         val effectiveConfigText = filterVpnApplicationSelectors(configText)
-        val parsed = try {
-            Config.parse(ByteArrayInputStream(effectiveConfigText.toByteArray(StandardCharsets.UTF_8)))
+        if (protocol !in setOf("wireguard_udp", "amneziawg")) {
+            result.success(
+                response(
+                    ok = false,
+                    connected = false,
+                    message = "Этот VPN-режим не поддерживается текущей сборкой."
+                )
+            )
+            return
+        }
+        if (protocol == "amneziawg" && !GreenVpnAwg2Preview.isAvailable()) {
+            result.success(
+                response(
+                    ok = false,
+                    connected = false,
+                    message = "AWG2 доступен только в специальной preview-сборке."
+                )
+            )
+            return
+        }
+
+        val parsed: Any = try {
+            if (protocol == "amneziawg" || BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
+                GreenVpnAwg2Preview.parseConfig(effectiveConfigText)
+            } else {
+                Config.parse(ByteArrayInputStream(effectiveConfigText.toByteArray(StandardCharsets.UTF_8)))
+            }
         } catch (e: Exception) {
             result.success(
                 response(
@@ -175,25 +208,41 @@ class MainActivity : FlutterActivity() {
         if (permissionIntent != null) {
             pendingConnectResult = result
             pendingConfig = parsed
+            pendingProtocol = protocol
             startActivityForResult(permissionIntent, VPN_PERMISSION_REQUEST)
             return
         }
 
-        connectWithConfig(parsed, result)
+        connectWithConfig(protocol, parsed, result)
     }
 
-    private fun connectWithConfig(config: Config, result: MethodChannel.Result) {
+    private fun connectWithConfig(protocol: String, config: Any, result: MethodChannel.Result) {
         executor.execute {
             try {
-                val currentBackend = backend()
-                if (currentBackend.getRunningTunnelNames().contains(tunnel.getName())) {
-                    currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
-                    if (!waitForOwnVpnNetworkInactive(2_500L)) {
-                        throw IllegalStateException("Android не завершил предыдущее VPN-подключение")
+                val connected = if (
+                    protocol == "amneziawg" || BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED
+                ) {
+                    if (!BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
+                        val currentBackend = backend()
+                        if (currentBackend.getRunningTunnelNames().contains(tunnel.getName())) {
+                            currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
+                        }
                     }
+                    GreenVpnAwg2Preview.connect(applicationContext, config)
+                } else {
+                    if (GreenVpnAwg2Preview.isAvailable()) {
+                        GreenVpnAwg2Preview.disconnect(applicationContext)
+                    }
+                    val currentBackend = backend()
+                    if (currentBackend.getRunningTunnelNames().contains(tunnel.getName())) {
+                        currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
+                        if (!waitForOwnVpnNetworkInactive(2_500L)) {
+                            throw IllegalStateException("Android не завершил предыдущее VPN-подключение")
+                        }
+                    }
+                    currentBackend.setState(tunnel, Tunnel.State.UP, config as Config) == Tunnel.State.UP
                 }
-                val state = currentBackend.setState(tunnel, Tunnel.State.UP, config)
-                if (state == Tunnel.State.UP) {
+                if (connected) {
                     markOwnVpnActive()
                 } else {
                     markOwnVpnInactive()
@@ -201,12 +250,12 @@ class MainActivity : FlutterActivity() {
                 runOnUiThread {
                     result.success(
                         response(
-                            ok = state == Tunnel.State.UP,
-                            connected = state == Tunnel.State.UP,
-                            message = if (state == Tunnel.State.UP) {
+                            ok = connected,
+                            connected = connected,
+                            message = if (connected) {
                                 "VPN подключён."
                             } else {
-                                "Android вернул состояние VPN: $state"
+                                "Android не подтвердил запуск VPN."
                             }
                         )
                     )
@@ -228,12 +277,27 @@ class MainActivity : FlutterActivity() {
     private fun handleDisconnect(result: MethodChannel.Result) {
         executor.execute {
             try {
+                if (BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
+                    val disconnected = GreenVpnAwg2Preview.disconnect(applicationContext)
+                    if (disconnected) markOwnVpnInactive()
+                    runOnUiThread {
+                        result.success(
+                            response(
+                                ok = disconnected,
+                                connected = !disconnected,
+                                message = if (disconnected) "VPN выключен." else "VPN ещё активен."
+                            )
+                        )
+                    }
+                    return@execute
+                }
                 val currentBackend = backend()
                 val state = currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
+                val awgDisconnected = GreenVpnAwg2Preview.disconnect(applicationContext)
                 val runningNames = currentBackend.getRunningTunnelNames().toList()
                 val stillRunning = runningNames.contains(tunnel.getName()) ||
                     !waitForOwnVpnNetworkInactive(2_500L)
-                val disconnected = state == Tunnel.State.DOWN && !stillRunning
+                val disconnected = state == Tunnel.State.DOWN && awgDisconnected && !stillRunning
                 if (disconnected) {
                     markOwnVpnInactive()
                 }
@@ -315,6 +379,42 @@ class MainActivity : FlutterActivity() {
             val systemOwnVpnActive = systemVpnActive && isOwnVpnNetworkActive()
             if (!systemVpnActive) {
                 markOwnVpnInactive()
+            }
+            if (BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
+                val awg = GreenVpnAwg2Preview.snapshot(applicationContext)
+                val markerOwnRunning = !systemOwnVpnActive &&
+                    systemVpnActive &&
+                    hasOwnVpnActiveMarker(systemVpnActive)
+                val ownRunning = awg.connected || systemOwnVpnActive || markerOwnRunning
+                runOnUiThread {
+                    result.success(
+                        mapOf(
+                            "ok" to awg.available,
+                            "connected" to ownRunning,
+                            "ownTunnelRunning" to ownRunning,
+                            "state" to if (ownRunning) "up" else awg.state,
+                            "rxBytes" to awg.rxBytes,
+                            "txBytes" to awg.txBytes,
+                            "version" to awg.version,
+                            "runningTunnels" to awg.runningTunnels,
+                            "systemVpnActive" to systemVpnActive,
+                            "systemVpnActiveWithoutOwnTunnel" to (systemVpnActive && !ownRunning),
+                            "externalVpnActive" to (systemVpnActive && !ownRunning),
+                            "lastGreenVpnActive" to (systemOwnVpnActive || markerOwnRunning),
+                            "lastGreenVpnActiveAgeMs" to ownVpnMarkerAgeMs(),
+                            "ownTunnelSource" to when {
+                                awg.connected -> "backend"
+                                systemOwnVpnActive -> "system_owner"
+                                markerOwnRunning -> "marker"
+                                else -> "none"
+                            },
+                            "nativeTunnelName" to "GreenVPN",
+                            "requestedTunnelName" to requestedName,
+                            "statusError" to awg.error
+                        )
+                    )
+                }
+                return@execute
             }
             val statusErrors = mutableListOf<String>()
             val currentBackend = try {
@@ -690,6 +790,7 @@ class MainActivity : FlutterActivity() {
 
     private fun isAllowedSecureKey(key: String): Boolean {
         return key == "greenvpn_mobile_managed_config_v1" ||
+            key == "greenvpn_mobile_managed_protocol_v1" ||
             key == "greenvpn_mobile_base_config_v1" ||
             key == "greenvpn_mobile_session_v1" ||
             key == "greenvpn_mobile_device_id_v1"

@@ -609,11 +609,17 @@ SERVER_CATALOG_PROTOCOLS = [
     "masque_udp",
 ]
 SERVER_CATALOG_TRANSPORTS = ["udp", "tcp", "tls", "quic", "http3", "reality", "masque"]
-SERVER_CLIENT_CONFIG_PROFILES = ["none", "builtin_wg0", "remote_ssh_wg0"]
+SERVER_CLIENT_CONFIG_PROFILES = [
+    "none",
+    "builtin_wg0",
+    "remote_ssh_wg0",
+    "remote_ssh_awg2",
+]
 SERVER_CLIENT_CONFIG_PROFILE_TITLES = {
     "none": "Не выдавать клиентам",
     "builtin_wg0": "Текущий backend wg0",
     "remote_ssh_wg0": "Удалённый WireGuard wg0",
+    "remote_ssh_awg2": "Удалённый AmneziaWG 2",
 }
 SERVER_PROTOCOL_TITLES = {
     "wireguard_udp": "WireGuard UDP",
@@ -638,6 +644,13 @@ SERVER_PROTOCOL_ROLLOUT_ORDER = [
     "masque_udp",
 ]
 SERVER_CLIENT_READY_PROTOCOLS = {"wireguard_udp"}
+if os.getenv("GREENVPN_AMNEZIAWG_CLIENT_CONFIG_ENABLED", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}:
+    SERVER_CLIENT_READY_PROTOCOLS.add("amneziawg")
 SERVER_DEFAULT_CLIENT_PROTOCOLS = frozenset({"wireguard_udp"})
 SERVER_TRANSPORT_ROLLOUT_STAGES = {
     "wireguard_udp": "public",
@@ -2856,6 +2869,28 @@ def init_db() -> None:
             "devices",
             "support_config_refresh_applied_reason",
             "support_config_refresh_applied_reason TEXT",
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS device_transport_assignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_uid TEXT NOT NULL,
+                transport_key TEXT NOT NULL,
+                assigned_ip TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(device_uid, transport_key),
+                UNIQUE(transport_key, assigned_ip),
+                FOREIGN KEY(device_uid) REFERENCES devices(device_uid)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_device_transport_assignments_device
+            ON device_transport_assignments(device_uid, transport_key)
+            """
         )
 
         conn.execute(
@@ -8814,6 +8849,31 @@ def remote_vpn_node_config_check(
     wg_config = (env.get("GREENVPN_NODE_WG_CONFIG") or "/etc/wireguard/wg0.conf").strip()
     wg_public_key = (env.get("GREENVPN_NODE_WG_PUBLIC_KEY") or "").strip()
     client_mtu_raw = (env.get("GREENVPN_NODE_CLIENT_MTU") or "").strip()
+    client_subnet_raw = (env.get("GREENVPN_NODE_CLIENT_SUBNET") or "").strip()
+    wg_tool = (env.get("GREENVPN_NODE_WG_TOOL") or "wg").strip()
+    awg_field_names = (
+        "Jc",
+        "Jmin",
+        "Jmax",
+        "S1",
+        "S2",
+        "S3",
+        "S4",
+        "H1",
+        "H2",
+        "H3",
+        "H4",
+        "I1",
+        "I2",
+        "I3",
+        "I4",
+        "I5",
+    )
+    awg_interface_fields = {
+        field: (env.get(f"GREENVPN_NODE_AWG_{field.upper()}") or "").strip()
+        for field in awg_field_names
+        if (env.get(f"GREENVPN_NODE_AWG_{field.upper()}") or "").strip()
+    }
 
     try:
         ssh_port = int(ssh_port_raw)
@@ -8829,6 +8889,7 @@ def remote_vpn_node_config_check(
             client_mtu = int(client_mtu_raw)
         except Exception:
             client_mtu = 0
+    client_subnet = normalized_ipv4_client_subnet(client_subnet_raw)
 
     ssh_key = Path(ssh_key_raw) if ssh_key_raw else Path()
 
@@ -8854,6 +8915,32 @@ def remote_vpn_node_config_check(
         add_blocker("remote_node_public_key_missing", "Не задан публичный WireGuard-ключ узла.")
     if client_mtu < 576 or client_mtu > 1420:
         add_blocker("remote_node_client_mtu_invalid", "GREENVPN_NODE_CLIENT_MTU должен быть 576..1420.")
+    if client_subnet_raw and client_subnet is None:
+        add_blocker(
+            "remote_node_client_subnet_invalid",
+            "GREENVPN_NODE_CLIENT_SUBNET должен быть отдельной IPv4-сетью /16../30.",
+        )
+    if not wg_tool:
+        add_blocker("remote_node_wg_tool_missing", "Не задан инструмент управления VPN-интерфейсом.")
+    elif wg_tool != "wg" and not re.fullmatch(r"/[A-Za-z0-9._/+:-]+", wg_tool):
+        add_blocker(
+            "remote_node_wg_tool_invalid",
+            "GREENVPN_NODE_WG_TOOL должен быть wg или абсолютным путём без shell-метасимволов.",
+        )
+
+    for field, value in awg_interface_fields.items():
+        if field.startswith("I"):
+            if len(value) > 2048 or "\n" in value or "\r" in value:
+                add_blocker(
+                    "remote_node_awg_field_invalid",
+                    f"Некорректное значение GREENVPN_NODE_AWG_{field.upper()}.",
+                )
+            continue
+        if not re.fullmatch(r"[0-9]+(?:-[0-9]+)?", value):
+            add_blocker(
+                "remote_node_awg_field_invalid",
+                f"GREENVPN_NODE_AWG_{field.upper()} должен быть числом или числовым диапазоном.",
+            )
 
     normalized_row_host = str(row_host or "").strip().lower()
     if normalized_row_host and public_host and normalized_row_host != public_host:
@@ -8880,6 +8967,9 @@ def remote_vpn_node_config_check(
         "wgConfig": wg_config,
         "wgPublicKey": wg_public_key,
         "clientMtu": client_mtu,
+        "clientSubnet": str(client_subnet) if client_subnet is not None else "",
+        "wgTool": wg_tool,
+        "awgInterfaceFields": awg_interface_fields,
     }, blockers
 
 
@@ -8938,12 +9028,13 @@ def server_client_config_readiness(row: sqlite3.Row) -> dict:
                     f"VPN-узла {WG_ENDPOINT_HOST}:{WG_ENDPOINT_PORT}."
                 ),
             )
-    elif profile == "remote_ssh_wg0":
+    elif profile in {"remote_ssh_wg0", "remote_ssh_awg2"}:
         server_id = str(row["server_id"] or "").strip().lower()
-        if row["protocol"] != "wireguard_udp":
+        expected_protocol = "amneziawg" if profile == "remote_ssh_awg2" else "wireguard_udp"
+        if row["protocol"] != expected_protocol:
             add_blocker(
                 "client_config_protocol_mismatch",
-                "Профиль remote_ssh_wg0 поддерживает только WireGuard UDP.",
+                f"Профиль {profile} поддерживает только протокол {expected_protocol}.",
             )
         if row["transport"] != "udp":
             add_blocker(
@@ -8956,20 +9047,48 @@ def server_client_config_readiness(row: sqlite3.Row) -> dict:
             row_port=int(row["port"] or 0),
         )
         blockers.extend(remote_blockers)
+        if profile == "remote_ssh_awg2":
+            required_awg_fields = {"S1", "S2", "H1", "H2", "H3", "H4"}
+            missing_awg_fields = sorted(
+                required_awg_fields - set((remote_config.get("awgInterfaceFields") or {}).keys())
+            )
+            if missing_awg_fields:
+                add_blocker(
+                    "remote_node_awg_fields_missing",
+                    "Не заданы обязательные AWG2-параметры: " + ", ".join(missing_awg_fields) + ".",
+                )
+            if (remote_config.get("wgTool") or "wg") == "wg":
+                add_blocker(
+                    "remote_node_awg_tool_missing",
+                    "Для AWG2 нужен GREENVPN_NODE_WG_TOOL с абсолютным путём к awg.",
+                )
+            awg_client_subnet = normalized_ipv4_client_subnet(
+                remote_config.get("clientSubnet")
+            )
+            if awg_client_subnet is None:
+                add_blocker(
+                    "remote_node_client_subnet_missing",
+                    "Для AWG2 нужен отдельный GREENVPN_NODE_CLIENT_SUBNET.",
+                )
+            elif awg_client_subnet.overlaps(legacy_wireguard_client_subnet()):
+                add_blocker(
+                    "remote_node_client_subnet_overlap",
+                    "Диапазон AWG2 не должен пересекаться с production WireGuard.",
+                )
     else:
         add_blocker(
             "client_config_profile_unknown",
             "Неизвестный профиль выдачи конфига. VPN-узел заблокирован до ручной проверки.",
         )
 
-    if profile == "remote_ssh_wg0" and "remote_config" in locals() and remote_config:
+    if profile in {"remote_ssh_wg0", "remote_ssh_awg2"} and "remote_config" in locals() and remote_config:
         expected_endpoint = {
             "host": remote_config.get("publicHost") or row["host"],
             "port": remote_config.get("publicPort") or int(row["port"] or 0),
             "interface": remote_config.get("interface") or WG_INTERFACE,
             "nodeEnv": remote_config.get("path") or "",
         }
-        managed_by = "remote_ssh_wg0"
+        managed_by = profile
     else:
         expected_endpoint = {
             "host": WG_ENDPOINT_HOST,
@@ -15849,6 +15968,151 @@ def allocate_ip() -> str:
     raise HTTPException(status_code=500, detail="Не осталось свободных клиентских IP.")
 
 
+def normalized_ipv4_client_subnet(value: Optional[str]) -> Optional[ipaddress.IPv4Network]:
+    raw = clean_limited_text(value, 80).strip()
+    if not raw:
+        return None
+    try:
+        network = ipaddress.ip_network(raw, strict=True)
+    except ValueError:
+        return None
+    if not isinstance(network, ipaddress.IPv4Network):
+        return None
+    if network.prefixlen < 16 or network.prefixlen > 30:
+        return None
+    return network
+
+
+def legacy_wireguard_client_subnet() -> ipaddress.IPv4Network:
+    try:
+        return ipaddress.ip_network(f"{WG_CLIENT_IP_PREFIX}0/24", strict=True)
+    except ValueError:
+        return ipaddress.ip_network("10.10.0.0/24", strict=True)
+
+
+def ensure_device_transport_ip(
+    device_uid: str,
+    *,
+    transport_key: str,
+    client_subnet: str,
+) -> str:
+    normalized_key = clean_limited_text(transport_key, 60).strip().lower()
+    network = normalized_ipv4_client_subnet(client_subnet)
+    if not normalized_key or network is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Для транспорта не настроен отдельный безопасный диапазон клиентских IP.",
+        )
+    if network.overlaps(legacy_wireguard_client_subnet()):
+        raise HTTPException(
+            status_code=409,
+            detail="Диапазон транспорта пересекается с production WireGuard.",
+        )
+
+    now = utc_now_iso()
+    with db() as conn:
+        device_row = conn.execute(
+            "SELECT assigned_ip FROM devices WHERE device_uid = ?",
+            (device_uid,),
+        ).fetchone()
+        if device_row is None:
+            raise HTTPException(status_code=404, detail="Device not found.")
+        existing = conn.execute(
+            """
+            SELECT assigned_ip
+            FROM device_transport_assignments
+            WHERE device_uid = ? AND transport_key = ?
+            """,
+            (device_uid, normalized_key),
+        ).fetchone()
+        if existing is not None:
+            assigned = str(existing["assigned_ip"] or "").strip()
+            try:
+                if ipaddress.ip_address(assigned) in network:
+                    return assigned
+            except ValueError:
+                pass
+            raise HTTPException(
+                status_code=409,
+                detail="Существующий адрес транспорта не входит в настроенный диапазон.",
+            )
+
+        used = {
+            str(row["assigned_ip"] or "").strip()
+            for row in conn.execute(
+                "SELECT assigned_ip FROM devices WHERE assigned_ip IS NOT NULL"
+            ).fetchall()
+        }
+        used.update(
+            str(row["assigned_ip"] or "").strip()
+            for row in conn.execute(
+                "SELECT assigned_ip FROM device_transport_assignments"
+            ).fetchall()
+        )
+
+        # The first usable address is reserved for the transport gateway. Prefer
+        # the legacy host number so independent control planes converge on the
+        # same transport IP even before state sync runs.
+        candidates = list(network.hosts())[1:]
+        base_ip = str(device_row["assigned_ip"] or "").strip()
+        try:
+            parsed_base_ip = ipaddress.ip_address(base_ip)
+        except ValueError:
+            parsed_base_ip = None
+        legacy_network = legacy_wireguard_client_subnet()
+        if parsed_base_ip is not None and parsed_base_ip in legacy_network:
+            host_offset = int(parsed_base_ip) - int(legacy_network.network_address)
+            preferred = ipaddress.ip_address(int(network.network_address) + host_offset)
+            if preferred in candidates:
+                candidates.remove(preferred)
+                candidates.insert(0, preferred)
+        else:
+            seed = hashlib.sha256(
+                f"{normalized_key}:{device_uid}".encode("utf-8")
+            ).digest()
+            preferred_index = int.from_bytes(seed[:8], "big") % len(candidates)
+            candidates.insert(0, candidates.pop(preferred_index))
+
+        for candidate in candidates:
+            assigned = str(candidate)
+            if assigned in used:
+                continue
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO device_transport_assignments(
+                        device_uid, transport_key, assigned_ip, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (device_uid, normalized_key, assigned, now, now),
+                )
+                conn.commit()
+                return assigned
+            except sqlite3.IntegrityError:
+                winner = conn.execute(
+                    """
+                    SELECT assigned_ip
+                    FROM device_transport_assignments
+                    WHERE device_uid = ? AND transport_key = ?
+                    """,
+                    (device_uid, normalized_key),
+                ).fetchone()
+                if winner is not None:
+                    winner_ip = str(winner["assigned_ip"] or "").strip()
+                    try:
+                        if ipaddress.ip_address(winner_ip) in network:
+                            return winner_ip
+                    except ValueError:
+                        pass
+                continue
+
+    raise HTTPException(
+        status_code=500,
+        detail="Не осталось свободных клиентских IP для выбранного транспорта.",
+    )
+
+
 def device_status(device_row) -> dict:
     return {
         "deviceUid": device_row["device_uid"],
@@ -19639,6 +19903,7 @@ preshared_key = str(payload.get("preshared_key") or "").strip()
 ip = str(payload.get("ip") or "").strip().split("/", 1)[0]
 iface = str(payload.get("interface") or "wg0").strip()
 config_path = str(payload.get("config_path") or "/etc/wireguard/wg0.conf").strip()
+wg_tool = str(payload.get("wg_tool") or "wg").strip()
 
 if not device_uid or not public_key or not preshared_key or not ip or not iface or not config_path:
     raise SystemExit("missing required peer payload fields")
@@ -19695,7 +19960,7 @@ try:
         tmp.write(preshared_key)
         tmp_path = tmp.name
     subprocess.run(
-        ["wg", "set", iface, "peer", public_key, "preshared-key", tmp_path, "allowed-ips", f"{ip}/32"],
+        [wg_tool, "set", iface, "peer", public_key, "preshared-key", tmp_path, "allowed-ips", f"{ip}/32"],
         check=True,
         capture_output=True,
         text=True,
@@ -19721,10 +19986,11 @@ device_uid = str(payload.get("device_uid") or "").strip()
 public_key = str(payload.get("public_key") or "").strip()
 iface = str(payload.get("interface") or "wg0").strip()
 config_path = str(payload.get("config_path") or "/etc/wireguard/wg0.conf").strip()
+wg_tool = str(payload.get("wg_tool") or "wg").strip()
 
 if public_key and iface:
     subprocess.run(
-        ["wg", "set", iface, "peer", public_key, "remove"],
+        [wg_tool, "set", iface, "peer", public_key, "remove"],
         check=False,
         capture_output=True,
         text=True,
@@ -19755,8 +20021,9 @@ import subprocess
 payload = json.load(open(0, encoding="utf-8"))
 iface = str(payload.get("interface") or "wg0").strip()
 expected_public_key = str(payload.get("expected_public_key") or "").strip()
+wg_tool = str(payload.get("wg_tool") or "wg").strip()
 current_public_key = subprocess.run(
-    ["wg", "show", iface, "public-key"],
+    [wg_tool, "show", iface, "public-key"],
     check=True,
     capture_output=True,
     text=True,
@@ -19782,11 +20049,12 @@ import subprocess
 payload = json.load(open(0, encoding="utf-8"))
 iface = str(payload.get("interface") or "wg0").strip()
 public_key = str(payload.get("public_key") or "").strip()
+wg_tool = str(payload.get("wg_tool") or "wg").strip()
 if not iface or not public_key:
     raise SystemExit("missing interface or public_key")
 
 peers = subprocess.run(
-    ["wg", "show", iface, "peers"],
+    [wg_tool, "show", iface, "peers"],
     check=True,
     capture_output=True,
     text=True,
@@ -19921,6 +20189,7 @@ def apply_remote_peer_live(
             "ip": ip,
             "interface": config["interface"],
             "config_path": config["wgConfig"],
+            "wg_tool": config.get("wgTool") or "wg",
         },
     )
 
@@ -19938,6 +20207,7 @@ def best_effort_remove_remote_peer_live(config: dict, device_uid: str, public_ke
                 "public_key": public_key,
                 "interface": config["interface"],
                 "config_path": config["wgConfig"],
+                "wg_tool": config.get("wgTool") or "wg",
             },
         )
         return True
@@ -19952,6 +20222,7 @@ def remote_vpn_node_probe(config: dict) -> dict:
         {
             "interface": config["interface"],
             "expected_public_key": config["wgPublicKey"],
+            "wg_tool": config.get("wgTool") or "wg",
         },
     )
 
@@ -19963,6 +20234,7 @@ def remote_vpn_node_peer_status(config: dict, public_key: str) -> dict:
         {
             "interface": config["interface"],
             "public_key": public_key,
+            "wg_tool": config.get("wgTool") or "wg",
         },
     )
 
@@ -20004,7 +20276,7 @@ def best_effort_remove_peer_from_server(
             removed_live = best_effort_remove_peer_live(public_key)
             removed_config = best_effort_remove_peer_block_in_wg0(device_uid)
             return bool(removed_live or removed_config)
-        if profile == "remote_ssh_wg0" and readiness.get("ready"):
+        if profile in {"remote_ssh_wg0", "remote_ssh_awg2"} and readiness.get("ready"):
             remote_config = load_remote_vpn_node_config(normalized_server_id)
             return best_effort_remove_remote_peer_live(
                 remote_config,
@@ -20114,7 +20386,7 @@ def provision_wireguard_peer_for_selected_server(
             "clientMtu": WG_CLIENT_MTU,
         }
 
-    if profile == "remote_ssh_wg0":
+    if profile in {"remote_ssh_wg0", "remote_ssh_awg2"}:
         remote_config = load_remote_vpn_node_config(server_id)
         apply_remote_peer_live(
             remote_config,
@@ -20143,6 +20415,7 @@ def provision_wireguard_peer_for_selected_server(
             "endpointHost": endpoint_host,
             "endpointPort": endpoint_port,
             "clientMtu": remote_config.get("clientMtu") or WG_CLIENT_MTU,
+            "interfaceFields": remote_config.get("awgInterfaceFields") or {},
         }
 
     raise HTTPException(
@@ -20159,6 +20432,7 @@ def build_client_config(
     endpoint_host: Optional[str] = None,
     endpoint_port: Optional[int] = None,
     client_mtu: Optional[int] = None,
+    interface_fields: Optional[dict[str, str]] = None,
 ) -> str:
     host = (endpoint_host or WG_ENDPOINT_HOST).strip() or WG_ENDPOINT_HOST
     port = int(endpoint_port or WG_ENDPOINT_PORT)
@@ -20172,12 +20446,21 @@ def build_client_config(
         if WG_PERSISTENT_KEEPALIVE > 0
         else ""
     )
+    extra_interface_lines = "".join(
+        f"{key} = {value}\n"
+        for key, value in (interface_fields or {}).items()
+        if key in {"Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4", "I1", "I2", "I3", "I4", "I5"}
+        and str(value).strip()
+    )
+    extra_interface_separator = "\n" if extra_interface_lines else ""
     return (
         "[Interface]\n"
         f"PrivateKey = {client_private_key}\n"
         f"Address = {client_ip}/32\n"
         f"DNS = {WG_DNS}\n"
         f"MTU = {mtu}\n\n"
+        f"{extra_interface_lines}"
+        f"{extra_interface_separator}"
         "[Peer]\n"
         f"PublicKey = {server_public_key}\n"
         f"PresharedKey = {preshared_key}\n"
@@ -26765,6 +27048,21 @@ def client_config(
     client_private_key = device["client_private_key"]
     preshared_key = device["preshared_key"]
     assigned_ip = device["assigned_ip"]
+    selected_protocol = server_primary_protocol(selected_server)
+    if selected_protocol == "amneziawg":
+        selected_server_id = str(selected_server.get("id") or "").strip()
+        selected_row = get_managed_server_catalog_row_by_server_id(selected_server_id)
+        if selected_row is None or server_row_client_config_profile(selected_row) != "remote_ssh_awg2":
+            raise HTTPException(
+                status_code=409,
+                detail="Для выбранного AWG2-узла не настроен безопасный профиль выдачи.",
+            )
+        selected_remote_config = load_remote_vpn_node_config(selected_server_id)
+        assigned_ip = ensure_device_transport_ip(
+            device["device_uid"],
+            transport_key=selected_protocol,
+            client_subnet=selected_remote_config.get("clientSubnet") or "",
+        )
 
     old_public_key = (
         clean_limited_text(refresh_result.get("oldPublicKey"), 120).strip()
@@ -26818,6 +27116,7 @@ def client_config(
         endpoint_host=provisioning["endpointHost"],
         endpoint_port=provisioning["endpointPort"],
         client_mtu=provisioning.get("clientMtu"),
+        interface_fields=provisioning.get("interfaceFields"),
     )
     touch_device(device["device_uid"], config_issued=True)
     if (
@@ -26845,6 +27144,8 @@ def client_config(
 
     return {
         "ok": True,
+        "protocol": selected_protocol,
+        "configFormat": "awg-quick" if selected_protocol == "amneziawg" else "wg-quick",
         "configText": config_text,
         "deviceUid": device["device_uid"],
         "assignedIp": assigned_ip,

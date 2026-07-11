@@ -3,6 +3,14 @@ param(
     [string]$Mode = "both",
 
     [switch]$EnableYandexRewardedAds,
+    [switch]$EnableAwg2Preview,
+    [string]$Awg2PreviewApplicationId = "pro.greenvpn.app.transportpreview",
+    [string]$Awg2PreviewAppLabel = "Green VPN Transport Preview",
+    [string]$Awg2PreviewAppVersion = "0.2.44-awg2-transport-preview.4",
+    [string]$Awg2PreviewBuildName = "0.2.44",
+    [string]$Awg2PreviewBuildNumber = "2026070506",
+    [string]$Awg2PreviewApiBaseUrl = "https://api.greenvpn.pro/paid-beta-api",
+    [string]$Awg2PreviewApiFallbackBaseUrls = "https://176-113-81-35.sslip.io/paid-beta-api",
     [switch]$DeployPreview,
     [string]$PreviewApkName = ""
 )
@@ -26,6 +34,24 @@ $env:ANDROID_HOME = $androidSdk
 $env:ANDROID_SDK_ROOT = $androidSdk
 $env:JAVA_HOME = $jdkDir
 $env:Path = "$jdkDir\bin;$androidSdk\platform-tools;$androidSdk\cmdline-tools\latest\bin;$env:Path"
+$env:GREENVPN_ANDROID_AWG2_PREVIEW_ENABLED = if ($EnableAwg2Preview) { 'true' } else { 'false' }
+if ($EnableAwg2Preview) {
+    if (-not $Awg2PreviewApiBaseUrl.Contains('/paid-beta-api')) {
+        throw 'AWG2 preview primary API must use /paid-beta-api.'
+    }
+    if (-not $Awg2PreviewApiFallbackBaseUrls.Contains('/paid-beta-api')) {
+        throw 'AWG2 preview fallback API must use /paid-beta-api.'
+    }
+    if ($Awg2PreviewApplicationId -eq 'pro.greenvpn.app') {
+        throw 'AWG2 preview must not replace the production Android package.'
+    }
+    $env:GREENVPN_ANDROID_APPLICATION_ID = $Awg2PreviewApplicationId
+    $env:GREENVPN_ANDROID_APP_LABEL = $Awg2PreviewAppLabel
+    $env:GREENVPN_ANDROID_API_BASE_URL = $Awg2PreviewApiBaseUrl
+    $env:GREENVPN_ANDROID_API_FALLBACK_BASE_URLS = $Awg2PreviewApiFallbackBaseUrls
+    $env:GREENVPN_APP_VERSION = $Awg2PreviewAppVersion
+    & (Join-Path $PSScriptRoot 'prepare_android_awg2_preview.ps1')
+}
 
 flutter config --android-sdk $androidSdk | Out-Host
 flutter config --jdk-dir $jdkDir | Out-Host
@@ -46,7 +72,20 @@ $releaseAppVersion = "0.2.23-trial-only-android-vpn-takeover"
 $releaseBuildName = "0.2.23"
 $releaseBuildNumber = "2026060801"
 if ($Mode -eq "debug" -or $Mode -eq "both") {
-    flutter build apk --debug --no-pub | Out-Host
+    $debugArgs = @('build', 'apk', '--debug', '--no-pub')
+    if ($EnableAwg2Preview) {
+        $debugArgs += '--dart-define=GREENVPN_AWG2_PREVIEW_ENABLED=true'
+        $debugArgs += "--dart-define=GREENVPN_APP_VERSION=$Awg2PreviewAppVersion"
+        $debugArgs += '--dart-define=GREENVPN_PAID_BETA_BUILD=true'
+        $debugArgs += '--dart-define=GREENVPN_PAID_BETA_CLIENT_MARKER=green-vpn-paid-beta-v1'
+        $debugArgs += '--dart-define=GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=false'
+        $debugArgs += '--dart-define=GREENVPN_YANDEX_REWARDED_ADS_ENABLED=false'
+        $debugArgs += "--dart-define=BLUEVPN_API_BASE_URL=$Awg2PreviewApiBaseUrl"
+        $debugArgs += "--dart-define=BLUEVPN_API_BASE_URLS=$Awg2PreviewApiFallbackBaseUrls"
+        $debugArgs += "--build-name=$Awg2PreviewBuildName"
+        $debugArgs += "--build-number=$Awg2PreviewBuildNumber"
+    }
+    flutter @debugArgs | Out-Host
     $builds += "build\app\outputs\flutter-apk\app-debug.apk"
 }
 if ($Mode -eq "release" -or $Mode -eq "both") {
@@ -54,7 +93,7 @@ if ($Mode -eq "release" -or $Mode -eq "both") {
     $releaseArgs += "--dart-define=GREENVPN_APP_VERSION=$releaseAppVersion"
     $releaseArgs += "--build-name=$releaseBuildName"
     $releaseArgs += "--build-number=$releaseBuildNumber"
-    if ($EnableYandexRewardedAds -or $DeployPreview) {
+    if ($EnableYandexRewardedAds -or $EnableAwg2Preview -or $DeployPreview) {
         $releaseAppVersion = "0.2.43-preview"
         $releaseBuildName = "0.2.43"
         $releaseBuildNumber = "2026070503"
@@ -64,6 +103,13 @@ if ($Mode -eq "release" -or $Mode -eq "both") {
         $releaseArgs += "--dart-define=GREENVPN_YANDEX_REWARDED_ADS_ENABLED=true"
         $releaseArgs += "--dart-define=GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=false"
         $releaseArgs += "--dart-define=BLUEVPN_API_BASE_URLS=https://176-113-81-35.sslip.io"
+    }
+    if ($EnableAwg2Preview) {
+        $releaseArgs += '--dart-define=GREENVPN_AWG2_PREVIEW_ENABLED=true'
+        $releaseArgs += '--dart-define=GREENVPN_PAID_BETA_BUILD=true'
+        $releaseArgs += '--dart-define=GREENVPN_PAID_BETA_CLIENT_MARKER=green-vpn-paid-beta-v1'
+        $releaseArgs += "--dart-define=BLUEVPN_API_BASE_URL=$Awg2PreviewApiBaseUrl"
+        $releaseArgs += "--dart-define=BLUEVPN_API_BASE_URLS=$Awg2PreviewApiFallbackBaseUrls"
     }
     $previousGreenVpnAppVersion = $env:GREENVPN_APP_VERSION
     try {

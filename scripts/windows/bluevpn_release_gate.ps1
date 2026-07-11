@@ -488,7 +488,11 @@ $requiredAutoRouteClientFragments = @(
     "resilienceMap['routeDecision']",
     'selectedRouteMap',
     's.isAuto || s.isCurrentClientReady',
-    "const List<String> kSupportedVpnProtocols = <String>['wireguard_udp']",
+    'const bool kAwg2PreviewEnabled = bool.fromEnvironment(',
+    "'GREENVPN_AWG2_PREVIEW_ENABLED'",
+    'defaultValue: false',
+    "'wireguard_udp'",
+    "if (kAwg2PreviewEnabled) 'amneziawg'",
     "'X-GreenVPN-Supported-Protocols'",
     "'supportedProtocols': kSupportedVpnProtocols"
 )

@@ -16,6 +16,7 @@ import android.widget.Toast
 import com.wireguard.android.backend.GoBackend
 import com.wireguard.android.backend.Tunnel
 import com.wireguard.config.Config
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.net.HttpURLConnection
@@ -44,8 +45,16 @@ class GreenVpnQuickTileService : TileService() {
         const val SESSION_KEY = "greenvpn_mobile_session_v1"
         const val DEVICE_ID_KEY = "greenvpn_mobile_device_id_v1"
         const val MANAGED_CONFIG_KEY = "greenvpn_mobile_managed_config_v1"
+        const val MANAGED_PROTOCOL_KEY = "greenvpn_mobile_managed_protocol_v1"
         val FREE_PLAN_CODES = setOf("trial", "free", "free_start", "support_trial", "base")
+        val SUPPORTED_PROTOCOLS = if (BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
+            listOf("wireguard_udp", "amneziawg")
+        } else {
+            listOf("wireguard_udp")
+        }
     }
+
+    private data class FetchedConfig(val config: String, val protocol: String)
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
@@ -99,6 +108,7 @@ class GreenVpnQuickTileService : TileService() {
                         .put("deviceName", "Android Quick Settings")
                         .put("platform", "android")
                         .put("appVersion", APP_VERSION)
+                        .put("supportedProtocols", JSONArray(SUPPORTED_PROTOCOLS))
                 )
                 val subscription = bootstrap.optJSONObject("subscription")
                 if (!canConnectFromTile(subscription)) {
@@ -107,8 +117,12 @@ class GreenVpnQuickTileService : TileService() {
                     return@execute
                 }
 
-                val config = fetchFreshConfig(accessToken, deviceId, sessionApiBaseUrl)
+                val fetched = fetchFreshConfig(accessToken, deviceId, sessionApiBaseUrl)
+                val config = fetched?.config
                     ?: readSecureString(MANAGED_CONFIG_KEY)?.trim()
+                val protocol = fetched?.protocol
+                    ?: readSecureString(MANAGED_PROTOCOL_KEY)?.trim()?.lowercase()
+                    ?: "wireguard_udp"
                 if (config.isNullOrBlank()) {
                     openApp("Откройте Green VPN, чтобы получить VPN-конфиг.")
                     setTile(Tile.STATE_INACTIVE, "Нужен конфиг")
@@ -122,7 +136,7 @@ class GreenVpnQuickTileService : TileService() {
                     return@execute
                 }
 
-                val connected = connectVpn(config)
+                val connected = connectVpn(config, protocol)
                 if (connected) {
                     showToast("Green VPN включен.")
                     setTile(Tile.STATE_ACTIVE, "Включено")
@@ -165,12 +179,27 @@ class GreenVpnQuickTileService : TileService() {
     }
 
     private fun isVpnConnected(): Boolean {
+        if (BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
+            return GreenVpnAwg2Preview.snapshot(applicationContext).connected
+        }
+        if (GreenVpnAwg2Preview.snapshot(applicationContext).connected) return true
         val currentBackend = backend()
         return currentBackend.getState(tunnel) == Tunnel.State.UP ||
             currentBackend.getRunningTunnelNames().contains(tunnel.getName())
     }
 
-    private fun connectVpn(configText: String): Boolean {
+    private fun connectVpn(configText: String, protocol: String): Boolean {
+        if (protocol == "amneziawg" || BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
+            if (!BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
+                val currentBackend = backend()
+                if (currentBackend.getRunningTunnelNames().contains(tunnel.getName())) {
+                    currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
+                }
+            }
+            val parsed = GreenVpnAwg2Preview.parseConfig(configText)
+            return GreenVpnAwg2Preview.connect(applicationContext, parsed)
+        }
+        GreenVpnAwg2Preview.disconnect(applicationContext)
         val currentBackend = backend()
         if (currentBackend.getRunningTunnelNames().contains(tunnel.getName())) {
             currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
@@ -181,9 +210,13 @@ class GreenVpnQuickTileService : TileService() {
     }
 
     private fun disconnectVpn(): Boolean {
+        if (BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
+            return GreenVpnAwg2Preview.disconnect(applicationContext)
+        }
         val currentBackend = backend()
         val state = currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
-        return state == Tunnel.State.DOWN &&
+        val awgDisconnected = GreenVpnAwg2Preview.disconnect(applicationContext)
+        return state == Tunnel.State.DOWN && awgDisconnected &&
             !currentBackend.getRunningTunnelNames().contains(tunnel.getName())
     }
 
@@ -191,7 +224,7 @@ class GreenVpnQuickTileService : TileService() {
         accessToken: String,
         deviceId: String,
         preferredBaseUrl: String?
-    ): String? {
+    ): FetchedConfig? {
         val json = postJson(
             path = "/api/v1/client/config",
             accessToken = accessToken,
@@ -199,12 +232,15 @@ class GreenVpnQuickTileService : TileService() {
             payload = JSONObject()
                 .put("deviceUid", deviceId)
                 .put("mode", "full")
+                .put("supportedProtocols", JSONArray(SUPPORTED_PROTOCOLS))
         )
         val config = json.optString("configText").trim()
+        val protocol = json.optString("protocol", "wireguard_udp").trim().lowercase()
         if (config.isNotEmpty()) {
             writeSecureString(MANAGED_CONFIG_KEY, config)
+            writeSecureString(MANAGED_PROTOCOL_KEY, protocol)
         }
-        return config.ifEmpty { null }
+        return if (config.isEmpty()) null else FetchedConfig(config, protocol)
     }
 
     private fun canConnectFromTile(subscription: JSONObject?): Boolean {

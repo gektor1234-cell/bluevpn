@@ -33,6 +33,9 @@ val greenVpnApiFallbackBaseUrls = environmentValue(
     "GREENVPN_ANDROID_API_FALLBACK_BASE_URLS",
     "https://176-113-81-35.sslip.io",
 )
+val greenVpnAwg2PreviewEnabled =
+    environmentValue("GREENVPN_ANDROID_AWG2_PREVIEW_ENABLED", "false").lowercase() in
+        setOf("1", "true", "yes", "on")
 
 android {
     namespace = "pro.greenvpn.app"
@@ -70,6 +73,7 @@ android {
             "GREENVPN_API_FALLBACK_BASE_URLS",
             quotedBuildConfig(greenVpnApiFallbackBaseUrls),
         )
+        buildConfigField("boolean", "GREENVPN_AWG2_PREVIEW_ENABLED", greenVpnAwg2PreviewEnabled.toString())
     }
 
     if (hasReleaseKeystore) {
@@ -101,5 +105,8 @@ flutter {
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("com.wireguard.android:tunnel:1.0.20260102")
+    if (greenVpnAwg2PreviewEnabled) {
+        implementation(project(":awg_tunnel_preview"))
+    }
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
 }

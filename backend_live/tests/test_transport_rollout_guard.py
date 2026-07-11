@@ -129,6 +129,134 @@ class TransportRolloutGuardTests(unittest.TestCase):
             "no_available_vpn_nodes",
         )
 
+    def test_awg_capability_is_accepted_only_when_server_gate_is_enabled(self) -> None:
+        self.assertEqual(
+            main.normalize_client_supported_protocols(["amneziawg"]),
+            set(),
+        )
+        with patch.object(
+            main,
+            "SERVER_CLIENT_READY_PROTOCOLS",
+            {"wireguard_udp", "amneziawg"},
+        ):
+            self.assertEqual(
+                main.normalize_client_supported_protocols(["amneziawg"]),
+                {"amneziawg"},
+            )
+
+    def test_awg_config_contains_obfuscation_fields(self) -> None:
+        config = main.build_client_config(
+            client_private_key="client-private",
+            preshared_key="client-psk",
+            server_public_key="server-public",
+            client_ip="10.202.0.2",
+            endpoint_host="203.0.113.42",
+            endpoint_port=1443,
+            interface_fields={
+                "Jc": "6",
+                "Jmin": "32",
+                "Jmax": "96",
+                "S1": "64",
+                "S2": "96",
+                "H1": "1234-5678",
+                "H2": "2234-6678",
+                "H3": "3234-7678",
+                "H4": "4234-8678",
+                "unsupported": "must-not-leak",
+            },
+        )
+
+        self.assertIn("Jc = 6", config)
+        self.assertIn("H4 = 4234-8678", config)
+        self.assertIn("Endpoint = 203.0.113.42:1443", config)
+        self.assertNotIn("unsupported", config)
+        self.assertLess(config.index("H4 = 4234-8678"), config.index("[Peer]"))
+
+    def test_awg_profile_requires_awg_tool_and_matching_fields(self) -> None:
+        row = {
+            "server_id": "nl2-awg2",
+            "client_config_profile": "remote_ssh_awg2",
+            "protocol": "amneziawg",
+            "transport": "udp",
+            "host": "203.0.113.42",
+            "port": 1443,
+        }
+        remote = {
+            "publicHost": "203.0.113.42",
+            "publicPort": 1443,
+            "interface": "awgcanary0",
+            "path": "/etc/bluevpn/vpn-nodes/nl2-awg2.env",
+            "wgTool": "wg",
+            "clientSubnet": "10.10.0.0/24",
+            "awgInterfaceFields": {
+                "S1": "64",
+                "S2": "96",
+                "H1": "1001",
+                "H2": "1002",
+                "H3": "1003",
+            },
+        }
+        with patch.object(
+            main,
+            "remote_vpn_node_config_check",
+            return_value=(remote, []),
+        ):
+            readiness = main.server_client_config_readiness(row)
+
+        blocker_codes = {item["code"] for item in readiness["blockers"]}
+        self.assertFalse(readiness["ready"])
+        self.assertIn("remote_node_awg_fields_missing", blocker_codes)
+        self.assertIn("remote_node_awg_tool_missing", blocker_codes)
+        self.assertIn("remote_node_client_subnet_overlap", blocker_codes)
+
+    def test_awg_transport_ip_is_separate_and_sticky(self) -> None:
+        main.init_db()
+        device_uid = "transport-awg-address-test"
+        now = main.utc_now_iso()
+        with main.db() as conn:
+            conn.execute("DELETE FROM device_transport_assignments WHERE device_uid = ?", (device_uid,))
+            conn.execute("DELETE FROM devices WHERE device_uid = ?", (device_uid,))
+            user = conn.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()
+            if user is None:
+                cursor = conn.execute(
+                    "INSERT INTO users(email, password_hash, created_at) VALUES (?, ?, ?)",
+                    ("transport-address-test@example.com", "test-only", now),
+                )
+                user_id = int(cursor.lastrowid)
+            else:
+                user_id = int(user["id"])
+            conn.execute(
+                """
+                INSERT INTO devices(
+                    user_id, device_uid, device_name, platform, app_version,
+                    assigned_ip, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (user_id, device_uid, "AWG address test", "android", "test", "10.10.0.50", now, now),
+            )
+            conn.commit()
+
+        first = main.ensure_device_transport_ip(
+            device_uid,
+            transport_key="amneziawg",
+            client_subnet="10.202.0.0/24",
+        )
+        second = main.ensure_device_transport_ip(
+            device_uid,
+            transport_key="amneziawg",
+            client_subnet="10.202.0.0/24",
+        )
+        self.assertEqual(first, "10.202.0.50")
+        self.assertEqual(second, first)
+        with self.assertRaises(HTTPException) as raised:
+            main.ensure_device_transport_ip(
+                device_uid,
+                transport_key="amneziawg-overlap",
+                client_subnet="10.10.0.0/24",
+            )
+        self.assertEqual(raised.exception.status_code, 409)
+
 
 if __name__ == "__main__":
     unittest.main()

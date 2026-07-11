@@ -42,7 +42,11 @@ Last updated: 2026-07-11.
 - Real isolated WSL smoke passed handshake, tunnel IP and egress to `1.1.1.1`; rollback, interface/NAT removal, reinstall and post-reinstall smoke also passed. Public catalog still exposes only `wireguard_udp`.
 - NL2 pre-change snapshot: `/root/greenvpn-awg2-prechange/20260711T171122Z`; local root-only client checkpoint: `C:\Users\gekto\GreenVPN_Checkpoints\transport_canary_awg2_20260711`.
 - Detailed live result: `docs/AMNEZIAWG2_NL2_CANARY_2026_07_11_RU.md`.
-- Verification: 47 backend tests, 6 Flutter tests, bash syntax and release gate pass. `flutter analyze` reports only the pre-existing 182 lint/info items and no new issue on changed lines.
+- Android transport preview is physically proven on Samsung SM-A226B: separate `10.202.0.2`, NL2 egress `5.129.216.42`, YouTube playback, Recents swipe survival, session persistence and accurate selected-server restoration.
+- Paid-beta control planes run isolated r15 backend `0.9.109-transport-preview.3`; transport assignments are synchronized and canonical hashes match. Production remains `0.9.105`.
+- Android preview artifact: `C:\BlueVPN_Builds\GreenVPN_Android_0.2.44_awg2_transport_preview4_paid_beta_debug.apk`, SHA-256 `EAC700378406484E273DFBD4892220F8D403331167BA7DEB070E5414B30B78B1`.
+- Detailed Android result and rollback: `docs/ANDROID_AWG2_PREVIEW_2026_07_11_RU.md`.
+- Verification: 52 backend tests and 6 Flutter tests pass. `flutter analyze` returns code 0 with only the pre-existing 184 lint/info items.
 - Detailed operator runbook: `docs/TRANSPORT_CANARY_ROLLOUT_2026_07_11_RU.md`.
 
 ## Frozen production stable
@@ -58,8 +62,8 @@ Last updated: 2026-07-11.
 
 - Primary API/site: `https://api.greenvpn.pro/paid-beta-api`, `https://greenvpn.pro/paid-beta/`.
 - Fallback API/site: `https://176-113-81-35.sslip.io/paid-beta-api`, `https://176-113-81-35.sslip.io/paid-beta/`.
-- Current server release on both nodes: `paid-beta-0.3.0-paid-beta.6-2026071106-r12`.
-- Backend: `0.9.106-paid-beta.9`, service `greenvpn-paid-beta.service`, bind `127.0.0.1:8010` only.
+- Current server release on both nodes: `paid-beta-0.3.0-paid-beta.6-2026071106-r15-awg2-active-active`.
+- Backend: `0.9.109-transport-preview.3`, service `greenvpn-paid-beta.service`, bind `127.0.0.1:8010` only.
 - DB: `/opt/bluevpn-paid-beta/data/bluevpn.db`; sync timer every 10 seconds.
 - Probe: `greenvpn-paid-beta-service-probe.timer`, every 300 seconds on both nodes.
 - Marker/channel/cohort: `green-vpn-paid-beta-v1` / `paid-beta` / `paid_beta_v1`.

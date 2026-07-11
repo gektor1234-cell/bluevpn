@@ -206,6 +206,66 @@ class DbStateSyncTests(unittest.TestCase):
             self.assertEqual(redemption, ("redeemed",))
             self.assertEqual(event, ("invite_claimed",))
 
+    def test_transport_assignment_reaches_peer_without_id_collision(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="greenvpn-transport-assignment-sync-",
+            ignore_cleanup_errors=True,
+        ) as root:
+            source_db = Path(root) / "source.sqlite"
+            target_db = Path(root) / "target.sqlite"
+            schema = """
+                CREATE TABLE device_transport_assignments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    device_uid TEXT NOT NULL,
+                    transport_key TEXT NOT NULL,
+                    assigned_ip TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(device_uid, transport_key),
+                    UNIQUE(transport_key, assigned_ip)
+                );
+            """
+            for path in (source_db, target_db):
+                with sqlite3.connect(path) as conn:
+                    conn.executescript(schema)
+                    conn.commit()
+            with sqlite3.connect(source_db) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO device_transport_assignments(
+                        id, device_uid, transport_key, assigned_ip, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (1, "device-a", "amneziawg", "10.202.0.50", "2026-07-11T18:00:00+00:00", "2026-07-11T18:00:00+00:00"),
+                )
+                conn.commit()
+            with sqlite3.connect(target_db) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO device_transport_assignments(
+                        id, device_uid, transport_key, assigned_ip, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (1, "device-b", "amneziawg", "10.202.0.60", "2026-07-11T17:00:00+00:00", "2026-07-11T17:00:00+00:00"),
+                )
+                conn.commit()
+
+            result = self.run_sync(
+                source_db,
+                target_db,
+                tables=["device_transport_assignments"],
+            )
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            with sqlite3.connect(target_db) as conn:
+                row = conn.execute(
+                    """
+                    SELECT assigned_ip
+                    FROM device_transport_assignments
+                    WHERE device_uid = 'device-a' AND transport_key = 'amneziawg'
+                    """
+                ).fetchone()
+            self.assertEqual(row, ("10.202.0.50",))
+
     def test_older_snapshot_does_not_overwrite_newer_cohort(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="greenvpn-state-sync-",

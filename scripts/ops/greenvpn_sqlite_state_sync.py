@@ -22,6 +22,7 @@ NATURAL_KEYS: dict[str, tuple[str, ...]] = {
     "users": ("email",),
     "tokens": ("token",),
     "devices": ("device_uid",),
+    "device_transport_assignments": ("device_uid", "transport_key"),
     "subscriptions": ("user_id",),
     "billing_orders": ("public_id",),
     "client_endpoint_assignments": ("user_id", "device_uid"),
@@ -67,6 +68,9 @@ PRESERVE_ID_TABLES = {
     "users",
     "subscriptions",
     "billing_orders",
+}
+UNIQUE_CONFLICT_KEYS: dict[str, tuple[str, ...]] = {
+    "device_transport_assignments": ("transport_key", "assigned_ip"),
 }
 
 
@@ -170,6 +174,25 @@ def _can_insert_without_conflicting_id(table: str, pk_columns: list[str]) -> boo
     return pk_columns == ["id"] and table not in PRESERVE_ID_TABLES
 
 
+def _has_unique_value_conflict(
+    conn: sqlite3.Connection,
+    table: str,
+    source_row: sqlite3.Row,
+    natural_keys: tuple[str, ...],
+) -> bool:
+    unique_keys = UNIQUE_CONFLICT_KEYS.get(table)
+    if unique_keys is None:
+        return False
+    where = _where_clause(unique_keys)
+    existing = conn.execute(
+        f"SELECT * FROM {table} WHERE {where} LIMIT 1",
+        _row_key(source_row, unique_keys),
+    ).fetchone()
+    if existing is None:
+        return False
+    return _row_key(existing, natural_keys) != _row_key(source_row, natural_keys)
+
+
 def _insert_row(conn: sqlite3.Connection, table: str, row: sqlite3.Row, columns: list[str]) -> None:
     placeholders = ", ".join(["?"] * len(columns))
     column_sql = ", ".join(columns)
@@ -225,6 +248,14 @@ def _sync_table(
         key_values = _row_key(source_row, keys)
         target_row = target_conn.execute(lookup_sql, key_values).fetchone()
         if target_row is None:
+            if _has_unique_value_conflict(
+                target_conn,
+                table,
+                source_row,
+                keys,
+            ):
+                result.conflicts += 1
+                continue
             if _has_pk_conflict(target_conn, table, source_row, pk_columns, keys):
                 if _can_insert_without_conflicting_id(table, pk_columns):
                     insert_columns = [column for column in columns if column != "id"]

@@ -47,7 +47,14 @@ const String kPaidBetaClientMarker = String.fromEnvironment(
   defaultValue: 'green-vpn-paid-beta-v1',
 );
 const String kPaidBetaReleaseChannel = 'paid-beta';
-const List<String> kSupportedVpnProtocols = <String>['wireguard_udp'];
+const bool kAwg2PreviewEnabled = bool.fromEnvironment(
+  'GREENVPN_AWG2_PREVIEW_ENABLED',
+  defaultValue: false,
+);
+const List<String> kSupportedVpnProtocols = <String>[
+  'wireguard_udp',
+  if (kAwg2PreviewEnabled) 'amneziawg',
+];
 const bool kAdsDisabledBuild =
     kTrialOnlyNoAdsBuild || kPaidBetaBuild || kPublicProductBuild;
 const bool kYandexRewardedAdsEnabled = bool.fromEnvironment(
@@ -1387,8 +1394,11 @@ class BlueVpnLocalPaths {
 
   static String sharedStateDirSync() {
     if (kIsWeb) return '';
+    if (Platform.isAndroid) {
+      return '${Directory.systemTemp.parent.path}${Platform.pathSeparator}files${Platform.pathSeparator}greenvpn_state';
+    }
     if (!Platform.isWindows) {
-      return '${Directory.systemTemp.path}/greenvpn_state';
+      return '${Directory.systemTemp.path}${Platform.pathSeparator}greenvpn_state';
     }
     return '${greenVpnProgramDataRootSync()}\\state';
   }
@@ -1432,7 +1442,16 @@ class BlueVpnLocalPaths {
   }
 
   static Future<List<Directory>> legacyStateDirs() async {
-    if (kIsWeb || !Platform.isWindows) return const <Directory>[];
+    if (kIsWeb) return const <Directory>[];
+    if (Platform.isAndroid) {
+      final oldTempState = Directory(
+        '${Directory.systemTemp.path}${Platform.pathSeparator}greenvpn_state',
+      );
+      return oldTempState.existsSync()
+          ? <Directory>[oldTempState]
+          : const <Directory>[];
+    }
+    if (!Platform.isWindows) return const <Directory>[];
     if (greenVpnWindowsRuntimeIsIsolated) return const <Directory>[];
     final out = <Directory>[];
     final seen = <String>{};
@@ -1472,8 +1491,14 @@ class BlueVpnLocalPaths {
   static Future<File?> firstLegacyFile(String fileName) async {
     final dirs = await legacyStateDirs();
     for (final dir in dirs) {
-      final f = File('${dir.path}\\$fileName');
-      if (f.existsSync()) return f;
+      final normal = File('${dir.path}${Platform.pathSeparator}$fileName');
+      if (normal.existsSync()) return normal;
+      if (Platform.isAndroid) {
+        // Older Android builds used a Windows separator, creating a sibling
+        // filename that contained a literal backslash.
+        final malformedLegacy = File('${dir.path}\\$fileName');
+        if (malformedLegacy.existsSync()) return malformedLegacy;
+      }
     }
     return null;
   }
@@ -2527,7 +2552,7 @@ class PrefsStore {
 
   Future<File> _file() async {
     final dir = await _appDirPath();
-    return File('$dir\\prefs.json');
+    return File('$dir${Platform.pathSeparator}prefs.json');
   }
 
   Future<Map<String, dynamic>> _readMap() async {
@@ -2535,16 +2560,20 @@ class PrefsStore {
     try {
       final f = await _file();
       String? raw;
+      var readFromLegacy = false;
       if (f.existsSync()) {
         raw = await f.readAsString();
       } else {
-        raw = await (await BlueVpnLocalPaths.firstLegacyFile(
-          'prefs.json',
-        ))?.readAsString();
+        final legacy = await BlueVpnLocalPaths.firstLegacyFile('prefs.json');
+        readFromLegacy = legacy != null;
+        raw = await legacy?.readAsString();
       }
       if (raw == null || raw.trim().isEmpty) return <String, dynamic>{};
       final decoded = jsonDecode(raw);
-      if (decoded is Map<String, dynamic>) return decoded;
+      if (decoded is Map<String, dynamic>) {
+        if (readFromLegacy) await _writeMap(decoded);
+        return decoded;
+      }
       return <String, dynamic>{};
     } catch (_) {
       return <String, dynamic>{};
@@ -2590,6 +2619,7 @@ class ApiResult<T> {
 
 class WireGuardConfigResponse {
   final String configText;
+  final String protocol;
   final String serverId;
   final String serverName;
   final Map<String, dynamic> endpointAssignment;
@@ -2597,6 +2627,7 @@ class WireGuardConfigResponse {
 
   const WireGuardConfigResponse({
     required this.configText,
+    required this.protocol,
     required this.serverId,
     required this.serverName,
     required this.endpointAssignment,
@@ -2625,6 +2656,10 @@ class WireGuardConfigResponse {
         .trim();
     return WireGuardConfigResponse(
       configText: (json['configText'] ?? json['config'] ?? '').toString(),
+      protocol: (json['protocol'] ?? 'wireguard_udp')
+          .toString()
+          .trim()
+          .toLowerCase(),
       serverId: id,
       serverName: name,
       endpointAssignment: assignmentMap,
@@ -4724,11 +4759,14 @@ while True:
 class ConfigStore {
   static Future<void> _configIoBarrier = Future<void>.value();
   static const _mobileManagedConfigKey = 'greenvpn_mobile_managed_config_v1';
+  static const _mobileManagedProtocolKey =
+      'greenvpn_mobile_managed_protocol_v1';
   static const _mobileBaseConfigKey = 'greenvpn_mobile_base_config_v1';
   static const _mobileServerBaseConfigPrefix =
       'greenvpn_mobile_base_config_server_v1_';
   static const _mobileConfigChannel = MethodChannel('green_vpn/android_vpn');
   static String? _mobileManagedConfig;
+  static String _mobileManagedProtocol = 'wireguard_udp';
   static String? _mobileBaseConfig;
   static final Map<String, String?> _mobileServerBaseConfigs = {};
 
@@ -4737,9 +4775,9 @@ class ConfigStore {
 
   Future<String?> _readMobileConfig(String key) async {
     if (!Platform.isAndroid) {
-      return key == _mobileManagedConfigKey
-          ? _mobileManagedConfig
-          : _mobileBaseConfig;
+      if (key == _mobileManagedConfigKey) return _mobileManagedConfig;
+      if (key == _mobileManagedProtocolKey) return _mobileManagedProtocol;
+      return _mobileBaseConfig;
     }
     try {
       final value = await _mobileConfigChannel.invokeMethod<String>(
@@ -4748,21 +4786,26 @@ class ConfigStore {
       );
       if (key == _mobileManagedConfigKey) {
         _mobileManagedConfig = value;
+      } else if (key == _mobileManagedProtocolKey) {
+        final normalized = (value ?? '').trim().toLowerCase();
+        if (normalized.isNotEmpty) _mobileManagedProtocol = normalized;
       } else if (key == _mobileBaseConfigKey) {
         _mobileBaseConfig = value;
       }
       return value;
     } catch (e) {
       await appendBlueVpnClientLog('mobile config secure read failed: $e');
-      return key == _mobileManagedConfigKey
-          ? _mobileManagedConfig
-          : _mobileBaseConfig;
+      if (key == _mobileManagedConfigKey) return _mobileManagedConfig;
+      if (key == _mobileManagedProtocolKey) return _mobileManagedProtocol;
+      return _mobileBaseConfig;
     }
   }
 
   Future<void> _writeMobileConfig(String key, String content) async {
     if (key == _mobileManagedConfigKey) {
       _mobileManagedConfig = content;
+    } else if (key == _mobileManagedProtocolKey) {
+      _mobileManagedProtocol = content.trim().toLowerCase();
     } else if (key == _mobileBaseConfigKey) {
       _mobileBaseConfig = content;
     }
@@ -4780,6 +4823,8 @@ class ConfigStore {
   Future<void> _deleteMobileConfig(String key) async {
     if (key == _mobileManagedConfigKey) {
       _mobileManagedConfig = null;
+    } else if (key == _mobileManagedProtocolKey) {
+      _mobileManagedProtocol = 'wireguard_udp';
     } else if (key == _mobileBaseConfigKey) {
       _mobileBaseConfig = null;
     }
@@ -4990,6 +5035,43 @@ class ConfigStore {
       await WindowsLocalSecurity.prepareSharedConfigDirectory(f.parent.path);
       await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
     });
+  }
+
+  Future<String> readManagedProtocol() async {
+    if (kIsWeb) return 'wireguard_udp';
+    if (_usesMobileSecureConfig) {
+      final value = await _readMobileConfig(_mobileManagedProtocolKey);
+      final normalized = (value ?? '').trim().toLowerCase();
+      if (normalized.isNotEmpty) _mobileManagedProtocol = normalized;
+      return _mobileManagedProtocol;
+    }
+    if (Platform.isWindows) {
+      final path = '${managedConfigPath}.protocol';
+      final file = File(path);
+      if (file.existsSync()) {
+        final normalized = (await file.readAsString()).trim().toLowerCase();
+        if (normalized.isNotEmpty) _mobileManagedProtocol = normalized;
+      }
+    }
+    return _mobileManagedProtocol;
+  }
+
+  Future<void> writeManagedProtocol(String protocol) async {
+    final normalized = protocol.trim().toLowerCase();
+    _mobileManagedProtocol = normalized.isEmpty ? 'wireguard_udp' : normalized;
+    if (kIsWeb) return;
+    if (_usesMobileSecureConfig) {
+      await _writeMobileConfig(
+        _mobileManagedProtocolKey,
+        _mobileManagedProtocol,
+      );
+      return;
+    }
+    if (Platform.isWindows) {
+      final file = File('${managedConfigPath}.protocol');
+      if (!file.parent.existsSync()) file.parent.createSync(recursive: true);
+      await file.writeAsString(_mobileManagedProtocol);
+    }
   }
 
   Future<void> writeBaseConfig(String content) async {
@@ -5953,7 +6035,9 @@ class ServerLocation {
   });
 
   bool get isCurrentClientReady =>
-      available && clientConfigReady && protocolCode == 'wireguard_udp';
+      available &&
+      clientConfigReady &&
+      kSupportedVpnProtocols.contains(protocolCode);
 
   static ServerLocation fromCatalogJson(Map<String, dynamic> json) {
     final endpoint = json['endpoint'];
@@ -6301,6 +6385,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     pingMs: null,
     isAuto: true,
   );
+  String _persistedServerId = 'auto';
 
   // ===== TARIFF STATE =====
   final Set<TariffApp> selectedApps = {};
@@ -6915,11 +7000,13 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       sLanguage = 'Русский';
 
       // Apply server
-      final srv = servers.firstWhere(
-        (s) => s.id == p.serverId,
-        orElse: () => servers.first,
-      );
-      selectedServer = srv;
+      _persistedServerId = p.serverId.trim().isEmpty
+          ? 'auto'
+          : p.serverId.trim();
+      final matchingServers = servers.where((s) => s.id == _persistedServerId);
+      if (matchingServers.isNotEmpty) {
+        selectedServer = matchingServers.first;
+      }
 
       // Apply social-only
       socialOnlyEnabled = p.socialOnlyEnabled;
@@ -7040,6 +7127,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
   void _schedulePrefsSave() {
     if (kIsWeb) return;
+    _persistedServerId = selectedServer.id;
     _prefsDebounce?.cancel();
     _prefsDebounce = Timer(const Duration(milliseconds: 350), () {
       unawaited(
@@ -7955,6 +8043,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     ServerLocation? server,
   }) async {
     await _cfg.writeManagedConfig(_buildManagedConfigFromBase(rawConfig));
+    await _cfg.writeManagedProtocol(server?.protocolCode ?? 'wireguard_udp');
     try {
       await _cfg.writeBaseConfig(rawConfig);
     } catch (e) {
@@ -9082,8 +9171,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       status: 'healthy',
       available: true,
       clientConfigReady: true,
-      protocolCode: fallback.protocolCode,
-      protocolLabel: fallback.protocolLabel,
+      protocolCode: config.protocol.isEmpty
+          ? fallback.protocolCode
+          : config.protocol,
+      protocolLabel: config.protocol == 'amneziawg'
+          ? 'Защищённый режим'
+          : fallback.protocolLabel,
     );
   }
 
@@ -9645,14 +9738,17 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           _fallbackServerCatalogForCurrentChannel(),
           servers.where((s) => !s.isAuto).toList(),
         );
+        final desiredServerId = _persistedServerId.trim().isEmpty
+            ? selectedServer.id
+            : _persistedServerId;
         final stillSelected = fallbackServers.any(
-          (s) => s.id == selectedServer.id,
+          (s) => s.id == desiredServerId,
         );
         setState(() {
           servers = fallbackServers;
           selectedServer = stillSelected
               ? fallbackServers.firstWhere(
-                  (s) => s.id == selectedServer.id,
+                  (s) => s.id == desiredServerId,
                   orElse: () => fallbackServers.first,
                 )
               : fallbackServers.first;
@@ -9725,7 +9821,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         );
       }
 
-      final stillSelected = nextServers.any((s) => s.id == selectedServer.id);
+      final desiredServerId = _persistedServerId.trim().isEmpty
+          ? selectedServer.id
+          : _persistedServerId;
+      final stillSelected = nextServers.any((s) => s.id == desiredServerId);
       setState(() {
         servers = nextServers;
         _adaptiveRouteServerId = selectedRouteServerId.isEmpty
@@ -9742,7 +9841,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             : selectedRouteConfidence;
         final nextSelected = stillSelected
             ? nextServers.firstWhere(
-                (s) => s.id == selectedServer.id,
+                (s) => s.id == desiredServerId,
                 orElse: () => nextServers.first,
               )
             : nextServers.first;
@@ -9838,6 +9937,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       return;
     }
 
+    _persistedServerId = picked.id;
     setState(() => selectedServer = picked);
     _schedulePrefsSave();
 
@@ -17233,6 +17333,7 @@ class WireGuardAndroidBackend extends VpnBackend {
       final response = await _invokeMap('connect', {
         'name': tunnelName,
         'config': config,
+        'protocol': await ConfigStore().readManagedProtocol(),
       });
       return VpnBackendResult(
         ok: response['ok'] == true,
