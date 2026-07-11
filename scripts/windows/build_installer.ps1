@@ -8,6 +8,7 @@ param(
     [string]$ApiFallbackBaseUrls = "https://176-113-81-35.sslip.io",
     [bool]$TrialOnlyNoAdsBuild = $true,
     [bool]$PaidBetaBuild = $false,
+    [bool]$PublicProductBuild = $false,
     [ValidateSet('stable', 'paid-beta')]
     [string]$WindowsRuntimeScope = 'stable',
     [switch]$SkipBuild,
@@ -229,6 +230,14 @@ if ($PaidBetaBuild) {
 } elseif ($WindowsRuntimeScope -ne 'stable') {
     throw "The paid-beta Windows runtime scope requires PaidBetaBuild=true."
 }
+if ($PublicProductBuild) {
+    if ($TrialOnlyNoAdsBuild -or $PaidBetaBuild) {
+        throw "Public product build cannot also be Trial-only or paid-beta."
+    }
+    if ($WindowsRuntimeScope -ne 'stable') {
+        throw "Public product Windows build must use the stable runtime scope."
+    }
+}
 
 $runtime = if ($WindowsRuntimeScope -eq 'paid-beta') {
     [ordered]@{
@@ -273,6 +282,7 @@ if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
         Write-Section 'BUILD WINDOWS RELEASE'
         $trialOnlyDefine = $TrialOnlyNoAdsBuild.ToString().ToLowerInvariant()
         $paidBetaDefine = $PaidBetaBuild.ToString().ToLowerInvariant()
+        $publicProductDefine = $PublicProductBuild.ToString().ToLowerInvariant()
         $previousRuntimeEnvironment = @{}
         foreach ($name in $runtime.Keys) {
             $previousRuntimeEnvironment[$name] = [pscustomobject]@{
@@ -293,6 +303,7 @@ if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
                 --dart-define="GREENVPN_APP_VERSION=$AppVersion" `
                 --dart-define="GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=$trialOnlyDefine" `
                 --dart-define="GREENVPN_PAID_BETA_BUILD=$paidBetaDefine" `
+                --dart-define="GREENVPN_PUBLIC_PRODUCT_BUILD=$publicProductDefine" `
                 --dart-define="GREENVPN_WINDOWS_RUNTIME_SCOPE=$($runtime.GREENVPN_WINDOWS_RUNTIME_SCOPE)" `
                 --dart-define="GREENVPN_WINDOWS_TUNNEL_NAME=$($runtime.GREENVPN_WINDOWS_TUNNEL_NAME)" `
                 --dart-define="GREENVPN_WINDOWS_SERVICE_NAME=$($runtime.GREENVPN_WINDOWS_SERVICE_NAME)" `

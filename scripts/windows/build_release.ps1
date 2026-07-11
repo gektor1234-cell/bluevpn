@@ -5,6 +5,7 @@ param(
     [string]$AppVersion = "0.2.39-windows-clean-server-ui",
     [string]$ApiBaseUrl = "https://api.greenvpn.pro",
     [string]$ApiFallbackBaseUrls = "https://176-113-81-35.sslip.io",
+    [switch]$PublicProductBuild,
     [switch]$SkipBuild,
     [switch]$OpenFolder
 )
@@ -94,11 +95,14 @@ if (-not $SkipBuild) {
 
     Push-Location $ProjectRoot
     try {
+        $trialOnlyDefine = (-not $PublicProductBuild).ToString().ToLowerInvariant()
+        $publicProductDefine = $PublicProductBuild.ToString().ToLowerInvariant()
         flutter clean
         flutter pub get
         flutter build windows --release `
             --dart-define="GREENVPN_APP_VERSION=$AppVersion" `
-            --dart-define="GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=true" `
+            --dart-define="GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=$trialOnlyDefine" `
+            --dart-define="GREENVPN_PUBLIC_PRODUCT_BUILD=$publicProductDefine" `
             --dart-define="BLUEVPN_API_BASE_URL=$ApiBaseUrl" `
             --dart-define="BLUEVPN_API_BASE_URLS=$ApiFallbackBaseUrls"
     }

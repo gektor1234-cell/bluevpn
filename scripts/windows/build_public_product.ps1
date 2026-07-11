@@ -1,0 +1,171 @@
+param(
+    [ValidateSet("android", "windows", "both")]
+    [string]$Mode = "both",
+    [string]$AppVersion = "0.3.0",
+    [string]$WindowsAppVersion = "0.3.0",
+    [string]$AndroidBuildNumber = "2026071101",
+    [string]$AndroidApplicationId = "pro.greenvpn.app",
+    [string]$AndroidAppLabel = "Green VPN",
+    [string]$ApiBaseUrl = "https://api.greenvpn.pro",
+    [string]$ApiFallbackBaseUrls = "https://176-113-81-35.sslip.io",
+    [string]$OutDir = "C:\BlueVPN_Builds\public_product_20260711",
+    [switch]$SkipChecks
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+$repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+Set-Location $repo
+
+if ($ApiBaseUrl.Contains("/paid-beta-api") -or $ApiFallbackBaseUrls.Contains("/paid-beta-api")) {
+    throw "Public product build must use production API roots."
+}
+if ($AndroidApplicationId -ne "pro.greenvpn.app") {
+    throw "Public product Android build must keep the production package ID."
+}
+if ($AndroidAppLabel -ne "Green VPN") {
+    throw "Public product Android build must keep the production label."
+}
+if (-not (Get-Command flutter -ErrorAction SilentlyContinue)) {
+    throw "flutter was not found in PATH."
+}
+
+New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+
+if (-not $SkipChecks) {
+    flutter pub get | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "flutter pub get failed" }
+    flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "flutter analyze failed" }
+    flutter test --no-pub | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "flutter test failed" }
+}
+
+$artifacts = New-Object System.Collections.Generic.List[object]
+$safeVersion = $AppVersion -replace "[^A-Za-z0-9._-]", "_"
+$safeWindowsVersion = $WindowsAppVersion -replace "[^A-Za-z0-9._-]", "_"
+
+if ($Mode -in @("android", "both")) {
+    $androidSdk = Join-Path $env:LOCALAPPDATA "Android\Sdk"
+    $jdkDir = "C:\Program Files\Android\openjdk\jdk-21.0.8"
+    if (-not (Test-Path -LiteralPath $androidSdk)) { throw "Android SDK not found: $androidSdk" }
+    if (-not (Test-Path -LiteralPath $jdkDir)) { throw "Android JDK not found: $jdkDir" }
+
+    $oldEnvironment = @{}
+    $buildEnvironment = [ordered]@{
+        ANDROID_HOME = $androidSdk
+        ANDROID_SDK_ROOT = $androidSdk
+        JAVA_HOME = $jdkDir
+        GREENVPN_ANDROID_APPLICATION_ID = $AndroidApplicationId
+        GREENVPN_ANDROID_APP_LABEL = $AndroidAppLabel
+        GREENVPN_ANDROID_API_BASE_URL = $ApiBaseUrl
+        GREENVPN_ANDROID_API_FALLBACK_BASE_URLS = $ApiFallbackBaseUrls
+    }
+    $oldPath = $env:Path
+    try {
+        foreach ($name in $buildEnvironment.Keys) {
+            $oldEnvironment[$name] = [pscustomobject]@{
+                existed = Test-Path -LiteralPath "Env:$name"
+                value = [Environment]::GetEnvironmentVariable($name, "Process")
+            }
+            Set-Item -LiteralPath "Env:$name" -Value $buildEnvironment[$name]
+        }
+        $env:Path = "$jdkDir\bin;$androidSdk\platform-tools;$env:Path"
+
+        flutter build apk --release --no-pub `
+            --build-name $AppVersion `
+            --build-number $AndroidBuildNumber `
+            --dart-define="GREENVPN_APP_VERSION=$AppVersion" `
+            --dart-define="GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=false" `
+            --dart-define="GREENVPN_PAID_BETA_BUILD=false" `
+            --dart-define="GREENVPN_PUBLIC_PRODUCT_BUILD=true" `
+            --dart-define="GREENVPN_YANDEX_REWARDED_ADS_ENABLED=false" `
+            --dart-define="BLUEVPN_API_BASE_URL=$ApiBaseUrl" `
+            --dart-define="BLUEVPN_API_BASE_URLS=$ApiFallbackBaseUrls" | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "Android public product build failed" }
+    }
+    finally {
+        $env:Path = $oldPath
+        foreach ($name in $buildEnvironment.Keys) {
+            $previous = $oldEnvironment[$name]
+            if ($previous.existed) {
+                Set-Item -LiteralPath "Env:$name" -Value $previous.value
+            } else {
+                Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    $sourceApk = (Resolve-Path "build\app\outputs\flutter-apk\app-release.apk").Path
+    $androidPath = Join-Path $OutDir "GreenVPN_Android_${safeVersion}_${AndroidBuildNumber}.apk"
+    Copy-Item -LiteralPath $sourceApk -Destination $androidPath -Force
+
+    $apksigner = Get-ChildItem -LiteralPath (Join-Path $androidSdk "build-tools") `
+        -Filter "apksigner.bat" -Recurse | Sort-Object FullName -Descending | Select-Object -First 1
+    $aapt = Get-ChildItem -LiteralPath (Join-Path $androidSdk "build-tools") `
+        -Filter "aapt.exe" -Recurse | Sort-Object FullName -Descending | Select-Object -First 1
+    if ($null -eq $apksigner -or $null -eq $aapt) { throw "Android verification tools not found" }
+    & $apksigner.FullName verify --verbose --print-certs $androidPath | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "Android signature verification failed" }
+    $badging = (& $aapt.FullName dump badging $androidPath) -join "`n"
+    if ($badging -notmatch "package: name='$([regex]::Escape($AndroidApplicationId))'") {
+        throw "Android package ID mismatch."
+    }
+    if ($badging -notmatch "application-label:'$([regex]::Escape($AndroidAppLabel))'") {
+        throw "Android app label mismatch."
+    }
+
+    $item = Get-Item -LiteralPath $androidPath
+    $artifacts.Add([pscustomobject]@{
+        platform = "android"; version = $AppVersion; buildNumber = $AndroidBuildNumber
+        applicationId = $AndroidApplicationId; path = $item.FullName
+        sizeBytes = $item.Length; sha256 = (Get-FileHash $item.FullName -Algorithm SHA256).Hash
+        signed = $true
+    })
+}
+
+if ($Mode -in @("windows", "both")) {
+    $windowsPath = Join-Path $OutDir "GreenVPN_Setup_${safeWindowsVersion}.exe"
+    & (Join-Path $PSScriptRoot "build_installer.ps1") `
+        -ProjectRoot $repo -OutBase $OutDir `
+        -InstallerName (Split-Path $windowsPath -Leaf) `
+        -AppVersion $WindowsAppVersion `
+        -ApiBaseUrl $ApiBaseUrl `
+        -ApiFallbackBaseUrls $ApiFallbackBaseUrls `
+        -TrialOnlyNoAdsBuild $false `
+        -PaidBetaBuild $false `
+        -PublicProductBuild $true `
+        -WindowsRuntimeScope stable
+    if ($LASTEXITCODE -ne 0) { throw "Windows public product build failed" }
+    $item = Get-Item -LiteralPath $windowsPath
+    $signature = Get-AuthenticodeSignature -LiteralPath $item.FullName
+    $artifacts.Add([pscustomobject]@{
+        platform = "windows"; version = $WindowsAppVersion; buildNumber = ""
+        path = $item.FullName; sizeBytes = $item.Length
+        sha256 = (Get-FileHash $item.FullName -Algorithm SHA256).Hash
+        signed = $signature.Status -eq "Valid"; signatureStatus = $signature.Status.ToString()
+    })
+}
+
+$manifest = [ordered]@{
+    channel = "stable"
+    publicProduct = $true
+    productionPublished = $false
+    appVersion = $AppVersion
+    windowsAppVersion = $WindowsAppVersion
+    trialDays = 3
+    plans = [object[]]@(
+        [pscustomobject]@{ code = 'green_30d'; periodDays = 30; priceRub = 249 }
+        [pscustomobject]@{ code = 'green_90d'; periodDays = 90; priceRub = 649 }
+        [pscustomobject]@{ code = 'green_180d'; periodDays = 180; priceRub = 1099 }
+    )
+    autoRenew = $true
+    adsEnabled = $false
+    generatedAt = (Get-Date).ToUniversalTime().ToString("o")
+    artifacts = [object[]]$artifacts
+}
+$manifest | ConvertTo-Json -Depth 8 | Set-Content `
+    -LiteralPath (Join-Path $OutDir "public-product-artifacts.json") -Encoding utf8
+
+$artifacts | Format-Table platform, version, sizeBytes, sha256, path -AutoSize | Out-Host

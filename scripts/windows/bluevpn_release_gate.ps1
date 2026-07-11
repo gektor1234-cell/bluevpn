@@ -144,6 +144,21 @@ foreach ($fragment in $localServiceClientFragments) {
     }
 }
 
+$publicProductClientFragments = @(
+    'GREENVPN_PUBLIC_PRODUCT_BUILD',
+    '_buildFixedPublicProduct(',
+    'green_90d',
+    'green_180d'
+)
+foreach ($fragment in $publicProductClientFragments) {
+    if ($main.Contains($fragment)) {
+        Add-Pass "Public product client flow present: $fragment"
+    }
+    else {
+        Add-Error "Public product client flow missing: $fragment"
+    }
+}
+
 $sessionPersistenceFragments = @(
     'session storage migration skipped type=',
     'session read failed type=',
@@ -198,6 +213,7 @@ $requiredBackendFragments = @(
     '@app.get("/api/v1/admin/billing/promos/readiness")',
     '@app.post("/api/v1/admin/billing/promos/draft-start-campaign")',
     '@app.get("/api/v1/admin/billing/renewals/readiness")',
+    '@app.post("/api/v1/admin/billing/renewals/run")',
     '@app.get("/api/v1/admin/subscriptions/expiry-readiness")',
     '@app.get("/api/v1/admin/email/readiness")',
     '@app.get("/api/v1/admin/sms/readiness")',
@@ -337,6 +353,16 @@ $requiredBackendSafetyFragments = @(
     'def billing_reconciliation_payload(',
     'GREENVPN_PAID_BETA_BILLING_PRIMARY',
     'paid_beta_billing_primary_required',
+    'GREENVPN_PUBLIC_PRODUCT_ENABLED',
+    'GREENVPN_PUBLIC_PRODUCT_BILLING_PRIMARY',
+    'PUBLIC_PRODUCT_PRICE_RUB = 249',
+    '"green_90d"',
+    '"green_180d"',
+    '"pricingModel": "fixed_term_plans"',
+    'GREENVPN_AUTO_RENEWAL_CHARGES_ENABLED',
+    'def execute_due_auto_renewals(',
+    'order_kind',
+    'renewal_key',
     'def billing_order_requires_attention(',
     'paid_not_activated',
     'status"] or "").strip().lower() in {"failed", "canceled", "cancelled"}',

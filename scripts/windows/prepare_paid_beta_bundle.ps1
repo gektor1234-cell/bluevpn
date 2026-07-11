@@ -97,6 +97,9 @@ New-Item -ItemType Directory -Force -Path `
 Copy-Item `
     -LiteralPath (Join-Path $repo "scripts\server\install_paid_beta_contour.sh") `
     -Destination (Join-Path $stage "install_paid_beta_contour.sh")
+Copy-Item `
+    -LiteralPath (Join-Path $repo "scripts\server\install_auto_renewal_timer.sh") `
+    -Destination (Join-Path $stage "install_auto_renewal_timer.sh")
 
 Copy-Item -LiteralPath (Join-Path $backendSource "app\main.py") -Destination (Join-Path $backendTarget "app\main.py")
 Copy-Item -LiteralPath (Join-Path $backendSource "requirements.txt") -Destination (Join-Path $backendTarget "requirements.txt")
@@ -105,6 +108,7 @@ $opsFiles = @(
     "greenvpn_db_sync_from_peer.sh",
     "greenvpn_sqlite_snapshot_stdout.py",
     "greenvpn_sqlite_state_sync.py",
+    "run_auto_renewals.py",
     "create_paid_beta_first20_package.py",
     "smoke_paid_beta_contour.py"
 )

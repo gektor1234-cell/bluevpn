@@ -215,9 +215,41 @@ VPN_NODE_SSH_CONTROL_PATH = (
 
 DEFAULT_PLAN_NAME = "Trial"
 DEFAULT_PLAN_CODE = "trial"
-DEFAULT_MAX_DEVICES = int(os.getenv("BLUEVPN_DEFAULT_MAX_DEVICES", "5"))
+DEFAULT_MAX_DEVICES = int(os.getenv("BLUEVPN_DEFAULT_MAX_DEVICES", "1"))
 DEFAULT_TRIAL_DAYS = int(os.getenv("BLUEVPN_DEFAULT_TRIAL_DAYS", "3"))
 PAID_PLAN_DAYS = int(os.getenv("BLUEVPN_PAID_PLAN_DAYS", "30"))
+PUBLIC_PRODUCT_ENABLED = (
+    os.getenv("GREENVPN_PUBLIC_PRODUCT_ENABLED", "").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+PUBLIC_PRODUCT_BILLING_PRIMARY = (
+    os.getenv("GREENVPN_PUBLIC_PRODUCT_BILLING_PRIMARY", "1").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+PUBLIC_PRODUCT_POLICY_VERSION = "2026-07-11-public-v2"
+PUBLIC_PRODUCT_PLAN_CODE = "green_30d"
+PUBLIC_PRODUCT_PLAN_NAME = "Green VPN"
+PUBLIC_PRODUCT_PRICE_RUB = 249
+PUBLIC_PRODUCT_INCLUDED_DEVICES = 5
+PUBLIC_PRODUCT_MAX_DEVICES = 5
+PUBLIC_PRODUCT_PERIOD_DAYS = 30
+PUBLIC_PRODUCT_PLANS = {
+    "green_30d": {
+        "title": "1 месяц",
+        "periodDays": 30,
+        "priceRub": 249,
+    },
+    "green_90d": {
+        "title": "3 месяца",
+        "periodDays": 90,
+        "priceRub": 649,
+    },
+    "green_180d": {
+        "title": "6 месяцев",
+        "periodDays": 180,
+        "priceRub": 1099,
+    },
+}
 PAID_BETA_ENABLED = (
     os.getenv("GREENVPN_PAID_BETA_ENABLED", "").strip().lower()
     in {"1", "true", "yes", "on"}
@@ -447,10 +479,10 @@ PUBLIC_SITE_REQUIRED_LANDING_LINKS = [
     {"code": "support_anchor", "label": "Ссылка на поддержку", "needle": "#support"},
 ]
 PUBLIC_SITE_REQUIRED_PRICING_MARKERS = [
-    {"code": "free_start", "label": "Free start", "needle": "Бесплатный старт"},
-    {"code": "two_ads", "label": "Two ads", "needle": "2 рекламы"},
-    {"code": "zero_price", "label": "Zero rubles start", "needle": "0 ₽"},
-    {"code": "configurable_tariff", "label": "Configurable tariff", "needle": "Тариф без рекламы"},
+    {"code": "trial_3d", "label": "3-day Trial", "needle": "3 дня"},
+    {"code": "month_1", "label": "1 month", "needle": "249 ₽"},
+    {"code": "month_3", "label": "3 months", "needle": "649 ₽"},
+    {"code": "month_6", "label": "6 months", "needle": "1 099 ₽"},
 ]
 PAID_BETA_SITE_REQUIRED_MARKERS = [
     {"code": "trial_3d", "label": "3-day Trial", "needle": "3 дня"},
@@ -483,6 +515,18 @@ PUBLIC_SITE_BANNED_PHRASES = [
 ]
 RENEWAL_LOOKAHEAD_DAYS = int(os.getenv("GREENVPN_RENEWAL_LOOKAHEAD_DAYS", "7"))
 RENEWAL_DUE_SOON_DAYS = int(os.getenv("GREENVPN_RENEWAL_DUE_SOON_DAYS", "1"))
+AUTO_RENEWAL_CHARGES_ENABLED = (
+    os.getenv("GREENVPN_AUTO_RENEWAL_CHARGES_ENABLED", "0").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+AUTO_RENEWAL_BILLING_PRIMARY = (
+    os.getenv("GREENVPN_AUTO_RENEWAL_BILLING_PRIMARY", "0").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+AUTO_RENEWAL_MAX_CHARGES_PER_RUN = max(
+    1,
+    min(25, int(os.getenv("GREENVPN_AUTO_RENEWAL_MAX_CHARGES_PER_RUN", "5"))),
+)
 SUBSCRIPTION_EXPIRY_LOOKAHEAD_DAYS = int(
     os.getenv("GREENVPN_SUBSCRIPTION_EXPIRY_LOOKAHEAD_DAYS", "7")
 )
@@ -1380,6 +1424,7 @@ class TariffSelectionIn(BaseModel):
     promoCode: Optional[str] = None
     clientMarker: Optional[str] = None
     releaseChannel: Optional[str] = None
+    billingPlanCode: Optional[str] = None
 
 
 class AdminMarkOrderPaidIn(BaseModel):
@@ -2901,6 +2946,22 @@ def init_db() -> None:
             "beta_invite_public_id",
             "beta_invite_public_id TEXT",
         )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "order_kind",
+            "order_kind TEXT NOT NULL DEFAULT 'manual'",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "renewal_key",
+            "renewal_key TEXT",
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_orders_renewal_key "
+            "ON billing_orders(renewal_key) WHERE renewal_key IS NOT NULL"
+        )
 
         conn.execute(
             """
@@ -4293,6 +4354,7 @@ def client_subscription_access_policy(
     beta_client = paid_beta_request_allowed(client_marker, release_channel)
     beta_user = user_is_paid_beta_cohort(user)
     beta_scope = beta_client or beta_user
+    public_product_scope = bool(PUBLIC_PRODUCT_ENABLED and not beta_scope)
 
     if beta_client and not beta_user:
         allowed = False
@@ -4303,7 +4365,10 @@ def client_subscription_access_policy(
         enforced = True
         reason = None if allowed else "subscription_inactive"
     else:
-        enforced = bool(ENFORCE_SUBSCRIPTION_ACCESS and not PAID_BETA_ENABLED)
+        enforced = bool(
+            ENFORCE_SUBSCRIPTION_ACCESS
+            and (PUBLIC_PRODUCT_ENABLED or not PAID_BETA_ENABLED)
+        )
         allowed = bool(sub.get("isActive")) or not enforced
         reason = None if allowed else "subscription_inactive"
 
@@ -4314,13 +4379,14 @@ def client_subscription_access_policy(
         "paidBetaClient": beta_client,
         "paidBetaUser": beta_user,
         "paidBetaScope": beta_scope,
+        "publicProductScope": public_product_scope,
         "accessCohort": user_access_cohort(user),
         "maxDevices": (
             PAID_BETA_MAX_DEVICES
             if beta_user
             else max(1, int(sub.get("maxDevices") or DEFAULT_MAX_DEVICES))
         ),
-        "adsDisabled": beta_scope,
+        "adsDisabled": beta_scope or public_product_scope,
     }
 
 
@@ -4895,9 +4961,52 @@ def paid_beta_funnel_summary(limit: int = 100) -> dict:
     }
 
 
+def build_public_product_tariff_catalog() -> dict:
+    return {
+        "policyVersion": PUBLIC_PRODUCT_POLICY_VERSION,
+        "pricingModel": "fixed_term_plans",
+        "defaultPlanCode": PUBLIC_PRODUCT_PLAN_CODE,
+        "plans": [
+            {
+                "code": code,
+                "title": plan["title"],
+                "periodDays": plan["periodDays"],
+                "priceRub": plan["priceRub"],
+                "effectiveMonthlyRub": round(
+                    int(plan["priceRub"]) * 30 / int(plan["periodDays"])
+                ),
+                "discountPercent": round(
+                    100
+                    * (
+                        1
+                        - int(plan["priceRub"])
+                        / (
+                            PUBLIC_PRODUCT_PRICE_RUB
+                            * int(plan["periodDays"])
+                            / PUBLIC_PRODUCT_PERIOD_DAYS
+                        )
+                    )
+                ),
+            }
+            for code, plan in PUBLIC_PRODUCT_PLANS.items()
+        ],
+        "includedDevices": PUBLIC_PRODUCT_INCLUDED_DEVICES,
+        "autoRenew": True,
+        "adsEnabled": False,
+        "includedFeatures": ["vpn_access", "social_routing", "no_ads"],
+        "notes": [
+            "Все планы включают одинаковые возможности Green VPN.",
+            "Чем больше оплаченный срок, тем ниже стоимость месяца.",
+            "Автопродление включено по умолчанию и может быть отключено в приложении.",
+        ],
+    }
+
+
 def build_tariff_catalog(paid_beta: bool = False) -> dict:
     if paid_beta:
         return build_paid_beta_tariff_catalog()
+    if PUBLIC_PRODUCT_ENABLED:
+        return build_public_product_tariff_catalog()
     return {
         "policyVersion": TARIFF_POLICY_VERSION,
         "pricingModel": "free_start_plus_configurable_paid_plan",
@@ -5616,6 +5725,31 @@ def normalize_tariff_selection(payload: TariffSelectionIn) -> dict:
             "includedFeatures": ["vpn_access", "social_routing", "no_ads"],
         }
 
+    if PUBLIC_PRODUCT_ENABLED:
+        plan_code = str(payload.billingPlanCode or PUBLIC_PRODUCT_PLAN_CODE).strip().lower()
+        if plan_code not in PUBLIC_PRODUCT_PLANS:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "public_plan_invalid",
+                    "message": "Выбранный срок подписки недоступен.",
+                },
+            )
+        return {
+            "policyMode": "public_product",
+            "policyVersion": PUBLIC_PRODUCT_POLICY_VERSION,
+            "planCode": plan_code,
+            "trafficPack": "included",
+            "trafficGb": 0,
+            "paidEffectiveGb": 0,
+            "devices": PUBLIC_PRODUCT_INCLUDED_DEVICES,
+            "unlimitedApps": [],
+            "dedicatedIp": False,
+            "autoRenew": bool(payload.autoRenew),
+            "promoCode": "",
+            "includedFeatures": ["vpn_access", "social_routing", "no_ads"],
+        }
+
     traffic_pack = payload.trafficPack.strip().lower()
     if traffic_pack not in TRAFFIC_PACK_BASE:
         traffic_pack = "gb50"
@@ -5679,6 +5813,47 @@ def quote_tariff(selection: dict, strict_promo: bool = False) -> dict:
                 "maxDevices": PAID_BETA_MAX_DEVICES,
                 "ads": False,
                 "autoRenew": False,
+            },
+        }
+
+    if selection.get("policyMode") == "public_product":
+        plan_code = str(selection.get("planCode") or PUBLIC_PRODUCT_PLAN_CODE).strip().lower()
+        plan = PUBLIC_PRODUCT_PLANS.get(plan_code)
+        if plan is None:
+            raise HTTPException(status_code=400, detail="Выбранный срок подписки недоступен.")
+        period_days = int(plan["periodDays"])
+        price_rub = int(plan["priceRub"])
+        return {
+            "planCode": plan_code,
+            "planName": f"{PUBLIC_PRODUCT_PLAN_NAME} — {plan['title']}",
+            "policyVersion": PUBLIC_PRODUCT_POLICY_VERSION,
+            "pricingModel": "fixed_term_plans",
+            "periodDays": period_days,
+            "trafficPack": "included",
+            "trafficGb": 0,
+            "trafficLimitGb": None,
+            "devices": PUBLIC_PRODUCT_INCLUDED_DEVICES,
+            "includedDevices": PUBLIC_PRODUCT_INCLUDED_DEVICES,
+            "unlimitedApps": [],
+            "dedicatedIp": False,
+            "autoRenew": bool(selection.get("autoRenew", True)),
+            "adsEnabled": False,
+            "includedFeatures": ["vpn_access", "social_routing", "no_ads"],
+            "lineItems": [
+                {
+                    "code": "vpn_access",
+                    "title": f"Green VPN на {period_days} дней",
+                    "priceRub": price_rub,
+                },
+            ],
+            "monthlyPriceRub": price_rub,
+            "priceRub": price_rub,
+            "effectiveMonthlyRub": round(price_rub * 30 / period_days),
+            "summary": {
+                "periodDays": period_days,
+                "includedDevices": PUBLIC_PRODUCT_INCLUDED_DEVICES,
+                "ads": False,
+                "autoRenew": bool(selection.get("autoRenew", True)),
             },
         }
 
@@ -16040,11 +16215,13 @@ def apply_tariff_for_user(
         strict_promo=bool(normalized.get("promoCode")),
     )
     now = utc_now()
-    period_days = (
-        PAID_BETA_PERIOD_DAYS
-        if normalized.get("policyMode") == "paid_beta"
-        else PAID_PLAN_DAYS
-    )
+    policy_mode = normalized.get("policyMode")
+    if policy_mode == "paid_beta":
+        period_days = PAID_BETA_PERIOD_DAYS
+    elif policy_mode == "public_product":
+        period_days = int(quote.get("periodDays") or PUBLIC_PRODUCT_PERIOD_DAYS)
+    else:
+        period_days = PAID_PLAN_DAYS
     selection_json = json.dumps(normalized, ensure_ascii=False)
     auto_renew = bool(normalized.get("autoRenew", False))
     saved_payment_method_id = provider_payment_method_id if auto_renew else None
@@ -16062,12 +16239,13 @@ def apply_tariff_for_user(
         ).fetchone()
 
         period_start = now
-        if (
-            normalized.get("policyMode") == "paid_beta"
+        same_renewable_product = policy_mode == "public_product" or (
+            policy_mode == "paid_beta"
             and current is not None
             and str(current["plan_code"] or "").strip().lower()
-            == PAID_BETA_PLAN_CODE
-        ):
+            == str(quote["planCode"] or "").strip().lower()
+        )
+        if same_renewable_product and current is not None:
             current_expires_at = parse_dt(current["expires_at"])
             if current_expires_at is not None:
                 if current_expires_at.tzinfo is None:
@@ -16193,6 +16371,7 @@ def billing_order_status(row) -> dict:
         "provider": row["provider"],
         "providerPaymentId": row["provider_payment_id"],
         "providerPaymentMethodId": row["provider_payment_method_id"] if "provider_payment_method_id" in row.keys() else None,
+        "orderKind": row["order_kind"] if "order_kind" in row.keys() else "manual",
         "paidAt": row["paid_at"],
         "activatedAt": row["activated_at"],
         "createdAt": row["created_at"],
@@ -17025,7 +17204,11 @@ def create_yookassa_payment_for_order(row, user_email: str) -> dict:
     confirmation = payment.get("confirmation") if isinstance(payment.get("confirmation"), dict) else {}
     payment_url = str(confirmation.get("confirmation_url") or "")
     payment_method = payment.get("payment_method") if isinstance(payment.get("payment_method"), dict) else {}
-    payment_method_id = str(payment_method.get("id") or "") or None
+    payment_method_id = (
+        str(payment_method.get("id") or "") or None
+        if payment_method.get("saved") is True
+        else None
+    )
 
     with db() as conn:
         conn.execute(
@@ -17061,6 +17244,7 @@ def create_billing_order_for_user(user_id: int, payload: TariffSelectionIn) -> d
         payload.clientMarker,
         payload.releaseChannel,
     )
+    public_product_request = PUBLIC_PRODUCT_ENABLED and not beta_request
     beta_user = user_is_paid_beta_cohort(user_access)
     if beta_request and not beta_user:
         raise HTTPException(
@@ -17086,6 +17270,14 @@ def create_billing_order_for_user(user_id: int, payload: TariffSelectionIn) -> d
                 "message": "Оплата временно недоступна. Повторите через несколько секунд.",
             },
         )
+    if public_product_request and not PUBLIC_PRODUCT_BILLING_PRIMARY:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "billing_primary_required",
+                "message": "Оплата временно недоступна. Повторите через несколько секунд.",
+            },
+        )
 
     normalized = normalize_tariff_selection(payload)
     quote = quote_tariff(
@@ -17098,17 +17290,40 @@ def create_billing_order_for_user(user_id: int, payload: TariffSelectionIn) -> d
     reused_existing_order = False
 
     with db() as conn:
-        if beta_request:
+        if beta_request or public_product_request:
             conn.execute("BEGIN IMMEDIATE")
         user = conn.execute("SELECT email FROM users WHERE id = ?", (user_id,)).fetchone()
         user_email = user["email"] if user else ""
         row = None
+        if public_product_request:
+            pending_rows = conn.execute(
+                """
+                SELECT *
+                FROM billing_orders
+                WHERE user_id = ? AND status = 'pending'
+                ORDER BY id DESC
+                """,
+                (int(user_id),),
+            ).fetchall()
+            for candidate in pending_rows:
+                try:
+                    candidate_selection = json.loads(candidate["selection_json"] or "{}")
+                except Exception:
+                    candidate_selection = {}
+                if (
+                    candidate_selection.get("policyMode") == "public_product"
+                    and candidate_selection.get("planCode") == normalized.get("planCode")
+                ):
+                    row = candidate
+                    reused_existing_order = True
+                    break
+
         redemption = (
             get_paid_beta_redemption_offer_row(conn, int(user_id))
             if beta_request
             else None
         )
-        if redemption is not None:
+        if row is None and redemption is not None:
             order_status = str(redemption["order_status"] or "").strip().lower()
             first_order_id = str(redemption["first_order_public_id"] or "").strip()
             converted = bool(redemption["converted_at"]) or str(
@@ -17326,7 +17541,11 @@ def apply_yookassa_payment_update(
 
     payment_id = str(payment.get("id") or "").strip() or None
     payment_method = payment.get("payment_method") if isinstance(payment.get("payment_method"), dict) else {}
-    payment_method_id = str(payment_method.get("id") or "").strip() or None
+    payment_method_id = (
+        str(payment_method.get("id") or "").strip() or None
+        if payment_method.get("saved") is True
+        else None
+    )
     status = str(payment.get("status") or "").strip().lower()
     paid = payment.get("paid") is True
 
@@ -18060,13 +18279,268 @@ def billing_renewal_readiness_payload(limit: int = 25) -> dict:
         "issueCounts": issue_counts,
         "candidates": due_or_attention[:safe_limit],
         "policy": {
-            "mode": "dry_run_readiness_only",
+            "mode": "guarded_execution" if AUTO_RENEWAL_CHARGES_ENABLED else "dry_run_readiness_only",
             "renewalLookaheadDays": RENEWAL_LOOKAHEAD_DAYS,
             "renewalDueSoonDays": RENEWAL_DUE_SOON_DAYS,
-            "automaticChargeExecution": "disabled_in_this_backend_version",
+            "automaticChargeExecution": (
+                "enabled_on_primary"
+                if AUTO_RENEWAL_CHARGES_ENABLED and AUTO_RENEWAL_BILLING_PRIMARY
+                else "disabled"
+            ),
             "requiresPaymentSmoke": True,
             "safePaymentMethodExposure": "Only boolean hasProviderPaymentMethod is returned; provider payment method ids are not exposed.",
         },
+    }
+
+
+def create_yookassa_auto_renewal_payment(
+    row: sqlite3.Row,
+    user_email: str,
+    subscription_id: int,
+    payment_method_id: str,
+    renewal_key: str,
+) -> dict:
+    order = billing_order_status(row)
+    quote = order["quote"] if isinstance(order["quote"], dict) else {}
+    plan_name = str(quote.get("planName") or PUBLIC_PRODUCT_PLAN_NAME)
+    public_id = order["orderId"]
+    payload = {
+        "amount": {
+            "value": f"{int(order['amountRub'])}.00",
+            "currency": order["currency"],
+        },
+        "capture": True,
+        "payment_method_id": payment_method_id,
+        "description": f"Автопродление Green VPN: {plan_name} ({public_id})",
+        "metadata": {
+            "bluevpn_order_id": public_id,
+            "orderId": public_id,
+            "userId": str(order["userId"]),
+            "email": user_email,
+            "subscriptionId": str(subscription_id),
+            "orderKind": "auto_renewal",
+        },
+    }
+    idempotence_key = "greenvpn-renew-" + hashlib.sha256(
+        renewal_key.encode("utf-8")
+    ).hexdigest()[:32]
+    payment = yookassa_request(
+        "/payments",
+        payload,
+        idempotence_key=idempotence_key,
+    )
+    payment_id = str(payment.get("id") or "").strip() or None
+    payment_method = (
+        payment.get("payment_method")
+        if isinstance(payment.get("payment_method"), dict)
+        else {}
+    )
+    saved_method_id = (
+        str(payment_method.get("id") or "").strip() or None
+        if payment_method.get("saved") is True
+        else payment_method_id
+    )
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE billing_orders
+            SET provider = 'yookassa', provider_payment_id = ?,
+                provider_payment_method_id = ?, updated_at = ?
+            WHERE public_id = ?
+            """,
+            (payment_id, saved_method_id, utc_now_iso(), public_id),
+        )
+        conn.commit()
+        updated = conn.execute(
+            "SELECT * FROM billing_orders WHERE public_id = ?",
+            (public_id,),
+        ).fetchone()
+
+    status = str(payment.get("status") or "").strip().lower()
+    if payment.get("paid") is True or status == "succeeded":
+        return apply_yookassa_payment_update(public_id, payment)
+    if status == "canceled":
+        return mark_billing_order_canceled(public_id, provider_payment_id=payment_id)
+    return {"order": billing_order_status(updated)}
+
+
+def create_auto_renewal_order(subscription_id: int) -> dict:
+    if not AUTO_RENEWAL_CHARGES_ENABLED or not AUTO_RENEWAL_BILLING_PRIMARY:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "auto_renewal_execution_disabled",
+                "message": "Automatic renewal execution is disabled on this server.",
+            },
+        )
+    if not yookassa_payment_readiness().get("productionReady"):
+        raise HTTPException(status_code=503, detail="YooKassa is not production-ready.")
+
+    now = utc_now()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        subscription = conn.execute(
+            """
+            SELECT s.*, u.email AS user_email
+            FROM subscriptions s
+            JOIN users u ON u.id = s.user_id
+            WHERE s.id = ?
+              AND s.id = (SELECT MAX(id) FROM subscriptions WHERE user_id = s.user_id)
+            """,
+            (int(subscription_id),),
+        ).fetchone()
+        if subscription is None:
+            raise HTTPException(status_code=404, detail="Subscription not found.")
+        if not bool(subscription["is_active"]) or not bool(subscription["auto_renew"]):
+            raise HTTPException(status_code=409, detail="Subscription is not eligible for auto-renewal.")
+        expires_at = parse_dt(subscription["expires_at"])
+        if expires_at is None:
+            raise HTTPException(status_code=409, detail="Subscription expiry is missing.")
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        days_until = (expires_at - now).total_seconds() / 86400.0
+        if days_until < 0 or days_until > RENEWAL_DUE_SOON_DAYS:
+            raise HTTPException(status_code=409, detail="Subscription is outside the renewal charge window.")
+        payment_method_id = str(subscription["provider_payment_method_id"] or "").strip()
+        if not payment_method_id:
+            raise HTTPException(status_code=409, detail="Saved payment method is missing.")
+        try:
+            selection = json.loads(subscription["selection_json"] or "{}")
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail="Subscription selection is invalid.") from exc
+        if not isinstance(selection, dict):
+            raise HTTPException(status_code=500, detail="Subscription selection is invalid.")
+        selection["autoRenew"] = True
+        quote = quote_tariff(selection)
+        renewal_key = f"subscription:{int(subscription['id'])}:expires:{subscription['expires_at']}"
+        existing = conn.execute(
+            "SELECT * FROM billing_orders WHERE renewal_key = ?",
+            (renewal_key,),
+        ).fetchone()
+        if existing is not None:
+            conn.commit()
+            return {
+                "order": billing_order_status(existing),
+                "reused": True,
+                "charged": str(existing["status"] or "").lower() in {"paid", "activated"},
+            }
+
+        public_id = "ord_" + secrets.token_urlsafe(18).replace("-", "").replace("_", "")[:24]
+        now_iso = now.isoformat()
+        conn.execute(
+            """
+            INSERT INTO billing_orders(
+                public_id, user_id, status, auto_renew, amount_rub, currency,
+                selection_json, quote_json, promo_code, discount_rub,
+                original_amount_rub, payment_url, provider,
+                provider_payment_method_id, created_at, updated_at,
+                order_kind, renewal_key
+            )
+            VALUES (?, ?, 'pending', 1, ?, 'RUB', ?, ?, NULL, 0, ?, NULL,
+                    'yookassa', ?, ?, ?, 'auto_renewal', ?)
+            """,
+            (
+                public_id,
+                int(subscription["user_id"]),
+                int(quote["monthlyPriceRub"]),
+                json.dumps(selection, ensure_ascii=False),
+                json.dumps(quote, ensure_ascii=False),
+                int(quote["monthlyPriceRub"]),
+                payment_method_id,
+                now_iso,
+                now_iso,
+                renewal_key,
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM billing_orders WHERE public_id = ?",
+            (public_id,),
+        ).fetchone()
+        user_email = str(subscription["user_email"] or "")
+
+    try:
+        result = create_yookassa_auto_renewal_payment(
+            row,
+            user_email=user_email,
+            subscription_id=int(subscription_id),
+            payment_method_id=payment_method_id,
+            renewal_key=renewal_key,
+        )
+    except Exception:
+        with db() as conn:
+            conn.execute(
+                "UPDATE billing_orders SET status = 'failed', updated_at = ? "
+                "WHERE public_id = ? AND status = 'pending'",
+                (utc_now_iso(), public_id),
+            )
+            conn.commit()
+        raise
+    order = result.get("order") if isinstance(result, dict) else None
+    return {
+        **(result if isinstance(result, dict) else {}),
+        "reused": False,
+        "charged": isinstance(order, dict)
+        and str(order.get("status") or "").lower() in {"paid", "activated"},
+    }
+
+
+def execute_due_auto_renewals(limit: Optional[int] = None) -> dict:
+    safe_limit = max(
+        1,
+        min(int(limit or AUTO_RENEWAL_MAX_CHARGES_PER_RUN), AUTO_RENEWAL_MAX_CHARGES_PER_RUN),
+    )
+    if not AUTO_RENEWAL_CHARGES_ENABLED or not AUTO_RENEWAL_BILLING_PRIMARY:
+        return {
+            "ok": True,
+            "enabled": False,
+            "executed": 0,
+            "results": [],
+        }
+    threshold = (utc_now() + timedelta(days=RENEWAL_DUE_SOON_DAYS)).isoformat()
+    now_iso = utc_now_iso()
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT s.id
+            FROM subscriptions s
+            WHERE s.auto_renew = 1 AND s.is_active = 1
+              AND s.provider_payment_method_id IS NOT NULL
+              AND s.expires_at >= ? AND s.expires_at <= ?
+              AND s.id = (SELECT MAX(s2.id) FROM subscriptions s2 WHERE s2.user_id = s.user_id)
+            ORDER BY s.expires_at ASC
+            LIMIT ?
+            """,
+            (now_iso, threshold, safe_limit),
+        ).fetchall()
+    results = []
+    for row in rows:
+        try:
+            result = create_auto_renewal_order(int(row["id"]))
+            order = result.get("order") if isinstance(result, dict) else {}
+            results.append(
+                {
+                    "subscriptionId": int(row["id"]),
+                    "ok": True,
+                    "orderId": order.get("orderId") if isinstance(order, dict) else None,
+                    "status": order.get("status") if isinstance(order, dict) else None,
+                    "reused": bool(result.get("reused")),
+                }
+            )
+        except Exception as exc:
+            detail = exc.detail if isinstance(exc, HTTPException) else type(exc).__name__
+            results.append(
+                {
+                    "subscriptionId": int(row["id"]),
+                    "ok": False,
+                    "error": detail if isinstance(detail, str) else "auto_renewal_failed",
+                }
+            )
+    return {
+        "ok": all(item["ok"] for item in results),
+        "enabled": True,
+        "executed": len(results),
+        "results": results,
     }
 
 
@@ -18594,6 +19068,12 @@ def mark_billing_order_paid_and_activate(
             else None
         )
     )
+    if bool(selection.get("autoRenew")) and not effective_payment_method_id:
+        selection["autoRenew"] = False
+        if isinstance(order_quote, dict):
+            order_quote["autoRenew"] = False
+            if isinstance(order_quote.get("summary"), dict):
+                order_quote["summary"]["autoRenew"] = False
     now = utc_now_iso()
 
     with db() as conn:
@@ -18629,6 +19109,7 @@ def mark_billing_order_paid_and_activate(
             SET status = 'activating',
                 provider_payment_id = COALESCE(?, provider_payment_id),
                 provider_payment_method_id = COALESCE(?, provider_payment_method_id),
+                selection_json = ?, quote_json = ?,
                 paid_at = COALESCE(paid_at, ?),
                 updated_at = ?
             WHERE public_id = ?
@@ -18636,6 +19117,8 @@ def mark_billing_order_paid_and_activate(
             (
                 provider_payment_id,
                 provider_payment_method_id,
+                json.dumps(selection, ensure_ascii=False),
+                json.dumps(order_quote, ensure_ascii=False),
                 now,
                 now,
                 public_id,
@@ -20296,11 +20779,13 @@ def build_launch_readiness() -> dict:
             "billing_renewals",
             not bool(renewal.get("requiresAttention")),
             renewal_summary.get("message")
-            or "Автопродление пока работает в режиме проверки готовности.",
+            or "Контур автопродления проверен.",
             severity="warning",
             title="Автопродления подписок",
             next_action=(
-                "Автоматические списания не включать, пока нет production-платежей, "
+                "Контролировать неуспешные повторные платежи и отключения пользователями."
+                if AUTO_RENEWAL_CHARGES_ENABLED and AUTO_RENEWAL_BILLING_PRIMARY
+                else "Автоматические списания не включать, пока нет production-платежей, "
                 "чистого payment smoke и чистого dry-run по автопродлениям."
             ),
             details={
@@ -24879,11 +25364,12 @@ def public_landing_page():
   <section class="hero">
     <div class="wrap">
       <h1>Green VPN</h1>
-      <p>Установите приложение, войдите в аккаунт и включите защищенное подключение бесплатно. Платный режим можно выбрать позже, если потребуется работа без рекламы и с повышенным приоритетом.</p>
+      <p>Защищенное подключение для Windows и Android. Попробуйте все основные функции бесплатно 3 дня, затем выберите удобный срок подписки.</p>
       <div class="badges">
-        <span class="badge">Бесплатный старт</span>
-        <span class="badge">Режим без привязки карты</span>
-        <span class="badge">Тариф без рекламы</span>
+        <span class="badge">Trial 3 дня</span>
+        <span class="badge">От 249 ₽</span>
+        <span class="badge">До 6 месяцев</span>
+        <span class="badge">Без рекламы</span>
         <span class="badge">Windows и Android</span>
       </div>
       <div class="actions">
@@ -24912,21 +25398,22 @@ def public_landing_page():
       </div>
     </section>
     <section id="plans">
-      <h2>Бесплатно или без рекламы</h2>
+      <h2>Один сервис, три срока подписки</h2>
       <div class="grid">
-        <div class="card"><h3>Бесплатный старт</h3><div class="price">0 ₽</div><p>Можно попробовать защищенное подключение без оплаты и без привязки карты.</p></div>
-        <div class="card"><h3>Тариф без рекламы</h3><div class="price">от 99 ₽</div><p>Выберите подходящий объем в приложении. Оплата убирает рекламу и повышает приоритет.</p></div>
-        <div class="card"><h3>Больше стабильности</h3><div class="price">до 299 ₽</div><p>Максимальный режим рассчитан на ежедневное использование и высокую нагрузку.</p></div>
+        <div class="card"><h3>1 месяц</h3><div class="price">249 ₽</div><p>249 ₽ за месяц. Подходит, чтобы начать без долгого обязательства.</p></div>
+        <div class="card"><h3>3 месяца</h3><div class="price">649 ₽</div><p>Около 216 ₽ за месяц, выгода 13% относительно помесячной оплаты.</p></div>
+        <div class="card"><h3>6 месяцев</h3><div class="price">1 099 ₽</div><p>Около 183 ₽ за месяц, выгода 26% относительно помесячной оплаты.</p></div>
       </div>
-      <p class="note">Бесплатный режим помогает познакомиться с сервисом. Платный тариф убирает рекламу, повышает приоритет и дает больше стабильности при нагрузке. Банковские карты не хранятся в Green VPN.</p>
+      <p class="note">Во всех вариантах доступны одинаковые функции Green VPN. Отличается только оплаченный срок. Автопродление включено по умолчанию и отключается в приложении.</p>
     </section>
     <section id="setup">
       <h2>Как пользователь получает услугу</h2>
       <ul>
         <li>Скачивает и устанавливает приложение Green VPN.</li>
         <li>Регистрируется или входит в аккаунт.</li>
-        <li>Начинает бесплатно через рекламу или настраивает тариф без ожидания.</li>
-        <li>После выбора режима приложение получает рабочую конфигурацию и пользователь подключается к защищенному соединению.</li>
+        <li>Пользуется Trial 3 дня без карты и оплаты.</li>
+        <li>Выбирает подписку на 1, 3 или 6 месяцев.</li>
+        <li>Подписка активируется только после подтверждения платежа YooKassa.</li>
       </ul>
     </section>
     <section id="support">
@@ -25035,7 +25522,9 @@ def legal_offer_page():
     <h2>1. Предмет</h2>
     <p>Владелец сервиса предоставляет пользователю доступ к приложению Green VPN и серверной инфраструктуре для защищенного и стабильного сетевого подключения в рамках выбранного тарифа.</p>
     <h2>2. Тарифы и оплата</h2>
-    <p>Стоимость подписки указывается на сайте и в приложении до оплаты. Подписка активируется после успешного подтверждения платежа платежным провайдером.</p>
+    <p>Пробный период действует 3 дня. Подписка на 30 дней стоит 249 ₽, на 90 дней — 649 ₽, на 180 дней — 1 099 ₽. Все варианты включают одинаковые функции сервиса и отличаются только сроком доступа.</p>
+    <p>Автопродление включено по умолчанию только при явном согласии пользователя на сохранение способа оплаты. В конце оплаченного срока Green VPN списывает стоимость выбранного периода и продлевает доступ после подтверждения YooKassa. Пользователь может отключить автопродление в приложении до даты следующего списания.</p>
+    <p>Если повторное списание отклонено банком или платежным провайдером, доступ не продлевается автоматически. Пользователь может оплатить новый период вручную.</p>
     <h2>3. Получение услуги</h2>
     <p>После оплаты пользователь входит в приложение, получает доступ к тарифу и может подключиться к защищенному соединению в пределах выбранных лимитов.</p>
     <h2>4. Ограничения</h2>
@@ -25059,17 +25548,23 @@ def legal_privacy_page():
     <ul>
       <li>email, телефон или иной идентификатор аккаунта;</li>
       <li>статус подписки, тариф, платежный статус и сумма заказа;</li>
-      <li>технические данные устройства и приложения, необходимые для подключения и поддержки;</li>
+      <li>выбранный срок подписки, технический идентификатор устройства, версия приложения, выданный сервер и технические счетчики работы сервиса;</li>
       <li>сообщения в поддержку и диагностические отчеты, если пользователь отправляет их добровольно.</li>
     </ul>
     <h2>Что не хранится</h2>
     <ul>
       <li>Green VPN не хранит номера банковских карт и CVV;</li>
       <li>Green VPN не хранит пароли в открытом виде;</li>
-      <li>Green VPN не публикует приватные WireGuard-ключи и не записывает их в репозиторий.</li>
+      <li>Green VPN не публикует и не передает третьим лицам приватные ключи подключения.</li>
     </ul>
+    <h2>Что не анализируется</h2>
+    <p>Green VPN не использует содержимое передаваемого трафика для рекламы и не формирует историю посещенных страниц. Для работы сервиса могут обрабатываться технические счетчики объема трафика, время подключения, выбранный сервер и диагностические события.</p>
     <h2>Платежи</h2>
     <p>Платежные данные обрабатываются YooKassa или другим подключенным платежным провайдером. Green VPN получает только статус платежа, сумму, валюту и технические идентификаторы, необходимые для активации тарифа.</p>
+    <h2>Хранение и удаление</h2>
+    <p>Данные аккаунта и подписки хранятся, пока аккаунт используется, а платежные и бухгалтерские сведения — в течение срока, необходимого по закону. Диагностические данные хранятся только столько, сколько требуется для поддержки и безопасности. Запрос на удаление аккаунта или уточнение данных можно направить в поддержку.</p>
+    <h2>Подрядчики</h2>
+    <p>Для оплаты, доставки писем и размещения инфраструктуры могут использоваться отдельные провайдеры. Им передается только объем данных, необходимый для соответствующей операции.</p>
   </main>
 """
     return _legal_shell("Политика конфиденциальности", body, "Политика конфиденциальности Green VPN")
@@ -25742,7 +26237,6 @@ def subscription_me(authorization: Optional[str] = Header(default=None)):
     sub = subscription_status(get_subscription_row(user["id"]))
     traffic_usage = subscription_traffic_usage_status(int(user["id"]), sub)
     beta_offer = paid_beta_offer_for_user(int(user["id"])) if PAID_BETA_ENABLED else None
-
     return {
         "email": user["email"],
         "planName": sub["planName"],
@@ -25759,6 +26253,7 @@ def subscription_me(authorization: Optional[str] = Header(default=None)):
         "accessCohort": user_access_cohort(user),
         "paidBeta": user_is_paid_beta_cohort(user),
         "betaOffer": beta_offer,
+        "publicOffer": None,
     }
 
 
@@ -25783,6 +26278,7 @@ def subscription_quote(
         "selection": normalized,
         "quote": quote,
         "betaOffer": beta_offer,
+        "publicOffer": None,
     }
 
 
@@ -25959,8 +26455,8 @@ def client_bootstrap(
     device_enabled = bool(device["is_enabled"])
     subscription_ok = bool(access_policy["allowed"])
     ad_gate = (
-        disabled_ad_gate_policy(device["platform"], reason="paid_beta_no_ads")
-        if access_policy["paidBetaScope"]
+        disabled_ad_gate_policy(device["platform"], reason="product_no_ads")
+        if access_policy["adsDisabled"]
         else free_ad_gate_policy(
             int(user["id"]),
             device["device_uid"],
@@ -26104,8 +26600,8 @@ def client_config(
         raise HTTPException(status_code=403, detail="Device limit exceeded.")
 
     ad_gate = (
-        disabled_ad_gate_policy(device["platform"], reason="paid_beta_no_ads")
-        if access_policy["paidBetaScope"]
+        disabled_ad_gate_policy(device["platform"], reason="product_no_ads")
+        if access_policy["adsDisabled"]
         else free_ad_gate_policy(
             int(user["id"]),
             payload.deviceUid.strip(),
@@ -26207,7 +26703,7 @@ def client_config(
     )
     touch_device(device["device_uid"], config_issued=True)
     if (
-        not access_policy["paidBetaScope"]
+        not access_policy["adsDisabled"]
         and FREE_AD_GATE_ENABLED
         and free_ad_gate_required_for(
         sub,
@@ -29885,6 +30381,29 @@ def admin_billing_renewals_readiness(
 ):
     require_admin(x_admin_token, authorization, "billing.read")
     return billing_renewal_readiness_payload(limit=limit)
+
+
+@app.post("/api/v1/admin/billing/renewals/run")
+def admin_billing_renewals_run(
+    request: Request,
+    limit: int = 5,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "billing.manage", request=request)
+    result = execute_due_auto_renewals(limit=limit)
+    write_admin_audit(
+        "billing_auto_renewals_run",
+        "billing",
+        "auto_renewals",
+        {
+            "enabled": bool(result.get("enabled")),
+            "executed": int(result.get("executed") or 0),
+            "successful": len([item for item in result.get("results", []) if item.get("ok")]),
+        },
+        request=request,
+    )
+    return result
 
 
 @app.get("/api/v1/admin/billing/payment-smoke/readiness")

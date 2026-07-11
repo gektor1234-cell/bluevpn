@@ -772,6 +772,206 @@ class PaidBetaPolicyTests(unittest.TestCase):
         local_remove.assert_called_once_with("legacy-current-public-key")
         local_config_remove.assert_called_once_with("legacy-current-device")
 
+    def public_product_payload(self, *, plan_code: str = "green_30d"):
+        return main.TariffSelectionIn(
+            trafficPack="custom",
+            trafficGb=315,
+            unlimitedApps=["youtube", "telegram"],
+            devices=2,
+            dedicatedIp=True,
+            autoRenew=True,
+            releaseChannel="stable",
+            billingPlanCode=plan_code,
+        )
+
+    def test_public_product_catalog_has_three_fixed_terms(self) -> None:
+        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+            catalog = main.build_public_product_tariff_catalog()
+
+        self.assertEqual(catalog["pricingModel"], "fixed_term_plans")
+        self.assertEqual(
+            [(plan["periodDays"], plan["priceRub"]) for plan in catalog["plans"]],
+            [(30, 249), (90, 649), (180, 1099)],
+        )
+
+    def test_public_product_quotes_selected_term_and_ignores_old_constructor_fields(self) -> None:
+        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+            normalized = main.normalize_tariff_selection(
+                self.public_product_payload(plan_code="green_90d")
+            )
+            quote = main.quote_tariff(normalized)
+
+        self.assertEqual(normalized["planCode"], "green_90d")
+        self.assertEqual(normalized["trafficGb"], 0)
+        self.assertEqual(normalized["devices"], 5)
+        self.assertEqual(normalized["unlimitedApps"], [])
+        self.assertFalse(normalized["dedicatedIp"])
+        self.assertTrue(normalized["autoRenew"])
+        self.assertEqual(quote["periodDays"], 90)
+        self.assertEqual(quote["monthlyPriceRub"], 649)
+        self.assertEqual(quote["effectiveMonthlyRub"], 216)
+        self.assertTrue(quote["autoRenew"])
+
+    def test_public_product_rejects_unknown_term(self) -> None:
+        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+            with self.assertRaises(main.HTTPException) as raised:
+                main.normalize_tariff_selection(
+                    self.public_product_payload(plan_code="green_365d")
+                )
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertEqual(raised.exception.detail["code"], "public_plan_invalid")
+
+    def test_public_product_order_amount_and_activation_match_selected_term(self) -> None:
+        payload = self.public_product_payload(plan_code="green_90d")
+        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+            first = main.create_billing_order_for_user(self.user_id, payload)
+            duplicate = main.create_billing_order_for_user(self.user_id, payload)
+            activated = main.mark_billing_order_paid_and_activate(
+                first["orderId"],
+                provider_payment_id="public-product-payment-1",
+            )
+
+        self.assertEqual(first["amountRub"], 649)
+        self.assertEqual(first["orderId"], duplicate["orderId"])
+        self.assertEqual(activated["subscription"]["planCode"], "green_90d")
+        self.assertEqual(activated["subscription"]["monthlyPriceRub"], 649)
+        self.assertEqual(activated["subscription"]["maxDevices"], 5)
+        self.assertEqual(activated["subscription"]["periodDays"], 90)
+        self.assertFalse(activated["subscription"]["autoRenew"])
+        self.assertFalse(activated["subscription"]["paymentMethodSaved"])
+
+    def test_public_product_auto_renewal_charges_once_and_extends_term(self) -> None:
+        payload = self.public_product_payload(plan_code="green_30d")
+        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+            first = main.create_billing_order_for_user(self.user_id, payload)
+            activated = main.mark_billing_order_paid_and_activate(
+                first["orderId"],
+                provider_payment_id="initial-payment",
+                provider_payment_method_id="saved-method",
+            )
+        subscription_id = main.get_subscription_row(self.user_id)["id"]
+        due_at = (main.utc_now() + main.timedelta(hours=1)).isoformat()
+        with main.db() as conn:
+            conn.execute(
+                "UPDATE subscriptions SET expires_at = ? WHERE id = ?",
+                (due_at, subscription_id),
+            )
+            conn.commit()
+
+        def successful_payment(path, payment_payload, idempotence_key):
+            self.assertEqual(path, "/payments")
+            self.assertEqual(payment_payload["payment_method_id"], "saved-method")
+            self.assertTrue(idempotence_key.startswith("greenvpn-renew-"))
+            return {
+                "id": "renewal-payment-1",
+                "status": "succeeded",
+                "paid": True,
+                "amount": payment_payload["amount"],
+                "metadata": payment_payload["metadata"],
+                "payment_method": {"id": "saved-method", "saved": True},
+            }
+
+        with (
+            patch.object(main, "PUBLIC_PRODUCT_ENABLED", True),
+            patch.object(main, "AUTO_RENEWAL_CHARGES_ENABLED", True),
+            patch.object(main, "AUTO_RENEWAL_BILLING_PRIMARY", True),
+            patch.object(
+                main,
+                "yookassa_payment_readiness",
+                return_value={"productionReady": True},
+            ),
+            patch.object(main, "yookassa_request", side_effect=successful_payment),
+        ):
+            result = main.execute_due_auto_renewals(limit=5)
+            second = main.execute_due_auto_renewals(limit=5)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["executed"], 1)
+        self.assertEqual(result["results"][0]["status"], "activated")
+        self.assertEqual(second["executed"], 0)
+        renewed = main.subscription_status(main.get_subscription_row(self.user_id))
+        self.assertTrue(renewed["autoRenew"])
+        self.assertTrue(renewed["paymentMethodSaved"])
+        self.assertGreater(
+            main.parse_dt(renewed["expiresAt"]),
+            main.parse_dt(due_at),
+        )
+        with main.db() as conn:
+            renewal_order = conn.execute(
+                "SELECT * FROM billing_orders WHERE order_kind = 'auto_renewal'"
+            ).fetchone()
+        self.assertIsNotNone(renewal_order)
+        self.assertEqual(renewal_order["amount_rub"], 249)
+        self.assertIsNone(renewal_order["payment_url"])
+
+    def test_auto_renewal_executor_is_inert_on_fallback(self) -> None:
+        with (
+            patch.object(main, "AUTO_RENEWAL_CHARGES_ENABLED", True),
+            patch.object(main, "AUTO_RENEWAL_BILLING_PRIMARY", False),
+        ):
+            result = main.execute_due_auto_renewals(limit=5)
+
+        self.assertFalse(result["enabled"])
+        self.assertEqual(result["executed"], 0)
+
+    def test_public_product_fallback_rejects_order_before_mutation(self) -> None:
+        with (
+            patch.object(main, "PUBLIC_PRODUCT_ENABLED", True),
+            patch.object(main, "PUBLIC_PRODUCT_BILLING_PRIMARY", False),
+        ):
+            with self.assertRaises(main.HTTPException) as raised:
+                main.create_billing_order_for_user(
+                    self.user_id,
+                    self.public_product_payload(),
+                )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(raised.exception.detail["code"], "billing_primary_required")
+        with main.db() as conn:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM billing_orders").fetchone()[0],
+                0,
+            )
+
+    def test_public_product_enforces_trial_then_allows_paid_configuration(self) -> None:
+        payload = self.public_product_payload(plan_code="green_180d")
+        with (
+            patch.object(main, "PUBLIC_PRODUCT_ENABLED", True),
+            patch.object(main, "ENFORCE_SUBSCRIPTION_ACCESS", True),
+        ):
+            trial_bootstrap = self.bootstrap(
+                paid_beta=False,
+                device_uid="public-product-trial-device",
+            )
+            with main.db() as conn:
+                conn.execute(
+                    "UPDATE subscriptions SET expires_at = ?, is_active = 1 WHERE user_id = ?",
+                    ("2020-01-01T00:00:00+00:00", self.user_id),
+                )
+                conn.commit()
+            expired_bootstrap = self.bootstrap(
+                paid_beta=False,
+                device_uid="public-product-expired-device",
+            )
+            order = main.create_billing_order_for_user(self.user_id, payload)
+            main.mark_billing_order_paid_and_activate(
+                order["orderId"],
+                provider_payment_id="public-product-payment-2",
+            )
+            paid_bootstrap = self.bootstrap(
+                paid_beta=False,
+                device_uid="public-product-paid-device",
+            )
+
+        self.assertTrue(trial_bootstrap["canConnect"])
+        self.assertFalse(expired_bootstrap["canConnect"])
+        self.assertEqual(expired_bootstrap["reason"], "subscription_inactive")
+        self.assertTrue(paid_bootstrap["canConnect"])
+        self.assertEqual(paid_bootstrap["subscription"]["maxDevices"], 5)
+        self.assertEqual(paid_bootstrap["subscription"]["periodDays"], 180)
+        self.assertFalse(paid_bootstrap["adGate"]["required"])
+
 
 if __name__ == "__main__":
     unittest.main()

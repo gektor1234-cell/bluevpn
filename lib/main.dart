@@ -38,12 +38,17 @@ const bool kPaidBetaBuild = bool.fromEnvironment(
   'GREENVPN_PAID_BETA_BUILD',
   defaultValue: false,
 );
+const bool kPublicProductBuild = bool.fromEnvironment(
+  'GREENVPN_PUBLIC_PRODUCT_BUILD',
+  defaultValue: false,
+);
 const String kPaidBetaClientMarker = String.fromEnvironment(
   'GREENVPN_PAID_BETA_CLIENT_MARKER',
   defaultValue: 'green-vpn-paid-beta-v1',
 );
 const String kPaidBetaReleaseChannel = 'paid-beta';
-const bool kAdsDisabledBuild = kTrialOnlyNoAdsBuild || kPaidBetaBuild;
+const bool kAdsDisabledBuild =
+    kTrialOnlyNoAdsBuild || kPaidBetaBuild || kPublicProductBuild;
 const bool kYandexRewardedAdsEnabled = bool.fromEnvironment(
   'GREENVPN_YANDEX_REWARDED_ADS_ENABLED',
   defaultValue: false,
@@ -3932,6 +3937,7 @@ while True:
 
   Future<ApiResult<Map<String, dynamic>>> quoteTariff({
     String? accessToken,
+    String? billingPlanCode,
     required String trafficPack,
     required int trafficGb,
     required List<String> unlimitedApps,
@@ -3948,6 +3954,7 @@ while True:
         'unlimitedApps': unlimitedApps,
         'devices': devices,
         'dedicatedIp': dedicatedIp,
+        if (billingPlanCode != null) 'billingPlanCode': billingPlanCode,
         if (kPaidBetaBuild) 'clientMarker': kPaidBetaClientMarker,
         if (kPaidBetaBuild) 'releaseChannel': kPaidBetaReleaseChannel,
       },
@@ -3961,6 +3968,7 @@ while True:
 
   Future<ApiResult<Map<String, dynamic>>> createBillingOrder({
     required String accessToken,
+    String? billingPlanCode,
     required String trafficPack,
     required int trafficGb,
     required List<String> unlimitedApps,
@@ -3979,6 +3987,7 @@ while True:
         'devices': devices,
         'dedicatedIp': dedicatedIp,
         'autoRenew': autoRenew,
+        if (billingPlanCode != null) 'billingPlanCode': billingPlanCode,
         if (kPaidBetaBuild) 'clientMarker': kPaidBetaClientMarker,
         if (kPaidBetaBuild) 'releaseChannel': kPaidBetaReleaseChannel,
       },
@@ -6282,6 +6291,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   TrafficPack trafficPack = TrafficPack.gb20; // "режим" (по ГБ / безлимит)
   double trafficGb = 20; // любой объём ГБ
   int devices = kPaidBetaBuild ? 2 : 1;
+  String _publicBillingPlanCode = 'green_30d';
 
   bool optNoAds = true;
   bool optSmartRouting = true; // этим флагом управляем доступностью "соцсетей"
@@ -6953,8 +6963,14 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       optNoAds = true;
       optSmartRouting =
           true; // временно всегда разрешаем режим соцсетей в Windows-клиенте
-      optDedicatedIp = kPaidBetaBuild ? false : p.optDedicatedIp;
-      optAutoRenew = kPaidBetaBuild ? false : p.optAutoRenew;
+      optDedicatedIp = (kPaidBetaBuild || kPublicProductBuild)
+          ? false
+          : p.optDedicatedIp;
+      optAutoRenew = kPaidBetaBuild
+          ? false
+          : kPublicProductBuild
+          ? true
+          : p.optAutoRenew;
 
       await _repairProvisionedConfigFromPreferredDevSource(showToast: false);
       await _cfg.ensureBaseSeededFromManagedIfMissing();
@@ -7056,13 +7072,29 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
 
     setState(() {
+      final nextBillingPlanCode = (selection['planCode'] ?? '')
+          .toString()
+          .trim();
+      if (kPublicProductBuild && nextBillingPlanCode.isNotEmpty) {
+        _publicBillingPlanCode = nextBillingPlanCode;
+      }
       trafficPack = nextPack;
       trafficGb = nextGb.clamp(1.0, 800.0);
       devices = kPaidBetaBuild ? 2 : nextDevices.clamp(1, 5);
       optNoAds = true;
       optSmartRouting = true;
-      optDedicatedIp = kPaidBetaBuild ? false : nextDedicatedIp;
-      optAutoRenew = kPaidBetaBuild ? false : nextAutoRenew;
+      optDedicatedIp = (kPaidBetaBuild || kPublicProductBuild)
+          ? false
+          : nextDedicatedIp;
+      if (kPaidBetaBuild) {
+        optAutoRenew = false;
+      } else if (kPublicProductBuild) {
+        optAutoRenew = selection['policyMode'] == 'public_product'
+            ? nextAutoRenew
+            : true;
+      } else {
+        optAutoRenew = nextAutoRenew;
+      }
       selectedApps
         ..clear()
         ..addAll(nextApps);
@@ -7226,6 +7258,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       final catalogRes = await _api.fetchTariffCatalog();
       final quoteRes = await _api.quoteTariff(
         accessToken: widget.session.accessToken,
+        billingPlanCode: kPublicProductBuild ? _publicBillingPlanCode : null,
         trafficPack: trafficPack.name,
         trafficGb: trafficGb.round(),
         unlimitedApps: _selectedTariffAppCodes(),
@@ -7264,6 +7297,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         final monthly = quote is Map ? quote['monthlyPriceRub'] : null;
         _tariffStatus = monthly == null
             ? 'Цена обновлена.'
+            : kPublicProductBuild
+            ? 'Стоимость: $monthly ₽.'
             : 'Цена обновлена: $monthly ₽/мес.';
       });
 
@@ -7380,6 +7415,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     try {
       final res = await _api.createBillingOrder(
         accessToken: widget.session.accessToken,
+        billingPlanCode: kPublicProductBuild ? _publicBillingPlanCode : null,
         trafficPack: trafficPack.name,
         trafficGb: trafficGb.round(),
         unlimitedApps: _selectedTariffAppCodes(),
@@ -10666,6 +10702,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         paymentMethodSaved: _paymentMethodSaved,
         subscriptionExpiresAt: _subscriptionExpiresAt,
         subscriptionMonthlyPriceRub: _subscriptionMonthlyPriceRub,
+        publicBillingPlanCode: _publicBillingPlanCode,
         tariffBusy: _tariffBusy,
         onClaimPaidBetaInvite: _claimPaidBetaInvite,
         onApplyTariff: _createTariffOrderOnServer,
@@ -10673,6 +10710,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             _checkPendingBillingOrder(showToast: true),
         onCancelAutoRenew: _cancelAutoRenew,
         onOpenPaymentUrl: _openPaymentUrl,
+        onPublicBillingPlanChanged: (code) {
+          setState(() => _publicBillingPlanCode = code);
+          _scheduleTariffRefresh();
+        },
         onToggleApp: (app) {
           setState(() {
             if (selectedApps.contains(app)) {
@@ -10717,6 +10758,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         onOptAutoRenew: (v) {
           setState(() => optAutoRenew = v);
           _schedulePrefsSave();
+          _scheduleTariffRefresh();
         },
       ),
 
@@ -11343,6 +11385,7 @@ class TariffPage extends StatelessWidget {
   final bool paymentMethodSaved;
   final String? subscriptionExpiresAt;
   final int? subscriptionMonthlyPriceRub;
+  final String publicBillingPlanCode;
   final bool tariffBusy;
 
   final void Function(TariffApp) onToggleApp;
@@ -11359,6 +11402,7 @@ class TariffPage extends StatelessWidget {
   final Future<void> Function() onCheckPendingBillingOrder;
   final Future<void> Function() onCancelAutoRenew;
   final void Function(String url) onOpenPaymentUrl;
+  final ValueChanged<String> onPublicBillingPlanChanged;
 
   const TariffPage({
     super.key,
@@ -11380,6 +11424,7 @@ class TariffPage extends StatelessWidget {
     required this.paymentMethodSaved,
     required this.subscriptionExpiresAt,
     required this.subscriptionMonthlyPriceRub,
+    required this.publicBillingPlanCode,
     required this.tariffBusy,
     required this.onClaimPaidBetaInvite,
     required this.onToggleApp,
@@ -11394,6 +11439,7 @@ class TariffPage extends StatelessWidget {
     required this.onCheckPendingBillingOrder,
     required this.onCancelAutoRenew,
     required this.onOpenPaymentUrl,
+    required this.onPublicBillingPlanChanged,
   });
 
   int _basePriceForGb(double gb) {
@@ -11518,6 +11564,848 @@ class TariffPage extends StatelessWidget {
     final day = dt.day.toString().padLeft(2, '0');
     final month = dt.month.toString().padLeft(2, '0');
     return '$day.$month.${dt.year}';
+  }
+
+  Future<void> _openPublicProductConfigurator(BuildContext context) async {
+    var draftTrafficGb = trafficGb.round().clamp(1, 315);
+    var draftDevices = devices.clamp(1, 5);
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, setSheetState) {
+          final trafficCost = _basePriceForGb(draftTrafficGb.toDouble());
+          final devicesCost = max(0, draftDevices - 1) * 39;
+          final used = trafficCost + devicesCost;
+          final remaining = 249 - used;
+          final overBudget = remaining < 0;
+
+          return Padding(
+            padding: EdgeInsets.fromLTRB(
+              20,
+              12,
+              20,
+              20 + MediaQuery.of(context).viewInsets.bottom,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Настроить тариф',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Закрыть',
+                        onPressed: () => Navigator.of(sheetContext).pop(),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    overBudget
+                        ? 'Превышение: ${-remaining} ₽'
+                        : 'Использовано $used ₽ из 249 ₽ • осталось $remaining ₽',
+                    style: TextStyle(
+                      color: overBudget
+                          ? Theme.of(context).colorScheme.error
+                          : kBrandPrimary,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  LinearProgressIndicator(
+                    value: (used / 249).clamp(0.0, 1.0),
+                    minHeight: 8,
+                    color: overBudget
+                        ? Theme.of(context).colorScheme.error
+                        : kBrandPrimary,
+                    backgroundColor: kBrandPrimarySoft,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  const SizedBox(height: 24),
+                  Row(
+                    children: [
+                      const Icon(Icons.data_usage_rounded),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Трафик: $draftTrafficGb ГБ',
+                          style: const TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                      Text(
+                        '$trafficCost ₽',
+                        style: const TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    ],
+                  ),
+                  Slider(
+                    value: draftTrafficGb.toDouble(),
+                    min: 1,
+                    max: 315,
+                    divisions: 314,
+                    label: '$draftTrafficGb ГБ',
+                    onChanged: (value) =>
+                        setSheetState(() => draftTrafficGb = value.round()),
+                  ),
+                  const SizedBox(height: 18),
+                  Row(
+                    children: [
+                      const Icon(Icons.devices_rounded),
+                      const SizedBox(width: 10),
+                      const Expanded(
+                        child: Text(
+                          'Устройства',
+                          style: TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Убрать устройство',
+                        onPressed: draftDevices <= 1
+                            ? null
+                            : () => setSheetState(() => draftDevices -= 1),
+                        icon: const Icon(Icons.remove_circle_outline_rounded),
+                      ),
+                      SizedBox(
+                        width: 32,
+                        child: Text(
+                          '$draftDevices',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Добавить устройство',
+                        onPressed: draftDevices >= 5
+                            ? null
+                            : () => setSheetState(() => draftDevices += 1),
+                        icon: const Icon(Icons.add_circle_outline_rounded),
+                      ),
+                    ],
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 34),
+                    child: Text(
+                      draftDevices == 1
+                          ? 'Одно устройство входит в тариф'
+                          : 'Дополнительные устройства: +$devicesCost ₽ из бюджета',
+                      style: TextStyle(
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.onSurface.withOpacity(0.65),
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: overBudget
+                          ? null
+                          : () {
+                              onTrafficChanged(TrafficPack.gb20);
+                              onTrafficGbChanged(draftTrafficGb.toDouble());
+                              onDevicesChanged(draftDevices);
+                              Navigator.of(sheetContext).pop();
+                            },
+                      icon: const Icon(Icons.check_rounded),
+                      label: const Text('Применить настройку'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildFixedPublicProduct(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final textColor = theme.colorScheme.onSurface;
+    final mutedColor = textColor.withOpacity(isDark ? 0.72 : 0.62);
+    final rawPlans = (tariffCatalog?['plans'] as List?) ?? const [];
+    final plans = rawPlans
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList();
+    if (plans.isEmpty) {
+      plans.addAll(const [
+        {
+          'code': 'green_30d',
+          'title': '1 месяц',
+          'periodDays': 30,
+          'priceRub': 249,
+          'effectiveMonthlyRub': 249,
+          'discountPercent': 0,
+        },
+        {
+          'code': 'green_90d',
+          'title': '3 месяца',
+          'periodDays': 90,
+          'priceRub': 649,
+          'effectiveMonthlyRub': 216,
+          'discountPercent': 13,
+        },
+        {
+          'code': 'green_180d',
+          'title': '6 месяцев',
+          'periodDays': 180,
+          'priceRub': 1099,
+          'effectiveMonthlyRub': 183,
+          'discountPercent': 26,
+        },
+      ]);
+    }
+
+    final selectedPlan = plans.firstWhere(
+      (plan) => plan['code'] == publicBillingPlanCode,
+      orElse: () => plans.first,
+    );
+    final selectedPrice = (selectedPlan['priceRub'] as num?)?.toInt() ?? 249;
+    final selectedDays = (selectedPlan['periodDays'] as num?)?.toInt() ?? 30;
+    final pendingStatus = (pendingBillingOrder?['status'] ?? '')
+        .toString()
+        .trim()
+        .toLowerCase();
+    final hasPendingOrder =
+        pendingBillingOrder != null &&
+        !{
+          'activated',
+          'canceled',
+          'cancelled',
+          'failed',
+        }.contains(pendingStatus);
+    final currentPlan = _hasPaidPlan
+        ? _currentPlanText()
+        : subscriptionActive
+        ? 'Пробный период активен'
+        : 'Пробный период завершён';
+
+    Widget planOption(Map<String, dynamic> plan) {
+      final code = (plan['code'] ?? '').toString();
+      final title = (plan['title'] ?? '').toString();
+      final price = (plan['priceRub'] as num?)?.toInt() ?? 0;
+      final monthly = (plan['effectiveMonthlyRub'] as num?)?.toInt() ?? price;
+      final discount = (plan['discountPercent'] as num?)?.toInt() ?? 0;
+      final selected = code == publicBillingPlanCode;
+      return InkWell(
+        onTap: tariffBusy || hasPendingOrder
+            ? null
+            : () => onPublicBillingPlanChanged(code),
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: selected ? kBrandPrimary : theme.dividerColor,
+              width: selected ? 2 : 1,
+            ),
+            color: selected
+                ? kBrandPrimary.withOpacity(isDark ? 0.14 : 0.08)
+                : Colors.transparent,
+          ),
+          child: Row(
+            children: [
+              Icon(
+                selected
+                    ? Icons.radio_button_checked_rounded
+                    : Icons.radio_button_off_rounded,
+                color: selected ? kBrandPrimary : mutedColor,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      discount > 0
+                          ? '$monthly ₽ в месяц • выгода $discount%'
+                          : '$monthly ₽ в месяц',
+                      style: TextStyle(
+                        color: mutedColor,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                '$price ₽',
+                style: TextStyle(
+                  color: selected ? kBrandPrimary : textColor,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 18,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const _PageTitle(
+          title: 'Тариф',
+          subtitle: 'Выберите срок подписки',
+          icon: Icons.workspace_premium_rounded,
+        ),
+        const SizedBox(height: 12),
+        _Card(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Сейчас',
+                style: TextStyle(
+                  color: mutedColor,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 12,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                currentPlan,
+                style: TextStyle(
+                  color: textColor,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 18,
+                ),
+              ),
+              if (!_hasPaidPlan && subscriptionExpiresAt != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Пробный период до ${_formatCompactDate(subscriptionExpiresAt!)}',
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+              if (_hasPaidPlan && subscriptionAutoRenew) ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: tariffBusy ? null : () => onCancelAutoRenew(),
+                    icon: const Icon(Icons.event_busy_rounded),
+                    label: const Text('Отключить автопродление'),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        _Card(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const _SectionTitle('Срок подписки'),
+              const SizedBox(height: 10),
+              for (var index = 0; index < plans.length; index++) ...[
+                planOption(plans[index]),
+                if (index != plans.length - 1) const SizedBox(height: 8),
+              ],
+              const SizedBox(height: 14),
+              const Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _IncludedBadge(
+                    icon: Icons.block_rounded,
+                    text: 'Без рекламы',
+                  ),
+                  _IncludedBadge(
+                    icon: Icons.alt_route_rounded,
+                    text: 'Только для выбранных приложений',
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              SwitchListTile.adaptive(
+                contentPadding: EdgeInsets.zero,
+                value: optAutoRenew,
+                onChanged: tariffBusy || hasPendingOrder
+                    ? null
+                    : onOptAutoRenew,
+                title: const Text(
+                  'Автопродление',
+                  style: TextStyle(fontWeight: FontWeight.w900),
+                ),
+                subtitle: const Text(
+                  'Автоматически продлим выбранный срок. Можно отключить.',
+                ),
+                secondary: const Icon(Icons.autorenew_rounded),
+              ),
+            ],
+          ),
+        ),
+        if (hasPendingOrder) ...[
+          const SizedBox(height: 12),
+          _Card(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const _SectionTitle('Ожидает оплаты'),
+                const SizedBox(height: 6),
+                Text(
+                  'Заказ ${_shortOrderId(pendingBillingOrder!['orderId'])} • '
+                  '${pendingBillingOrder!['amountRub'] ?? selectedPrice} ₽',
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                if ((pendingBillingOrder!['paymentUrl'] ?? '')
+                    .toString()
+                    .trim()
+                    .isNotEmpty) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: tariffBusy
+                          ? null
+                          : () => onOpenPaymentUrl(
+                              pendingBillingOrder!['paymentUrl'].toString(),
+                            ),
+                      icon: const Icon(Icons.open_in_browser_rounded),
+                      label: const Text('Открыть оплату'),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: tariffBusy
+                        ? null
+                        : () => onCheckPendingBillingOrder(),
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: const Text('Проверить оплату'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+        if (tariffStatus != null && tariffStatus!.trim().isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Text(
+            tariffStatus!,
+            style: TextStyle(color: mutedColor, fontWeight: FontWeight.w700),
+          ),
+        ],
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: tariffBusy || hasPendingOrder
+                ? null
+                : () => onApplyTariff(),
+            icon: tariffBusy
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.payment_rounded),
+            label: Text(
+              '${_hasPaidPlan ? 'Продлить' : 'Оплатить'} $selectedPrice ₽ '
+              'за $selectedDays дней',
+              style: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+          ),
+        ),
+        const SizedBox(height: 110),
+      ],
+    );
+  }
+
+  // Archived configurable tariff UI. Kept for a possible post-launch experiment.
+  Widget _buildPublicProduct(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final textColor = theme.colorScheme.onSurface;
+    final mutedColor = textColor.withOpacity(isDark ? 0.72 : 0.62);
+    final quoteRaw = tariffQuote?['quote'];
+    final quote = quoteRaw is Map
+        ? Map<String, dynamic>.from(quoteRaw)
+        : <String, dynamic>{};
+    final catalogPlanRaw = tariffCatalog?['plan'];
+    final catalogPlan = catalogPlanRaw is Map
+        ? Map<String, dynamic>.from(catalogPlanRaw)
+        : <String, dynamic>{};
+    final priceRaw = quote['monthlyPriceRub'] ?? catalogPlan['priceRub'];
+    final price = priceRaw is num ? priceRaw.toInt() : 249;
+    final originalRaw = quote['originalMonthlyPriceRub'];
+    final originalPrice = originalRaw is num ? originalRaw.toInt() : 249;
+    final usedRaw = quote['configurationUsedRub'];
+    final used = usedRaw is num
+        ? usedRaw.toInt()
+        : _basePriceForGb(trafficGb) + _devicesPriceRub();
+    final remaining = max(0, 249 - used);
+    final selectedTraffic =
+        (quote['trafficGb'] as num?)?.toInt() ??
+        trafficGb.round().clamp(1, 315);
+    final selectedDevices = (quote['devices'] as num?)?.toInt() ?? devices;
+    final selectedPreset = (quote['presetCode'] ?? 'custom').toString();
+    final pendingStatus = (pendingBillingOrder?['status'] ?? '')
+        .toString()
+        .trim()
+        .toLowerCase();
+    final hasPendingOrder =
+        pendingBillingOrder != null &&
+        !{
+          'activated',
+          'canceled',
+          'cancelled',
+          'failed',
+        }.contains(pendingStatus);
+    final currentPlan = _hasPaidPlan
+        ? _currentPlanText()
+        : subscriptionActive
+        ? 'Trial активен'
+        : 'Trial завершён';
+
+    void applyPreset(double gb, int deviceCount) {
+      onTrafficChanged(TrafficPack.gb20);
+      onTrafficGbChanged(gb);
+      onDevicesChanged(deviceCount);
+    }
+
+    Widget presetButton({
+      required String code,
+      required String title,
+      required String subtitle,
+      required IconData icon,
+      required double gb,
+      required int deviceCount,
+    }) {
+      final selected = selectedPreset == code;
+      return SizedBox(
+        width: double.infinity,
+        child: OutlinedButton.icon(
+          onPressed: tariffBusy ? null : () => applyPreset(gb, deviceCount),
+          style: OutlinedButton.styleFrom(
+            alignment: Alignment.centerLeft,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            side: BorderSide(
+              color: selected ? kBrandPrimary : theme.dividerColor,
+              width: selected ? 2 : 1,
+            ),
+          ),
+          icon: Icon(icon, color: selected ? kBrandPrimary : mutedColor),
+          label: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: TextStyle(
+                  color: mutedColor,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const _PageTitle(
+          title: 'Тариф',
+          subtitle: 'Готовый набор или своя настройка в одном бюджете',
+          icon: Icons.tune_rounded,
+        ),
+        const SizedBox(height: 12),
+        _Card(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Сейчас',
+                style: TextStyle(
+                  color: mutedColor,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 12,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                currentPlan,
+                style: TextStyle(
+                  color: textColor,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 18,
+                ),
+              ),
+              if (!_hasPaidPlan && subscriptionExpiresAt != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Trial до ${_formatCompactDate(subscriptionExpiresAt!)}',
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        _Card(
+          tint: isDark ? kBrandDarkSurface : kBrandPrimarySoft,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const _SectionTitle('Green VPN на 30 дней'),
+              const SizedBox(height: 8),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '$price ₽',
+                    style: const TextStyle(
+                      color: kBrandPrimary,
+                      fontSize: 34,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 5),
+                    child: Text(
+                      'за 30 дней',
+                      style: TextStyle(
+                        color: mutedColor,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (originalPrice > price) ...[
+                const SizedBox(height: 4),
+                Text(
+                  'Первый период вместо $originalPrice ₽',
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 12),
+              const Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _IncludedBadge(
+                    icon: Icons.block_rounded,
+                    text: 'Без рекламы',
+                  ),
+                  _IncludedBadge(
+                    icon: Icons.alt_route_rounded,
+                    text: 'Умный маршрут',
+                  ),
+                  _IncludedBadge(
+                    icon: Icons.event_repeat_rounded,
+                    text: 'Без автопродления',
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        _Card(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const _SectionTitle('Готовые наборы'),
+              const SizedBox(height: 10),
+              presetButton(
+                code: 'devices',
+                title: 'Больше устройств',
+                subtitle: '50 ГБ • 3 устройства',
+                icon: Icons.devices_rounded,
+                gb: 50,
+                deviceCount: 3,
+              ),
+              const SizedBox(height: 8),
+              presetButton(
+                code: 'balanced',
+                title: 'Баланс',
+                subtitle: '150 ГБ • 2 устройства',
+                icon: Icons.balance_rounded,
+                gb: 150,
+                deviceCount: 2,
+              ),
+              const SizedBox(height: 8),
+              presetButton(
+                code: 'traffic',
+                title: 'Больше трафика',
+                subtitle: '315 ГБ • 1 устройство',
+                icon: Icons.data_usage_rounded,
+                gb: 315,
+                deviceCount: 1,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        _Card(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const _SectionTitle('Своя настройка'),
+              const SizedBox(height: 8),
+              Text(
+                '$selectedTraffic ГБ • $selectedDevices ${selectedDevices == 1 ? 'устройство' : 'устройства'}',
+                style: const TextStyle(fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Использовано $used ₽ из 249 ₽ • осталось $remaining ₽',
+                style: TextStyle(
+                  color: mutedColor,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 8),
+              LinearProgressIndicator(
+                value: (used / 249).clamp(0.0, 1.0),
+                minHeight: 8,
+                borderRadius: BorderRadius.circular(4),
+                color: kBrandPrimary,
+                backgroundColor: kBrandPrimarySoft,
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: tariffBusy
+                      ? null
+                      : () => _openPublicProductConfigurator(context),
+                  icon: const Icon(Icons.tune_rounded),
+                  label: const Text('Настроить тариф'),
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (hasPendingOrder) ...[
+          const SizedBox(height: 12),
+          _Card(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const _SectionTitle('Ожидает оплаты'),
+                const SizedBox(height: 6),
+                Text(
+                  'Заказ ${_shortOrderId(pendingBillingOrder!['orderId'])} • '
+                  '${pendingBillingOrder!['amountRub'] ?? price} ₽',
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                if ((pendingBillingOrder!['paymentUrl'] ?? '')
+                    .toString()
+                    .trim()
+                    .isNotEmpty) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: tariffBusy
+                          ? null
+                          : () => onOpenPaymentUrl(
+                              pendingBillingOrder!['paymentUrl'].toString(),
+                            ),
+                      icon: const Icon(Icons.open_in_browser_rounded),
+                      label: const Text('Открыть оплату'),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: tariffBusy
+                        ? null
+                        : () => onCheckPendingBillingOrder(),
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: const Text('Проверить оплату'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+        if (tariffStatus != null && tariffStatus!.trim().isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Text(
+            tariffStatus!,
+            style: TextStyle(color: mutedColor, fontWeight: FontWeight.w700),
+          ),
+        ],
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: tariffBusy || hasPendingOrder
+                ? null
+                : () => onApplyTariff(),
+            icon: tariffBusy
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.payment_rounded),
+            label: Text(
+              _hasPaidPlan ? 'Продлить на 30 дней' : 'Перейти к оплате',
+              style: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+          ),
+        ),
+        const SizedBox(height: 110),
+      ],
+    );
   }
 
   Widget _buildPaidBeta(BuildContext context) {
@@ -11793,6 +12681,10 @@ class TariffPage extends StatelessWidget {
 
     if (kPaidBetaBuild) {
       return _buildPaidBeta(context);
+    }
+
+    if (kPublicProductBuild) {
+      return _buildFixedPublicProduct(context);
     }
 
     if (kTrialOnlyNoAdsBuild) {
