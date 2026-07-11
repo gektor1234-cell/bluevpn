@@ -63,6 +63,8 @@ $servicePath = Join-Path $ProjectRoot "windows\green_vpn_service\main.cpp"
 $doctorPath = Join-Path $ProjectRoot "scripts\windows\doctor_bluevpn.ps1"
 $recoverPath = Join-Path $ProjectRoot "scripts\windows\bluevpn_network_recover.ps1"
 $networkProtectionPath = Join-Path $ProjectRoot "scripts\windows\check_windows_network_protection.ps1"
+$networkTransitionSmokePath = Join-Path $ProjectRoot "scripts\windows\run_paid_beta_network_transition_smoke.ps1"
+$vpnTaskPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_vpn_task.ps1"
 $wireguardTcpCanaryPath = Join-Path $ProjectRoot "scripts\server\install_wireguard_tcp_canary.sh"
 $transportCanaryPath = Join-Path $ProjectRoot "scripts\server\install_transport_canary_service.sh"
 $transportCanaryCheckPath = Join-Path $ProjectRoot "scripts\server\check_transport_canary_readiness.sh"
@@ -75,6 +77,8 @@ $signScript = Read-Text $signScriptPath
 $serviceSource = Read-Text $servicePath
 $doctorScript = Read-Text $doctorPath
 $networkProtectionScript = Read-Text $networkProtectionPath
+$networkTransitionSmokeScript = Read-Text $networkTransitionSmokePath
+$vpnTaskScript = Read-Text $vpnTaskPath
 $wireguardTcpCanaryScript = Read-Text $wireguardTcpCanaryPath
 $transportCanaryScript = Read-Text $transportCanaryPath
 $transportCanaryCheckScript = Read-Text $transportCanaryCheckPath
@@ -137,6 +141,26 @@ foreach ($fragment in $localServiceClientFragments) {
     }
     else {
         Add-Error "Client local service token support missing: $fragment"
+    }
+}
+
+$sessionPersistenceFragments = @(
+    'session storage migration skipped type=',
+    'session read failed type=',
+    'A best-effort storage migration must not invalidate a session',
+    'preparePrivateFileForWrite',
+    'Add-Type -AssemblyName System.Security',
+    'DataProtectionScope]::LocalMachine',
+    "'-h'",
+    "'-s'",
+    "'-r'"
+)
+foreach ($fragment in $sessionPersistenceFragments) {
+    if ($main.Contains($fragment)) {
+        Add-Pass "Session persistence guard present: $fragment"
+    }
+    else {
+        Add-Error "Session persistence guard missing: $fragment"
     }
 }
 
@@ -654,10 +678,18 @@ Write-Section "WINDOWS NETWORK PROTECTION CHECKS"
 $networkProtectionFragments = @(
     'check_windows_network_protection',
     'full_tunnel_ipv4',
+    '0.0.0.0/1',
+    '128.0.0.0/1',
+    'ownsSplitDefault',
     'full_tunnel_ipv6',
     'config_dns_present',
     'active_tunnel_dns',
     'non_vpn_dns_visible',
+    'Find-NetRoute',
+    'allThroughTunnel',
+    'ignoredPlaceholders',
+    'nativeKillSwitchConfigured',
+    'nativeKillSwitch',
     'competing_vpn',
     'PrivateKey = <hidden>',
     'productionReady'
@@ -681,6 +713,71 @@ if (Test-Path -LiteralPath $networkProtectionPath) {
     }
     else {
         Add-Pass "Network protection checker PowerShell parser check passed"
+    }
+}
+
+$vpnTaskKillSwitchFragments = @(
+    'Ensure-NativeFullTunnelKillSwitch',
+    "'0.0.0.0/0'",
+    "'::/0'",
+    "'0.0.0.0/1'",
+    "'128.0.0.0/1'",
+    'normalized Windows full-tunnel routes for native kill switch',
+    'Ensure-GreenProgramDataAcl'
+)
+
+foreach ($fragment in $vpnTaskKillSwitchFragments) {
+    if ($vpnTaskScript.Contains($fragment)) {
+        Add-Pass "Windows VPN task supports: $fragment"
+    }
+    else {
+        Add-Error "Windows VPN task missing kill-switch marker: $fragment"
+    }
+}
+
+if (Test-Path -LiteralPath $vpnTaskPath) {
+    $tokens = $null
+    $parseErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile($vpnTaskPath, [ref]$tokens, [ref]$parseErrors) | Out-Null
+    if ($parseErrors -and $parseErrors.Count -gt 0) {
+        Add-Error "Windows VPN task has PowerShell parser errors: $($parseErrors[0].ToString())"
+    }
+    else {
+        Add-Pass 'Windows VPN task PowerShell parser check passed'
+    }
+}
+
+$networkTransitionSmokeFragments = @(
+    'GreenVPNBetaNetworkSmokeFailsafe',
+    'AmneziaWGTunnel$device20_full',
+    "'/connect'",
+    "'/disconnect'",
+    'handshakeFresh',
+    'trafficPresent',
+    'Invoke-DirectDnsLeakProbe',
+    'leakDetected',
+    'restoring $AmneziaServiceName',
+    'finally'
+)
+
+foreach ($fragment in $networkTransitionSmokeFragments) {
+    if ($networkTransitionSmokeScript.Contains($fragment)) {
+        Add-Pass "Network transition smoke supports: $fragment"
+    }
+    else {
+        Add-Error "Network transition smoke missing safety marker: $fragment"
+    }
+}
+
+if (Test-Path -LiteralPath $networkTransitionSmokePath) {
+    $tokens = $null
+    $parseErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile($networkTransitionSmokePath, [ref]$tokens, [ref]$parseErrors) | Out-Null
+    if ($parseErrors -and $parseErrors.Count -gt 0) {
+        Add-Error "Network transition smoke has PowerShell parser errors: $($parseErrors[0].ToString())"
+    }
+    else {
+        Add-Pass "Network transition smoke PowerShell parser check passed"
     }
 }
 

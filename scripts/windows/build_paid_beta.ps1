@@ -2,7 +2,7 @@ param(
     [ValidateSet("android", "windows", "both")]
     [string]$Mode = "both",
     [string]$AppVersion = "0.3.0-paid-beta.5",
-    [string]$WindowsAppVersion = "0.3.0-paid-beta.3",
+    [string]$WindowsAppVersion = "0.3.0-paid-beta.10",
     [string]$AndroidBuildName = "0.3.0",
     [string]$AndroidBuildNumber = "2026071005",
     [string]$AndroidApplicationId = "pro.greenvpn.app.beta",

@@ -84,9 +84,11 @@ class ManagedConfigService {
     if (!socialOnlyEnabled) {
       mode = 'full_tunnel';
       final baseAllowedIps = _readAllowedIps(original);
-      allowedIps = baseAllowedIps.isEmpty
-          ? const ['0.0.0.0/1', '128.0.0.0/1']
-          : baseAllowedIps;
+      allowedIps = Platform.isWindows
+          ? const ['0.0.0.0/0', '::/0']
+          : (baseAllowedIps.isEmpty
+                ? const ['0.0.0.0/1', '128.0.0.0/1']
+                : baseAllowedIps);
       updatedConfig = _removeInterfaceField(
         _removeInterfaceField(
           _replaceAllowedIps(original, allowedIps.join(', ')),

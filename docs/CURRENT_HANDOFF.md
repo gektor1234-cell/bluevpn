@@ -1,6 +1,6 @@
 # Green VPN Current Handoff
 
-Last updated: 2026-07-10.
+Last updated: 2026-07-11.
 
 ## Hard rules
 
@@ -51,9 +51,9 @@ Last updated: 2026-07-10.
 - Android package/label: `pro.greenvpn.app.beta` / `Green VPN Beta`.
 - Android SHA-256: `90E42FB6CE5A06247E620E5DC3302B7C7C86A0F9A8FEBDC523876A622B9C6580`.
 - Android signer SHA-256: `1ea2c985890e9010aa3b76aee676624ec45398fd86a5e40dd95c76cdfc6a0fbc`.
-- Local Windows side-by-side candidate: `C:\BlueVPN_Builds\paid_beta_20260710_v6\GreenVPN_Beta_Setup_0.3.0-paid-beta.3.exe`.
-- Local Windows SHA-256: `559C66438BD319E010631061C7ABF024DAE4DAAA2EAA15697B7DAFAA62CD7604`; Authenticode `NotSigned`.
-- Server-published Windows remains `.2` with SHA-256 `41F96CB95118507AACA861721F83B2972CF419E2F10BA2FCF38CB73800988332` until the `.3` real-PC smoke passes.
+- Local Windows side-by-side candidate: `C:\BlueVPN_Builds\paid_beta_20260711_v13\GreenVPN_Beta_Setup_0.3.0-paid-beta.10.exe`.
+- Local Windows SHA-256: `A87F527D910CF50C075518270C221F7890963A5893D7FAB2637EC60FB3A2B170`; size `12,822,016`; Authenticode `NotSigned`.
+- Server-published Windows remains `.2` with SHA-256 `41F96CB95118507AACA861721F83B2972CF419E2F10BA2FCF38CB73800988332` until the `.10` uninstall/reinstall recovery gate passes.
 - Final bundle: `C:\BlueVPN_Builds\paid_beta_20260710_v5\paid-beta-0.3.0-paid-beta.5-2026071005-r5.tar.gz`.
 - Bundle SHA-256: `5955F5A884A7E847A09F9DA43A226F6A78603107EDEDFA0E17C5D1EA2337AF07`.
 - Android `.2/.3/.4` and server revisions before `r5` are forensic/superseded, not approved rollback targets.
@@ -69,13 +69,15 @@ Last updated: 2026-07-10.
 - Stable Android and beta coexist; stable remains `pro.greenvpn.app`, beta is `pro.greenvpn.app.beta`.
 - Android custom-app picker lists launchable apps with search. Active add/remove of Chrome rebuilt `tun0`; VPN UID list contained Chrome only while selected. Chrome, MAX and all unselected apps route directly.
 - Device was restored after testing: Chrome removed from VPN list, beta VPN off, `stay_on_while_plugged_in=0`.
-- Windows `.3` static gate passed: isolated install/data/service/tunnel/port/process/window identifiers, clean EXE extraction, 0 stable identifier matches, 0 PowerShell parse errors and 0 Defender detections. It has not been installed.
+- Windows `.10` static gate passed: real EXE extraction, 18 payload files, isolated beta identity, 0 stable identifier matches, 0 PowerShell parse errors and 0 Defender detections.
+- Windows `.10` was installed side-by-side on the real owner PC. Reboot gate passed with preserved session, successful DPAPI migration, encrypted session at rest, automatic full-tunnel kill switch, beta service/port autostart and Amnezia restoration.
+- Windows `.10` physical transition smoke passed: network checker `10/10`, `productionReady=true`, two direct outside-tunnel DNS probes blocked, fresh handshake and traffic, beta APIs `200/200`, YouTube `204`, Green tunnel cleaned and Amnezia restored. Report SHA-256: `F5D4FB2DAC09216FC8116CF4EC2E5B3FD0E633F5F3D96E445FA93C96CD2D08C0`.
 
 ## Owner gate
 
 Do not create/send the first 20 codes yet. Remaining owner actions:
 
-1. Install and smoke local Windows beta `.3` on a real PC, including VPN connect, reboot, uninstall and network recovery. It is side-by-side isolated and does not target stable paths, but still requires UAC and is unsigned.
+1. Complete the destructive uninstall/network-recovery gate for Windows `.10`, then reinstall the same artifact. Install, reboot, session persistence and physical VPN/DNS smoke already passed; only uninstall/reinstall is pending.
 2. Make one real 149 RUB YooKassa payment and verify activation polling plus refund/cancel handling.
 3. Accept or legally review beta terms/privacy.
 

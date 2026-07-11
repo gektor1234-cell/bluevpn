@@ -102,6 +102,49 @@ function Ensure-GreenProgramDataAcl {
     }
 }
 
+function Ensure-NativeFullTunnelKillSwitch {
+    if (-not (Test-Path -LiteralPath $ConfigPath)) { return }
+
+    $configText = [IO.File]::ReadAllText($ConfigPath)
+    $match = [regex]::Match($configText, '(?im)^\s*AllowedIPs\s*=\s*(.+?)\s*$')
+    if (-not $match.Success) { return }
+
+    $allowedIps = @(
+        $match.Groups[1].Value.Split(',') |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+    $hasSplitIpv4 = $allowedIps -contains '0.0.0.0/1' -and
+        $allowedIps -contains '128.0.0.0/1'
+    $hasNativeDefault = $allowedIps -contains '0.0.0.0/0' -or
+        $allowedIps -contains '::/0'
+    if (-not $hasSplitIpv4 -or $hasNativeDefault) { return }
+
+    $preserved = @(
+        $allowedIps | Where-Object {
+            $_ -notin @('0.0.0.0/1', '128.0.0.0/1', '::/1', '8000::/1')
+        }
+    )
+    $normalized = @($preserved + @('0.0.0.0/0', '::/0') | Select-Object -Unique)
+    $updated = [regex]::Replace(
+        $configText,
+        '(?im)^\s*AllowedIPs\s*=.*$',
+        ('AllowedIPs = ' + ($normalized -join ', ')),
+        1
+    )
+    if ($updated -eq $configText) { return }
+
+    $tempPath = $ConfigPath + '.killswitch.tmp'
+    try {
+        [IO.File]::WriteAllText($tempPath, $updated, [Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $tempPath -Destination $ConfigPath -Force
+        Ensure-GreenProgramDataAcl
+        Write-GreenLog 'normalized Windows full-tunnel routes for native kill switch'
+    } finally {
+        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-OwnService {
     try {
         return Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue
@@ -188,6 +231,8 @@ function Start-GreenTunnel {
         Stop-GreenTunnel
         exit 2
     }
+
+    Ensure-NativeFullTunnelKillSwitch
 
     $wg = Resolve-WireGuardExe
     if ([string]::IsNullOrWhiteSpace($wg)) {

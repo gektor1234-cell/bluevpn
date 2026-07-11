@@ -1,6 +1,6 @@
 # Green VPN Release State
 
-Last compacted: 2026-07-10.
+Last compacted: 2026-07-11.
 
 ## Stable Public Contour
 
@@ -16,7 +16,7 @@ Last compacted: 2026-07-10.
 - Paths: `/paid-beta`, `/paid-beta-api`; do not publish before owner gate.
 - Android/backend: `0.3.0-paid-beta.5` / `0.9.106-paid-beta.4`.
 - Server-published Windows beta: `0.3.0-paid-beta.2` (`NotSigned`).
-- Local side-by-side Windows candidate: `0.3.0-paid-beta.3`, SHA `559C66438BD319E010631061C7ABF024DAE4DAAA2EAA15697B7DAFAA62CD7604` (`NotSigned`); not deployed.
+- Local side-by-side Windows candidate: `0.3.0-paid-beta.10`, SHA `A87F527D910CF50C075518270C221F7890963A5893D7FAB2637EC60FB3A2B170` (`NotSigned`); installed and runtime-tested locally, not deployed.
 - Current release on both nodes: `paid-beta-0.3.0-paid-beta.5-2026071005-r5`.
 - Android package: `pro.greenvpn.app.beta`, side-by-side with stable.
 - Policy: Trial 3 days, 149 RUB first invited period, then 299 RUB manually, 2 devices, no ads/timer/auto-renew.
@@ -31,11 +31,12 @@ Last compacted: 2026-07-10.
 - 28 backend tests and release gate: passed.
 - Site readiness: 8/8. Payment configuration ready; real payment not yet run.
 - Primary update API serves primary download URLs; fallback API serves fallback URLs with matching hashes.
-- Windows `.3` static isolation/PE/payload/parser/Defender gates passed; real install/reboot/uninstall is pending.
+- Windows `.10` static isolation/payload/parser/Defender gates passed.
+- Windows `.10` real install, reboot, session/DPAPI migration, kill-switch, DNS-leak, handshake, API/YouTube, cleanup and competing-VPN restoration gates passed. Uninstall/reinstall recovery is pending owner confirmation.
 
 ## Owner Gate
 
-1. Real Windows install/reboot/uninstall/network-recovery smoke.
+1. Windows `.10` uninstall/network-recovery and immediate reinstall smoke. All earlier Windows gates passed.
 2. One real 149 RUB payment with activation/refund/cancel verification.
 3. Owner/legal acceptance of terms and privacy.
 
@@ -43,7 +44,7 @@ Only then create the first 20 invite package.
 
 ## Known Risks
 
-- Windows `.3` is side-by-side isolated but unsigned and not yet physically installed.
+- Windows `.10` is side-by-side isolated and physically verified, but remains unsigned. It must not replace the public Windows build before the owner gate.
 - Two SQLite nodes are not globally transactional and deletes have no replicated tombstones. Keep first20 primary-normal/fallback-only.
 - KZ VPS deletion and London/NL legacy cleanup require separate owner approval.
 

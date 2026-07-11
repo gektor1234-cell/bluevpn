@@ -551,6 +551,9 @@ class _AppBootstrapState extends State<AppBootstrap> {
     await appendBlueVpnClientLog(
       'bootstrap session=${s == null ? "none" : "present"}',
     );
+    if (s != null) {
+      await _prepareWindowsFullTunnelConfig();
+    }
     if (s == null && !kIsWeb && Platform.isWindows) {
       try {
         if (mounted) {
@@ -572,6 +575,30 @@ class _AppBootstrapState extends State<AppBootstrap> {
       _openSessionDirectly = s != null && !kIsWeb && Platform.isAndroid;
       _loading = false;
     });
+  }
+
+  Future<void> _prepareWindowsFullTunnelConfig() async {
+    if (kIsWeb || !Platform.isWindows) return;
+    try {
+      final prefs = await PrefsStore().readPrefs();
+      if (prefs.socialOnlyEnabled) return;
+
+      final configStore = ConfigStore();
+      await configStore.ensureBaseSeededFromManagedIfMissing();
+      final baseConfig = await configStore.readBaseConfig();
+      if (baseConfig == null || baseConfig.trim().isEmpty) return;
+
+      await configStore.writeManagedConfig(
+        preserveFullTunnelAllowedIps(baseConfig),
+      );
+      await appendBlueVpnClientLog(
+        'bootstrap prepared Windows native full-tunnel kill switch',
+      );
+    } catch (e) {
+      await appendBlueVpnClientLog(
+        'bootstrap Windows full-tunnel preparation failed: $e',
+      );
+    }
   }
 
   Future<void> _resumeStartupDisconnectIfNeeded() async {
@@ -1161,6 +1188,7 @@ class WindowsLocalSecurity {
     if (kIsWeb || !Platform.isWindows) return null;
     try {
       const script = r'''
+Add-Type -AssemblyName System.Security
 $plain = [Console]::In.ReadToEnd()
 $bytes = [System.Text.Encoding]::UTF8.GetBytes($plain)
 $entropy = [System.Text.Encoding]::UTF8.GetBytes('BlueVPN-Machine-v1')
@@ -1182,6 +1210,7 @@ $protected = [System.Security.Cryptography.ProtectedData]::Protect(
     if (kIsWeb || !Platform.isWindows) return null;
     try {
       const script = r'''
+Add-Type -AssemblyName System.Security
 $encrypted = [Console]::In.ReadToEnd().Trim()
 $bytes = [Convert]::FromBase64String($encrypted)
 $entropy = [System.Text.Encoding]::UTF8.GetBytes('BlueVPN-Machine-v1')
@@ -1243,6 +1272,20 @@ try {
         path,
         '/grant',
         ...grants,
+      ], runInShell: true);
+    } catch (_) {}
+  }
+
+  static Future<void> preparePrivateFileForWrite(String path) async {
+    if (kIsWeb || !Platform.isWindows || path.trim().isEmpty) return;
+    try {
+      final file = File(path);
+      if (!file.existsSync()) return;
+      await Process.run('attrib', [
+        '-h',
+        '-s',
+        '-r',
+        file.path,
       ], runInShell: true);
     } catch (_) {}
   }
@@ -1465,19 +1508,20 @@ class SecureLocalFile {
         dir.createSync(recursive: true);
       }
       if (BlueVpnLocalPaths.isSharedStatePath(dir.path)) {
-        unawaited(WindowsLocalSecurity.prepareSharedStateDirectory(dir.path));
+        await WindowsLocalSecurity.prepareSharedStateDirectory(dir.path);
       } else {
-        unawaited(WindowsLocalSecurity.hardenPath(dir.path, directory: true));
+        await WindowsLocalSecurity.hardenPath(dir.path, directory: true);
       }
+      await WindowsLocalSecurity.preparePrivateFileForWrite(file.path);
 
       if (encrypted && !kIsWeb && Platform.isWindows) {
         final protected = await WindowsLocalSecurity.protectString(value);
         if (protected != null && protected.trim().isNotEmpty) {
           await file.writeAsString(protected);
           if (BlueVpnLocalPaths.isSharedStatePath(file.path)) {
-            unawaited(WindowsLocalSecurity.prepareSharedStateFile(file.path));
+            await WindowsLocalSecurity.prepareSharedStateFile(file.path);
           } else {
-            unawaited(WindowsLocalSecurity.hardenPath(file.path));
+            await WindowsLocalSecurity.hardenPath(file.path);
           }
           return;
         }
@@ -1485,9 +1529,9 @@ class SecureLocalFile {
 
       await file.writeAsString(value);
       if (BlueVpnLocalPaths.isSharedStatePath(file.path)) {
-        unawaited(WindowsLocalSecurity.prepareSharedStateFile(file.path));
+        await WindowsLocalSecurity.prepareSharedStateFile(file.path);
       } else {
-        unawaited(WindowsLocalSecurity.hardenPath(file.path));
+        await WindowsLocalSecurity.hardenPath(file.path);
       }
     } catch (_) {
       rethrow;
@@ -1598,9 +1642,18 @@ class SessionStore {
         );
       }
       BlueVpnApi.rememberSession(s);
-      await write(s);
+      try {
+        await write(s);
+      } catch (e) {
+        // A best-effort storage migration must not invalidate a session that
+        // was already read and parsed successfully.
+        await appendBlueVpnClientLog(
+          'session storage migration skipped type=${e.runtimeType}',
+        );
+      }
       return s;
-    } catch (_) {
+    } catch (e) {
+      await appendBlueVpnClientLog('session read failed type=${e.runtimeType}');
       return null;
     }
   }
@@ -2785,12 +2838,26 @@ String? readWireGuardConfigField(String configText, String fieldName) {
   return match?.group(1)?.trim();
 }
 
+List<String> resolveFullTunnelAllowedIps(
+  List<String> baseAllowedIps, {
+  required bool windows,
+}) {
+  if (windows) {
+    // WireGuard for Windows enables its DNS/IPv6 leak-prevention firewall only
+    // for an exact /0 route. Split-default /1 routes do not enable it.
+    return const ['0.0.0.0/0', '::/0'];
+  }
+  return baseAllowedIps.isEmpty
+      ? const ['0.0.0.0/1', '128.0.0.0/1']
+      : baseAllowedIps;
+}
+
 String preserveFullTunnelAllowedIps(String baseConfig) {
-  final allowedIps = readAllowedIpsFromConfig(baseConfig);
-  return replaceAllowedIpsInConfig(
-    baseConfig,
-    allowedIps.isEmpty ? const ['0.0.0.0/1', '128.0.0.0/1'] : allowedIps,
+  final allowedIps = resolveFullTunnelAllowedIps(
+    readAllowedIpsFromConfig(baseConfig),
+    windows: !kIsWeb && Platform.isWindows,
   );
+  return replaceAllowedIpsInConfig(baseConfig, allowedIps);
 }
 
 class ProvisioningWarmupResult {
