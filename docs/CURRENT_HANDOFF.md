@@ -16,7 +16,8 @@ Last updated: 2026-07-11.
 ## Repository and checkpoints
 
 - Root: `C:\Users\gekto\projects\bluevpn`.
-- Branch: `green-vpn-paid-beta-20260710`.
+- Stable/public-product base branch: `green-vpn-paid-beta-20260710`.
+- Active isolated transport branch: `green-vpn-transport-canary-20260711`.
 - Stable tag: `greenvpn-stable-pre-paid-beta-20260710`.
 - Stable local checkpoint: `C:\Users\gekto\GreenVPN_Checkpoints\pre_paid_beta_20260710_103722`.
 - Stable server snapshots: `/root/greenvpn-pre-paid-beta-20260710T103821`.
@@ -28,6 +29,18 @@ Last updated: 2026-07-11.
 - Real-payment/sync checkpoint/tag: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_real_payment_sync_ready_20260711`, `greenvpn-paid-beta-real-payment-sync-ready-20260711`.
 - Public billing-guard checkpoint/tag: `C:\Users\gekto\GreenVPN_Checkpoints\public_candidate_billing_guard_20260711`, `greenvpn-public-candidate-billing-guard-20260711`.
 - Private Windows session/config recovery copy: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_windows_0.3.0-paid-beta.10_private_state_20260711`; ACL is limited to the owner, SYSTEM and Administrators. Never publish or commit it.
+
+## Isolated transport canary foundation
+
+- Based on tag `greenvpn-public-candidate-billing-guard-20260711`; production, paid beta, site and downloads were not deployed or changed.
+- Current client explicitly advertises only `wireguard_udp`; old clients without the capability field also default to `wireguard_udp` only.
+- Backend performs fail-closed protocol negotiation and removes non-negotiated endpoints before selection. An empty negotiation returns `503 no_available_vpn_nodes` instead of silently restoring the builtin endpoint.
+- Rollout stages are explicit: `wireguard_udp=public`; existing guarded alternatives are `canary_prepared` or `research`.
+- Canary apply/rollback is permanently refused on all known production/control-plane hosts and Friendly Linnet, and requires an exact expected public IP on a separate test VPS.
+- AmneziaWG uses a oneshot systemd unit; readiness validates root-only non-symlink config, required AWG2 fields, unique nonzero H1-H4 and a canary peer without printing secrets.
+- No live transport daemon was installed because there is currently no free reachable test-only VPS. KZ test remains unreachable; working VPN nodes were intentionally untouched.
+- Verification: 47 backend tests, 6 Flutter tests, bash syntax and release gate pass. `flutter analyze` reports only the pre-existing 182 lint/info items and no new issue on changed lines.
+- Detailed operator runbook: `docs/TRANSPORT_CANARY_ROLLOUT_2026_07_11_RU.md`.
 
 ## Frozen production stable
 

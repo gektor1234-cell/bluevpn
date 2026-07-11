@@ -3,13 +3,21 @@ set -euo pipefail
 
 APPLY=0
 ALLOW_CURRENT_VPN_HOST=0
+EXPECTED_PUBLIC_IP=""
 LISTEN_PORT="8443"
 WIREGUARD_HOST="127.0.0.1"
 WIREGUARD_PORT="51820"
 UDP2RAW_BIN="/usr/local/bin/udp2raw"
 KEY_FILE="/etc/greenvpn-transport/wireguard_tcp_key"
 SERVICE_NAME="greenvpn-wg-tcp-canary"
-CURRENT_VPN_IP="37.220.85.211"
+PROTECTED_HOST_IPS=(
+  "37.220.85.211"
+  "5.129.216.42"
+  "88.218.250.86"
+  "72.56.32.197"
+  "176.113.81.35"
+  "5.129.237.163"
+)
 
 usage() {
   cat <<'EOF'
@@ -22,11 +30,12 @@ Usage:
       [--wireguard-host 127.0.0.1] [--wireguard-port 51820]
       [--udp2raw-bin /usr/local/bin/udp2raw]
       [--key-file /etc/greenvpn-transport/wireguard_tcp_key]
-      [--allow-current-vpn-host]
+      [--expected-public-ip IP]
 
 Safety:
   - intended for a separate canary VPN node;
-  - refuses to run on 37.220.85.211 unless --allow-current-vpn-host is set;
+  - refuses apply mode on every known production/control-plane host;
+  - apply mode requires --expected-public-ip to prevent wrong-host deployment;
   - never prints the transport key;
   - creates a systemd service only in --apply mode;
   - does not edit WireGuard peers, DNS, backend env, or the public catalog.
@@ -60,8 +69,13 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --allow-current-vpn-host)
+      # Retained for old dry-run automation. It never bypasses apply protection.
       ALLOW_CURRENT_VPN_HOST=1
       shift
+      ;;
+    --expected-public-ip)
+      EXPECTED_PUBLIC_IP="${2:?missing expected public ip}"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -91,10 +105,22 @@ if ! [[ "${WIREGUARD_PORT}" =~ ^[0-9]+$ ]] || (( WIREGUARD_PORT < 1 || WIREGUARD
 fi
 
 PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org || true)"
-if [[ "${PUBLIC_IP}" == "${CURRENT_VPN_IP}" && "${ALLOW_CURRENT_VPN_HOST}" -ne 1 ]]; then
-  echo "Refusing to install canary wrapper on current production VPN host ${CURRENT_VPN_IP}." >&2
-  echo "Use a separate canary node, or pass --allow-current-vpn-host only for a deliberate maintenance window." >&2
-  exit 1
+for protected_ip in "${PROTECTED_HOST_IPS[@]}"; do
+  if [[ "${PUBLIC_IP}" == "${protected_ip}" && "${APPLY}" -eq 1 ]]; then
+    echo "Refusing to install canary wrapper on protected Green VPN host ${protected_ip}." >&2
+    echo "Use a separate test-only canary node." >&2
+    exit 1
+  fi
+done
+if [[ "${APPLY}" -eq 1 ]]; then
+  if [[ -z "${PUBLIC_IP}" ]]; then
+    echo "Cannot verify public IP; refusing apply mode." >&2
+    exit 1
+  fi
+  if [[ -z "${EXPECTED_PUBLIC_IP}" || "${PUBLIC_IP}" != "${EXPECTED_PUBLIC_IP}" ]]; then
+    echo "Public IP does not match --expected-public-ip; refusing apply mode." >&2
+    exit 1
+  fi
 fi
 
 if [[ ! -x "${UDP2RAW_BIN}" ]]; then

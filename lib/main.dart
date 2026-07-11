@@ -47,6 +47,7 @@ const String kPaidBetaClientMarker = String.fromEnvironment(
   defaultValue: 'green-vpn-paid-beta-v1',
 );
 const String kPaidBetaReleaseChannel = 'paid-beta';
+const List<String> kSupportedVpnProtocols = <String>['wireguard_udp'];
 const bool kAdsDisabledBuild =
     kTrialOnlyNoAdsBuild || kPaidBetaBuild || kPublicProductBuild;
 const bool kYandexRewardedAdsEnabled = bool.fromEnvironment(
@@ -4175,6 +4176,7 @@ while True:
             'platform': platform,
             'appVersion': appVersion,
             'releaseChannel': releaseChannel ?? greenVpnUpdateChannel(),
+            'supportedProtocols': kSupportedVpnProtocols,
             if (kPaidBetaBuild) 'clientMarker': kPaidBetaClientMarker,
           }),
         );
@@ -4227,6 +4229,7 @@ while True:
           'deviceUid': deviceId,
           'mode': 'full',
           'releaseChannel': releaseChannel ?? greenVpnUpdateChannel(),
+          'supportedProtocols': kSupportedVpnProtocols,
           if (kPaidBetaBuild) 'clientMarker': kPaidBetaClientMarker,
         };
         if (serverId != null && serverId.trim().isNotEmpty) {
@@ -4464,6 +4467,10 @@ while True:
           req.headers.set(
             'X-GreenVPN-Release-Channel',
             greenVpnUpdateChannel(),
+          );
+          req.headers.set(
+            'X-GreenVPN-Supported-Protocols',
+            kSupportedVpnProtocols.join(','),
           );
           if (bearerToken != null && bearerToken.trim().isNotEmpty) {
             req.headers.set('Authorization', 'Bearer $bearerToken');

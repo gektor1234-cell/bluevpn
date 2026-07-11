@@ -3,11 +3,19 @@ set -euo pipefail
 
 APPLY=0
 ALLOW_CURRENT_VPN_HOST=0
+EXPECTED_PUBLIC_IP=""
 PROTOCOL=""
 BINARY=""
 CONFIG_FILE=""
 SERVICE_NAME=""
-CURRENT_VPN_IP="37.220.85.211"
+PROTECTED_HOST_IPS=(
+  "37.220.85.211"
+  "5.129.216.42"
+  "88.218.250.86"
+  "72.56.32.197"
+  "176.113.81.35"
+  "5.129.237.163"
+)
 
 usage() {
   cat <<'EOF'
@@ -17,7 +25,7 @@ Default mode is dry-run. It never publishes a transport to users.
 
 Usage:
   install_transport_canary_service.sh --protocol PROTOCOL --binary PATH --config-file PATH [--apply]
-      [--service-name NAME] [--allow-current-vpn-host]
+      [--service-name NAME] [--expected-public-ip IP]
 
 Supported PROTOCOL values:
   amneziawg
@@ -39,7 +47,8 @@ Examples:
 
 Safety:
   - intended for a separate canary node;
-  - refuses to run on 37.220.85.211 unless --allow-current-vpn-host is set;
+  - refuses apply mode on every known production/control-plane host;
+  - apply mode requires --expected-public-ip to prevent wrong-host deployment;
   - requires trusted/pinned binaries to be installed before this script runs;
   - requires a root-owned config file that is not world-readable;
   - never prints config contents, credentials or private keys;
@@ -58,8 +67,13 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --allow-current-vpn-host)
+      # Retained for old dry-run automation. It never bypasses apply protection.
       ALLOW_CURRENT_VPN_HOST=1
       shift
+      ;;
+    --expected-public-ip)
+      EXPECTED_PUBLIC_IP="${2:?missing expected public ip}"
+      shift 2
       ;;
     --protocol)
       PROTOCOL="${2:?missing protocol}"
@@ -134,16 +148,21 @@ if [[ ! -f "${CONFIG_FILE}" ]]; then
   echo "Create the root-only canary config first. This script will not generate secrets." >&2
   exit 1
 fi
+if [[ -L "${CONFIG_FILE}" ]]; then
+  echo "Config file must not be a symbolic link: ${CONFIG_FILE}" >&2
+  exit 1
+fi
 
 CONFIG_OWNER="$(stat -c '%U' "${CONFIG_FILE}" 2>/dev/null || echo unknown)"
 CONFIG_MODE="$(stat -c '%a' "${CONFIG_FILE}" 2>/dev/null || echo 000)"
+GROUP_PERMS=$(( (CONFIG_MODE / 10) % 10 ))
 OTHER_PERMS=$(( CONFIG_MODE % 10 ))
 if [[ "${CONFIG_OWNER}" != "root" ]]; then
   echo "Config file must be owned by root: ${CONFIG_FILE}" >&2
   exit 1
 fi
-if (( OTHER_PERMS != 0 )); then
-  echo "Config file must not be world-readable/executable: ${CONFIG_FILE} mode=${CONFIG_MODE}" >&2
+if (( GROUP_PERMS != 0 || OTHER_PERMS != 0 )); then
+  echo "Config file must be root-only: ${CONFIG_FILE} mode=${CONFIG_MODE}" >&2
   exit 1
 fi
 
@@ -156,18 +175,34 @@ if ! [[ "${SERVICE_NAME}" =~ ^[a-zA-Z0-9_.@-]+$ ]]; then
 fi
 
 PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org || true)"
-if [[ "${PUBLIC_IP}" == "${CURRENT_VPN_IP}" && "${ALLOW_CURRENT_VPN_HOST}" -ne 1 ]]; then
-  echo "Refusing to install canary service on current production VPN host ${CURRENT_VPN_IP}." >&2
-  echo "Use a separate canary node, or pass --allow-current-vpn-host only for a deliberate maintenance window." >&2
-  exit 1
+for protected_ip in "${PROTECTED_HOST_IPS[@]}"; do
+  if [[ "${PUBLIC_IP}" == "${protected_ip}" && "${APPLY}" -eq 1 ]]; then
+    echo "Refusing to install canary service on protected Green VPN host ${protected_ip}." >&2
+    echo "Use a separate test-only canary node." >&2
+    exit 1
+  fi
+done
+if [[ "${APPLY}" -eq 1 ]]; then
+  if [[ -z "${PUBLIC_IP}" ]]; then
+    echo "Cannot verify public IP; refusing apply mode." >&2
+    exit 1
+  fi
+  if [[ -z "${EXPECTED_PUBLIC_IP}" || "${PUBLIC_IP}" != "${EXPECTED_PUBLIC_IP}" ]]; then
+    echo "Public IP does not match --expected-public-ip; refusing apply mode." >&2
+    exit 1
+  fi
 fi
 
 EXEC_START=""
 EXEC_STOP=""
+SERVICE_TYPE="simple"
+REMAIN_AFTER_EXIT="no"
 case "${PROTOCOL}" in
   amneziawg)
     EXEC_START="${BINARY} up ${CONFIG_FILE}"
     EXEC_STOP="${BINARY} down ${CONFIG_FILE}"
+    SERVICE_TYPE="oneshot"
+    REMAIN_AFTER_EXIT="yes"
     ;;
   openvpn_tcp)
     EXEC_START="${BINARY} --config ${CONFIG_FILE}"
@@ -197,6 +232,7 @@ echo "config_file=${CONFIG_FILE}"
 echo "config_owner=${CONFIG_OWNER}"
 echo "config_mode=${CONFIG_MODE}"
 echo "service=${SERVICE_NAME}.service"
+echo "service_type=${SERVICE_TYPE}"
 echo "mode=$([[ "${APPLY}" -eq 1 ]] && echo apply || echo dry-run)"
 echo "catalog_publication=not_changed"
 
@@ -212,11 +248,11 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=${SERVICE_TYPE}
+RemainAfterExit=${REMAIN_AFTER_EXIT}
 ExecStart=${EXEC_START}
 $(if [[ -n "${EXEC_STOP}" ]]; then echo "ExecStop=${EXEC_STOP}"; fi)
-Restart=always
-RestartSec=3
+$(if [[ "${SERVICE_TYPE}" == "simple" ]]; then printf 'Restart=always\nRestartSec=3'; fi)
 NoNewPrivileges=true
 PrivateTmp=true
 

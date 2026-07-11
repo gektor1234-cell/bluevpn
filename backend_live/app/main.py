@@ -638,6 +638,18 @@ SERVER_PROTOCOL_ROLLOUT_ORDER = [
     "masque_udp",
 ]
 SERVER_CLIENT_READY_PROTOCOLS = {"wireguard_udp"}
+SERVER_DEFAULT_CLIENT_PROTOCOLS = frozenset({"wireguard_udp"})
+SERVER_TRANSPORT_ROLLOUT_STAGES = {
+    "wireguard_udp": "public",
+    "wireguard_tcp": "canary_prepared",
+    "amneziawg": "canary_prepared",
+    "openvpn_tcp": "canary_prepared",
+    "shadowsocks": "canary_prepared",
+    "hysteria2": "canary_prepared",
+    "trojan_tls": "canary_prepared",
+    "vless_reality": "canary_prepared",
+    "masque_udp": "research",
+}
 RESILIENCE_ROUTE_STATUSES = ["green", "yellow", "red", "unknown"]
 RESILIENCE_ROUTE_MIN_SCORE = int(os.getenv("GREENVPN_RESILIENCE_ROUTE_MIN_SCORE", "70"))
 RESILIENCE_ROUTE_STALE_AFTER_SECONDS = int(
@@ -1340,6 +1352,7 @@ class BootstrapIn(BaseModel):
     appVersion: str = "0.1.0"
     releaseChannel: Optional[str] = None
     clientMarker: Optional[str] = None
+    supportedProtocols: Optional[list[str]] = None
 
 
 class ClientConfigIn(BaseModel):
@@ -1348,6 +1361,7 @@ class ClientConfigIn(BaseModel):
     serverId: Optional[str] = None
     releaseChannel: Optional[str] = None
     clientMarker: Optional[str] = None
+    supportedProtocols: Optional[list[str]] = None
 
 
 class AdChallengeStartIn(BaseModel):
@@ -8225,15 +8239,55 @@ def builtin_server_catalog_entry() -> dict:
     }
 
 
-def protocol_catalog_item(code: str) -> dict:
+def normalize_client_supported_protocols(
+    values: Optional[list[str] | tuple[str, ...] | set[str] | str],
+) -> set[str]:
+    if values is None:
+        requested = set(SERVER_DEFAULT_CLIENT_PROTOCOLS)
+    elif isinstance(values, str):
+        requested = {
+            item.strip().lower()
+            for item in values.split(",")
+            if item.strip()
+        }
+    else:
+        requested = {
+            clean_limited_text(item, 40).strip().lower()
+            for item in values
+            if clean_limited_text(item, 40).strip()
+        }
+    return requested.intersection(SERVER_CLIENT_READY_PROTOCOLS)
+
+
+def server_primary_protocol(server: dict) -> str:
+    protocols = server.get("protocols") or []
+    primary = next(
+        (item for item in protocols if isinstance(item, dict) and item.get("primary")),
+        None,
+    )
+    primary = primary or next((item for item in protocols if isinstance(item, dict)), None)
+    return str((primary or {}).get("code") or "").strip().lower()
+
+
+def server_visible_to_client(server: dict, supported_protocols: set[str]) -> bool:
+    return server_primary_protocol(server) in supported_protocols
+
+
+def protocol_catalog_item(
+    code: str,
+    client_supported_protocols: Optional[set[str]] = None,
+) -> dict:
     title = SERVER_PROTOCOL_TITLES.get(code, code)
-    client_ready = code in SERVER_CLIENT_READY_PROTOCOLS
+    negotiated = normalize_client_supported_protocols(client_supported_protocols)
+    client_ready = code in negotiated
+    rollout_stage = SERVER_TRANSPORT_ROLLOUT_STAGES.get(code, "research")
     return {
         "code": code,
         "title": title,
         "clientReady": client_ready,
         "serverReady": code == "wireguard_udp",
-        "publicReady": client_ready and code == "wireguard_udp",
+        "publicReady": client_ready and rollout_stage == "public" and code == "wireguard_udp",
+        "rolloutStage": rollout_stage,
         "rolloutOrder": SERVER_PROTOCOL_ROLLOUT_ORDER.index(code)
         if code in SERVER_PROTOCOL_ROLLOUT_ORDER
         else 999,
@@ -8241,10 +8295,16 @@ def protocol_catalog_item(code: str) -> dict:
     }
 
 
-def build_resilience_policy(servers: Optional[list[dict]] = None) -> dict:
-    protocol_matrix = [protocol_catalog_item(code) for code in SERVER_CATALOG_PROTOCOLS]
+def build_resilience_policy(
+    servers: Optional[list[dict]] = None,
+    client_supported_protocols: Optional[set[str]] = None,
+) -> dict:
+    negotiated = normalize_client_supported_protocols(client_supported_protocols)
+    protocol_matrix = [
+        protocol_catalog_item(code, negotiated) for code in SERVER_CATALOG_PROTOCOLS
+    ]
     route_decision = build_resilience_route_decision(
-        servers or [builtin_server_catalog_entry()]
+        [builtin_server_catalog_entry()] if servers is None else servers
     )
     return {
         "autoSwitch": True,
@@ -8268,11 +8328,11 @@ def build_resilience_policy(servers: Optional[list[dict]] = None) -> dict:
             ),
         },
         "routeDecision": route_decision,
-        "clientReadyProtocols": sorted(SERVER_CLIENT_READY_PROTOCOLS),
+        "clientReadyProtocols": sorted(negotiated),
         "rolloutOrder": list(SERVER_PROTOCOL_ROLLOUT_ORDER),
         "protocols": protocol_matrix,
         "currentWindowsClient": {
-            "canUse": sorted(SERVER_CLIENT_READY_PROTOCOLS),
+            "canUse": sorted(negotiated),
             "cannotUseYet": [
                 item["code"] for item in protocol_matrix if not item["clientReady"]
             ],
@@ -8383,7 +8443,10 @@ def managed_catalog_entry_has_resilient_client_visibility(entry: dict) -> bool:
     return health_score >= SERVER_PUBLIC_MIN_HEALTH_SCORE
 
 
-def list_public_client_catalog_servers() -> list[dict]:
+def list_public_client_catalog_servers(
+    supported_protocols: Optional[set[str]] = None,
+) -> list[dict]:
+    negotiated = normalize_client_supported_protocols(supported_protocols)
     try:
         managed_entries = list_managed_server_catalog_entries(
             status="healthy",
@@ -8397,7 +8460,8 @@ def list_public_client_catalog_servers() -> list[dict]:
     return [
         managed_catalog_entry_to_public_server(entry)
         for entry in managed_entries
-        if entry.get("clientConfigReady")
+        if str(entry.get("protocol") or "").strip().lower() in negotiated
+        and entry.get("clientConfigReady")
         and (
             entry.get("publicEligible")
             or managed_catalog_entry_has_resilient_client_visibility(entry)
@@ -8405,9 +8469,13 @@ def list_public_client_catalog_servers() -> list[dict]:
     ]
 
 
-def list_preview_client_catalog_servers(server_ids: set[str]) -> list[dict]:
+def list_preview_client_catalog_servers(
+    server_ids: set[str],
+    supported_protocols: Optional[set[str]] = None,
+) -> list[dict]:
     if not server_ids:
         return []
+    negotiated = normalize_client_supported_protocols(supported_protocols)
     try:
         managed_entries = list_managed_server_catalog_entries(
             status="healthy",
@@ -8421,7 +8489,9 @@ def list_preview_client_catalog_servers(server_ids: set[str]) -> list[dict]:
     return [
         managed_catalog_entry_to_public_server(entry, preview_only=True)
         for entry in managed_entries
-        if entry.get("serverId") in server_ids and entry.get("clientConfigReady")
+        if entry.get("serverId") in server_ids
+        and str(entry.get("protocol") or "").strip().lower() in negotiated
+        and entry.get("clientConfigReady")
     ]
 
 
@@ -8429,24 +8499,32 @@ def build_server_catalog(
     *,
     release_channel: Optional[str] = None,
     app_version: Optional[str] = None,
+    client_supported_protocols: Optional[list[str] | set[str] | str] = None,
 ) -> dict:
+    negotiated = normalize_client_supported_protocols(client_supported_protocols)
     builtin = builtin_server_catalog_entry()
     managed_servers = [
         item
-        for item in list_public_client_catalog_servers()
-        if item.get("id") != builtin["id"]
+        for item in list_public_client_catalog_servers(negotiated)
+        if item.get("id") != builtin["id"] and server_visible_to_client(item, negotiated)
     ]
     preview_server_ids = preview_server_ids_for_request(release_channel, app_version)
     existing_server_ids = {str(item.get("id") or "") for item in managed_servers}
     preview_servers = [
         item
-        for item in list_preview_client_catalog_servers(preview_server_ids)
-        if item.get("id") != builtin["id"] and item.get("id") not in existing_server_ids
+        for item in list_preview_client_catalog_servers(preview_server_ids, negotiated)
+        if item.get("id") != builtin["id"]
+        and item.get("id") not in existing_server_ids
+        and server_visible_to_client(item, negotiated)
     ]
     builtin_client_ready = bool(builtin.get("available")) and bool(
         builtin.get("clientConfigReady")
     )
-    servers = ([builtin] if builtin_client_ready else []) + managed_servers + preview_servers
+    servers = (
+        [builtin]
+        if builtin_client_ready and server_visible_to_client(builtin, negotiated)
+        else []
+    ) + managed_servers + preview_servers
     default_candidates = [server for server in servers if server_auto_capacity_ok(server)]
     if not default_candidates:
         default_candidates = [
@@ -8480,7 +8558,7 @@ def build_server_catalog(
             "strategy": "best_healthy_config_ready",
         },
         "servers": servers,
-        "resilience": build_resilience_policy(servers),
+        "resilience": build_resilience_policy(servers, negotiated),
         "bootstrap": {
             "apiBaseUrls": SERVER_CATALOG_API_BASE_URLS,
             "emergencyCatalogUrl": SERVER_CATALOG_EMERGENCY_URL,
@@ -8494,6 +8572,7 @@ def build_server_catalog(
             ),
             "clientVisibleManagedEntries": len(managed_servers),
             "clientVisiblePreviewEntries": len(preview_servers),
+            "negotiatedClientProtocols": sorted(negotiated),
             "publicationRules": server_publication_requirements(),
         },
     }
@@ -12568,6 +12647,7 @@ def transport_rollout_profile(code: str) -> dict:
     return {
         "code": clean_code,
         "title": SERVER_PROTOCOL_TITLES.get(clean_code, clean_code),
+        "rolloutStage": SERVER_TRANSPORT_ROLLOUT_STAGES.get(clean_code, "research"),
         "engine": profile.get("engine") or "Не выбран",
         "windowsWork": profile.get("windowsWork") or "Нужно добавить клиентский engine.",
         "serverWork": profile.get("serverWork") or "Нужно развернуть отдельный server endpoint.",
@@ -12794,7 +12874,7 @@ def latest_service_status_score(target_ids: list[str]) -> dict:
 
 
 def build_resilience_route_decision(servers: Optional[list[dict]] = None) -> dict:
-    servers = servers or [builtin_server_catalog_entry()]
+    servers = [builtin_server_catalog_entry()] if servers is None else servers
     endpoint_by_protocol = public_endpoint_protocol_map(servers)
     try:
         targets = list_monitoring_targets(status="active", service="all", limit=500)
@@ -12983,7 +13063,7 @@ def select_best_capacity_server(catalog: dict) -> dict:
             if bool(server.get("available")) and bool(server.get("clientConfigReady"))
         ]
     if not servers:
-        return builtin_server_catalog_entry()
+        return {}
     return sorted(
         servers,
         key=lambda item: (
@@ -25683,12 +25763,17 @@ def server_catalog(
     currentVersion: Optional[str] = None,
     x_greenvpn_release_channel: Optional[str] = Header(default=None, alias="X-GreenVPN-Release-Channel"),
     x_greenvpn_version: Optional[str] = Header(default=None, alias="X-GreenVPN-Version"),
+    x_greenvpn_supported_protocols: Optional[str] = Header(
+        default=None,
+        alias="X-GreenVPN-Supported-Protocols",
+    ),
 ):
     return {
         "ok": True,
         "catalog": build_server_catalog(
             release_channel=channel or x_greenvpn_release_channel,
             app_version=currentVersion or x_greenvpn_version,
+            client_supported_protocols=x_greenvpn_supported_protocols,
         ),
     }
 
@@ -26514,6 +26599,7 @@ def client_bootstrap(
     catalog = build_server_catalog(
         release_channel=payload.releaseChannel,
         app_version=device["app_version"],
+        client_supported_protocols=payload.supportedProtocols,
     )
     resilience = catalog.get("resilience") or build_resilience_policy(catalog.get("servers"))
     route_decision = resilience.get("routeDecision") if isinstance(resilience, dict) else {}
@@ -26655,6 +26741,7 @@ def client_config(
     catalog = build_server_catalog(
         release_channel=payload.releaseChannel,
         app_version=device["app_version"],
+        client_supported_protocols=payload.supportedProtocols,
     )
     resilience = catalog.get("resilience") or build_resilience_policy(catalog.get("servers"))
     route_decision = resilience.get("routeDecision") if isinstance(resilience, dict) else {}

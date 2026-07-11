@@ -68,6 +68,7 @@ $vpnTaskPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_vpn_task.ps1"
 $wireguardTcpCanaryPath = Join-Path $ProjectRoot "scripts\server\install_wireguard_tcp_canary.sh"
 $transportCanaryPath = Join-Path $ProjectRoot "scripts\server\install_transport_canary_service.sh"
 $transportCanaryCheckPath = Join-Path $ProjectRoot "scripts\server\check_transport_canary_readiness.sh"
+$transportCanaryRollbackPath = Join-Path $ProjectRoot "scripts\server\remove_transport_canary_service.sh"
 
 $main = Read-Text $mainPath
 $runtimeConfig = Read-Text $runtimeConfigPath
@@ -82,6 +83,7 @@ $vpnTaskScript = Read-Text $vpnTaskPath
 $wireguardTcpCanaryScript = Read-Text $wireguardTcpCanaryPath
 $transportCanaryScript = Read-Text $transportCanaryPath
 $transportCanaryCheckScript = Read-Text $transportCanaryCheckPath
+$transportCanaryRollbackScript = Read-Text $transportCanaryRollbackPath
 
 Write-Section "CLIENT SAFETY CHECKS"
 $forbiddenClientPatterns = @(
@@ -381,6 +383,12 @@ $requiredBackendSafetyFragments = @(
     'safePlanCodes',
     'SERVER_PROTOCOL_ROLLOUT_ORDER',
     'SERVER_CLIENT_READY_PROTOCOLS',
+    'SERVER_DEFAULT_CLIENT_PROTOCOLS',
+    'SERVER_TRANSPORT_ROLLOUT_STAGES',
+    'def normalize_client_supported_protocols(',
+    'def server_visible_to_client(',
+    'negotiatedClientProtocols',
+    'no_available_vpn_nodes',
     'resilience_route_observations',
     'AdminResilienceRouteObservationIn',
     'client_route_events',
@@ -477,7 +485,10 @@ $requiredAutoRouteClientFragments = @(
     "res.data!['resilience']",
     "resilienceMap['routeDecision']",
     'selectedRouteMap',
-    's.isAuto || s.isCurrentClientReady'
+    's.isAuto || s.isCurrentClientReady',
+    "const List<String> kSupportedVpnProtocols = <String>['wireguard_udp']",
+    "'X-GreenVPN-Supported-Protocols'",
+    "'supportedProtocols': kSupportedVpnProtocols"
 )
 
 foreach ($fragment in $requiredAutoRouteClientFragments) {
@@ -494,7 +505,9 @@ $requiredCanaryFragments = @(
     'Green VPN WireGuard TCP canary installer',
     '--apply',
     '--allow-current-vpn-host',
-    'Refusing to install canary wrapper on current production VPN host',
+    '--expected-public-ip',
+    'Refusing to install canary wrapper on protected Green VPN host',
+    'Use a separate test-only canary node',
     'Dry-run only',
     'does not edit WireGuard peers',
     'udp2raw',
@@ -517,9 +530,14 @@ $requiredTransportCanaryFragments = @(
     'amneziawg|openvpn_tcp|shadowsocks|hysteria2|trojan_tls|vless_reality|masque_udp',
     '--apply',
     '--allow-current-vpn-host',
-    'Refusing to install canary service on current production VPN host',
+    '--expected-public-ip',
+    'Refusing to install canary service on protected Green VPN host',
+    'SERVICE_TYPE="oneshot"',
+    'REMAIN_AFTER_EXIT="yes"',
     'trusted/pinned',
     'requires a root-owned config file',
+    'Config file must be root-only',
+    'Config file must not be a symbolic link',
     'does not edit WireGuard peers',
     'catalog_publication=not_changed',
     'NoNewPrivileges=true',
@@ -540,10 +558,13 @@ $requiredTransportCanaryCheckFragments = @(
     'wireguard_tcp|amneziawg|openvpn_tcp|shadowsocks|hysteria2|trojan_tls|vless_reality|masque_udp',
     'does not read or print transport secrets',
     'does not edit WireGuard peers',
-    'current_production_vpn_host_refused',
+    'protected_production_host_refused',
     'binary_missing_or_not_executable',
     'config_not_root_owned',
-    'config_world_readable',
+    'config_not_root_only',
+    'config_symlink_refused',
+    'amneziawg2_required_fields_missing',
+    'amneziawg2_headers_invalid',
     'service_not_active',
     'route_candidate=',
     '--json'
@@ -555,6 +576,25 @@ foreach ($fragment in $requiredTransportCanaryCheckFragments) {
     }
     else {
         Add-Error "Transport canary readiness marker missing: $fragment"
+    }
+}
+
+$requiredTransportCanaryRollbackFragments = @(
+    'Green VPN guarded transport canary rollback',
+    '--expected-public-ip',
+    'Refusing canary rollback mutation on protected Green VPN host',
+    'Refusing non-canary service name',
+    'config_keys_binaries=preserved',
+    'public_catalog=not_changed',
+    'Dry-run only'
+)
+
+foreach ($fragment in $requiredTransportCanaryRollbackFragments) {
+    if ($transportCanaryRollbackScript.Contains($fragment)) {
+        Add-Pass "Transport canary rollback safety marker present: $fragment"
+    }
+    else {
+        Add-Error "Transport canary rollback safety marker missing: $fragment"
     }
 }
 

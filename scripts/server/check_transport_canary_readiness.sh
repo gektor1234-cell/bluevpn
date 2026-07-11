@@ -10,7 +10,14 @@ ENDPOINT_ID=""
 TRANSPORT=""
 JSON_OUTPUT=0
 ALLOW_CURRENT_VPN_HOST=0
-CURRENT_VPN_IP="37.220.85.211"
+PROTECTED_HOST_IPS=(
+  "37.220.85.211"
+  "5.129.216.42"
+  "88.218.250.86"
+  "72.56.32.197"
+  "176.113.81.35"
+  "5.129.237.163"
+)
 
 usage() {
   cat <<'USAGE'
@@ -166,12 +173,19 @@ json_array() {
   printf ']'
 }
 
-host_has_current_ip() {
-  hostname -I 2>/dev/null | tr ' ' '\n' | grep -qxF "$CURRENT_VPN_IP"
+host_has_protected_ip() {
+  local addresses
+  addresses="$(hostname -I 2>/dev/null || true) $(curl -fsS --max-time 5 https://api.ipify.org || true)"
+  for protected_ip in "${PROTECTED_HOST_IPS[@]}"; do
+    if printf '%s\n' "$addresses" | tr ' ' '\n' | grep -qxF "$protected_ip"; then
+      return 0
+    fi
+  done
+  return 1
 }
 
-if host_has_current_ip && [[ "$ALLOW_CURRENT_VPN_HOST" -ne 1 ]]; then
-  add_blocker "current_production_vpn_host_refused"
+if host_has_protected_ip; then
+  add_blocker "protected_production_host_refused"
 fi
 
 if [[ -n "$BINARY_PATH" ]]; then
@@ -185,15 +199,39 @@ fi
 if [[ -n "$CONFIG_FILE" ]]; then
   if [[ ! -f "$CONFIG_FILE" ]]; then
     add_blocker "config_file_missing"
+  elif [[ -L "$CONFIG_FILE" ]]; then
+    add_blocker "config_symlink_refused"
   else
     owner_uid="$(stat -c '%u' "$CONFIG_FILE" 2>/dev/null || echo unknown)"
     mode="$(stat -c '%a' "$CONFIG_FILE" 2>/dev/null || echo 777)"
+    group_digit="${mode: -2:1}"
     other_digit="${mode: -1}"
     if [[ "$owner_uid" != "0" ]]; then
       add_blocker "config_not_root_owned"
     fi
-    if [[ "$other_digit" =~ ^[0-7]$ ]] && (( other_digit & 4 )); then
-      add_blocker "config_world_readable"
+    if [[ "$group_digit" =~ ^[0-7]$ ]] && (( group_digit != 0 )); then
+      add_blocker "config_not_root_only"
+    fi
+    if [[ "$other_digit" =~ ^[0-7]$ ]] && (( other_digit != 0 )); then
+      add_blocker "config_not_root_only"
+    fi
+    if [[ "$PROTOCOL" == "amneziawg" ]]; then
+      required_awg_fields=(PrivateKey ListenPort S1 S2 S3 S4 H1 H2 H3 H4)
+      for field in "${required_awg_fields[@]}"; do
+        if ! grep -Eq "^[[:space:]]*${field}[[:space:]]*=" "$CONFIG_FILE"; then
+          add_blocker "amneziawg2_required_fields_missing"
+          break
+        fi
+      done
+      if ! grep -Eq '^[[:space:]]*\[Peer\][[:space:]]*$' "$CONFIG_FILE"; then
+        add_blocker "amneziawg_canary_peer_missing"
+      fi
+      header_values="$(sed -nE 's/^[[:space:]]*H[1-4][[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "$CONFIG_FILE")"
+      if [[ "$(printf '%s\n' "$header_values" | sed '/^$/d' | wc -l)" -ne 4 ]] \
+        || [[ "$(printf '%s\n' "$header_values" | sed '/^$/d' | sort -u | wc -l)" -ne 4 ]] \
+        || printf '%s\n' "$header_values" | grep -qx '0'; then
+        add_blocker "amneziawg2_headers_invalid"
+      fi
     fi
   fi
 else
