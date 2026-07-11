@@ -4,6 +4,7 @@ set -euo pipefail
 APPLY=0
 ALLOW_CURRENT_VPN_HOST=0
 EXPECTED_PUBLIC_IP=""
+APPROVED_EXISTING_HOST=""
 PROTOCOL=""
 BINARY=""
 CONFIG_FILE=""
@@ -26,6 +27,7 @@ Default mode is dry-run. It never publishes a transport to users.
 Usage:
   install_transport_canary_service.sh --protocol PROTOCOL --binary PATH --config-file PATH [--apply]
       [--service-name NAME] [--expected-public-ip IP]
+      [--approved-existing-host 5.129.216.42]
 
 Supported PROTOCOL values:
   amneziawg
@@ -48,6 +50,7 @@ Examples:
 Safety:
   - intended for a separate canary node;
   - refuses apply mode on every known production/control-plane host;
+  - the only narrow exception is the owner-approved NL2 AmneziaWG canary;
   - apply mode requires --expected-public-ip to prevent wrong-host deployment;
   - requires trusted/pinned binaries to be installed before this script runs;
   - requires a root-owned config file that is not world-readable;
@@ -73,6 +76,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --expected-public-ip)
       EXPECTED_PUBLIC_IP="${2:?missing expected public ip}"
+      shift 2
+      ;;
+    --approved-existing-host)
+      APPROVED_EXISTING_HOST="${2:?missing approved existing host}"
       shift 2
       ;;
     --protocol)
@@ -177,9 +184,16 @@ fi
 PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org || true)"
 for protected_ip in "${PROTECTED_HOST_IPS[@]}"; do
   if [[ "${PUBLIC_IP}" == "${protected_ip}" && "${APPLY}" -eq 1 ]]; then
-    echo "Refusing to install canary service on protected Green VPN host ${protected_ip}." >&2
-    echo "Use a separate test-only canary node." >&2
-    exit 1
+    if ! [[ "${PUBLIC_IP}" == "5.129.216.42" \
+      && "${APPROVED_EXISTING_HOST}" == "5.129.216.42" \
+      && "${PROTOCOL}" == "amneziawg" \
+      && "${SERVICE_NAME}" == "greenvpn-amneziawg-canary" \
+      && "${CONFIG_FILE}" == "/etc/greenvpn-transport/awgcanary0.conf" ]]; then
+      echo "Refusing to install canary service on protected Green VPN host ${protected_ip}." >&2
+      echo "Use a separate test-only canary node." >&2
+      exit 1
+    fi
+    echo "Owner-approved narrow NL2 AmneziaWG canary exception accepted."
   fi
 done
 if [[ "${APPLY}" -eq 1 ]]; then

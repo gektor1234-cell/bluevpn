@@ -642,7 +642,7 @@ SERVER_DEFAULT_CLIENT_PROTOCOLS = frozenset({"wireguard_udp"})
 SERVER_TRANSPORT_ROLLOUT_STAGES = {
     "wireguard_udp": "public",
     "wireguard_tcp": "canary_prepared",
-    "amneziawg": "canary_prepared",
+    "amneziawg": "canary",
     "openvpn_tcp": "canary_prepared",
     "shadowsocks": "canary_prepared",
     "hysteria2": "canary_prepared",

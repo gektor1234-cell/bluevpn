@@ -66,7 +66,7 @@ class TransportRolloutGuardTests(unittest.TestCase):
 
     def test_planned_protocol_has_non_public_rollout_stage(self) -> None:
         item = main.protocol_catalog_item("amneziawg")
-        self.assertEqual(item["rolloutStage"], "canary_prepared")
+        self.assertEqual(item["rolloutStage"], "canary")
         self.assertFalse(item["clientReady"])
         self.assertFalse(item["publicReady"])
 

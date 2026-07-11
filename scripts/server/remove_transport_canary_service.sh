@@ -5,6 +5,7 @@ APPLY=0
 PROTOCOL=""
 SERVICE_NAME=""
 EXPECTED_PUBLIC_IP=""
+APPROVED_EXISTING_HOST=""
 PROTECTED_HOST_IPS=(
   "37.220.85.211"
   "5.129.216.42"
@@ -21,6 +22,7 @@ Green VPN guarded transport canary rollback.
 Usage:
   remove_transport_canary_service.sh --protocol PROTOCOL [--service-name NAME]
       [--expected-public-ip IP] [--apply]
+      [--approved-existing-host 5.129.216.42]
 
 The default mode is dry-run. Apply mode:
   - is permanently refused on known production/control-plane hosts;
@@ -42,6 +44,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --expected-public-ip)
       EXPECTED_PUBLIC_IP="${2:?missing expected public ip}"
+      shift 2
+      ;;
+    --approved-existing-host)
+      APPROVED_EXISTING_HOST="${2:?missing approved existing host}"
       shift 2
       ;;
     --apply)
@@ -84,8 +90,14 @@ fi
 PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org || true)"
 for protected_ip in "${PROTECTED_HOST_IPS[@]}"; do
   if [[ "$PUBLIC_IP" == "$protected_ip" && "$APPLY" -eq 1 ]]; then
-    echo "Refusing canary rollback mutation on protected Green VPN host ${protected_ip}." >&2
-    exit 1
+    if ! [[ "$PUBLIC_IP" == "5.129.216.42" \
+      && "$APPROVED_EXISTING_HOST" == "5.129.216.42" \
+      && "$PROTOCOL" == "amneziawg" \
+      && "$SERVICE_NAME" == "greenvpn-amneziawg-canary" ]]; then
+      echo "Refusing canary rollback mutation on protected Green VPN host ${protected_ip}." >&2
+      exit 1
+    fi
+    echo "Owner-approved narrow NL2 AmneziaWG rollback exception accepted."
   fi
 done
 if [[ "$APPLY" -eq 1 ]]; then

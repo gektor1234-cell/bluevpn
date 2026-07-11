@@ -10,6 +10,7 @@ ENDPOINT_ID=""
 TRANSPORT=""
 JSON_OUTPUT=0
 ALLOW_CURRENT_VPN_HOST=0
+APPROVED_EXISTING_HOST=""
 PROTECTED_HOST_IPS=(
   "37.220.85.211"
   "5.129.216.42"
@@ -27,6 +28,7 @@ Usage:
   check_transport_canary_readiness.sh --protocol PROTOCOL [--service-name NAME]
       [--binary PATH] [--config-file PATH] [--listen-port PORT]
       [--endpoint-id ID] [--transport TRANSPORT] [--json]
+      [--approved-existing-host 5.129.216.42]
 
 Supported protocols:
   wireguard_tcp
@@ -83,6 +85,10 @@ while [[ $# -gt 0 ]]; do
     --allow-current-vpn-host)
       ALLOW_CURRENT_VPN_HOST=1
       shift
+      ;;
+    --approved-existing-host)
+      APPROVED_EXISTING_HOST="${2:-}"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -185,7 +191,12 @@ host_has_protected_ip() {
 }
 
 if host_has_protected_ip; then
-  add_blocker "protected_production_host_refused"
+  if ! [[ "$APPROVED_EXISTING_HOST" == "5.129.216.42" \
+    && "$PROTOCOL" == "amneziawg" \
+    && "$SERVICE_NAME" == "greenvpn-amneziawg-canary" \
+    && "$CONFIG_FILE" == "/etc/greenvpn-transport/awgcanary0.conf" ]]; then
+    add_blocker "protected_production_host_refused"
+  fi
 fi
 
 if [[ -n "$BINARY_PATH" ]]; then
@@ -226,9 +237,10 @@ if [[ -n "$CONFIG_FILE" ]]; then
       if ! grep -Eq '^[[:space:]]*\[Peer\][[:space:]]*$' "$CONFIG_FILE"; then
         add_blocker "amneziawg_canary_peer_missing"
       fi
-      header_values="$(sed -nE 's/^[[:space:]]*H[1-4][[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "$CONFIG_FILE")"
+      header_values="$(sed -nE 's/^[[:space:]]*H[1-4][[:space:]]*=[[:space:]]*([^[:space:]#]+).*/\1/p' "$CONFIG_FILE")"
       if [[ "$(printf '%s\n' "$header_values" | sed '/^$/d' | wc -l)" -ne 4 ]] \
         || [[ "$(printf '%s\n' "$header_values" | sed '/^$/d' | sort -u | wc -l)" -ne 4 ]] \
+        || printf '%s\n' "$header_values" | grep -Evq '^[0-9]+(-[0-9]+)?$' \
         || printf '%s\n' "$header_values" | grep -qx '0'; then
         add_blocker "amneziawg2_headers_invalid"
       fi

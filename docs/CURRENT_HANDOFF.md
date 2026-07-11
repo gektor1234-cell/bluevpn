@@ -36,9 +36,12 @@ Last updated: 2026-07-11.
 - Current client explicitly advertises only `wireguard_udp`; old clients without the capability field also default to `wireguard_udp` only.
 - Backend performs fail-closed protocol negotiation and removes non-negotiated endpoints before selection. An empty negotiation returns `503 no_available_vpn_nodes` instead of silently restoring the builtin endpoint.
 - Rollout stages are explicit: `wireguard_udp=public`; existing guarded alternatives are `canary_prepared` or `research`.
-- Canary apply/rollback is permanently refused on all known production/control-plane hosts and Friendly Linnet, and requires an exact expected public IP on a separate test VPS.
+- Canary apply/rollback is refused on all known production/control-plane hosts and Friendly Linnet. The only owner-approved exception is the exact NL2 AmneziaWG unit/config/IP tuple; it cannot enable another transport or touch another host.
 - AmneziaWG uses a oneshot systemd unit; readiness validates root-only non-symlink config, required AWG2 fields, unique nonzero H1-H4 and a canary peer without printing secrets.
-- No live transport daemon was installed because there is currently no free reachable test-only VPS. KZ test remains unreachable; working VPN nodes were intentionally untouched.
+- AmneziaWG 2 canary is active on Netherlands #2 `5.129.216.42` as `awgcanary0` UDP/1443. Existing `wg0` UDP/443 stayed active and its config matches the pre-change snapshot byte-for-byte.
+- Real isolated WSL smoke passed handshake, tunnel IP and egress to `1.1.1.1`; rollback, interface/NAT removal, reinstall and post-reinstall smoke also passed. Public catalog still exposes only `wireguard_udp`.
+- NL2 pre-change snapshot: `/root/greenvpn-awg2-prechange/20260711T171122Z`; local root-only client checkpoint: `C:\Users\gekto\GreenVPN_Checkpoints\transport_canary_awg2_20260711`.
+- Detailed live result: `docs/AMNEZIAWG2_NL2_CANARY_2026_07_11_RU.md`.
 - Verification: 47 backend tests, 6 Flutter tests, bash syntax and release gate pass. `flutter analyze` reports only the pre-existing 182 lint/info items and no new issue on changed lines.
 - Detailed operator runbook: `docs/TRANSPORT_CANARY_ROLLOUT_2026_07_11_RU.md`.
 

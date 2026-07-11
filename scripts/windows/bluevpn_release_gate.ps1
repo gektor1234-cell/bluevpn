@@ -69,6 +69,7 @@ $wireguardTcpCanaryPath = Join-Path $ProjectRoot "scripts\server\install_wiregua
 $transportCanaryPath = Join-Path $ProjectRoot "scripts\server\install_transport_canary_service.sh"
 $transportCanaryCheckPath = Join-Path $ProjectRoot "scripts\server\check_transport_canary_readiness.sh"
 $transportCanaryRollbackPath = Join-Path $ProjectRoot "scripts\server\remove_transport_canary_service.sh"
+$amneziaWg2CanaryBootstrapPath = Join-Path $ProjectRoot "scripts\server\bootstrap_amneziawg2_canary.sh"
 
 $main = Read-Text $mainPath
 $runtimeConfig = Read-Text $runtimeConfigPath
@@ -84,6 +85,7 @@ $wireguardTcpCanaryScript = Read-Text $wireguardTcpCanaryPath
 $transportCanaryScript = Read-Text $transportCanaryPath
 $transportCanaryCheckScript = Read-Text $transportCanaryCheckPath
 $transportCanaryRollbackScript = Read-Text $transportCanaryRollbackPath
+$amneziaWg2CanaryBootstrapScript = Read-Text $amneziaWg2CanaryBootstrapPath
 
 Write-Section "CLIENT SAFETY CHECKS"
 $forbiddenClientPatterns = @(
@@ -532,6 +534,7 @@ $requiredTransportCanaryFragments = @(
     '--allow-current-vpn-host',
     '--expected-public-ip',
     'Refusing to install canary service on protected Green VPN host',
+    'Owner-approved narrow NL2 AmneziaWG canary exception accepted',
     'SERVICE_TYPE="oneshot"',
     'REMAIN_AFTER_EXIT="yes"',
     'trusted/pinned',
@@ -559,6 +562,7 @@ $requiredTransportCanaryCheckFragments = @(
     'does not read or print transport secrets',
     'does not edit WireGuard peers',
     'protected_production_host_refused',
+    '--approved-existing-host',
     'binary_missing_or_not_executable',
     'config_not_root_owned',
     'config_not_root_only',
@@ -583,6 +587,7 @@ $requiredTransportCanaryRollbackFragments = @(
     'Green VPN guarded transport canary rollback',
     '--expected-public-ip',
     'Refusing canary rollback mutation on protected Green VPN host',
+    'Owner-approved narrow NL2 AmneziaWG rollback exception accepted',
     'Refusing non-canary service name',
     'config_keys_binaries=preserved',
     'public_catalog=not_changed',
@@ -595,6 +600,28 @@ foreach ($fragment in $requiredTransportCanaryRollbackFragments) {
     }
     else {
         Add-Error "Transport canary rollback safety marker missing: $fragment"
+    }
+}
+
+$requiredAmneziaWg2BootstrapFragments = @(
+    'Green VPN pinned AmneziaWG 2 canary bootstrap',
+    'CANARY_HOST="5.129.216.42"',
+    'CANARY_INTERFACE="awgcanary0"',
+    'CANARY_PORT="1443"',
+    'AWG_GO_COMMIT="c1e9bb3758e71bb1adc402598465565bfc9663fd"',
+    'AWG_TOOLS_TAG="v1.0.20260618-2"',
+    'sha256sum -c',
+    'existing_wg0=active_untouched',
+    'public_catalog=not_changed',
+    'The interface was not started'
+)
+
+foreach ($fragment in $requiredAmneziaWg2BootstrapFragments) {
+    if ($amneziaWg2CanaryBootstrapScript.Contains($fragment)) {
+        Add-Pass "AmneziaWG 2 bootstrap safety marker present: $fragment"
+    }
+    else {
+        Add-Error "AmneziaWG 2 bootstrap safety marker missing: $fragment"
     }
 }
 

@@ -22,13 +22,13 @@
 | `preview` | Есть отдельный клиентский engine и физический smoke | Только явно совместимому preview-клиенту |
 | `public` | Пройдены server, client, route-health и rollback gates | Да |
 
-Текущее состояние: `wireguard_udp=public`; `wireguard_tcp`, `amneziawg`, `openvpn_tcp`, `shadowsocks`, `hysteria2`, `trojan_tls`, `vless_reality=canary_prepared`; `masque_udp=research`.
+Текущее состояние: `wireguard_udp=public`; `amneziawg=canary`; `wireguard_tcp`, `openvpn_tcp`, `shadowsocks`, `hysteria2`, `trojan_tls`, `vless_reality=canary_prepared`; `masque_udp=research`.
 
 ## Защищённые серверы
 
-Canary-скрипты безусловно запрещают apply на действующих control-plane/VPN узлах и на Friendly Linnet. Старый параметр `--allow-current-vpn-host` оставлен только для совместимости dry-run и не обходит защиту apply.
+Canary-скрипты запрещают apply на действующих control-plane/VPN узлах и на Friendly Linnet. Единственное исключение после прямого решения владельца: `5.129.216.42`, только `amneziawg`, service `greenvpn-amneziawg-canary`, config `/etc/greenvpn-transport/awgcanary0.conf` и явный параметр `--approved-existing-host 5.129.216.42`. Исключение нельзя использовать для другого протокола, unit, config или IP.
 
-Свободного безопасного VPS на момент фиксации нет. KZ test `94.198.221.206` недоступен по SSH; существующие зарубежные узлы обслуживают рабочий VPN. Поэтому live-развёртывание нового транспорта не выполнялось.
+Свободного безопасного VPS на момент первоначальной фиксации не было. Владелец явно выбрал Netherlands #2 для параллельного canary. Основной `wg0` UDP/443 сохранён; AWG2 использует отдельные interface `awgcanary0`, UDP/1443, subnet и ключи. Результат зафиксирован в `docs/AMNEZIAWG2_NL2_CANARY_2026_07_11_RU.md`.
 
 ## Первый кандидат: AmneziaWG 2
 
