@@ -9,8 +9,8 @@ param(
     [string]$AndroidBuildNumber = "2026071005",
     [string]$AndroidApplicationId = "pro.greenvpn.app.beta",
     [string]$AndroidAppLabel = "Green VPN Beta",
-    [string]$WindowsAppVersion = "0.3.0-paid-beta.2",
-    [string]$BackendVersion = "0.9.106-paid-beta.4",
+    [string]$WindowsAppVersion = "0.3.0-paid-beta.10",
+    [string]$BackendVersion = "0.9.106-paid-beta.5",
     [ValidateRange(1, 99)]
     [int]$BundleRevision = 1,
     [string]$OutDir = "C:\BlueVPN_Builds\paid_beta_20260710"

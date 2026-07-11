@@ -14,10 +14,10 @@ Last compacted: 2026-07-11.
 ## Isolated Paid Beta
 
 - Paths: `/paid-beta`, `/paid-beta-api`; keep isolated and do not promote to production before the remaining owner gates.
-- Android/backend: `0.3.0-paid-beta.5` / `0.9.106-paid-beta.4`.
+- Android/backend: `0.3.0-paid-beta.5` / `0.9.106-paid-beta.5`.
 - Server-published Windows beta: `0.3.0-paid-beta.10`, SHA `A87F527D910CF50C075518270C221F7890963A5893D7FAB2637EC60FB3A2B170` (`NotSigned`, `required=false`).
 - Local side-by-side Windows candidate is the same deployed `.10` artifact; install, reboot, VPN/DNS transition, uninstall/network recovery and clean reinstall all passed.
-- Current release on both nodes: `paid-beta-0.3.0-paid-beta.5-2026071005-r6`.
+- Current release on both nodes: `paid-beta-0.3.0-paid-beta.5-2026071005-r7`.
 - Android package: `pro.greenvpn.app.beta`, side-by-side with stable.
 - Policy: Trial 3 days, 149 RUB first invited period, then 299 RUB manually, 2 devices, no ads/timer/auto-renew.
 - Marker + channel + personal invite + cohort enforcement active.
@@ -29,16 +29,18 @@ Last compacted: 2026-07-11.
 - Physical Android VPN/failover/YouTube/recents/disconnect/custom-app split tunneling: passed.
 - Stateful auth/invite/quote/bootstrap/config/fallback cleanup: passed.
 - 28 backend tests and release gate: passed.
-- Site readiness: 8/8. Payment configuration ready; real payment not yet run.
+- Site readiness: 8/8. Payment credentials are not ready: YooKassa returns `401 invalid_credentials` for the configured shop/key pair on both nodes.
 - Primary update API serves primary download URLs; fallback API serves fallback URLs with matching hashes.
 - Windows `.10` static isolation/payload/parser/Defender gates passed.
 - Windows `.10` real install, reboot, session/DPAPI migration, kill-switch, DNS-leak, handshake, API/YouTube, cleanup, competing-VPN restoration, destructive uninstall/network recovery and clean reinstall gates passed.
 - Timeweb/RUVDS beta deployment `r6` passed; both update APIs and downloads expose `.10` with the approved SHA while production remains `0.9.105`.
+- Billing guard `r7` passed 29 tests and release gate 0/0. Timeweb is the only paid-beta billing writer; RUVDS rejects billing mutation before DB writes. Empty checkout artifacts from the failed credential test were backed up and removed from both DBs.
 
 ## Owner Gate
 
-1. One real 149 RUB payment with activation/refund/cancel verification.
-2. Owner/legal acceptance of terms and privacy.
+1. Rotate the invalid YooKassa secret key and install it on both control-plane nodes.
+2. One real 149 RUB payment with activation/refund/cancel verification.
+3. Owner/legal acceptance of terms and privacy.
 
 Only then create the first 20 invite package.
 

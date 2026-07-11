@@ -409,6 +409,7 @@ download_base = (
 )
 released_at = str(manifest.get("generatedAt") or "").strip()
 updates = {
+    "GREENVPN_PAID_BETA_BILLING_PRIMARY": "1" if role == "timeweb" else "0",
     "GREENVPN_ANDROID_PAID_BETA_LATEST_VERSION": str(android["version"]).strip(),
     "GREENVPN_ANDROID_PAID_BETA_UPDATE_URL": f"{download_base}/GreenVPN_Android.apk",
     "GREENVPN_ANDROID_PAID_BETA_UPDATE_SHA256": str(android["sha256"]).strip().upper(),

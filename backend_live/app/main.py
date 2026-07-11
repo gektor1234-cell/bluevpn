@@ -232,6 +232,10 @@ PAID_BETA_RELEASE_CHANNEL = (
     .strip()
     .lower()
 )
+PAID_BETA_BILLING_PRIMARY = (
+    os.getenv("GREENVPN_PAID_BETA_BILLING_PRIMARY", "1").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
 PAID_BETA_POLICY_VERSION = "2026-07-10-paid-beta-v1"
 PAID_BETA_COHORT_CODE = "paid_beta_v1"
 PAID_BETA_TRIAL_PLAN_CODE = "paid_beta_trial"
@@ -17072,6 +17076,14 @@ def create_billing_order_for_user(user_id: int, payload: TariffSelectionIn) -> d
             detail={
                 "code": "paid_beta_client_required",
                 "message": "Открой оплату в beta-версии Green VPN.",
+            },
+        )
+    if beta_request and not PAID_BETA_BILLING_PRIMARY:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "paid_beta_billing_primary_required",
+                "message": "Оплата временно недоступна. Повторите через несколько секунд.",
             },
         )
 

@@ -110,3 +110,14 @@
 - После deploy beta/production/sync/probe services активны, обе SQLite имеют `quick_check=ok`, billing orders `0`, временные upload/stage удалены.
 - Rollback backups: Timeweb `/root/greenvpn-paid-beta-backups/20260711T004246Z-timeweb-paid-beta-0.3.0-paid-beta.5-2026071005-r6`; RUVDS `/root/greenvpn-paid-beta-backups/20260711T004336Z-ruvds-paid-beta-0.3.0-paid-beta.5-2026071005-r6`.
 - Bundle SHA-256: `DA6F1D07AA1DFB6330A08E116F0F0EC0AB223430D7D210359B2ED8520C3139AA`.
+
+## Billing single-writer `r7`, 2026-07-11
+
+- Первый реальный checkout не дошёл до платёжной страницы: YooKassa ответила `401 invalid_credentials` для одинаковой shop/key пары в production и beta env на обоих control-plane. Списания, provider payment ID и payment URL не было.
+- Fallback одновременно выявил SQLite write-conflict: Timeweb и RUVDS создали разные пустые pending-заказы. Перед исправлением обе DB сохранены в `/root/greenvpn-paid-beta-backups/20260711T010255Z-pre-billing-orphan-cleanup`.
+- При остановленном sync на обоих узлах удалены только два пустых pending-заказа и два duplicate `order_created` event; redemption возвращён в `redeemed`, billing orders `0`, `quick_check=ok`.
+- Backend `0.9.106-paid-beta.5` и server release `paid-beta-0.3.0-paid-beta.5-2026071005-r7` делают Timeweb единственным billing writer. RUVDS продолжает auth/VPN/config fallback, но отклоняет beta billing до любой DB mutation.
+- 29 backend/DB-sync/first20 tests и release gate 0 warnings/0 errors прошли.
+- Deployed integration probe на RUVDS вернул `503 paid_beta_billing_primary_required`; billing orders и `order_created` events остались `0 -> 0`. Report SHA-256: `F5E06CEFD4C3A3B47C09010CC86D59838668D39424CFDE03D03C928553DA3F45`.
+- Deploy backups: Timeweb `/root/greenvpn-paid-beta-backups/20260711T010531Z-timeweb-paid-beta-0.3.0-paid-beta.5-2026071005-r7`; RUVDS `/root/greenvpn-paid-beta-backups/20260711T010541Z-ruvds-paid-beta-0.3.0-paid-beta.5-2026071005-r7`.
+- Bundle SHA-256: `89423157BF094435C660692491C2885D2EC1EAF245F0F20ED2773A6E18B9F6FC`; technical report SHA-256: `8241308F02FA3CFBDB523C7B7052D89B802CFB3868CFF72D96259D595659CD50`.

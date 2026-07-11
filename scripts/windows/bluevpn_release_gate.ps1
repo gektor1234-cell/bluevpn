@@ -335,6 +335,8 @@ $requiredBackendSafetyFragments = @(
     'server-health:',
     'server_health_observation',
     'def billing_reconciliation_payload(',
+    'GREENVPN_PAID_BETA_BILLING_PRIMARY',
+    'paid_beta_billing_primary_required',
     'def billing_order_requires_attention(',
     'paid_not_activated',
     'status"] or "").strip().lower() in {"failed", "canceled", "cancelled"}',

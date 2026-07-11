@@ -20,9 +20,9 @@
 - Android directory: `C:\BlueVPN_Builds\paid_beta_20260710_v5`.
 - Windows candidate directory: `C:\BlueVPN_Builds\paid_beta_20260711_v13`.
 - Серверный bundle и оба update manifest содержат проверенную Windows `.10`; production aliases не изменены.
-- Final deploy bundle: `C:\BlueVPN_Builds\paid_beta_20260711_v14\paid-beta-0.3.0-paid-beta.5-2026071005-r6.tar.gz`.
-- Bundle size/SHA-256: 44 363 051 / `DA6F1D07AA1DFB6330A08E116F0F0EC0AB223430D7D210359B2ED8520C3139AA`.
-- Backend in bundle: `0.9.106-paid-beta.4`.
+- Final deploy bundle: `C:\BlueVPN_Builds\paid_beta_20260711_v15\paid-beta-0.3.0-paid-beta.5-2026071005-r7.tar.gz`.
+- Bundle size/SHA-256: 44 363 226 / `89423157BF094435C660692491C2885D2EC1EAF245F0F20ED2773A6E18B9F6FC`.
+- Backend in bundle: `0.9.106-paid-beta.5`.
 
 ## Android identity
 
@@ -69,10 +69,10 @@ Bundle создаётся `prepare_paid_beta_bundle.ps1 -BundleRevision 5`. Уп
 - Android `.2`: отклонён как same-package candidate.
 - Android `.3`: отклонён из-за lifecycle/disconnect ownership bug.
 - Android `.4`: lifecycle исправлен, но версия заменена `.5` после добавления custom app picker.
-- Server `r1-r4`: forensic only; `r5` is the previous rollback, current/approved is `r6`.
+- Server `r1-r4`: forensic only; `r5/r6` are previous rollback points, current technical release is `r7`.
 
 ## Ограничения
 
 - Windows `.10` side-by-side isolated, не подписан, но полный real-PC installation/reboot/VPN/DNS/uninstall/network-recovery/reinstall gate пройден; серверы beta отдают `.10`.
-- Реальный платёж и legal acceptance остаются owner gate.
+- YooKassa secret key сейчас недействителен (`401 invalid_credentials`); его ротация, реальный платёж и legal acceptance остаются owner gate.
 - Эти beta-файлы нельзя публиковать как production aliases.

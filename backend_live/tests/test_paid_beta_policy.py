@@ -51,6 +51,7 @@ class PaidBetaPolicyTests(unittest.TestCase):
 
     def setUp(self) -> None:
         main.PAID_BETA_ENABLED = True
+        main.PAID_BETA_BILLING_PRIMARY = True
         with main.db() as conn:
             conn.execute("DELETE FROM beta_funnel_events")
             conn.execute("DELETE FROM beta_invite_redemptions")
@@ -405,6 +406,31 @@ class PaidBetaPolicyTests(unittest.TestCase):
         self.assertEqual(funnel["stages"]["claimedUsers"], 1)
         self.assertEqual(funnel["stages"]["orderCreatedUsers"], 1)
         self.assertEqual(funnel["stages"]["paymentActivatedUsers"], 1)
+
+    def test_fallback_rejects_beta_order_before_database_mutation(self) -> None:
+        invite = self.create_invite()
+        self.claim_invite(invite["code"])
+
+        with patch.object(main, "PAID_BETA_BILLING_PRIMARY", False):
+            with self.assertRaises(main.HTTPException) as raised:
+                main.create_billing_order_for_user(self.user_id, self.beta_payload())
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail["code"],
+            "paid_beta_billing_primary_required",
+        )
+        with main.db() as conn:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM billing_orders").fetchone()[0],
+                0,
+            )
+            self.assertEqual(
+                conn.execute(
+                    "SELECT COUNT(*) FROM beta_funnel_events WHERE event_type = 'order_created'"
+                ).fetchone()[0],
+                0,
+            )
 
     def test_stable_marker_keeps_legacy_policy(self) -> None:
         selection = main.normalize_tariff_selection(

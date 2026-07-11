@@ -76,7 +76,7 @@
    - Desktop/mobile visual QA, локальные ссылки, якоря и ресурсы проверены; release-файлы добавляются только на этапе 7.
    - Манифест страницы: `docs/PAID_BETA_SITE_2026_07_10_RU.md`.
 7. **Тесты и smoke** - выполнено в изолированном тестовом контуре 2026-07-10.
-   - Backend `0.9.106-paid-beta.4` работает отдельно на `127.0.0.1:8010` у Timeweb и RUVDS; current release `paid-beta-0.3.0-paid-beta.5-2026071005-r6`.
+   - Backend `0.9.106-paid-beta.5` работает отдельно на `127.0.0.1:8010` у Timeweb и RUVDS; current release `paid-beta-0.3.0-paid-beta.5-2026071005-r7`.
    - Auth, marker/cohort denial, invite claim, quote 149, no-ads, expiry policy, primary/fallback bootstrap/config, update manifests, DB sync и funnel прошли.
    - Реальный beta peer получил `10.10.0.180`, одинаковый config на primary/fallback и был штатно удалён после smoke.
    - Остановка только Timeweb beta дала `502` на primary, selector выбрал RUVDS, production `0.9.105` не прервался; primary затем восстановлен.
@@ -96,7 +96,7 @@
 
 ## Текущая точка остановки
 
-Техническая часть доступная без владельца завершена. Android real-device gate и полный Windows `.10` physical/recovery gate закрыты; `.10` опубликована только в beta-контуре. До генерации 20 кодов владелец должен провести один реальный платёж 149 RUB и подтвердить terms/privacy. Production до этих действий остаётся замороженным.
+Техническая часть доступная без владельца завершена. Android real-device gate и полный Windows `.10` physical/recovery gate закрыты; `.10` опубликована только в beta-контуре. Billing переведён в single-writer режим Timeweb, но текущий YooKassa secret key отклоняется провайдером с `401 invalid_credentials`. До генерации 20 кодов владелец должен перевыпустить ключ, провести один реальный платёж 149 RUB и подтвердить terms/privacy. Production до этих действий остаётся замороженным.
 
 ## Критерии beta
 
