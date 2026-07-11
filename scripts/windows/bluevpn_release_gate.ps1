@@ -71,6 +71,7 @@ $transportCanaryCheckPath = Join-Path $ProjectRoot "scripts\server\check_transpo
 $transportCanaryRollbackPath = Join-Path $ProjectRoot "scripts\server\remove_transport_canary_service.sh"
 $amneziaWg2CanaryBootstrapPath = Join-Path $ProjectRoot "scripts\server\bootstrap_amneziawg2_canary.sh"
 $hysteria2CanaryBootstrapPath = Join-Path $ProjectRoot "scripts\server\bootstrap_hysteria2_canary.sh"
+$hysteria2ContractDeployPath = Join-Path $ProjectRoot "scripts\server\deploy_paid_beta_hysteria2_contract.sh"
 
 $main = Read-Text $mainPath
 $runtimeConfig = Read-Text $runtimeConfigPath
@@ -88,6 +89,7 @@ $transportCanaryCheckScript = Read-Text $transportCanaryCheckPath
 $transportCanaryRollbackScript = Read-Text $transportCanaryRollbackPath
 $amneziaWg2CanaryBootstrapScript = Read-Text $amneziaWg2CanaryBootstrapPath
 $hysteria2CanaryBootstrapScript = Read-Text $hysteria2CanaryBootstrapPath
+$hysteria2ContractDeployScript = Read-Text $hysteria2ContractDeployPath
 
 Write-Section "CLIENT SAFETY CHECKS"
 $forbiddenClientPatterns = @(
@@ -675,6 +677,35 @@ foreach ($fragment in $requiredHysteria2BootstrapFragments) {
     }
     else {
         Add-Error "Hysteria2 bootstrap safety marker missing: $fragment"
+    }
+}
+
+$requiredHysteria2ContractDeployFragments = @(
+    'Deploy the guarded Hysteria2 config contract',
+    'EXPECTED_CURRENT_RELEASE=',
+    'RELEASE_ID=',
+    'BACKEND_VERSION="0.9.110-transport-preview.4"',
+    'Role/public IP mismatch; refusing deploy',
+    'sha256sum -c',
+    'Staged Hysteria2 config must be root:root 0600',
+    'production_changed=false',
+    'stable_catalog_changed=false',
+    'source.backup(target)',
+    'rollback_on_error',
+    'GREENVPN_HYSTERIA2_CLIENT_CONFIG_ENABLED',
+    'static_hysteria2_canary',
+    'is_public, planned_bandwidth_mbps',
+    'legacy_hysteria_count=0',
+    'preview_hysteria_count=1',
+    'preview_default_protocol=wireguard_udp'
+)
+
+foreach ($fragment in $requiredHysteria2ContractDeployFragments) {
+    if ($hysteria2ContractDeployScript.Contains($fragment)) {
+        Add-Pass "Hysteria2 contract deploy safety marker present: $fragment"
+    }
+    else {
+        Add-Error "Hysteria2 contract deploy safety marker missing: $fragment"
     }
 }
 
