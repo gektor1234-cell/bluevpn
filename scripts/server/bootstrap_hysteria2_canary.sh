@@ -10,6 +10,7 @@ CANARY_PORT="2443"
 SERVICE_NAME="greenvpn-hysteria2-canary"
 CONFIG_FILE="/etc/greenvpn-transport/hysteria2-canary.yaml"
 CLIENT_CONFIG_FILE="/etc/greenvpn-transport/hysteria2-canary.client.yaml"
+CLIENT_BASE_CONFIG_FILE="/etc/greenvpn-transport/hysteria2-canary.base.yaml"
 MATERIAL_ROOT="/etc/greenvpn-transport/hysteria2-canary"
 INSTALL_ROOT="/opt/greenvpn-canary/hysteria2"
 HYSTERIA_VERSION="2.9.3"
@@ -119,6 +120,7 @@ chmod 0700 "${BACKUP_ROOT}"
 for path in \
   "${CONFIG_FILE}" \
   "${CLIENT_CONFIG_FILE}" \
+  "${CLIENT_BASE_CONFIG_FILE}" \
   "${MATERIAL_ROOT}" \
   "${INSTALL_ROOT}" \
   "/etc/systemd/system/${SERVICE_NAME}.service"; do
@@ -179,7 +181,7 @@ masquerade:
 EOF
 chmod 0600 "${CONFIG_FILE}"
 
-cat > "${CLIENT_CONFIG_FILE}" <<EOF
+cat > "${CLIENT_BASE_CONFIG_FILE}" <<EOF
 server: ${CANARY_HOST}:${CANARY_PORT}
 auth: ${AUTH_SECRET}
 tls:
@@ -189,6 +191,11 @@ obfs:
   type: salamander
   salamander:
     password: ${OBFS_SECRET}
+EOF
+chmod 0600 "${CLIENT_BASE_CONFIG_FILE}"
+
+cp -- "${CLIENT_BASE_CONFIG_FILE}" "${CLIENT_CONFIG_FILE}"
+cat >> "${CLIENT_CONFIG_FILE}" <<EOF
 fastOpen: true
 lazy: false
 socks5:
@@ -227,6 +234,7 @@ service=${SERVICE_NAME}.service
 listen_port=${CANARY_PORT}
 config=${CONFIG_FILE}
 client_config=${CLIENT_CONFIG_FILE}
+client_base_config=${CLIENT_BASE_CONFIG_FILE}
 backup=${BACKUP_ROOT}
 EOF
 chmod 0600 "${INSTALL_ROOT}/manifest"

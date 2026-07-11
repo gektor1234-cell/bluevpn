@@ -167,6 +167,18 @@ ADMIN_2FA_MAX_ATTEMPTS = max(
 
 BASE_DIR = Path(os.getenv("BLUEVPN_BASE_DIR", "/opt/bluevpn/backend")).resolve()
 DATA_DIR = Path(os.getenv("BLUEVPN_DATA_DIR", str(BASE_DIR / "data"))).resolve()
+HYSTERIA2_CLIENT_CONFIG_ROOT = Path(
+    os.getenv(
+        "GREENVPN_HYSTERIA2_CLIENT_CONFIG_ROOT",
+        "/etc/bluevpn/transport_clients",
+    )
+).resolve()
+HYSTERIA2_CANARY_SERVER_IDS = {
+    item.strip().lower()
+    for item in split_env_list(os.getenv("GREENVPN_HYSTERIA2_CANARY_SERVER_IDS", ""))
+    if item.strip()
+}
+HYSTERIA2_CANARY_SNI = os.getenv("GREENVPN_HYSTERIA2_CANARY_SNI", "").strip().lower()
 DB_PATH = DATA_DIR / "bluevpn.db"
 DB_BUSY_TIMEOUT_SECONDS = env_float("BLUEVPN_DB_BUSY_TIMEOUT_SECONDS", 30.0, min_value=1.0)
 DB_BUSY_TIMEOUT_MS = int(DB_BUSY_TIMEOUT_SECONDS * 1000)
@@ -614,12 +626,14 @@ SERVER_CLIENT_CONFIG_PROFILES = [
     "builtin_wg0",
     "remote_ssh_wg0",
     "remote_ssh_awg2",
+    "static_hysteria2_canary",
 ]
 SERVER_CLIENT_CONFIG_PROFILE_TITLES = {
     "none": "Не выдавать клиентам",
     "builtin_wg0": "Текущий backend wg0",
     "remote_ssh_wg0": "Удалённый WireGuard wg0",
     "remote_ssh_awg2": "Удалённый AmneziaWG 2",
+    "static_hysteria2_canary": "Hysteria2 canary",
 }
 SERVER_PROTOCOL_TITLES = {
     "wireguard_udp": "WireGuard UDP",
@@ -651,6 +665,13 @@ if os.getenv("GREENVPN_AMNEZIAWG_CLIENT_CONFIG_ENABLED", "0").strip().lower() in
     "on",
 }:
     SERVER_CLIENT_READY_PROTOCOLS.add("amneziawg")
+if os.getenv("GREENVPN_HYSTERIA2_CLIENT_CONFIG_ENABLED", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}:
+    SERVER_CLIENT_READY_PROTOCOLS.add("hysteria2")
 SERVER_DEFAULT_CLIENT_PROTOCOLS = frozenset({"wireguard_udp"})
 SERVER_TRANSPORT_ROLLOUT_STAGES = {
     "wireguard_udp": "public",
@@ -8983,6 +9004,136 @@ def load_remote_vpn_node_config(server_id: str) -> dict:
     return config
 
 
+def hysteria2_client_config_check(
+    server_id: str,
+    *,
+    row_host: Optional[str] = None,
+    row_port: Optional[int] = None,
+) -> tuple[dict, list[dict]]:
+    clean_server_id = clean_limited_text(server_id, 80).strip().lower()
+    blockers: list[dict] = []
+
+    def add_blocker(code: str, message: str) -> None:
+        blockers.append({"code": code, "message": message})
+
+    if clean_server_id not in HYSTERIA2_CANARY_SERVER_IDS:
+        add_blocker(
+            "hysteria2_server_not_allowlisted",
+            "Hysteria2 config разрешён только для явно указанного canary serverId.",
+        )
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{2,79}", clean_server_id):
+        add_blocker("hysteria2_server_id_invalid", "Некорректный Hysteria2 serverId.")
+        return {}, blockers
+
+    config_path = HYSTERIA2_CLIENT_CONFIG_ROOT / f"{clean_server_id}.hysteria2.yaml"
+    try:
+        resolved_root = HYSTERIA2_CLIENT_CONFIG_ROOT.resolve()
+        resolved_path = config_path.resolve(strict=False)
+        resolved_path.relative_to(resolved_root)
+    except (OSError, ValueError):
+        add_blocker("hysteria2_config_path_unsafe", "Путь Hysteria2 config вышел за разрешённый root.")
+        return {}, blockers
+
+    try:
+        if config_path.is_symlink():
+            add_blocker("hysteria2_config_symlink_refused", "Hysteria2 config не может быть symlink.")
+            return {}, blockers
+        metadata = config_path.stat()
+        if not config_path.is_file():
+            raise FileNotFoundError(str(config_path))
+        if getattr(metadata, "st_uid", 0) != 0:
+            add_blocker("hysteria2_config_not_root_owned", "Hysteria2 config должен принадлежать root.")
+        if os.name != "nt" and metadata.st_mode & 0o077:
+            add_blocker("hysteria2_config_not_root_only", "Hysteria2 config должен иметь mode 0600.")
+        if metadata.st_size < 64 or metadata.st_size > 65536:
+            add_blocker("hysteria2_config_size_invalid", "Некорректный размер Hysteria2 config.")
+        config_text = config_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        add_blocker("hysteria2_config_unreadable", "Root-only Hysteria2 config недоступен.")
+        return {"path": str(config_path)}, blockers
+
+    required_patterns = {
+        "hysteria2_server_missing": r"(?m)^server:\s*([^\s#]+)\s*$",
+        "hysteria2_auth_missing": r"(?m)^auth:\s*[^\s#]+\s*$",
+        "hysteria2_tls_missing": r"(?m)^tls:\s*$",
+        "hysteria2_sni_missing": r"(?m)^\s+sni:\s*[^\s#]+\s*$",
+        "hysteria2_tls_verification_missing": r"(?m)^\s+insecure:\s*false\s*$",
+        "hysteria2_obfs_missing": r"(?m)^obfs:\s*$",
+        "hysteria2_salamander_missing": r"(?m)^\s+type:\s*salamander\s*$",
+        "hysteria2_obfs_password_missing": r"(?m)^\s+password:\s*[^\s#]+\s*$",
+    }
+    matches: dict[str, re.Match[str]] = {}
+    for code, pattern in required_patterns.items():
+        match = re.search(pattern, config_text)
+        if match is None:
+            add_blocker(code, "Hysteria2 client config не прошёл обязательную shape-проверку.")
+        else:
+            matches[code] = match
+    if re.search(r"(?m)^\s+insecure:\s*(true|yes|1)\s*$", config_text, re.IGNORECASE):
+        add_blocker("hysteria2_insecure_tls_refused", "Отключение TLS verification запрещено.")
+    if re.search(
+        r"(?m)^(socks5|http|tun|tcpForwarding|udpForwarding|tcpTProxy|udpTProxy):\s*$",
+        config_text,
+    ):
+        add_blocker(
+            "hysteria2_base_config_contains_local_mode",
+            "Control-plane хранит только transport base config; local mode добавляет клиентский engine.",
+        )
+
+    sni_match = matches.get("hysteria2_sni_missing")
+    config_sni = sni_match.group(0).split(":", 1)[1].strip().lower() if sni_match else ""
+    if not HYSTERIA2_CANARY_SNI or config_sni != HYSTERIA2_CANARY_SNI:
+        add_blocker("hysteria2_sni_not_allowlisted", "TLS SNI не совпадает с canary allowlist.")
+
+    config_host = ""
+    config_port = 0
+    server_match = matches.get("hysteria2_server_missing")
+    if server_match is not None:
+        server_value = server_match.group(1).strip()
+        try:
+            parsed_host, parsed_port = server_value.rsplit(":", 1)
+            config_host = parsed_host.strip("[]").lower()
+            config_port = int(parsed_port)
+            ipaddress.ip_address(config_host)
+        except (ValueError, TypeError):
+            add_blocker(
+                "hysteria2_endpoint_invalid",
+                "Hysteria2 endpoint должен быть literal IP:port для Android FD-control.",
+            )
+    expected_host = str(row_host or "").strip().strip("[]").lower()
+    expected_port = int(row_port or 0)
+    if expected_host and config_host and expected_host != config_host:
+        add_blocker("hysteria2_endpoint_host_mismatch", "Host config не совпадает с catalog row.")
+    if expected_port and config_port and expected_port != config_port:
+        add_blocker("hysteria2_endpoint_port_mismatch", "Port config не совпадает с catalog row.")
+
+    return {
+        "serverId": clean_server_id,
+        "path": str(config_path),
+        "host": config_host,
+        "port": config_port,
+        "configText": config_text,
+    }, blockers
+
+
+def load_hysteria2_client_config(server_id: str, *, row_host: str, row_port: int) -> dict:
+    config, blockers = hysteria2_client_config_check(
+        server_id,
+        row_host=row_host,
+        row_port=row_port,
+    )
+    if blockers:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "hysteria2_client_config_not_ready",
+                "message": "Hysteria2 canary пока не готов к безопасной выдаче.",
+                "blockers": [item["code"] for item in blockers],
+            },
+        )
+    return config
+
+
 def server_row_client_config_profile(row: sqlite3.Row) -> str:
     try:
         raw_profile = row["client_config_profile"]
@@ -9075,6 +9226,24 @@ def server_client_config_readiness(row: sqlite3.Row) -> dict:
                     "remote_node_client_subnet_overlap",
                     "Диапазон AWG2 не должен пересекаться с production WireGuard.",
                 )
+    elif profile == "static_hysteria2_canary":
+        server_id = str(row["server_id"] or "").strip().lower()
+        if row["protocol"] != "hysteria2":
+            add_blocker(
+                "client_config_protocol_mismatch",
+                "Профиль static_hysteria2_canary поддерживает только Hysteria2.",
+            )
+        if row["transport"] not in {"quic", "http3"}:
+            add_blocker(
+                "client_config_transport_mismatch",
+                "Hysteria2 canary требует transport quic или http3.",
+            )
+        hysteria_config, hysteria_blockers = hysteria2_client_config_check(
+            server_id,
+            row_host=str(row["host"] or "").strip().lower(),
+            row_port=int(row["port"] or 0),
+        )
+        blockers.extend(hysteria_blockers)
     else:
         add_blocker(
             "client_config_profile_unknown",
@@ -9087,6 +9256,13 @@ def server_client_config_readiness(row: sqlite3.Row) -> dict:
             "port": remote_config.get("publicPort") or int(row["port"] or 0),
             "interface": remote_config.get("interface") or WG_INTERFACE,
             "nodeEnv": remote_config.get("path") or "",
+        }
+        managed_by = profile
+    elif profile == "static_hysteria2_canary" and "hysteria_config" in locals() and hysteria_config:
+        expected_endpoint = {
+            "host": hysteria_config.get("host") or row["host"],
+            "port": hysteria_config.get("port") or int(row["port"] or 0),
+            "configPath": hysteria_config.get("path") or "",
         }
         managed_by = profile
     else:
@@ -27035,6 +27211,74 @@ def client_config(
         device_uid=payload.deviceUid.strip(),
         requested_server_id=payload.serverId,
     )
+    selected_protocol = server_primary_protocol(selected_server)
+
+    if selected_protocol == "hysteria2":
+        selected_server_id = str(selected_server.get("id") or "").strip()
+        selected_row = get_managed_server_catalog_row_by_server_id(selected_server_id)
+        if (
+            selected_row is None
+            or server_row_client_config_profile(selected_row) != "static_hysteria2_canary"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Для выбранного Hysteria2 canary не настроен безопасный профиль выдачи.",
+            )
+        selected_endpoint = selected_server.get("endpoint") or {}
+        hysteria_config = load_hysteria2_client_config(
+            selected_server_id,
+            row_host=str(selected_endpoint.get("host") or ""),
+            row_port=int(selected_endpoint.get("port") or 0),
+        )
+        touch_device(device["device_uid"], config_issued=True)
+        if (
+            not access_policy["adsDisabled"]
+            and FREE_AD_GATE_ENABLED
+            and free_ad_gate_required_for(
+                sub,
+                device["platform"],
+                device["app_version"],
+            )
+        ):
+            consumed_ad_grant = consume_free_access_grant(
+                int(user["id"]),
+                device["device_uid"],
+            )
+        config_resilience = client_route_probe_safe_resilience(
+            {
+                "selectedBy": endpoint_assignment.get("selectedBy") or "auto",
+                "strategy": "capacity_aware_sticky_endpoint",
+                "selectedProtocol": selected_protocol,
+                "routeDecision": route_decision,
+                "clientReadyProtocols": sorted(SERVER_CLIENT_READY_PROTOCOLS),
+            },
+            platform=device["platform"],
+            app_version=device["app_version"],
+        )
+        return {
+            "ok": True,
+            "protocol": selected_protocol,
+            "configFormat": "hysteria2-yaml",
+            "configText": hysteria_config["configText"],
+            "deviceUid": device["device_uid"],
+            "assignedIp": None,
+            "endpoint": f"{hysteria_config['host']}:{hysteria_config['port']}",
+            "serverId": selected_server_id,
+            "clientConfigProfile": "static_hysteria2_canary",
+            "resilience": config_resilience,
+            "endpointAssignment": endpoint_assignment,
+            "rateLimitPolicy": sub.get("rateLimitPolicy"),
+            "fairUsePolicy": sub.get("fairUsePolicy"),
+            "trafficUsage": traffic_usage,
+            "supportConfigRefreshApplied": False,
+            "subscription": sub,
+            "accessPolicy": access_policy,
+            "adGate": {
+                **ad_gate,
+                "grantConsumed": consumed_ad_grant is not None,
+                "consumedGrant": consumed_ad_grant,
+            },
+        }
 
     support_refresh_requested = bool(device["support_config_refresh_requested_at"])
     refresh_result: Optional[dict] = None
@@ -27048,7 +27292,6 @@ def client_config(
     client_private_key = device["client_private_key"]
     preshared_key = device["preshared_key"]
     assigned_ip = device["assigned_ip"]
-    selected_protocol = server_primary_protocol(selected_server)
     if selected_protocol == "amneziawg":
         selected_server_id = str(selected_server.get("id") or "").strip()
         selected_row = get_managed_server_catalog_row_by_server_id(selected_server_id)

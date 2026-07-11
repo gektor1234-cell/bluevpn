@@ -423,7 +423,18 @@ $requiredBackendSafetyFragments = @(
     'lightest_healthy_client_ready_layer',
     'heavierLayersUsedOnlyWhenLighterLayerFails',
     'clientConfigReady',
-    'managedCatalog'
+    'managedCatalog',
+    'GREENVPN_HYSTERIA2_CLIENT_CONFIG_ENABLED',
+    'GREENVPN_HYSTERIA2_CANARY_SERVER_IDS',
+    'GREENVPN_HYSTERIA2_CANARY_SNI',
+    'static_hysteria2_canary',
+    'def hysteria2_client_config_check(',
+    'hysteria2_config_not_root_owned',
+    'hysteria2_config_not_root_only',
+    'hysteria2_config_symlink_refused',
+    'hysteria2_insecure_tls_refused',
+    'hysteria2_base_config_contains_local_mode',
+    'configFormat": "hysteria2-yaml"'
 )
 
 foreach ($fragment in $requiredBackendSafetyFragments) {
@@ -648,6 +659,8 @@ $requiredHysteria2BootstrapFragments = @(
     'sha256sum -c',
     'type: salamander',
     'insecure: false',
+    'CLIENT_BASE_CONFIG_FILE=',
+    'chmod 0600 "${CLIENT_BASE_CONFIG_FILE}"',
     'chmod 0600 "${CLIENT_CONFIG_FILE}"',
     'stable_wireguard=not_changed',
     'amneziawg_canary=not_changed',
