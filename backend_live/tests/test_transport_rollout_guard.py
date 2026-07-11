@@ -298,6 +298,28 @@ class TransportRolloutGuardTests(unittest.TestCase):
         ensure_wg_keys.assert_not_called()
         provision_wg.assert_not_called()
 
+    def test_auto_selector_prefers_lighter_protocol_before_higher_score(self) -> None:
+        wireguard = catalog_server("wg-light", "wireguard_udp")
+        wireguard.update(
+            {
+                "selectionScore": 10,
+                "capacity": {"capacityStatus": "green", "capacityScore": 10},
+            }
+        )
+        hysteria = catalog_server("hy-heavy", "hysteria2")
+        hysteria.update(
+            {
+                "selectionScore": 100,
+                "capacity": {"capacityStatus": "green", "capacityScore": 100},
+            }
+        )
+
+        selected = main.select_best_capacity_server(
+            {"servers": [hysteria, wireguard]}
+        )
+
+        self.assertEqual(selected["id"], "wg-light")
+
     def test_catalog_drops_injected_non_negotiated_server(self) -> None:
         unsafe = catalog_server("unsafe-awg", "amneziawg")
         stable = catalog_server("safe-wg", "wireguard_udp")

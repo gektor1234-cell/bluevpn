@@ -434,7 +434,9 @@ $requiredBackendSafetyFragments = @(
     'hysteria2_config_symlink_refused',
     'hysteria2_insecure_tls_refused',
     'hysteria2_base_config_contains_local_mode',
-    'configFormat": "hysteria2-yaml"'
+    'configFormat": "hysteria2-yaml"',
+    'def server_protocol_preference_rank(',
+    'SERVER_PROTOCOL_ROLLOUT_ORDER.index(protocol)'
 )
 
 foreach ($fragment in $requiredBackendSafetyFragments) {

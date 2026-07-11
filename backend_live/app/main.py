@@ -8592,6 +8592,7 @@ def build_server_catalog(
         sorted(
             default_candidates,
             key=lambda item: (
+                server_protocol_preference_rank(item),
                 -int(item.get("selectionScore") or endpoint_selection_score(item)),
                 int(item.get("priority") or 100),
                 -int((item.get("capacity") or {}).get("capacityScore") or 0),
@@ -9376,6 +9377,14 @@ def endpoint_selection_score(server: dict) -> int:
     if capacity.get("capacityStatus") == "red":
         score = min(score, 20)
     return max(0, min(100, score))
+
+
+def server_protocol_preference_rank(server: dict) -> int:
+    protocol = server_primary_protocol(server)
+    try:
+        return SERVER_PROTOCOL_ROLLOUT_ORDER.index(protocol)
+    except ValueError:
+        return len(SERVER_PROTOCOL_ROLLOUT_ORDER) + 100
 
 
 def server_public_eligibility(row: sqlite3.Row, health_meta: Optional[dict] = None) -> dict:
@@ -13362,6 +13371,7 @@ def select_best_capacity_server(catalog: dict) -> dict:
     return sorted(
         servers,
         key=lambda item: (
+            server_protocol_preference_rank(item),
             -int(item.get("selectionScore") or endpoint_selection_score(item)),
             int(item.get("priority") or 100),
             -int((item.get("capacity") or {}).get("capacityScore") or 0),
