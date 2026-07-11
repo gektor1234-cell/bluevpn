@@ -234,6 +234,62 @@ class DbStateSyncTests(unittest.TestCase):
                 ).fetchone()
             self.assertEqual(row, ("paid_beta_v1", "invite-alpha"))
 
+    def test_naive_source_timestamp_updates_older_aware_target(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="greenvpn-state-sync-",
+            ignore_cleanup_errors=True,
+        ) as root:
+            source_db = Path(root) / "source.sqlite"
+            target_db = Path(root) / "target.sqlite"
+            create_users_db(
+                source_db,
+                cohort="paid_beta_v1",
+                source="payment",
+                updated_at="2026-07-10T10:00:00",
+            )
+            create_users_db(
+                target_db,
+                cohort="stable",
+                source="legacy",
+                updated_at="2026-07-10T09:00:00+00:00",
+            )
+
+            result = self.run_sync(source_db, target_db)
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            with sqlite3.connect(target_db) as conn:
+                row = conn.execute(
+                    "SELECT access_cohort, acquisition_source FROM users WHERE id = 1"
+                ).fetchone()
+            self.assertEqual(row, ("paid_beta_v1", "payment"))
+
+    def test_older_naive_source_does_not_overwrite_newer_aware_target(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="greenvpn-state-sync-",
+            ignore_cleanup_errors=True,
+        ) as root:
+            source_db = Path(root) / "source.sqlite"
+            target_db = Path(root) / "target.sqlite"
+            create_users_db(
+                source_db,
+                cohort="stable",
+                source="legacy",
+                updated_at="2026-07-10T09:00:00",
+            )
+            create_users_db(
+                target_db,
+                cohort="paid_beta_v1",
+                source="payment",
+                updated_at="2026-07-10T10:00:00+00:00",
+            )
+
+            result = self.run_sync(source_db, target_db)
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            with sqlite3.connect(target_db) as conn:
+                row = conn.execute(
+                    "SELECT access_cohort, acquisition_source FROM users WHERE id = 1"
+                ).fetchone()
+            self.assertEqual(row, ("paid_beta_v1", "payment"))
+
 
 if __name__ == "__main__":
     unittest.main()

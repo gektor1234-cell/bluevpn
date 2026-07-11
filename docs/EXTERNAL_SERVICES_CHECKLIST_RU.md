@@ -165,27 +165,24 @@ GREENVPN_SMS_RESEND_COOLDOWN_SECONDS=60
 - Admin/backend now has dry-run subscription expiry readiness at `/api/v1/admin/subscriptions/expiry-readiness`: it flags expired-active rows, expiring manual subscriptions, retention contact gaps and auto-renew blockers before subscription enforcement is enabled.
 - Expired non-paid trial/support rows are backfilled to inactive on startup; paid plans are not silently changed.
 
-Что нужно сделать вручную:
+Статус 2026-07-11: магазин, `shopId`, production key и реальный платёж проверены. Ключ находится только в root-owned env на обоих control-plane.
 
-1. Оформить магазин в YooKassa.
-2. Получить `shopId`.
-3. Получить `secretKey`.
-4. В кабинете YooKassa добавить webhook:
+Webhook в кабинете YooKassa проверен 2026-07-11:
 
 ```text
 URL: https://api.greenvpn.pro/api/v1/billing/yookassa/webhook
 Events: payment.succeeded, payment.canceled
 ```
 
-5. Указать return URL, если YooKassa просит:
+Также включены `payment.waiting_for_capture`, `payment_method.active` и `refund.succeeded`.
+
+Return URL:
 
 ```text
 https://api.greenvpn.pro/payment/return
 ```
 
-6. Запустить env-скрипт и выбрать `Configure YooKassa production payments now?`.
-
-Что скрипт пропишет на сервер:
+Текущая server-only конфигурация содержит:
 
 ```text
 YOOKASSA_SHOP_ID=<секрет/идентификатор магазина, только на сервере>

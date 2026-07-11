@@ -24,6 +24,7 @@ Last updated: 2026-07-11.
 - Windows candidate checkpoint/tag: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_windows_candidate_ready_20260710`, `greenvpn-paid-beta-windows-candidate-ready-20260710`.
 - Windows owner-gate checkpoint/tag: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_windows_owner_gate_passed_20260711`, `greenvpn-paid-beta-windows-owner-gate-passed-20260711`.
 - Billing guard checkpoint/tag: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_billing_single_writer_20260711`, `greenvpn-paid-beta-billing-single-writer-20260711`.
+- Real-payment/sync checkpoint/tag: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_real_payment_sync_ready_20260711`, `greenvpn-paid-beta-real-payment-sync-ready-20260711`.
 - Private Windows session/config recovery copy: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_windows_0.3.0-paid-beta.10_private_state_20260711`; ACL is limited to the owner, SYSTEM and Administrators. Never publish or commit it.
 
 ## Frozen production stable
@@ -39,13 +40,13 @@ Last updated: 2026-07-11.
 
 - Primary API/site: `https://api.greenvpn.pro/paid-beta-api`, `https://greenvpn.pro/paid-beta/`.
 - Fallback API/site: `https://176-113-81-35.sslip.io/paid-beta-api`, `https://176-113-81-35.sslip.io/paid-beta/`.
-- Current server release on both nodes: `paid-beta-0.3.0-paid-beta.5-2026071005-r7`.
+- Current server release on both nodes: `paid-beta-0.3.0-paid-beta.5-2026071005-r8`.
 - Backend: `0.9.106-paid-beta.5`, service `greenvpn-paid-beta.service`, bind `127.0.0.1:8010` only.
 - DB: `/opt/bluevpn-paid-beta/data/bluevpn.db`; sync timer every 10 seconds.
 - Probe: `greenvpn-paid-beta-service-probe.timer`, every 300 seconds on both nodes.
 - Marker/channel/cohort: `green-vpn-paid-beta-v1` / `paid-beta` / `paid_beta_v1`.
 - Model: Trial 3 days, invited first period 149 RUB, then 299 RUB/30 days manually, 2 devices, no ads/timer/auto-renew.
-- Current clean state on each node: owner data only, 1 user/subscription, 2 tokens/devices, 0 billing orders and 0 smoke users.
+- Current state on each node: owner data only, 1 active paid subscription, 1 activated billing order, 2 tokens/devices and 0 smoke users. Payment/subscription/redemption row hashes match between nodes.
 - SQLite is suitable for the first 20 only in primary-normal/fallback-only mode. Deletes are not tombstone-replicated, so operational test cleanup must be performed on both nodes with sync paused.
 
 ## Paid beta artifacts
@@ -57,16 +58,16 @@ Last updated: 2026-07-11.
 - Local Windows side-by-side candidate: `C:\BlueVPN_Builds\paid_beta_20260711_v13\GreenVPN_Beta_Setup_0.3.0-paid-beta.10.exe`.
 - Local Windows SHA-256: `A87F527D910CF50C075518270C221F7890963A5893D7FAB2637EC60FB3A2B170`; size `12,822,016`; Authenticode `NotSigned`.
 - Server-published Windows on both beta nodes: `.10`, SHA-256 `A87F527D910CF50C075518270C221F7890963A5893D7FAB2637EC60FB3A2B170`, `required=false`.
-- Final bundle: `C:\BlueVPN_Builds\paid_beta_20260711_v15\paid-beta-0.3.0-paid-beta.5-2026071005-r7.tar.gz`.
-- Bundle SHA-256: `89423157BF094435C660692491C2885D2EC1EAF245F0F20ED2773A6E18B9F6FC`.
+- Final bundle: `C:\BlueVPN_Builds\paid_beta_20260711_v16\paid-beta-0.3.0-paid-beta.5-2026071005-r8.tar.gz`.
+- Bundle SHA-256: `FDFB9EDE9573C16748FA1AEF65A6979135D5C7394B48566F3D94091BDF610E98`.
 - Android `.2/.3/.4` and server revisions before `r5` are forensic/superseded, not approved rollback targets.
 
 ## Verified
 
-- 28 backend/DB-sync/first20 tests pass; release gate: 0 warnings, 0 errors.
+- 31 backend/DB-sync/first20 tests pass; release gate: 0 warnings, 0 errors.
 - Stateful auth/marker/invite/trial/149/299/bootstrap/config/fallback/cleanup smoke passed.
 - Both local/public beta health return `0.9.106-paid-beta.5`; production health returns `0.9.105`.
-- Site readiness is 8/8. YooKassa variables exist, but the provider rejects the current shared credentials with `401 invalid_credentials`; payment is not ready until the owner rotates the secret key.
+- Site readiness is 8/8. YooKassa key was reissued, installed in root-only production/beta env on both control-plane nodes and validated with provider HTTP 200.
 - Update API returns Android `.5` and Windows `.10`; RUVDS returns its own fallback download URLs. Both downloaded Windows files match the approved SHA-256.
 - Real Samsung SM-A226B Android 13: login, invite, VPN, YouTube playback, recents swipe/reopen, disconnect and Timeweb outage fallback passed.
 - Stable Android and beta coexist; stable remains `pro.greenvpn.app`, beta is `pro.greenvpn.app.beta`.
@@ -81,14 +82,17 @@ Last updated: 2026-07-11.
 - Both empty orders and duplicate `order_created` events were removed with sync paused after root-only DB backups; the invite is eligible again and both DBs pass `quick_check=ok`.
 - Beta `r7` makes Timeweb the only paid-beta billing writer. RUVDS still serves auth/VPN/config failover but rejects billing mutation before touching SQLite. 29 tests and release gate 0/0 pass. Report SHA-256: `8241308F02FA3CFBDB523C7B7052D89B802CFB3868CFF72D96259D595659CD50`.
 - Deployed RUVDS integration probe returned `503 paid_beta_billing_primary_required` with billing/order-event counts unchanged at zero. Report SHA-256: `F5E06CEFD4C3A3B47C09010CC86D59838668D39424CFDE03D03C928553DA3F45`.
+- One real 149 RUB payment succeeded and activated `paid_beta_30d` through 2026-08-10. Provider state is `succeeded`, paid and refundable; no actual refund was issued and auto-renew remains disabled.
+- YooKassa HTTP notifications are configured for the production webhook endpoint, including payment success/cancel, capture waiting, payment-method activation and refund success.
+- Server `r8` fixes mixed SQLite timestamp formats by normalizing them to UTC. Both sync timers run with 0 conflicts/errors; the three critical row hashes are identical on both nodes.
+- With Timeweb beta stopped, public RUVDS returned HTTP 200 for subscription and bootstrap, reported the paid plan, allowed VPN connection and required no ad. Timeweb was restored immediately after the test.
 
 ## Owner gate
 
 Do not create/send the first 20 codes yet. Remaining owner actions:
 
-1. Reissue the YooKassa secret key for the configured shop and install it into production and paid-beta root-only env on both control-plane nodes.
-2. Make one real 149 RUB YooKassa payment and verify activation polling plus refund/cancel handling.
-3. Accept or legally review beta terms/privacy.
+1. Accept or legally review beta terms/privacy.
+2. Decide separately whether the successful owner payment should remain active or be refunded; do not refund it implicitly.
 
 After all three, follow `docs/PAID_BETA_FIRST20_RUNBOOK_2026_07_10_RU.md`.
 

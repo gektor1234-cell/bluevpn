@@ -105,19 +105,16 @@ Sender name: <пусто или согласованное имя>
 
 ## 4. YooKassa production
 
-Статус: кабинет владельца активен, backend ждёт production `shopId` и `secretKey` через server-only env.
+Статус 2026-07-11: кабинет активен, production key перевыпущен, установлен только в root-owned server env на обоих control-plane и проверен provider API. Реальный платёж 149 RUB успешно активирован.
 
-Нужно сделать:
-
-- оформить магазин YooKassa;
-- получить `shopId`;
-- получить `secretKey`;
-- добавить webhook:
+Webhook в кабинете проверен 2026-07-11:
 
 ```text
 URL: https://api.greenvpn.pro/api/v1/billing/yookassa/webhook
 Events: payment.succeeded, payment.canceled
 ```
+
+Дополнительно включены `payment.waiting_for_capture`, `payment_method.active` и `refund.succeeded`.
 
 - если YooKassa спрашивает return URL:
 
@@ -125,23 +122,17 @@ Events: payment.succeeded, payment.canceled
 https://api.greenvpn.pro/payment/return
 ```
 
-Что передать Codex:
+Повторно передавать `shopId` или `secretKey` в чат не нужно. При следующей ротации ключ обновляется только через защищённый server-only процесс.
 
-```text
-YOOKASSA_SHOP_ID: <значение>
-YOOKASSA_SECRET_KEY: <секрет>
-```
+Уже проверено:
 
-Что Codex должен сделать после получения:
-
-- записать YooKassa env только на сервер;
-- перезапустить backend;
-- проверить `/api/v1/admin/billing/readiness`;
+- YooKassa env записан только на серверы, backend перезапущен;
+- provider API и реальный order/payment/activation прошли;
+- Timeweb остаётся единственным billing writer, оплаченный результат синхронизирован на RUVDS;
+- `/api/v1/admin/billing/readiness` готов к текущему ручному платёжному сценарию;
 - проверить `/api/v1/admin/billing/renewals/readiness`: auto-renewal charges должны оставаться blocked/dry-run, пока production YooKassa readiness не green и pending renewal conflicts не разобраны;
 - проверить `/api/v1/admin/subscriptions/expiry-readiness`: `BLUEVPN_ENFORCE_SUBSCRIPTION_ACCESS` не включать, пока expired-active rows и expiring retention blockers не разобраны;
-- с backend `0.9.65` оба safe-enable сигнала (`safeToEnableAutoRenewalCharges`, `safeToEnableExpiryEnforcement`) также должны ждать clean payment smoke;
-- создать тестовый order/payment в разрешённом тестовом/production режиме;
-- проверить, что тариф активируется только после подтверждения YooKassa.
+- auto-renew и глобальный subscription enforcement остаются выключены.
 
 ## 5. Telegram alerts
 

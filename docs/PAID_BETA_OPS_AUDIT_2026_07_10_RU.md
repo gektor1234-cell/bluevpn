@@ -121,3 +121,16 @@
 - Deployed integration probe на RUVDS вернул `503 paid_beta_billing_primary_required`; billing orders и `order_created` events остались `0 -> 0`. Report SHA-256: `F5E06CEFD4C3A3B47C09010CC86D59838668D39424CFDE03D03C928553DA3F45`.
 - Deploy backups: Timeweb `/root/greenvpn-paid-beta-backups/20260711T010531Z-timeweb-paid-beta-0.3.0-paid-beta.5-2026071005-r7`; RUVDS `/root/greenvpn-paid-beta-backups/20260711T010541Z-ruvds-paid-beta-0.3.0-paid-beta.5-2026071005-r7`.
 - Bundle SHA-256: `89423157BF094435C660692491C2885D2EC1EAF245F0F20ED2773A6E18B9F6FC`; technical report SHA-256: `8241308F02FA3CFBDB523C7B7052D89B802CFB3868CFF72D96259D595659CD50`.
+
+## Real payment and DB sync `r8`, 2026-07-11
+
+- YooKassa key перевыпущен в кабинете, установлен в root-only production/beta env на Timeweb и RUVDS и проверен provider API: HTTP 200 на обоих узлах. Значение ключа, OTP, shop/payment/order IDs в репозиторий и отчёты не записывались.
+- В кабинете подтверждён production webhook URL; выбраны `payment.succeeded`, `payment.waiting_for_capture`, `payment.canceled`, `payment_method.active` и `refund.succeeded`.
+- Реальный платёж 149 RUB имеет provider status `succeeded`, `paid=true`, `refundable=true`. Заказ активирован один раз, подписка `paid_beta_30d` действует до 2026-08-10, redemption перешёл в `converted`; auto-renew выключен.
+- После активации sync выявил смешанные SQLite timestamps: offset-naive и offset-aware `datetime` нельзя было сравнить напрямую. До исправления timers остановлены, обе DB сохранены в `/root/greenvpn-paid-beta-backups/20260711T013000Z-post-real-payment-pre-sync-fix`, `quick_check=ok`.
+- `greenvpn_sqlite_state_sync.py` теперь нормализует все распознанные timestamps в UTC. Два regression-теста покрывают оба направления сравнения; полный набор: 31 test, release gate 0 warnings/0 errors.
+- Dry-run на реальных DB подтвердил: устаревший RUVDS не меняет платёжное состояние Timeweb, а Timeweb передаёт на RUVDS ровно заказ, подписку и converted redemption без конфликтов. После apply полные SHA-256 этих трёх таблиц совпали между узлами.
+- Current release на обоих узлах: `paid-beta-0.3.0-paid-beta.5-2026071005-r8`. Sync timers активны, последние циклы имеют 0 conflicts/errors; production backend остался `0.9.105`.
+- При остановленном Timeweb beta публичный RUVDS вернул HTTP 200 для `subscription/me` и `client/bootstrap`: активный `paid_beta_30d`, 2 устройства, `canConnect=true`, реклама не требуется. Timeweb beta затем восстановлен и прошёл local health.
+- Deploy backups: Timeweb `/root/greenvpn-paid-beta-backups/20260711T013305Z-timeweb-paid-beta-0.3.0-paid-beta.5-2026071005-r8`; RUVDS `/root/greenvpn-paid-beta-backups/20260711T013406Z-ruvds-paid-beta-0.3.0-paid-beta.5-2026071005-r8`.
+- Bundle: `C:\BlueVPN_Builds\paid_beta_20260711_v16\paid-beta-0.3.0-paid-beta.5-2026071005-r8.tar.gz`; SHA-256 `FDFB9EDE9573C16748FA1AEF65A6979135D5C7394B48566F3D94091BDF610E98`.

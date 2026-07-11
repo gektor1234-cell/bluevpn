@@ -20,8 +20,8 @@
 - Android directory: `C:\BlueVPN_Builds\paid_beta_20260710_v5`.
 - Windows candidate directory: `C:\BlueVPN_Builds\paid_beta_20260711_v13`.
 - Серверный bundle и оба update manifest содержат проверенную Windows `.10`; production aliases не изменены.
-- Final deploy bundle: `C:\BlueVPN_Builds\paid_beta_20260711_v15\paid-beta-0.3.0-paid-beta.5-2026071005-r7.tar.gz`.
-- Bundle size/SHA-256: 44 363 226 / `89423157BF094435C660692491C2885D2EC1EAF245F0F20ED2773A6E18B9F6FC`.
+- Final deploy bundle: `C:\BlueVPN_Builds\paid_beta_20260711_v16\paid-beta-0.3.0-paid-beta.5-2026071005-r8.tar.gz`.
+- Bundle size/SHA-256: 44 363 292 / `FDFB9EDE9573C16748FA1AEF65A6979135D5C7394B48566F3D94091BDF610E98`.
 - Backend in bundle: `0.9.106-paid-beta.5`.
 
 ## Android identity
@@ -45,7 +45,7 @@
 
 - Flutter test и Android release build: OK.
 - APK signature/badging: OK.
-- 28 backend tests: OK.
+- 31 backend/DB-sync/first20 tests: OK.
 - Release gate: 0 warnings, 0 errors.
 - Real Samsung Android 13: login, VPN, YouTube, failover, recents lifecycle, disconnect: OK.
 - Chrome active add/remove: network UID set менялся с `{Chrome, Telegram}` на `{Telegram}` без потери `tun0`.
@@ -62,17 +62,17 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
   -OutDir C:\BlueVPN_Builds\paid_beta_20260710_v5
 ```
 
-Bundle создаётся `prepare_paid_beta_bundle.ps1 -BundleRevision 5`. Упаковщик включает installer, backend, site, monitoring, stateful smoke и first20 generator; секретов и DB в архиве нет.
+Bundle создаётся `prepare_paid_beta_bundle.ps1 -BundleRevision 8`. Упаковщик включает installer, backend, site, monitoring, stateful smoke и first20 generator; секретов и DB в архиве нет.
 
 ## Superseded
 
 - Android `.2`: отклонён как same-package candidate.
 - Android `.3`: отклонён из-за lifecycle/disconnect ownership bug.
 - Android `.4`: lifecycle исправлен, но версия заменена `.5` после добавления custom app picker.
-- Server `r1-r4`: forensic only; `r5/r6` are previous rollback points, current technical release is `r7`.
+- Server `r1-r4`: forensic only; `r5-r7` are previous rollback points, current technical release is `r8`.
 
 ## Ограничения
 
 - Windows `.10` side-by-side isolated, не подписан, но полный real-PC installation/reboot/VPN/DNS/uninstall/network-recovery/reinstall gate пройден; серверы beta отдают `.10`.
-- YooKassa secret key сейчас недействителен (`401 invalid_credentials`); его ротация, реальный платёж и legal acceptance остаются owner gate.
+- YooKassa key перевыпущен и проверен на обоих control-plane. Реальный платёж 149 RUB успешно активировал подписку; actual refund намеренно не выполнялся. Перед first20 остаётся owner/legal acceptance условий и privacy.
 - Эти beta-файлы нельзя публиковать как production aliases.

@@ -17,30 +17,32 @@ Last compacted: 2026-07-11.
 - Android/backend: `0.3.0-paid-beta.5` / `0.9.106-paid-beta.5`.
 - Server-published Windows beta: `0.3.0-paid-beta.10`, SHA `A87F527D910CF50C075518270C221F7890963A5893D7FAB2637EC60FB3A2B170` (`NotSigned`, `required=false`).
 - Local side-by-side Windows candidate is the same deployed `.10` artifact; install, reboot, VPN/DNS transition, uninstall/network recovery and clean reinstall all passed.
-- Current release on both nodes: `paid-beta-0.3.0-paid-beta.5-2026071005-r7`.
+- Current release on both nodes: `paid-beta-0.3.0-paid-beta.5-2026071005-r8`.
 - Android package: `pro.greenvpn.app.beta`, side-by-side with stable.
 - Policy: Trial 3 days, 149 RUB first invited period, then 299 RUB manually, 2 devices, no ads/timer/auto-renew.
 - Marker + channel + personal invite + cohort enforcement active.
 - DB sync every 10 seconds; service probes every 300 seconds.
-- Current DB state on both nodes: owner data only, 1 user/subscription, 2 tokens/devices, 0 billing orders and no smoke rows.
+- Current DB state on both nodes: owner data only, 1 active paid subscription, 1 activated billing order, 2 tokens/devices and no smoke rows. Payment/subscription/redemption rows have identical SHA-256 on both nodes.
 
 ## Verified
 
 - Physical Android VPN/failover/YouTube/recents/disconnect/custom-app split tunneling: passed.
 - Stateful auth/invite/quote/bootstrap/config/fallback cleanup: passed.
-- 28 backend tests and release gate: passed.
-- Site readiness: 8/8. Payment credentials are not ready: YooKassa returns `401 invalid_credentials` for the configured shop/key pair on both nodes.
+- 31 backend/DB-sync/first20 tests and release gate 0/0: passed.
+- Site readiness: 8/8. YooKassa key was reissued, installed into root-only production/beta env on both control-plane nodes and validated with provider HTTP 200.
 - Primary update API serves primary download URLs; fallback API serves fallback URLs with matching hashes.
 - Windows `.10` static isolation/payload/parser/Defender gates passed.
 - Windows `.10` real install, reboot, session/DPAPI migration, kill-switch, DNS-leak, handshake, API/YouTube, cleanup, competing-VPN restoration, destructive uninstall/network recovery and clean reinstall gates passed.
 - Timeweb/RUVDS beta deployment `r6` passed; both update APIs and downloads expose `.10` with the approved SHA while production remains `0.9.105`.
 - Billing guard `r7` passed 29 tests and release gate 0/0. Timeweb is the only paid-beta billing writer; RUVDS rejects billing mutation before DB writes. Empty checkout artifacts from the failed credential test were backed up and removed from both DBs.
+- One real 149 RUB YooKassa payment succeeded and activated `paid_beta_30d` through 2026-08-10. Provider reports the payment as paid and refundable; auto-renew remains disabled.
+- YooKassa cabinet webhook points to the production HTTPS endpoint and includes payment success/cancel, capture waiting, payment-method activation and refund success events.
+- DB sync `r8` normalizes naive and timezone-aware timestamps to UTC. Both sync timers complete with 0 conflicts/errors, and RUVDS served active subscription/bootstrap with Timeweb beta stopped.
 
 ## Owner Gate
 
-1. Rotate the invalid YooKassa secret key and install it on both control-plane nodes.
-2. One real 149 RUB payment with activation/refund/cancel verification.
-3. Owner/legal acceptance of terms and privacy.
+1. Owner/legal acceptance of terms and privacy.
+2. Keep the successful real payment active; perform an actual refund only as a separate explicit financial decision.
 
 Only then create the first 20 invite package.
 

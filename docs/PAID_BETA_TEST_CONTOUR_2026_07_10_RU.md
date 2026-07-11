@@ -26,7 +26,7 @@ Production использует отдельные service/DB/site/download path
 - Android: `0.3.0-paid-beta.5`, build `2026071005`, package `pro.greenvpn.app.beta`.
 - Windows на серверах и локально: `0.3.0-paid-beta.10`, side-by-side beta, `NotSigned`, `required=false`.
 - Backend: `0.9.106-paid-beta.5`.
-- Release directory на обоих узлах: `paid-beta-0.3.0-paid-beta.5-2026071005-r7`.
+- Release directory на обоих узлах: `paid-beta-0.3.0-paid-beta.5-2026071005-r8`.
 - Bundle SHA-256: `89423157BF094435C660692491C2885D2EC1EAF245F0F20ED2773A6E18B9F6FC`.
 - Android SHA-256: `90E42FB6CE5A06247E620E5DC3302B7C7C86A0F9A8FEBDC523876A622B9C6580`.
 - Windows `.10` SHA-256: `A87F527D910CF50C075518270C221F7890963A5893D7FAB2637EC60FB3A2B170` (`NotSigned`).
@@ -38,7 +38,7 @@ Windows `.10` прошёл real install/reboot/session/DPAPI/VPN/DNS/uninstall/n
 
 ## Проверки
 
-- 28 backend/DB-sync/first20 tests: OK.
+- 31 backend/DB-sync/first20 tests: OK.
 - Flutter test: OK; analyze без новых fatal issues.
 - Android release build/signature/package/label: OK.
 - Release gate: 0 warnings, 0 errors.
@@ -46,7 +46,7 @@ Windows `.10` прошёл real install/reboot/session/DPAPI/VPN/DNS/uninstall/n
 - DB `quick_check=ok` на обоих узлах.
 - Stateful HTTP smoke: marker denial, primary/fallback login, invite, Trial, 149/299, 2 devices, no ads/timer, bootstrap/config/fallback: OK.
 - Smoke peer удалён; после синхронизации на обоих узлах 0 smoke users/devices/invites.
-- Site readiness 8/8; текущие YooKassa credentials отклоняются с `401 invalid_credentials`, поэтому ротация ключа и real payment smoke остаются owner action.
+- Site readiness 8/8; YooKassa key перевыпущен и проверен на обоих узлах. Реальный платёж 149 RUB, активация, межсерверная синхронизация и RUVDS fallback subscription/bootstrap: OK.
 - Оба service probe завершились `Result=success`, timers active.
 - Реальный Timeweb beta outage переключил Android-клиент на RUVDS без потери сессии.
 - Реальный Samsung SM-A226B: YouTube playback через VPN, recents swipe/reopen, корректный disconnect: OK.
