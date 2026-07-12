@@ -75,6 +75,8 @@ $naiveWatchdogPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_naive_http
 $naiveClientSmokePath = Join-Path $ProjectRoot "scripts\windows\test_windows_naive_https_client_smoke.ps1"
 $androidSettingsPath = Join-Path $ProjectRoot "android\settings.gradle.kts"
 $androidAppBuildPath = Join-Path $ProjectRoot "android\app\build.gradle.kts"
+$androidMainActivityPath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\MainActivity.kt"
+$androidQuickTilePath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\GreenVpnQuickTileService.kt"
 $androidHysteriaBuildPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\build.gradle.kts"
 $androidHysteriaManifestPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\main\AndroidManifest.xml"
 $androidHysteriaDebugManifestPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\debug\AndroidManifest.xml"
@@ -109,6 +111,8 @@ $androidDnsttPhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_and
 $androidDnsttApkVerifyPath = Join-Path $ProjectRoot "scripts\windows\verify_android_dnstt_preview_apk.ps1"
 $routeFailureCooldownPath = Join-Path $ProjectRoot "lib\services\route_failure_cooldown.dart"
 $routeFailureCooldownTestPath = Join-Path $ProjectRoot "test\route_failure_cooldown_test.dart"
+$transportPreviewPolicyPath = Join-Path $ProjectRoot "lib\services\transport_preview_policy.dart"
+$transportPreviewPolicyTestPath = Join-Path $ProjectRoot "test\transport_preview_policy_test.dart"
 $monitoringProbePath = Join-Path $ProjectRoot "scripts\monitoring\service_probe.py"
 $wireguardTcpCanaryPath = Join-Path $ProjectRoot "scripts\server\install_wireguard_tcp_canary.sh"
 $transportCanaryPath = Join-Path $ProjectRoot "scripts\server\install_transport_canary_service.sh"
@@ -124,6 +128,7 @@ $naiveHttpsRollbackPath = Join-Path $ProjectRoot "scripts\server\remove_naive_ht
 $dnsttBootstrapPath = Join-Path $ProjectRoot "scripts\server\bootstrap_dnstt_canary.sh"
 $dnsttReadinessPath = Join-Path $ProjectRoot "scripts\server\check_dnstt_canary_readiness.sh"
 $dnsttRollbackPath = Join-Path $ProjectRoot "scripts\server\remove_dnstt_canary.sh"
+$naiveDnsttContractDeployPath = Join-Path $ProjectRoot "scripts\server\deploy_paid_beta_naive_dnstt_contract.sh"
 
 $main = Read-Text $mainPath
 $runtimeConfig = Read-Text $runtimeConfigPath
@@ -145,6 +150,8 @@ $naiveWatchdogScript = Read-Text $naiveWatchdogPath
 $naiveClientSmokeScript = Read-Text $naiveClientSmokePath
 $androidSettings = Read-Text $androidSettingsPath
 $androidAppBuild = Read-Text $androidAppBuildPath
+$androidMainActivity = Read-Text $androidMainActivityPath
+$androidQuickTile = Read-Text $androidQuickTilePath
 $androidHysteriaBuild = Read-Text $androidHysteriaBuildPath
 $androidHysteriaManifest = Read-Text $androidHysteriaManifestPath
 $androidHysteriaDebugManifest = Read-Text $androidHysteriaDebugManifestPath
@@ -179,6 +186,8 @@ $androidDnsttPhysicalTestScript = Read-Text $androidDnsttPhysicalTestPath
 $androidDnsttApkVerifyScript = Read-Text $androidDnsttApkVerifyPath
 $routeFailureCooldown = Read-Text $routeFailureCooldownPath
 $routeFailureCooldownTest = Read-Text $routeFailureCooldownTestPath
+$transportPreviewPolicy = Read-Text $transportPreviewPolicyPath
+$transportPreviewPolicyTest = Read-Text $transportPreviewPolicyTestPath
 $monitoringProbe = Read-Text $monitoringProbePath
 $wireguardTcpCanaryScript = Read-Text $wireguardTcpCanaryPath
 $transportCanaryScript = Read-Text $transportCanaryPath
@@ -194,6 +203,7 @@ $naiveHttpsRollbackScript = Read-Text $naiveHttpsRollbackPath
 $dnsttBootstrapScript = Read-Text $dnsttBootstrapPath
 $dnsttReadinessScript = Read-Text $dnsttReadinessPath
 $dnsttRollbackScript = Read-Text $dnsttRollbackPath
+$naiveDnsttContractDeployScript = Read-Text $naiveDnsttContractDeployPath
 
 Write-Section "CLIENT SAFETY CHECKS"
 $forbiddenClientPatterns = @(
@@ -1494,6 +1504,13 @@ $androidDnsttSourceChecks = [ordered]@{
     'dnstt readiness proves delegation and data plane' = @($dnsttReadinessScript, '--require-delegation', 'server_data_plane_ready=', 'doh_delegation_ready=', 'secrets_printed=false')
     'dnstt rollback is host-guarded' = @($dnsttRollbackScript, 'EXPECTED_PUBLIC_IP', 'APPROVED_EXISTING_HOST', 'registrar_dns=not_changed', 'stable_transports=active')
     'Stable APK isolation covers all preview engines' = @($androidStableIsolationVerifyScript, 'libdnstt_client', 'pro.greenvpn.dnstt.DnsttVpnService', 'GREENVPN_DNSTT_PREVIEW_ENABLED', 'GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED', 'GREENVPN_VLESS_REALITY_PREVIEW_ENABLED')
+    'Five-stage preview cascade policy' = @($transportPreviewPolicy, "'amneziawg'", "'hysteria2'", "'vless_reality'", "'naive_https'", "'dnstt'", 'greenVpnTransportPreviewRank', 'greenVpnTransportRequiresFullTunnel')
+    'Five-stage preview cascade tests' = @($transportPreviewPolicyTest, 'preview cascade keeps the guarded transport order', 'proxy transports are restricted to full-tunnel mode', "'wireguard_udp'")
+    'Dart selector advertises and orders dnstt' = @($main, 'kDnsttPreviewEnabled', "if (kDnsttPreviewEnabled) 'dnstt'", 'greenVpnTransportPreviewRank(', 'greenVpnTransportRequiresFullTunnel(')
+    'Android app lifecycle integrates dnstt' = @($androidMainActivity, 'protocol == "dnstt"', 'GreenVpnDnsttPreview.validateConfig', 'GreenVpnDnsttPreview.connect', 'GreenVpnDnsttPreview.disconnect', 'BuildConfig.GREENVPN_DNSTT_PREVIEW_ENABLED')
+    'Android quick tile integrates dnstt' = @($androidQuickTile, 'BuildConfig.GREENVPN_DNSTT_PREVIEW_ENABLED', 'GreenVpnDnsttPreview.validateConfig', 'GreenVpnDnsttPreview.connect', 'GreenVpnDnsttPreview.disconnect')
+    'Backend guarded Naive and dnstt contracts' = @($backend, 'static_naive_https_canary', 'static_dnstt_canary', 'guarded_json_client_profile_file(', 'load_naive_https_client_config(', 'load_dnstt_client_config(', 'GREENVPN_DNSTT_CLIENT_CONFIG_ENABLED', 'GREENVPN_NAIVE_HTTPS_CLIENT_CONFIG_ENABLED')
+    'Paid-beta Naive/dnstt deploy is atomic and isolated' = @($naiveDnsttContractDeployScript, 'EXPECTED_CURRENT_RELEASE="paid-beta-0.3.0-paid-beta.6-2026071106-r17-vless-contract"', 'production_changed=false', 'stable_catalog_changed=false', 'bluevpn.db.before.sqlite', 'rollback_on_error', 'legacy_naive_dnstt_count=0', 'preview_naive_dnstt_count=2')
 }
 foreach ($check in $androidDnsttSourceChecks.GetEnumerator()) {
     $source = [string]$check.Value[0]

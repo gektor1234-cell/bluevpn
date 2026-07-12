@@ -794,6 +794,273 @@ class TransportRolloutGuardTests(unittest.TestCase):
             )
         self.assertEqual(raised.exception.status_code, 409)
 
+    def test_naive_static_profile_is_root_only_and_endpoint_guarded(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="greenvpn-naive-config-") as config_root:
+            server_id = "nl2-naive-https-canary"
+            config_path = Path(config_root) / f"{server_id}.naive-https.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "listen": "socks://127.0.0.1:1982",
+                        "proxy": "https://preview-user:preview-password@nl2.vpn.greenvpn.pro:8443",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            os.chmod(config_path, 0o600)
+            row = {
+                "server_id": server_id,
+                "client_config_profile": "static_naive_https_canary",
+                "protocol": "naive_https",
+                "transport": "https",
+                "host": "203.0.113.42",
+                "port": 8443,
+            }
+            with (
+                patch.object(main, "NAIVE_HTTPS_CLIENT_CONFIG_ROOT", Path(config_root)),
+                patch.object(main, "NAIVE_HTTPS_CANARY_SERVER_IDS", {server_id}),
+                patch.object(main, "NAIVE_HTTPS_CANARY_HOST", "nl2.vpn.greenvpn.pro"),
+                patch.object(main, "NAIVE_HTTPS_CANARY_IP", "203.0.113.42"),
+            ):
+                readiness = main.server_client_config_readiness(row)
+                loaded = main.load_naive_https_client_config(
+                    server_id,
+                    row_host="203.0.113.42",
+                    row_port=8443,
+                )
+
+            self.assertTrue(readiness["ready"], readiness["blockers"])
+            self.assertEqual(readiness["managedBy"], "static_naive_https_canary")
+            self.assertEqual(loaded["host"], "nl2.vpn.greenvpn.pro")
+            self.assertEqual(loaded["port"], 8443)
+            self.assertEqual(set(json.loads(loaded["configText"])), {"listen", "proxy"})
+
+    def test_naive_static_profile_rejects_endpoint_and_field_drift(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="greenvpn-naive-unsafe-") as config_root:
+            server_id = "nl2-naive-https-canary"
+            config_path = Path(config_root) / f"{server_id}.naive-https.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "listen": "socks://0.0.0.0:1982",
+                        "proxy": "http://preview-user:preview-password@example.com:8080/path",
+                        "log": "/tmp/unsafe.log",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            os.chmod(config_path, 0o600)
+            with (
+                patch.object(main, "NAIVE_HTTPS_CLIENT_CONFIG_ROOT", Path(config_root)),
+                patch.object(main, "NAIVE_HTTPS_CANARY_SERVER_IDS", {server_id}),
+                patch.object(main, "NAIVE_HTTPS_CANARY_HOST", "nl2.vpn.greenvpn.pro"),
+                patch.object(main, "NAIVE_HTTPS_CANARY_IP", "203.0.113.42"),
+            ):
+                _, blockers = main.naive_https_client_config_check(
+                    server_id,
+                    row_host="203.0.113.42",
+                    row_port=8443,
+                )
+
+            blocker_codes = {item["code"] for item in blockers}
+            self.assertIn("naive_https_config_fields_invalid", blocker_codes)
+            self.assertIn("naive_https_listener_invalid", blocker_codes)
+            self.assertIn("naive_https_tls_required", blocker_codes)
+            self.assertIn("naive_https_host_not_allowlisted", blocker_codes)
+            self.assertIn("naive_https_endpoint_port_mismatch", blocker_codes)
+
+    def test_dnstt_static_profile_requires_guarded_doh_contract(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="greenvpn-dnstt-config-") as config_root:
+            server_id = "nl2-dnstt-canary"
+            profile = {
+                "zone": "t.greenvpn.pro",
+                "publicKey": "0123456789abcdef" * 4,
+                "socks": {
+                    "listen": "127.0.0.1:1983",
+                    "username": "preview-user",
+                    "password": "cHJldmlldy1wYXNzd29yZC1sb25n",
+                },
+                "resolvers": [
+                    {"mode": "doh", "endpoint": "https://1.1.1.1/dns-query"},
+                    {"mode": "doh", "endpoint": "https://8.8.8.8/dns-query"},
+                    {"mode": "dot", "endpoint": "1.1.1.1:853"},
+                ],
+                "expectedEgress": "203.0.113.42",
+            }
+            config_path = Path(config_root) / f"{server_id}.dnstt.json"
+            config_path.write_text(json.dumps(profile), encoding="utf-8")
+            os.chmod(config_path, 0o600)
+            row = {
+                "server_id": server_id,
+                "client_config_profile": "static_dnstt_canary",
+                "protocol": "dnstt",
+                "transport": "doh",
+                "host": "203.0.113.42",
+                "port": 53,
+            }
+            with (
+                patch.object(main, "DNSTT_CLIENT_CONFIG_ROOT", Path(config_root)),
+                patch.object(main, "DNSTT_CANARY_SERVER_IDS", {server_id}),
+                patch.object(main, "DNSTT_CANARY_ZONE", "t.greenvpn.pro"),
+                patch.object(main, "DNSTT_CANARY_IP", "203.0.113.42"),
+            ):
+                readiness = main.server_client_config_readiness(row)
+                loaded = main.load_dnstt_client_config(
+                    server_id,
+                    row_host="203.0.113.42",
+                    row_port=53,
+                )
+
+            self.assertTrue(readiness["ready"], readiness["blockers"])
+            self.assertEqual(readiness["managedBy"], "static_dnstt_canary")
+            self.assertEqual(loaded["host"], "203.0.113.42")
+            self.assertEqual(loaded["port"], 53)
+            self.assertEqual(json.loads(loaded["configText"])["zone"], "t.greenvpn.pro")
+
+    def test_dnstt_static_profile_rejects_resolver_listener_and_egress_drift(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="greenvpn-dnstt-unsafe-") as config_root:
+            server_id = "nl2-dnstt-canary"
+            profile = {
+                "zone": "wrong.example",
+                "publicKey": "abcd",
+                "socks": {
+                    "listen": "0.0.0.0:1983",
+                    "username": "x",
+                    "password": "short",
+                },
+                "resolvers": [{"mode": "doh", "endpoint": "https://example.com/dns-query"}],
+                "expectedEgress": "203.0.113.99",
+            }
+            config_path = Path(config_root) / f"{server_id}.dnstt.json"
+            config_path.write_text(json.dumps(profile), encoding="utf-8")
+            os.chmod(config_path, 0o600)
+            with (
+                patch.object(main, "DNSTT_CLIENT_CONFIG_ROOT", Path(config_root)),
+                patch.object(main, "DNSTT_CANARY_SERVER_IDS", {server_id}),
+                patch.object(main, "DNSTT_CANARY_ZONE", "t.greenvpn.pro"),
+                patch.object(main, "DNSTT_CANARY_IP", "203.0.113.42"),
+            ):
+                _, blockers = main.dnstt_client_config_check(
+                    server_id,
+                    row_host="203.0.113.42",
+                    row_port=53,
+                )
+
+            blocker_codes = {item["code"] for item in blockers}
+            self.assertIn("dnstt_zone_not_allowlisted", blocker_codes)
+            self.assertIn("dnstt_public_key_invalid", blocker_codes)
+            self.assertIn("dnstt_listener_invalid", blocker_codes)
+            self.assertIn("dnstt_resolver_not_allowlisted", blocker_codes)
+            self.assertIn("dnstt_egress_not_allowlisted", blocker_codes)
+
+    def test_static_json_transport_issue_never_invokes_wireguard_provisioning(self) -> None:
+        main.init_db()
+        now = main.utc_now_iso()
+        cases = (
+            (
+                "naive_https",
+                "nl2-naive-https-canary",
+                "static_naive_https_canary",
+                "naive-https-json",
+                8443,
+                "load_naive_https_client_config",
+            ),
+            (
+                "dnstt",
+                "nl2-dnstt-canary",
+                "static_dnstt_canary",
+                "dnstt-json",
+                53,
+                "load_dnstt_client_config",
+            ),
+        )
+        for protocol, server_id, profile, config_format, port, loader_name in cases:
+            with self.subTest(protocol=protocol):
+                device_uid = f"transport-{protocol}-no-wireguard"
+                with main.db() as conn:
+                    conn.execute("DELETE FROM devices WHERE device_uid = ?", (device_uid,))
+                    user = conn.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()
+                    if user is None:
+                        cursor = conn.execute(
+                            "INSERT INTO users(email, password_hash, created_at) VALUES (?, ?, ?)",
+                            (f"{protocol}-test@example.com", "test-only", now),
+                        )
+                        user_id = int(cursor.lastrowid)
+                    else:
+                        user_id = int(user["id"])
+                    conn.execute(
+                        """
+                        INSERT INTO devices(
+                            user_id, device_uid, device_name, platform, app_version,
+                            assigned_ip, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (user_id, device_uid, protocol, "android", "preview", "10.10.0.92", now, now),
+                    )
+                    conn.commit()
+                server = {
+                    "id": server_id,
+                    "endpoint": {"host": "203.0.113.42", "port": port},
+                    "protocols": [{"code": protocol, "transport": "doh", "port": port, "primary": True}],
+                }
+                access_policy = {
+                    "allowed": True,
+                    "reason": None,
+                    "maxDevices": 10,
+                    "paidBetaUser": True,
+                    "adsDisabled": True,
+                }
+                static_config = {
+                    "host": "203.0.113.42",
+                    "port": port,
+                    "configText": "{}\n",
+                }
+                with (
+                    patch.object(main, "get_user_by_token", return_value={"id": user_id}),
+                    patch.object(main, "get_subscription_row", return_value={}),
+                    patch.object(main, "subscription_status", return_value={"maxDevices": 10}),
+                    patch.object(main, "client_subscription_access_policy", return_value=access_policy),
+                    patch.object(main, "subscription_traffic_usage_status", return_value={}),
+                    patch.object(main, "enforce_device_limit_for_current_device", return_value=1),
+                    patch.object(main, "disabled_ad_gate_policy", return_value={"required": False}),
+                    patch.object(
+                        main,
+                        "build_server_catalog",
+                        return_value={
+                            "servers": [server],
+                            "resilience": {"routeDecision": {"selected": {"protocol": protocol}}},
+                        },
+                    ),
+                    patch.object(
+                        main,
+                        "select_client_server_for_device",
+                        return_value=(server, {"selectedBy": "preview_test"}),
+                    ),
+                    patch.object(main, "get_managed_server_catalog_row_by_server_id", return_value={}),
+                    patch.object(main, "server_row_client_config_profile", return_value=profile),
+                    patch.object(main, loader_name, return_value=static_config),
+                    patch.object(main, "touch_device"),
+                    patch.object(main, "client_route_probe_safe_resilience", side_effect=lambda value, **_: value),
+                    patch.object(main, "ensure_device_keys_and_ip") as ensure_wg_keys,
+                    patch.object(main, "provision_wireguard_peer_for_selected_server") as provision_wg,
+                ):
+                    response = main.client_config(
+                        main.ClientConfigIn(
+                            deviceUid=device_uid,
+                            serverId=server_id,
+                            releaseChannel="preview",
+                            supportedProtocols=[protocol],
+                        ),
+                        authorization="Bearer test-only",
+                    )
+
+                self.assertEqual(response["protocol"], protocol)
+                self.assertEqual(response["configFormat"], config_format)
+                self.assertEqual(response["clientConfigProfile"], profile)
+                self.assertIsNone(response["assignedIp"])
+                ensure_wg_keys.assert_not_called()
+                provision_wg.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,6 +13,7 @@ import 'package:yandex_mobileads/mobile_ads.dart';
 
 import 'runtime_config.dart';
 import 'services/route_failure_cooldown.dart';
+import 'services/transport_preview_policy.dart';
 
 /*
   Green VPN — режим "как пользовательский продукт":
@@ -64,18 +65,24 @@ const bool kNaiveHttpsPreviewEnabled = bool.fromEnvironment(
   'GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED',
   defaultValue: false,
 );
+const bool kDnsttPreviewEnabled = bool.fromEnvironment(
+  'GREENVPN_DNSTT_PREVIEW_ENABLED',
+  defaultValue: false,
+);
 const List<String> kSupportedVpnProtocols = <String>[
   'wireguard_udp',
   if (kAwg2PreviewEnabled) 'amneziawg',
   if (kHysteria2PreviewEnabled) 'hysteria2',
   if (kVlessRealityPreviewEnabled) 'vless_reality',
   if (kNaiveHttpsPreviewEnabled) 'naive_https',
+  if (kDnsttPreviewEnabled) 'dnstt',
 ];
 const bool kTransportPreviewFallbackEnabled =
     kAwg2PreviewEnabled ||
     kHysteria2PreviewEnabled ||
     kVlessRealityPreviewEnabled ||
-    kNaiveHttpsPreviewEnabled;
+    kNaiveHttpsPreviewEnabled ||
+    kDnsttPreviewEnabled;
 const bool kAdsDisabledBuild =
     kTrialOnlyNoAdsBuild || kPaidBetaBuild || kPublicProductBuild;
 const bool kYandexRewardedAdsEnabled = bool.fromEnvironment(
@@ -8090,9 +8097,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }) async {
     final protocol = server?.protocolCode ?? 'wireguard_udp';
     await _cfg.writeManagedConfig(
-      protocol == 'hysteria2' ||
-              protocol == 'vless_reality' ||
-              protocol == 'naive_https'
+      greenVpnTransportRequiresFullTunnel(protocol)
           ? rawConfig
           : _buildManagedConfigFromBase(rawConfig),
     );
@@ -9229,9 +9234,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           : config.protocol,
       protocolLabel: config.protocol == 'amneziawg'
           ? 'Защищённый режим'
-          : config.protocol == 'hysteria2' ||
-                config.protocol == 'vless_reality' ||
-                config.protocol == 'naive_https'
+          : greenVpnTransportRequiresFullTunnel(config.protocol)
           ? 'Резервный режим'
           : fallback.protocolLabel,
     );
@@ -9304,9 +9307,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                   !server.isAuto &&
                   server.isCurrentClientReady &&
                   !(socialOnlyEnabled &&
-                      (server.protocolCode == 'hysteria2' ||
-                          server.protocolCode == 'vless_reality' ||
-                          server.protocolCode == 'naive_https')),
+                      greenVpnTransportRequiresFullTunnel(
+                        server.protocolCode,
+                      )),
             )
             .toList()
           ..sort((a, b) {
@@ -9316,6 +9319,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                 _routeCooldownKey(b),
               );
               if (byCooldown != 0) return byCooldown;
+              final byTransport = greenVpnTransportPreviewRank(
+                a.protocolCode,
+              ).compareTo(
+                greenVpnTransportPreviewRank(b.protocolCode),
+              );
+              if (byTransport != 0) return byTransport;
             }
             final byScore = _serverConnectScore(
               b,
@@ -9361,9 +9370,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       return 'этот протокол уже есть в плане, но текущий клиент его пока не запускает';
     }
     if (socialOnlyEnabled &&
-        (server.protocolCode == 'hysteria2' ||
-            server.protocolCode == 'vless_reality' ||
-            server.protocolCode == 'naive_https')) {
+        greenVpnTransportRequiresFullTunnel(server.protocolCode)) {
       return 'этот резервный режим доступен только для полного подключения';
     }
     return 'сервер пока нельзя использовать текущим клиентом';

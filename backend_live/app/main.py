@@ -193,6 +193,36 @@ VLESS_REALITY_CANARY_SERVER_IDS = {
 VLESS_REALITY_CANARY_SNI = os.getenv(
     "GREENVPN_VLESS_REALITY_CANARY_SNI", ""
 ).strip().lower()
+NAIVE_HTTPS_CLIENT_CONFIG_ROOT = Path(
+    os.getenv(
+        "GREENVPN_NAIVE_HTTPS_CLIENT_CONFIG_ROOT",
+        "/etc/bluevpn/transport_clients",
+    )
+).resolve()
+NAIVE_HTTPS_CANARY_SERVER_IDS = {
+    item.strip().lower()
+    for item in split_env_list(os.getenv("GREENVPN_NAIVE_HTTPS_CANARY_SERVER_IDS", ""))
+    if item.strip()
+}
+NAIVE_HTTPS_CANARY_HOST = os.getenv(
+    "GREENVPN_NAIVE_HTTPS_CANARY_HOST", ""
+).strip().lower()
+NAIVE_HTTPS_CANARY_IP = os.getenv(
+    "GREENVPN_NAIVE_HTTPS_CANARY_IP", ""
+).strip()
+DNSTT_CLIENT_CONFIG_ROOT = Path(
+    os.getenv(
+        "GREENVPN_DNSTT_CLIENT_CONFIG_ROOT",
+        "/etc/bluevpn/transport_clients",
+    )
+).resolve()
+DNSTT_CANARY_SERVER_IDS = {
+    item.strip().lower()
+    for item in split_env_list(os.getenv("GREENVPN_DNSTT_CANARY_SERVER_IDS", ""))
+    if item.strip()
+}
+DNSTT_CANARY_ZONE = os.getenv("GREENVPN_DNSTT_CANARY_ZONE", "").strip().lower()
+DNSTT_CANARY_IP = os.getenv("GREENVPN_DNSTT_CANARY_IP", "").strip()
 DB_PATH = DATA_DIR / "bluevpn.db"
 DB_BUSY_TIMEOUT_SECONDS = env_float("BLUEVPN_DB_BUSY_TIMEOUT_SECONDS", 30.0, min_value=1.0)
 DB_BUSY_TIMEOUT_MS = int(DB_BUSY_TIMEOUT_SECONDS * 1000)
@@ -632,9 +662,13 @@ SERVER_CATALOG_PROTOCOLS = [
     "hysteria2",
     "trojan_tls",
     "vless_reality",
+    "naive_https",
+    "dnstt",
     "masque_udp",
 ]
-SERVER_CATALOG_TRANSPORTS = ["udp", "tcp", "tls", "quic", "http3", "reality", "masque"]
+SERVER_CATALOG_TRANSPORTS = [
+    "udp", "tcp", "tls", "quic", "http3", "reality", "https", "doh", "masque"
+]
 SERVER_CLIENT_CONFIG_PROFILES = [
     "none",
     "builtin_wg0",
@@ -642,6 +676,8 @@ SERVER_CLIENT_CONFIG_PROFILES = [
     "remote_ssh_awg2",
     "static_hysteria2_canary",
     "static_vless_reality_canary",
+    "static_naive_https_canary",
+    "static_dnstt_canary",
 ]
 SERVER_CLIENT_CONFIG_PROFILE_TITLES = {
     "none": "Не выдавать клиентам",
@@ -650,6 +686,8 @@ SERVER_CLIENT_CONFIG_PROFILE_TITLES = {
     "remote_ssh_awg2": "Удалённый AmneziaWG 2",
     "static_hysteria2_canary": "Hysteria2 canary",
     "static_vless_reality_canary": "VLESS REALITY canary",
+    "static_naive_https_canary": "Naive HTTPS canary",
+    "static_dnstt_canary": "dnstt canary",
 }
 SERVER_PROTOCOL_TITLES = {
     "wireguard_udp": "WireGuard UDP",
@@ -660,6 +698,8 @@ SERVER_PROTOCOL_TITLES = {
     "hysteria2": "Hysteria2 QUIC",
     "trojan_tls": "Trojan TLS",
     "vless_reality": "VLESS REALITY",
+    "naive_https": "HTTPS fallback",
+    "dnstt": "DNS fallback",
     "masque_udp": "MASQUE CONNECT-UDP",
 }
 SERVER_PROTOCOL_ROLLOUT_ORDER = [
@@ -670,6 +710,8 @@ SERVER_PROTOCOL_ROLLOUT_ORDER = [
     "hysteria2",
     "shadowsocks",
     "vless_reality",
+    "naive_https",
+    "dnstt",
     "trojan_tls",
     "masque_udp",
 ]
@@ -695,6 +737,20 @@ if os.getenv("GREENVPN_VLESS_REALITY_CLIENT_CONFIG_ENABLED", "0").strip().lower(
     "on",
 }:
     SERVER_CLIENT_READY_PROTOCOLS.add("vless_reality")
+if os.getenv("GREENVPN_NAIVE_HTTPS_CLIENT_CONFIG_ENABLED", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}:
+    SERVER_CLIENT_READY_PROTOCOLS.add("naive_https")
+if os.getenv("GREENVPN_DNSTT_CLIENT_CONFIG_ENABLED", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}:
+    SERVER_CLIENT_READY_PROTOCOLS.add("dnstt")
 SERVER_DEFAULT_CLIENT_PROTOCOLS = frozenset({"wireguard_udp"})
 SERVER_TRANSPORT_ROLLOUT_STAGES = {
     "wireguard_udp": "public",
@@ -705,6 +761,8 @@ SERVER_TRANSPORT_ROLLOUT_STAGES = {
     "hysteria2": "canary",
     "trojan_tls": "canary_prepared",
     "vless_reality": "canary",
+    "naive_https": "canary",
+    "dnstt": "canary",
     "masque_udp": "research",
 }
 RESILIENCE_ROUTE_STATUSES = ["green", "yellow", "red", "unknown"]
@@ -788,6 +846,24 @@ RESILIENCE_ROUTE_LAYERS = [
         "stealthTier": 5,
         "role": "reality_fallback",
         "description": "Продвинутый режим маскировки под реальный TLS-трафик.",
+    },
+    {
+        "code": "naive_https",
+        "title": "HTTPS fallback",
+        "weight": 75,
+        "resourceCost": 6,
+        "stealthTier": 5,
+        "role": "browser_https_fallback",
+        "description": "TCP/HTTPS-резерв, внешне похожий на обычный браузерный трафик.",
+    },
+    {
+        "code": "dnstt",
+        "title": "DNS fallback",
+        "weight": 79,
+        "resourceCost": 8,
+        "stealthTier": 6,
+        "role": "last_resort_dns_tunnel",
+        "description": "Медленный последний резерв через публичный DNS-over-HTTPS.",
     },
     {
         "code": "trojan_tls",
@@ -878,6 +954,26 @@ RESILIENCE_TRANSPORT_ROLLOUT_PROFILES = {
         "canaryScript": "scripts/server/install_transport_canary_service.sh --protocol vless_reality",
         "validationScript": "scripts/server/check_transport_canary_readiness.sh --protocol vless_reality",
         "ownerInput": ["подходящий dest/SNI и отдельный canary endpoint"],
+    },
+    "naive_https": {
+        "engine": "NaiveProxy HTTPS",
+        "windowsWork": "Preview TUN и watchdog уже подготовлены; stable выключен.",
+        "serverWork": "Изолированный HTTPS canary с root-only credentials.",
+        "probeWork": "HTTPS data-plane egress и public target checks.",
+        "risk": "high",
+        "canaryScript": "scripts/server/bootstrap_naive_https_canary.sh",
+        "validationScript": "scripts/server/check_naive_https_canary_readiness.sh",
+        "ownerInput": [],
+    },
+    "dnstt": {
+        "engine": "dnstt over DoH",
+        "windowsWork": "Preview client подготовлен; full TUN остаётся test-only.",
+        "serverWork": "Авторитетная delegated zone и loopback authenticated SOCKS.",
+        "probeWork": "DoH delegation, tunneled egress, watchdog and reconnect checks.",
+        "risk": "experimental",
+        "canaryScript": "scripts/server/bootstrap_dnstt_canary.sh",
+        "validationScript": "scripts/server/check_dnstt_canary_readiness.sh --require-delegation",
+        "ownerInput": ["делегация t.greenvpn.pro"],
     },
     "trojan_tls": {
         "engine": "Trojan TLS",
@@ -9326,6 +9422,255 @@ def load_vless_reality_client_config(server_id: str, *, row_host: str, row_port:
     return config
 
 
+def guarded_json_client_profile_file(
+    config_root: Path,
+    filename: str,
+    *,
+    blocker_prefix: str,
+    min_size: int,
+) -> tuple[Path, str, dict, list[dict]]:
+    blockers: list[dict] = []
+
+    def add_blocker(code: str, message: str) -> None:
+        blockers.append({"code": code, "message": message})
+
+    config_path = config_root / filename
+    try:
+        resolved_root = config_root.resolve()
+        resolved_path = config_path.resolve(strict=False)
+        resolved_path.relative_to(resolved_root)
+    except (OSError, ValueError):
+        add_blocker(f"{blocker_prefix}_config_path_unsafe", "Config path escaped its guarded root.")
+        return config_path, "", {}, blockers
+
+    try:
+        if config_path.is_symlink():
+            add_blocker(f"{blocker_prefix}_config_symlink_refused", "Config cannot be a symlink.")
+            return config_path, "", {}, blockers
+        metadata = config_path.stat()
+        if not config_path.is_file():
+            raise FileNotFoundError(str(config_path))
+        if getattr(metadata, "st_uid", 0) != 0:
+            add_blocker(f"{blocker_prefix}_config_not_root_owned", "Config must be owned by root.")
+        if os.name != "nt" and metadata.st_mode & 0o077:
+            add_blocker(f"{blocker_prefix}_config_not_root_only", "Config must have mode 0600.")
+        if metadata.st_size < min_size or metadata.st_size > 65536:
+            add_blocker(f"{blocker_prefix}_config_size_invalid", "Config size is invalid.")
+        config_text = config_path.read_text(encoding="utf-8")
+        root = json.loads(config_text)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        add_blocker(f"{blocker_prefix}_config_unreadable", "Root-only JSON config is unavailable.")
+        return config_path, "", {}, blockers
+
+    if not isinstance(root, dict):
+        add_blocker(f"{blocker_prefix}_config_root_invalid", "Config root must be a JSON object.")
+        return config_path, config_text, {}, blockers
+    return config_path, config_text, root, blockers
+
+
+def naive_https_client_config_check(
+    server_id: str,
+    *,
+    row_host: Optional[str] = None,
+    row_port: Optional[int] = None,
+) -> tuple[dict, list[dict]]:
+    clean_server_id = clean_limited_text(server_id, 80).strip().lower()
+    blockers: list[dict] = []
+
+    def add_blocker(code: str, message: str) -> None:
+        blockers.append({"code": code, "message": message})
+
+    if clean_server_id not in NAIVE_HTTPS_CANARY_SERVER_IDS:
+        add_blocker(
+            "naive_https_server_not_allowlisted",
+            "Naive HTTPS config is limited to an explicit canary serverId.",
+        )
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{2,79}", clean_server_id):
+        add_blocker("naive_https_server_id_invalid", "Invalid Naive HTTPS serverId.")
+        return {}, blockers
+
+    config_path, config_text, root, file_blockers = guarded_json_client_profile_file(
+        NAIVE_HTTPS_CLIENT_CONFIG_ROOT,
+        f"{clean_server_id}.naive-https.json",
+        blocker_prefix="naive_https",
+        min_size=64,
+    )
+    blockers.extend(file_blockers)
+    if not root:
+        return {"path": str(config_path)}, blockers
+
+    if set(root) != {"listen", "proxy"}:
+        add_blocker("naive_https_config_fields_invalid", "Naive HTTPS config fields are invalid.")
+    listen = str(root.get("listen") or "").strip()
+    if listen != "socks://127.0.0.1:1982":
+        add_blocker("naive_https_listener_invalid", "Naive HTTPS listener must be loopback-only.")
+
+    proxy_text = str(root.get("proxy") or "").strip()
+    proxy_host = ""
+    proxy_port = 0
+    try:
+        parsed = urllib.parse.urlsplit(proxy_text)
+        proxy_host = str(parsed.hostname or "").strip().lower()
+        proxy_port = int(parsed.port or 0)
+        if parsed.scheme.lower() != "https":
+            add_blocker("naive_https_tls_required", "Naive HTTPS proxy must use HTTPS.")
+        if parsed.path or parsed.query or parsed.fragment:
+            add_blocker("naive_https_proxy_components_invalid", "Naive HTTPS URI has unsupported components.")
+        if not parsed.username or not parsed.password:
+            add_blocker("naive_https_credentials_missing", "Naive HTTPS credentials are incomplete.")
+    except (TypeError, ValueError):
+        add_blocker("naive_https_proxy_invalid", "Naive HTTPS proxy URI is invalid.")
+
+    if not NAIVE_HTTPS_CANARY_HOST or proxy_host != NAIVE_HTTPS_CANARY_HOST:
+        add_blocker("naive_https_host_not_allowlisted", "Naive HTTPS host does not match the canary allowlist.")
+    if proxy_port != 8443:
+        add_blocker("naive_https_port_invalid", "Naive HTTPS canary must use TCP/8443.")
+    expected_row_host = str(row_host or "").strip().strip("[]").lower()
+    allowed_row_hosts = {NAIVE_HTTPS_CANARY_HOST, NAIVE_HTTPS_CANARY_IP.strip().lower()} - {""}
+    if expected_row_host and expected_row_host not in allowed_row_hosts:
+        add_blocker("naive_https_endpoint_host_mismatch", "Catalog host does not match the guarded canary.")
+    if int(row_port or 0) and int(row_port or 0) != proxy_port:
+        add_blocker("naive_https_endpoint_port_mismatch", "Catalog port does not match the guarded canary.")
+
+    return {
+        "serverId": clean_server_id,
+        "path": str(config_path),
+        "host": proxy_host,
+        "port": proxy_port,
+        "configText": config_text.strip() + "\n",
+    }, blockers
+
+
+def load_naive_https_client_config(server_id: str, *, row_host: str, row_port: int) -> dict:
+    config, blockers = naive_https_client_config_check(
+        server_id,
+        row_host=row_host,
+        row_port=row_port,
+    )
+    if blockers:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "naive_https_client_config_not_ready",
+                "message": "Naive HTTPS canary is not ready for guarded issue.",
+                "blockers": [item["code"] for item in blockers],
+            },
+        )
+    return config
+
+
+def dnstt_client_config_check(
+    server_id: str,
+    *,
+    row_host: Optional[str] = None,
+    row_port: Optional[int] = None,
+) -> tuple[dict, list[dict]]:
+    clean_server_id = clean_limited_text(server_id, 80).strip().lower()
+    blockers: list[dict] = []
+
+    def add_blocker(code: str, message: str) -> None:
+        blockers.append({"code": code, "message": message})
+
+    if clean_server_id not in DNSTT_CANARY_SERVER_IDS:
+        add_blocker("dnstt_server_not_allowlisted", "dnstt config is limited to an explicit canary serverId.")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{2,79}", clean_server_id):
+        add_blocker("dnstt_server_id_invalid", "Invalid dnstt serverId.")
+        return {}, blockers
+
+    config_path, config_text, root, file_blockers = guarded_json_client_profile_file(
+        DNSTT_CLIENT_CONFIG_ROOT,
+        f"{clean_server_id}.dnstt.json",
+        blocker_prefix="dnstt",
+        min_size=180,
+    )
+    blockers.extend(file_blockers)
+    if not root:
+        return {"path": str(config_path)}, blockers
+
+    if set(root) != {"zone", "publicKey", "socks", "resolvers", "expectedEgress"}:
+        add_blocker("dnstt_config_fields_invalid", "dnstt config fields are invalid.")
+    zone = str(root.get("zone") or "").strip().lower()
+    public_key = str(root.get("publicKey") or "").strip().lower()
+    expected_egress = str(root.get("expectedEgress") or "").strip()
+    if not DNSTT_CANARY_ZONE or zone != DNSTT_CANARY_ZONE:
+        add_blocker("dnstt_zone_not_allowlisted", "dnstt zone does not match the canary allowlist.")
+    if not re.fullmatch(r"[0-9a-f]{64}", public_key):
+        add_blocker("dnstt_public_key_invalid", "dnstt client public key is invalid.")
+    if not DNSTT_CANARY_IP or expected_egress != DNSTT_CANARY_IP:
+        add_blocker("dnstt_egress_not_allowlisted", "dnstt egress does not match the canary allowlist.")
+
+    socks = root.get("socks")
+    if not isinstance(socks, dict) or set(socks) != {"listen", "username", "password"}:
+        add_blocker("dnstt_socks_fields_invalid", "dnstt SOCKS fields are invalid.")
+    else:
+        if str(socks.get("listen") or "").strip() != "127.0.0.1:1983":
+            add_blocker("dnstt_listener_invalid", "dnstt listener must be loopback-only.")
+        username = str(socks.get("username") or "").strip()
+        password = str(socks.get("password") or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{3,128}", username):
+            add_blocker("dnstt_username_invalid", "dnstt SOCKS username is invalid.")
+        if not re.fullmatch(r"[A-Za-z0-9+/=]{16,256}", password):
+            add_blocker("dnstt_password_invalid", "dnstt SOCKS password is invalid.")
+
+    allowed_resolvers = {
+        ("doh", "https://1.1.1.1/dns-query"),
+        ("doh", "https://8.8.8.8/dns-query"),
+        ("dot", "1.1.1.1:853"),
+    }
+    resolvers = root.get("resolvers")
+    normalized_resolvers: list[tuple[str, str]] = []
+    if not isinstance(resolvers, list) or not 1 <= len(resolvers) <= 3:
+        add_blocker("dnstt_resolvers_invalid", "dnstt resolver list is invalid.")
+    else:
+        for resolver in resolvers:
+            if not isinstance(resolver, dict) or set(resolver) != {"mode", "endpoint"}:
+                add_blocker("dnstt_resolver_fields_invalid", "dnstt resolver fields are invalid.")
+                continue
+            item = (
+                str(resolver.get("mode") or "").strip().lower(),
+                str(resolver.get("endpoint") or "").strip(),
+            )
+            normalized_resolvers.append(item)
+            if item not in allowed_resolvers:
+                add_blocker("dnstt_resolver_not_allowlisted", "dnstt resolver is not allowlisted.")
+        if len(set(normalized_resolvers)) != len(normalized_resolvers):
+            add_blocker("dnstt_resolver_duplicate", "dnstt resolvers must be unique.")
+        if not normalized_resolvers or normalized_resolvers[0] != ("doh", "https://1.1.1.1/dns-query"):
+            add_blocker("dnstt_primary_doh_invalid", "dnstt primary resolver must be guarded DoH.")
+
+    expected_row_host = str(row_host or "").strip().strip("[]")
+    if expected_row_host and expected_row_host != DNSTT_CANARY_IP:
+        add_blocker("dnstt_endpoint_host_mismatch", "Catalog host does not match dnstt canary.")
+    if int(row_port or 0) and int(row_port or 0) != 53:
+        add_blocker("dnstt_endpoint_port_mismatch", "dnstt catalog port must be UDP/53.")
+
+    return {
+        "serverId": clean_server_id,
+        "path": str(config_path),
+        "host": DNSTT_CANARY_IP,
+        "port": 53,
+        "configText": config_text.strip() + "\n",
+    }, blockers
+
+
+def load_dnstt_client_config(server_id: str, *, row_host: str, row_port: int) -> dict:
+    config, blockers = dnstt_client_config_check(
+        server_id,
+        row_host=row_host,
+        row_port=row_port,
+    )
+    if blockers:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "dnstt_client_config_not_ready",
+                "message": "dnstt canary is not ready for guarded issue.",
+                "blockers": [item["code"] for item in blockers],
+            },
+        )
+    return config
+
+
 def server_row_client_config_profile(row: sqlite3.Row) -> str:
     try:
         raw_profile = row["client_config_profile"]
@@ -9454,6 +9799,42 @@ def server_client_config_readiness(row: sqlite3.Row) -> dict:
             row_port=int(row["port"] or 0),
         )
         blockers.extend(vless_reality_blockers)
+    elif profile == "static_naive_https_canary":
+        server_id = str(row["server_id"] or "").strip().lower()
+        if row["protocol"] != "naive_https":
+            add_blocker(
+                "client_config_protocol_mismatch",
+                "static_naive_https_canary supports only naive_https.",
+            )
+        if row["transport"] != "https":
+            add_blocker(
+                "client_config_transport_mismatch",
+                "Naive HTTPS canary requires transport https.",
+            )
+        naive_https_config, naive_https_blockers = naive_https_client_config_check(
+            server_id,
+            row_host=str(row["host"] or "").strip().lower(),
+            row_port=int(row["port"] or 0),
+        )
+        blockers.extend(naive_https_blockers)
+    elif profile == "static_dnstt_canary":
+        server_id = str(row["server_id"] or "").strip().lower()
+        if row["protocol"] != "dnstt":
+            add_blocker(
+                "client_config_protocol_mismatch",
+                "static_dnstt_canary supports only dnstt.",
+            )
+        if row["transport"] != "doh":
+            add_blocker(
+                "client_config_transport_mismatch",
+                "dnstt canary requires transport doh.",
+            )
+        dnstt_config, dnstt_blockers = dnstt_client_config_check(
+            server_id,
+            row_host=str(row["host"] or "").strip().lower(),
+            row_port=int(row["port"] or 0),
+        )
+        blockers.extend(dnstt_blockers)
     else:
         add_blocker(
             "client_config_profile_unknown",
@@ -9484,6 +9865,24 @@ def server_client_config_readiness(row: sqlite3.Row) -> dict:
             "host": vless_reality_config.get("host") or row["host"],
             "port": vless_reality_config.get("port") or int(row["port"] or 0),
             "configPath": vless_reality_config.get("path") or "",
+        }
+        managed_by = profile
+    elif (
+        profile == "static_naive_https_canary"
+        and "naive_https_config" in locals()
+        and naive_https_config
+    ):
+        expected_endpoint = {
+            "host": naive_https_config.get("host") or row["host"],
+            "port": naive_https_config.get("port") or int(row["port"] or 0),
+            "configPath": naive_https_config.get("path") or "",
+        }
+        managed_by = profile
+    elif profile == "static_dnstt_canary" and "dnstt_config" in locals() and dnstt_config:
+        expected_endpoint = {
+            "host": dnstt_config.get("host") or row["host"],
+            "port": dnstt_config.get("port") or int(row["port"] or 0),
+            "configPath": dnstt_config.get("path") or "",
         }
         managed_by = profile
     else:
@@ -27460,6 +27859,86 @@ def client_config(
         requested_server_id=payload.serverId,
     )
     selected_protocol = server_primary_protocol(selected_server)
+
+    if selected_protocol in {"naive_https", "dnstt"}:
+        selected_server_id = str(selected_server.get("id") or "").strip()
+        selected_row = get_managed_server_catalog_row_by_server_id(selected_server_id)
+        expected_profile = {
+            "naive_https": "static_naive_https_canary",
+            "dnstt": "static_dnstt_canary",
+        }[selected_protocol]
+        if (
+            selected_row is None
+            or server_row_client_config_profile(selected_row) != expected_profile
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Guarded {selected_protocol} config profile is not configured.",
+            )
+        selected_endpoint = selected_server.get("endpoint") or {}
+        if selected_protocol == "naive_https":
+            static_config = load_naive_https_client_config(
+                selected_server_id,
+                row_host=str(selected_endpoint.get("host") or ""),
+                row_port=int(selected_endpoint.get("port") or 0),
+            )
+            config_format = "naive-https-json"
+        else:
+            static_config = load_dnstt_client_config(
+                selected_server_id,
+                row_host=str(selected_endpoint.get("host") or ""),
+                row_port=int(selected_endpoint.get("port") or 0),
+            )
+            config_format = "dnstt-json"
+        touch_device(device["device_uid"], config_issued=True)
+        if (
+            not access_policy["adsDisabled"]
+            and FREE_AD_GATE_ENABLED
+            and free_ad_gate_required_for(
+                sub,
+                device["platform"],
+                device["app_version"],
+            )
+        ):
+            consumed_ad_grant = consume_free_access_grant(
+                int(user["id"]),
+                device["device_uid"],
+            )
+        config_resilience = client_route_probe_safe_resilience(
+            {
+                "selectedBy": endpoint_assignment.get("selectedBy") or "auto",
+                "strategy": "guarded_preview_cascade",
+                "selectedProtocol": selected_protocol,
+                "routeDecision": route_decision,
+                "clientReadyProtocols": sorted(SERVER_CLIENT_READY_PROTOCOLS),
+            },
+            platform=device["platform"],
+            app_version=device["app_version"],
+        )
+        return {
+            "ok": True,
+            "protocol": selected_protocol,
+            "configFormat": config_format,
+            "configText": static_config["configText"],
+            "deviceUid": device["device_uid"],
+            "assignedIp": None,
+            "endpoint": f"{static_config['host']}:{static_config['port']}",
+            "serverId": selected_server_id,
+            "clientConfigProfile": expected_profile,
+            "resilience": config_resilience,
+            "endpointAssignment": endpoint_assignment,
+            "rateLimitPolicy": sub.get("rateLimitPolicy"),
+            "fairUsePolicy": sub.get("fairUsePolicy"),
+            "trafficUsage": traffic_usage,
+            "supportConfigRefreshApplied": False,
+            "subscription": sub,
+            "accessPolicy": access_policy,
+            "adGate": {
+                **ad_gate,
+                "grantConsumed": consumed_ad_grant is not None,
+                "consumedGrant": consumed_ad_grant,
+            },
+        }
 
     if selected_protocol == "hysteria2":
         selected_server_id = str(selected_server.get("id") or "").strip()

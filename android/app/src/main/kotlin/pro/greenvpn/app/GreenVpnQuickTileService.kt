@@ -53,6 +53,7 @@ class GreenVpnQuickTileService : TileService() {
             if (BuildConfig.GREENVPN_HYSTERIA2_PREVIEW_ENABLED) add("hysteria2")
             if (BuildConfig.GREENVPN_VLESS_REALITY_PREVIEW_ENABLED) add("vless_reality")
             if (BuildConfig.GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED) add("naive_https")
+            if (BuildConfig.GREENVPN_DNSTT_PREVIEW_ENABLED) add("dnstt")
         }
     }
 
@@ -181,6 +182,7 @@ class GreenVpnQuickTileService : TileService() {
     }
 
     private fun isVpnConnected(): Boolean {
+        if (GreenVpnDnsttPreview.snapshot(applicationContext).connected) return true
         if (GreenVpnNaiveHttpsPreview.snapshot(applicationContext).connected) return true
         if (GreenVpnVlessRealityPreview.snapshot(applicationContext).connected) return true
         if (GreenVpnHysteria2Preview.snapshot(applicationContext).connected) return true
@@ -194,6 +196,28 @@ class GreenVpnQuickTileService : TileService() {
     }
 
     private fun connectVpn(configText: String, protocol: String): Boolean {
+        if (protocol == "dnstt") {
+            require(GreenVpnDnsttPreview.isAvailable(applicationContext)) {
+                "This mode is not included in the current build"
+            }
+            GreenVpnNaiveHttpsPreview.disconnect(applicationContext)
+            GreenVpnVlessRealityPreview.disconnect(applicationContext)
+            GreenVpnHysteria2Preview.disconnect(applicationContext)
+            GreenVpnAwg2Preview.disconnect(applicationContext)
+            val currentBackend = backend()
+            if (currentBackend.getRunningTunnelNames().contains(tunnel.getName())) {
+                currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
+                Thread.sleep(250)
+            }
+            return GreenVpnDnsttPreview.connect(
+                applicationContext,
+                GreenVpnDnsttPreview.validateConfig(configText)
+            )
+        }
+        val dnstt = GreenVpnDnsttPreview.snapshot(applicationContext)
+        if (dnstt.connected || dnstt.state == "starting" || dnstt.state == "error") {
+            GreenVpnDnsttPreview.disconnect(applicationContext)
+        }
         if (protocol == "naive_https") {
             require(GreenVpnNaiveHttpsPreview.isAvailable(applicationContext)) {
                 "This mode is not included in the current build"
@@ -276,6 +300,10 @@ class GreenVpnQuickTileService : TileService() {
     }
 
     private fun disconnectVpn(): Boolean {
+        val dnstt = GreenVpnDnsttPreview.snapshot(applicationContext)
+        if (dnstt.connected || dnstt.state == "starting" || dnstt.state == "error") {
+            return GreenVpnDnsttPreview.disconnect(applicationContext)
+        }
         val naive = GreenVpnNaiveHttpsPreview.snapshot(applicationContext)
         if (naive.connected || naive.state == "starting" || naive.state == "error") {
             return GreenVpnNaiveHttpsPreview.disconnect(applicationContext)
