@@ -4,4 +4,10 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <application>
+        <service
+            android:name="pro.greenvpn.app.TransportContractDebugService"
+            android:permission="android.permission.DUMP"
+            android:exported="true" />
+    </application>
 </manifest>

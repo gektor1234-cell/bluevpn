@@ -75,6 +75,10 @@ $naiveWatchdogPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_naive_http
 $naiveClientSmokePath = Join-Path $ProjectRoot "scripts\windows\test_windows_naive_https_client_smoke.ps1"
 $androidSettingsPath = Join-Path $ProjectRoot "android\settings.gradle.kts"
 $androidAppBuildPath = Join-Path $ProjectRoot "android\app\build.gradle.kts"
+$androidAppManifestPath = Join-Path $ProjectRoot "android\app\src\main\AndroidManifest.xml"
+$androidAppDebugManifestPath = Join-Path $ProjectRoot "android\app\src\debug\AndroidManifest.xml"
+$androidTransportContractServicePath = Join-Path $ProjectRoot "android\app\src\debug\kotlin\pro\greenvpn\app\TransportContractDebugService.kt"
+$androidTransportContractProbePath = Join-Path $ProjectRoot "scripts\windows\test_android_transport_contract_probe.ps1"
 $androidMainActivityPath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\MainActivity.kt"
 $androidQuickTilePath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\GreenVpnQuickTileService.kt"
 $androidHysteriaBuildPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\build.gradle.kts"
@@ -150,6 +154,10 @@ $naiveWatchdogScript = Read-Text $naiveWatchdogPath
 $naiveClientSmokeScript = Read-Text $naiveClientSmokePath
 $androidSettings = Read-Text $androidSettingsPath
 $androidAppBuild = Read-Text $androidAppBuildPath
+$androidAppManifest = Read-Text $androidAppManifestPath
+$androidAppDebugManifest = Read-Text $androidAppDebugManifestPath
+$androidTransportContractService = Read-Text $androidTransportContractServicePath
+$androidTransportContractProbe = Read-Text $androidTransportContractProbePath
 $androidMainActivity = Read-Text $androidMainActivityPath
 $androidQuickTile = Read-Text $androidQuickTilePath
 $androidHysteriaBuild = Read-Text $androidHysteriaBuildPath
@@ -1511,6 +1519,8 @@ $androidDnsttSourceChecks = [ordered]@{
     'Android quick tile integrates dnstt' = @($androidQuickTile, 'BuildConfig.GREENVPN_DNSTT_PREVIEW_ENABLED', 'GreenVpnDnsttPreview.validateConfig', 'GreenVpnDnsttPreview.connect', 'GreenVpnDnsttPreview.disconnect')
     'Backend guarded Naive and dnstt contracts' = @($backend, 'static_naive_https_canary', 'static_dnstt_canary', 'guarded_json_client_profile_file(', 'load_naive_https_client_config(', 'load_dnstt_client_config(', 'GREENVPN_DNSTT_CLIENT_CONFIG_ENABLED', 'GREENVPN_NAIVE_HTTPS_CLIENT_CONFIG_ENABLED')
     'Paid-beta Naive/dnstt deploy is atomic and isolated' = @($naiveDnsttContractDeployScript, 'EXPECTED_CURRENT_RELEASE="paid-beta-0.3.0-paid-beta.6-2026071106-r17-vless-contract"', 'production_changed=false', 'stable_catalog_changed=false', 'bluevpn.db.before.sqlite', 'rollback_on_error', 'legacy_naive_dnstt_count=0', 'preview_naive_dnstt_count=2')
+    'Android ten-contract debug probe' = @($androidTransportContractService, 'TransportContractDebugService', 'nl2-awg2-canary', 'nl2-hysteria2-canary', 'nl2-vless-reality-xhttp-canary', 'nl2-naive-https-canary', 'nl2-dnstt-canary', '"primary"', '"fallback"', 'checks.length() == bases.size * CANDIDATES.size')
+    'Android contract probe report is sanitized' = @($androidTransportContractProbe, 'checks = @($report.checks)', 'checks.Count -ne 10', 'run-as $Package rm -f $resultFile')
 }
 foreach ($check in $androidDnsttSourceChecks.GetEnumerator()) {
     $source = [string]$check.Value[0]
@@ -1527,7 +1537,19 @@ elseif (-not $androidHysteriaDebugManifest.Contains('DnsttDebugReceiver') -or
 }
 else { Add-Pass 'Android dnstt debug receiver is debug-only and DUMP-protected' }
 
-foreach ($scriptPath in @($androidDnsttPreparePath, $androidDnsttPhysicalTestPath, $androidDnsttApkVerifyPath)) {
+if ($androidAppManifest.Contains('TransportContractDebugService')) {
+    Add-Error 'Android transport contract debug service leaked into the main manifest'
+}
+elseif (-not $androidAppDebugManifest.Contains('TransportContractDebugService') -or
+    -not $androidAppDebugManifest.Contains('android.permission.DUMP')) {
+    Add-Error 'Android transport contract debug service is not DUMP-protected in the debug manifest'
+}
+elseif ($androidTransportContractService -match '\.put\("(accessToken|deviceId|configText)"') {
+    Add-Error 'Android transport contract debug report may expose a credential or config payload'
+}
+else { Add-Pass 'Android transport contract probe is debug-only, DUMP-protected, and sanitized' }
+
+foreach ($scriptPath in @($androidDnsttPreparePath, $androidDnsttPhysicalTestPath, $androidDnsttApkVerifyPath, $androidTransportContractProbePath)) {
     if (Test-Path -LiteralPath $scriptPath) {
         $tokens = $null
         $parseErrors = $null

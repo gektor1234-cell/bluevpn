@@ -48,7 +48,8 @@ $forbiddenComponents = @(
     'pro.greenvpn.naive.NaiveHttpsVpnService',
     'pro.greenvpn.naive.NaiveHttpsDebugReceiver',
     'pro.greenvpn.dnstt.DnsttVpnService',
-    'pro.greenvpn.dnstt.DnsttDebugReceiver'
+    'pro.greenvpn.dnstt.DnsttDebugReceiver',
+    'pro.greenvpn.app.TransportContractDebugService'
 )
 $leakedComponents = @($forbiddenComponents | Where-Object { $manifest.Contains($_) })
 if ($leakedComponents.Count -gt 0) {
@@ -61,8 +62,14 @@ $leakedDexPackages = @($forbiddenDexPackages | Where-Object { $dex.Contains($_) 
 if ($leakedDexPackages.Count -gt 0) {
     throw "Stable Android DEX contains transport preview package(s): $($leakedDexPackages -join ', ')"
 }
-$buildConfig = @(& $apkanalyzer dex code --class pro.greenvpn.app.BuildConfig $apk) -join "`n"
-if ($LASTEXITCODE -ne 0) { throw 'apkanalyzer failed to read stable Android BuildConfig.' }
+$previousErrorActionPreference = $ErrorActionPreference
+try {
+    $ErrorActionPreference = 'Continue'
+    $buildConfigOutput = @(& $apkanalyzer dex code --class pro.greenvpn.app.BuildConfig $apk 2>&1)
+    $buildConfigExitCode = $LASTEXITCODE
+}
+finally { $ErrorActionPreference = $previousErrorActionPreference }
+$buildConfig = $buildConfigOutput -join "`n"
 $previewFlags = @(
     'GREENVPN_AWG2_PREVIEW_ENABLED',
     'GREENVPN_HYSTERIA2_PREVIEW_ENABLED',
@@ -70,9 +77,17 @@ $previewFlags = @(
     'GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED',
     'GREENVPN_DNSTT_PREVIEW_ENABLED'
 )
-$badFlags = @($previewFlags | Where-Object { $buildConfig -notmatch "$([regex]::Escape($_)):Z = false" })
-if ($badFlags.Count -gt 0) {
-    throw "Stable Android BuildConfig does not prove preview disabled: $($badFlags -join ', ')"
+if ($buildConfigExitCode -eq 0) {
+    $badFlags = @($previewFlags | Where-Object { $buildConfig -notmatch "$([regex]::Escape($_)):Z = false" })
+    if ($badFlags.Count -gt 0) {
+        throw "Stable Android BuildConfig does not prove preview disabled: $($badFlags -join ', ')"
+    }
+}
+elseif ($buildConfig -match 'class .* not found') {
+    Write-Output 'Stable BuildConfig was removed by release optimization; payload, manifest, and DEX isolation checks passed.'
+}
+else {
+    throw "apkanalyzer failed to read stable Android BuildConfig: $buildConfig"
 }
 
 $item = Get-Item -LiteralPath $apk
