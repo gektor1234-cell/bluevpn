@@ -28,7 +28,7 @@ Last updated: 2026-07-12.
 - Billing guard checkpoint/tag: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_billing_single_writer_20260711`, `greenvpn-paid-beta-billing-single-writer-20260711`.
 - Real-payment/sync checkpoint/tag: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_real_payment_sync_ready_20260711`, `greenvpn-paid-beta-real-payment-sync-ready-20260711`.
 - Public billing-guard checkpoint/tag: `C:\Users\gekto\GreenVPN_Checkpoints\public_candidate_billing_guard_20260711`, `greenvpn-public-candidate-billing-guard-20260711`.
-- Five-stage preview checkpoint: `C:\Users\gekto\GreenVPN_Checkpoints\five_stage_transport_preview_20260712`; latest proven code commit before this documentation update is `5ed6e8e`.
+- Five-stage preview checkpoint: `C:\Users\gekto\GreenVPN_Checkpoints\five_stage_transport_preview_20260712`; latest verified checkpoint commit is `201cd11`.
 - Private Windows session/config recovery copy: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_windows_0.3.0-paid-beta.10_private_state_20260711`; ACL is limited to the owner, SYSTEM and Administrators. Never publish or commit it.
 
 ## Isolated transport canary foundation
