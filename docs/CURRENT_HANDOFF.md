@@ -28,6 +28,7 @@ Last updated: 2026-07-12.
 - Billing guard checkpoint/tag: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_billing_single_writer_20260711`, `greenvpn-paid-beta-billing-single-writer-20260711`.
 - Real-payment/sync checkpoint/tag: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_real_payment_sync_ready_20260711`, `greenvpn-paid-beta-real-payment-sync-ready-20260711`.
 - Public billing-guard checkpoint/tag: `C:\Users\gekto\GreenVPN_Checkpoints\public_candidate_billing_guard_20260711`, `greenvpn-public-candidate-billing-guard-20260711`.
+- Five-stage preview checkpoint: `C:\Users\gekto\GreenVPN_Checkpoints\five_stage_transport_preview_20260712`; latest proven code commit before documentation is `96a73c4`.
 - Private Windows session/config recovery copy: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_windows_0.3.0-paid-beta.10_private_state_20260711`; ACL is limited to the owner, SYSTEM and Administrators. Never publish or commit it.
 
 ## Isolated transport canary foundation
@@ -44,8 +45,8 @@ Last updated: 2026-07-12.
 - NL2 pre-change snapshot: `/root/greenvpn-awg2-prechange/20260711T171122Z`; local root-only client checkpoint: `C:\Users\gekto\GreenVPN_Checkpoints\transport_canary_awg2_20260711`.
 - Detailed live result: `docs/AMNEZIAWG2_NL2_CANARY_2026_07_11_RU.md`.
 - Android transport preview is physically proven on Samsung SM-A226B: separate `10.202.0.2`, NL2 egress `5.129.216.42`, YouTube playback, Recents swipe survival, session persistence and accurate selected-server restoration.
-- Paid-beta control planes run isolated r16 backend `0.9.110-transport-preview.4`. Legacy clients receive no Hysteria endpoint; an explicitly capable preview receives exactly one hidden Hysteria2 canary and still defaults to `wireguard_udp`. Transport catalogs are synchronized with canonical SHA-256 `2c9fb6e8e5245ee994cfd8585b81b1d766899e536a0b7b5a8ba64cf1904584d6`. Production remains `0.9.105`.
-- Android preview artifact: `C:\BlueVPN_Builds\GreenVPN_Android_0.2.44_awg2_transport_preview4_paid_beta_debug.apk`, SHA-256 `EAC700378406484E273DFBD4892220F8D403331167BA7DEB070E5414B30B78B1`.
+- Paid-beta control planes run isolated r19 backend `0.9.113-transport-preview.7`. A capable preview receives five hidden canaries in strict order: AWG2, Hysteria2, VLESS REALITY/XHTTP, Naive HTTPS and dnstt. Legacy/stable clients cannot negotiate them. Production remains `0.9.105`.
+- Android five-stage preview artifact: `C:\BlueVPN_Builds\android_transport_preview_20260712_cascade_r19\GreenVPN_Android_five_stage_preview_0.2.45_2026071203.apk`, size `140,063,000`, SHA-256 `DDAC4184FB0A7DABA8B7C70BE66084B8C8ED45D2D554A681538B05A69CDCF447`.
 - Detailed Android result and rollback: `docs/ANDROID_AWG2_PREVIEW_2026_07_11_RU.md`.
 - Windows transport preview remains isolated from stable. The protected `%ProgramFiles%` migration removed the unsafe legacy path and broad ProgramData ACLs. AWG2 full-tunnel proof passed after the Windows peer received unique `10.202.0.3/32`; Hysteria2 full-tunnel and watchdog cleanup also passed. Both tests proved NL2 egress, production/paid-beta APIs, YouTube, endpoint route isolation and exact restoration of `device20_full` with egress `5.129.237.163`. Artifact SHA-256 is `2B8A4D0EB2DD78A57CB979012A5881ABB0F2A4D6A18E09D8E858053DF1B9D6A2`; manifest has 32 files and 0 mismatches.
 - Detailed Windows preview state and rollback: `docs/WINDOWS_AWG2_PREVIEW_2026_07_12_RU.md`.
@@ -61,7 +62,7 @@ Last updated: 2026-07-12.
 - Preview-only route selection now applies a bounded in-memory failure cooldown of `1/3/10/30` minutes. Automatic route observations are accepted only for automation-eligible, verified tunnel/proxy data-plane probes; ordinary control-plane health cannot unlock or promote a transport. Stable flags remain off.
 - Android Hysteria2 preview artifact: `C:\BlueVPN_Builds\GreenVPN_Android_0.2.44_awg2_hysteria2_transport_preview5_build2026070515_debug.apk`, size `117,990,976`, SHA-256 `6D84E4F89296DE095133025BE3E4333F232DDC53A022FABD625F5A7E8F98D84E`. Exact official Hysteria hashes, three HEV/bridge ABIs, license assets, zip alignment and signature pass the APK verifier. A separate stable build has the preview flag `false` and contains no Hysteria engine/service/native payload.
 - Detailed Android Hysteria2 state and rollback: `docs/ANDROID_HYSTERIA2_PREVIEW_2026_07_12_RU.md`.
-- Verification: 64 backend tests, 8 Flutter tests and 18 Android transport config tests pass. `flutter analyze` remains at the pre-existing baseline of 184 lint/info items with no increase; the release gate is rerun after each transport milestone.
+- Verification: 28 transport-backend tests, 33 paid-beta backend tests and 11 Flutter tests pass. The Android package compiles, its dnstt/APK/signature verifier passes, and the physical device contract probe returned `10/10` valid config responses across both control planes. `flutter analyze` remains at the pre-existing baseline of 184 lint/info items with no increase; release gate is `0 warnings`, `0 errors`.
 - Detailed operator runbook: `docs/TRANSPORT_CANARY_ROLLOUT_2026_07_11_RU.md`.
 
 ## Frozen production stable
@@ -77,8 +78,8 @@ Last updated: 2026-07-12.
 
 - Primary API/site: `https://api.greenvpn.pro/paid-beta-api`, `https://greenvpn.pro/paid-beta/`.
 - Fallback API/site: `https://176-113-81-35.sslip.io/paid-beta-api`, `https://176-113-81-35.sslip.io/paid-beta/`.
-- Current server release on both nodes: `paid-beta-0.3.0-paid-beta.6-2026071106-r16-hysteria-contract`.
-- Backend: `0.9.110-transport-preview.4`, service `greenvpn-paid-beta.service`, bind `127.0.0.1:8010` only.
+- Current server release on both nodes: `paid-beta-0.3.0-paid-beta.6-2026071201-r19-preview-probe-contract`.
+- Backend: `0.9.113-transport-preview.7`, service `greenvpn-paid-beta.service`, bind `127.0.0.1:8010` only.
 - DB: `/opt/bluevpn-paid-beta/data/bluevpn.db`; sync timer every 10 seconds.
 - Probe: `greenvpn-paid-beta-service-probe.timer`, every 300 seconds on both nodes.
 - Marker/channel/cohort: `green-vpn-paid-beta-v1` / `paid-beta` / `paid_beta_v1`.
@@ -125,15 +126,19 @@ Last updated: 2026-07-12.
 - With Timeweb beta stopped, public RUVDS returned HTTP 200 for subscription and bootstrap, reported the paid plan, allowed VPN connection and required no ad. Timeweb was restored immediately after the test.
 - YooKassa rejects `save_payment_method=true` because recurring payments are not enabled for the live shop. Backend `.9` returns a safe actionable error, cancels an empty rejected order, and the client no longer masks it with RUVDS fallback.
 - Beta `r12` is active on both control-plane nodes. Both SQLite databases pass `quick_check`, have zero pending orders, and sync timers are active.
-- Auto-renew unlink evidence is live at `https://greenvpn.pro/paid-beta/yookassa-review-20260711/`; the link was sent to YooKassa and is waiting for a manager.
+- Auto-renew unlink evidence is live at `https://greenvpn.pro/paid-beta/yookassa-review-20260711/`. A YooKassa manager started recurring-payment review on 2026-07-11; expected response is within 1-2 working days, no duplicate ticket should be created.
 
 ## Transport preview continuation (2026-07-12)
 
+- Strict preview order is implemented as `AmneziaWG2 -> Hysteria2 -> VLESS REALITY/XHTTP -> Naive HTTPS -> dnstt`, with bounded failure cooldown `1/3/10/30` minutes. Stable flags remain off.
+- Both paid-beta control planes expose the same five preview-only rows and issue all five config formats. The Samsung contract probe proved `10/10` responses without exporting credentials or config bodies; report SHA-256 is `C8C6F9312EAD88AD32233CA681207083DCEFB4BE18D84F4436EB6DDCB9FF39E5`.
+- NL2 services for all five canaries are active. dnstt server and local SOCKS readiness pass, but public DNS delegation for `t.greenvpn.pro` is still absent.
 - Android Naive HTTPS preview passed physical watchdog, reconnect, background, relaunch, and YouTube checks; commit `207f11e` is the local checkpoint.
 - Windows Naive HTTPS preview is implemented and compiled as `0.3.0-preview3`.
 - Its package gate and non-disruptive SOCKS data-plane smoke pass; the latter preserved both route signature and WARP service state.
 - Full Windows TUN smoke remains deferred until changing WARP is explicitly allowed.
 - The frozen stable/public transport and production catalog remain unchanged.
+- Remaining transport gate: add `A tns.greenvpn.pro -> 5.129.216.42` and `NS t.greenvpn.pro -> tns.greenvpn.pro`, wait for propagation, unlock the phone, then run the dnstt physical egress/YouTube/watchdog/reconnect test.
 
 ## Owner gate
 

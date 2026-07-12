@@ -67,24 +67,26 @@ NS  t.greenvpn.pro    -> tns.greenvpn.pro
 - Watchdog закрывает VPN fail-closed при остановке дочернего процесса.
 - Runtime profile удаляется при disconnect и после теста.
 
-Проверенный APK:
+Текущий пятиступенчатый preview APK:
 
 ```text
-C:\BlueVPN_Builds\android_transport_preview_20260712_dnstt\GreenVPN_Android_dnstt_preview_0.2.45_2026071201.apk
-size=147688561
-sha256=E4A52B367C9D522B388F08D327967C5A410F60817F3CE3485991B7304954A1C5
+C:\BlueVPN_Builds\android_transport_preview_20260712_cascade_r19\GreenVPN_Android_five_stage_preview_0.2.45_2026071203.apk
+size=140063000
+sha256=DDAC4184FB0A7DABA8B7C70BE66084B8C8ED45D2D554A681538B05A69CDCF447
 ```
 
 `verify_android_dnstt_preview_apk.ps1` проверил package, versionCode, закреплённый бинарник, license asset, manifest, DEX, BuildConfig, zipalign и APK signature.
 
+Debug-only контрактный пробник на физическом Samsung получил корректные конфиги всех пяти транспортов через оба paid-beta control plane: `10/10`, HTTP `200`. Он не сохраняет токены, device ID или тела конфигов в отчёт.
+
 ## Stable isolation
 
-Отдельная debug-сборка без preview-флагов прошла `verify_android_stable_transport_isolation.ps1`:
+Замороженный production APK прошёл `verify_android_stable_transport_isolation.ps1`:
 
 ```text
 package=pro.greenvpn.app
-size=165890222
-sha256=5FB0C5ACFEFE122EC2EB00A58AA97E4CDEC8BA972D2B0AFF711BE3BFC67DE8D6
+size=65543311
+sha256=308320429991A3278E3BA903155482D6613425D46681F180338ECB8C0929248F
 ```
 
 Проверка запрещает payload, manifest-компоненты и DEX-пакеты Hysteria2, VLESS, Naive HTTPS и dnstt. Все пять preview-флагов, включая AWG2, должны быть `false`.
@@ -97,4 +99,4 @@ sha256=5FB0C5ACFEFE122EC2EB00A58AA97E4CDEC8BA972D2B0AFF711BE3BFC67DE8D6
 2. Дождаться публичной делегации и пройти server readiness с `--require-delegation`.
 3. Запустить `test_android_dnstt_preview_physical.ps1` на физическом телефоне.
 4. Доказать NL2 egress, production/paid-beta API, YouTube, watchdog cleanup, reconnect и удаление plaintext profile.
-5. Только после этого включать dnstt в пятиступенчатый preview selector. Stable и production при этом остаются без изменений.
+5. dnstt уже включён последним только в отдельном preview selector, но до выполнения пунктов 1-4 не считается физически доказанным. Stable и production остаются без изменений.
