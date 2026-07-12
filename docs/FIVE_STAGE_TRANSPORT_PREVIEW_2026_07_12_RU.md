@@ -71,6 +71,8 @@ report_sha256=C8C6F9312EAD88AD32233CA681207083DCEFB4BE18D84F4436EB6DDCB9FF39E5
 
 Токены, device ID и конфиги в отчёт не выводятся. Временный `dnstt-client-android-arm64` из `/data/local/tmp` удалён.
 
+Отдельный readiness smoke на NL2 прошёл реальный dnstt data plane напрямую к UDP/53, подтвердил egress `5.129.216.42`, YouTube и активность stable-транспортов. Итог: `server_data_plane_ready=true`, `doh_delegation_ready=false`, `secrets_printed=false`. Второй флаг станет положительным только после публичной DNS-делегации.
+
 ## Проверки
 
 - Flutter tests: `11/11`.

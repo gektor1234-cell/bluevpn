@@ -132,7 +132,7 @@ Last updated: 2026-07-12.
 
 - Strict preview order is implemented as `AmneziaWG2 -> Hysteria2 -> VLESS REALITY/XHTTP -> Naive HTTPS -> dnstt`, with bounded failure cooldown `1/3/10/30` minutes. Stable flags remain off.
 - Both paid-beta control planes expose the same five preview-only rows and issue all five config formats. The Samsung contract probe proved `10/10` responses without exporting credentials or config bodies; report SHA-256 is `C8C6F9312EAD88AD32233CA681207083DCEFB4BE18D84F4436EB6DDCB9FF39E5`.
-- NL2 services for all five canaries are active. dnstt server and local SOCKS readiness pass, but public DNS delegation for `t.greenvpn.pro` is still absent.
+- NL2 services for all five canaries are active. The dnstt direct server data-plane smoke passed with NL2 egress and YouTube, `server_data_plane_ready=true`, stable transports active and no secrets printed. Public DNS delegation for `t.greenvpn.pro` is still absent.
 - Android Naive HTTPS preview passed physical watchdog, reconnect, background, relaunch, and YouTube checks; commit `207f11e` is the local checkpoint.
 - Windows Naive HTTPS preview is implemented and compiled as `0.3.0-preview3`.
 - Its package gate and non-disruptive SOCKS data-plane smoke pass; the latter preserved both route signature and WARP service state.
