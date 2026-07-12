@@ -66,6 +66,8 @@ $networkProtectionPath = Join-Path $ProjectRoot "scripts\windows\check_windows_n
 $networkTransitionSmokePath = Join-Path $ProjectRoot "scripts\windows\run_paid_beta_network_transition_smoke.ps1"
 $vpnTaskPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_vpn_task.ps1"
 $transportPreviewVpnTaskPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_transport_preview_vpn_task.ps1"
+$transportPreviewInstallPath = Join-Path $ProjectRoot "scripts\windows\install_windows_transport_preview.ps1"
+$transportPreviewUninstallPath = Join-Path $ProjectRoot "scripts\windows\uninstall_windows_transport_preview.ps1"
 $wireguardTcpCanaryPath = Join-Path $ProjectRoot "scripts\server\install_wireguard_tcp_canary.sh"
 $transportCanaryPath = Join-Path $ProjectRoot "scripts\server\install_transport_canary_service.sh"
 $transportCanaryCheckPath = Join-Path $ProjectRoot "scripts\server\check_transport_canary_readiness.sh"
@@ -85,6 +87,8 @@ $networkProtectionScript = Read-Text $networkProtectionPath
 $networkTransitionSmokeScript = Read-Text $networkTransitionSmokePath
 $vpnTaskScript = Read-Text $vpnTaskPath
 $transportPreviewVpnTaskScript = Read-Text $transportPreviewVpnTaskPath
+$transportPreviewInstallScript = Read-Text $transportPreviewInstallPath
+$transportPreviewUninstallScript = Read-Text $transportPreviewUninstallPath
 $wireguardTcpCanaryScript = Read-Text $wireguardTcpCanaryPath
 $transportCanaryScript = Read-Text $transportCanaryPath
 $transportCanaryCheckScript = Read-Text $transportCanaryCheckPath
@@ -966,6 +970,45 @@ if (Test-Path -LiteralPath $transportPreviewVpnTaskPath) {
     }
 }
 
+$transportPreviewInstallFragments = @(
+    "Join-Path `$env:ProgramFiles 'Green VPN Transport Preview'",
+    "Join-Path `$env:LOCALAPPDATA 'Programs\Green VPN Transport Preview'",
+    "'*S-1-5-18:(OI)(CI)F'",
+    "'*S-1-5-32-544:(OI)(CI)F'",
+    "'*S-1-5-32-545:(OI)(CI)RX'",
+    "Set-PreviewAcl -UserSid `$installingUserSid",
+    'Remove-Item -LiteralPath $LegacyInstallRoot -Recurse -Force'
+)
+foreach ($fragment in $transportPreviewInstallFragments) {
+    if ($transportPreviewInstallScript.Contains($fragment)) {
+        Add-Pass "Windows transport preview protected install marker present: $fragment"
+    }
+    else {
+        Add-Error "Windows transport preview protected install marker missing: $fragment"
+    }
+}
+
+if ($transportPreviewInstallScript.Contains("`$InstallRoot = Join-Path `$env:LOCALAPPDATA")) {
+    Add-Error 'Windows transport preview privileged service must not run from a user-writable LocalAppData path'
+}
+else {
+    Add-Pass 'Windows transport preview privileged service is not installed under LocalAppData'
+}
+
+foreach ($scriptPath in @($transportPreviewInstallPath, $transportPreviewUninstallPath)) {
+    if (Test-Path -LiteralPath $scriptPath) {
+        $tokens = $null
+        $parseErrors = $null
+        [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$parseErrors) | Out-Null
+        if ($parseErrors -and $parseErrors.Count -gt 0) {
+            Add-Error "Windows transport preview installer parser errors in $scriptPath`: $($parseErrors[0].ToString())"
+        }
+        else {
+            Add-Pass "Windows transport preview installer parser check passed: $scriptPath"
+        }
+    }
+}
+
 $networkTransitionSmokeFragments = @(
     'GreenVPNBetaNetworkSmokeFailsafe',
     'AmneziaWGTunnel$device20_full',
@@ -1066,7 +1109,7 @@ if (-not [string]::IsNullOrWhiteSpace($ReleaseZip)) {
                 }
             }
 
-            if ($entries | Where-Object {
+            $appExecutableEntries = @($entries | Where-Object {
                     $entry = $_.Replace('\', '/')
                     $entry -eq "app/greenvpn.exe" -or
                     $entry -eq "greenvpn.exe" -or
@@ -1075,12 +1118,51 @@ if (-not [string]::IsNullOrWhiteSpace($ReleaseZip)) {
                     $entry -eq "app/bluevpn.exe" -or
                     $entry -eq "bluevpn.exe" -or
                     $entry.EndsWith("/app/bluevpn.exe", [System.StringComparison]::OrdinalIgnoreCase) -or
-                    $entry.EndsWith("/bluevpn.exe", [System.StringComparison]::OrdinalIgnoreCase)
-                }) {
+                    $entry.EndsWith("/bluevpn.exe", [System.StringComparison]::OrdinalIgnoreCase) -or
+                    $entry -eq "app/greenvpn_transport_preview.exe" -or
+                    $entry.EndsWith("/app/greenvpn_transport_preview.exe", [System.StringComparison]::OrdinalIgnoreCase)
+                })
+            if ($appExecutableEntries.Count -gt 0) {
                 Add-Pass "Release zip contains Green VPN app executable"
             }
             else {
                 Add-Error "Release zip does not contain Green VPN app executable in expected location."
+            }
+
+            $previewExecutableEntries = @($appExecutableEntries | Where-Object {
+                $_.Replace('\', '/').EndsWith('app/greenvpn_transport_preview.exe', [System.StringComparison]::OrdinalIgnoreCase)
+            })
+            if ($previewExecutableEntries.Count -gt 0) {
+                $previewInstallerEntries = @($zip.Entries | Where-Object {
+                    [IO.Path]::GetFileName($_.FullName.Replace('/', '\')).Equals('install_windows_transport_preview.ps1', [System.StringComparison]::OrdinalIgnoreCase)
+                })
+                if ($previewInstallerEntries.Count -ne 1) {
+                    Add-Error "Transport preview zip must contain exactly one protected installer; found $($previewInstallerEntries.Count)"
+                }
+                else {
+                    $reader = [IO.StreamReader]::new($previewInstallerEntries[0].Open())
+                    try { $packagedPreviewInstaller = $reader.ReadToEnd() } finally { $reader.Dispose() }
+                    foreach ($fragment in @(
+                        "`$InstallRoot = Join-Path `$env:ProgramFiles 'Green VPN Transport Preview'",
+                        "'*S-1-5-18:(OI)(CI)F'",
+                        "'*S-1-5-32-544:(OI)(CI)F'",
+                        "'*S-1-5-32-545:(OI)(CI)RX'",
+                        'Remove-Item -LiteralPath $LegacyInstallRoot -Recurse -Force'
+                    )) {
+                        if ($packagedPreviewInstaller.Contains($fragment)) {
+                            Add-Pass "Packaged transport preview installer marker present: $fragment"
+                        }
+                        else {
+                            Add-Error "Packaged transport preview installer marker missing: $fragment"
+                        }
+                    }
+                    if ($packagedPreviewInstaller.Contains("`$InstallRoot = Join-Path `$env:LOCALAPPDATA")) {
+                        Add-Error 'Packaged transport preview service must not run from LocalAppData'
+                    }
+                    else {
+                        Add-Pass 'Packaged transport preview service is installed under a protected machine path'
+                    }
+                }
             }
         }
         finally {

@@ -17,8 +17,9 @@ $ConfigPath = Join-Path $ProgramDataRoot 'GreenVPNTransportPreview.conf'
 $ProtocolPath = $ConfigPath + '.protocol'
 $TokenPath = Join-Path $ProgramDataRoot 'service_token'
 $ServiceBase = 'http://127.0.0.1:48739'
-$AwgExe = Join-Path $env:LOCALAPPDATA 'Programs\Green VPN Transport Preview\tools\amneziawg2\awg.exe'
-$InstalledTaskScript = Join-Path $env:LOCALAPPDATA 'Programs\Green VPN Transport Preview\tools\greenvpn_transport_preview_vpn_task.ps1'
+$InstallRoot = Join-Path $env:ProgramFiles 'Green VPN Transport Preview'
+$AwgExe = Join-Path $InstallRoot 'tools\amneziawg2\awg.exe'
+$InstalledTaskScript = Join-Path $InstallRoot 'tools\greenvpn_transport_preview_vpn_task.ps1'
 
 function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()

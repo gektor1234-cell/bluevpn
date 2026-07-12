@@ -10,7 +10,8 @@ $ServiceName = 'GreenVPNTransportPreviewService'
 $TunnelName = 'GreenVPNTransportPreview'
 $WireGuardTunnelService = 'WireGuardTunnel$GreenVPNTransportPreview'
 $AmneziaWgTunnelService = 'AmneziaWGTunnel$GreenVPNTransportPreview'
-$InstallRoot = Join-Path $env:LOCALAPPDATA 'Programs\Green VPN Transport Preview'
+$InstallRoot = Join-Path $env:ProgramFiles 'Green VPN Transport Preview'
+$LegacyInstallRoot = Join-Path $env:LOCALAPPDATA 'Programs\Green VPN Transport Preview'
 $ProgramDataRoot = Join-Path $env:ProgramData 'BlueVPNTransportPreview'
 
 function Test-IsAdministrator {
@@ -20,11 +21,27 @@ function Test-IsAdministrator {
 }
 
 function Assert-SafeInstallPath {
-    $allowed = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Programs')).TrimEnd('\') + '\'
+    $allowed = [IO.Path]::GetFullPath($env:ProgramFiles).TrimEnd('\') + '\'
     $candidate = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\') + '\'
     if (-not $candidate.StartsWith($allowed, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Unsafe transport preview install path: $candidate"
     }
+}
+
+function Set-PreviewAcl {
+    param([string]$UserSid)
+
+    & icacls.exe $InstallRoot /inheritance:r /grant:r `
+        '*S-1-5-18:(OI)(CI)F' `
+        '*S-1-5-32-544:(OI)(CI)F' `
+        '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to protect transport preview binaries.' }
+
+    & icacls.exe $ProgramDataRoot /inheritance:r /grant:r `
+        '*S-1-5-18:(OI)(CI)F' `
+        '*S-1-5-32-544:(OI)(CI)F' `
+        ($UserSid + ':(OI)(CI)M') | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to protect transport preview state.' }
 }
 
 function Stop-PreviewTunnel {
@@ -69,6 +86,8 @@ function Remove-PreviewService {
 }
 
 function Ensure-ServiceToken {
+    param([string]$UserSid)
+
     New-Item -ItemType Directory -Force -Path $ProgramDataRoot | Out-Null
     $tokenPath = Join-Path $ProgramDataRoot 'service_token'
     $current = if (Test-Path -LiteralPath $tokenPath) { (Get-Content -LiteralPath $tokenPath -Raw -ErrorAction SilentlyContinue).Trim() } else { '' }
@@ -79,8 +98,11 @@ function Ensure-ServiceToken {
         [Convert]::ToBase64String($bytes) | Set-Content -LiteralPath $tokenPath -NoNewline -Encoding ASCII
     }
     & attrib.exe +H $tokenPath 2>$null | Out-Null
-    & icacls.exe $tokenPath /inheritance:r /grant '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-11:R' | Out-Null
-    & icacls.exe $ProgramDataRoot /inheritance:e /grant '*S-1-5-11:(OI)(CI)M' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+    & icacls.exe $tokenPath /inheritance:r /grant:r `
+        '*S-1-5-18:F' `
+        '*S-1-5-32-544:F' `
+        ($UserSid + ':R') | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to protect transport preview service token.' }
 }
 
 $PayloadDir = [IO.Path]::GetFullPath($PayloadDir)
@@ -110,6 +132,7 @@ if (-not (Test-IsAdministrator)) {
 }
 
 Assert-SafeInstallPath
+$installingUserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 Stop-PreviewTunnel
 Remove-PreviewService
 Get-Process -Name 'greenvpn_transport_preview' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -117,9 +140,19 @@ Get-Process -Name 'greenvpn_transport_preview' -ErrorAction SilentlyContinue | S
 if (Test-Path -LiteralPath $InstallRoot) {
     Remove-Item -LiteralPath $InstallRoot -Recurse -Force
 }
+if (Test-Path -LiteralPath $LegacyInstallRoot) {
+    $legacyAllowed = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Programs')).TrimEnd('\') + '\'
+    $legacyCandidate = [IO.Path]::GetFullPath($LegacyInstallRoot).TrimEnd('\') + '\'
+    if (-not $legacyCandidate.StartsWith($legacyAllowed, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Unsafe legacy transport preview path: $legacyCandidate"
+    }
+    Remove-Item -LiteralPath $LegacyInstallRoot -Recurse -Force
+}
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
 Copy-Item -Path (Join-Path $PayloadDir '*') -Destination $InstallRoot -Recurse -Force
-Ensure-ServiceToken
+New-Item -ItemType Directory -Force -Path $ProgramDataRoot | Out-Null
+Set-PreviewAcl -UserSid $installingUserSid
+Ensure-ServiceToken -UserSid $installingUserSid
 
 $serviceExe = Join-Path $InstallRoot 'greenvpn_transport_preview_service.exe'
 $taskScript = Join-Path $InstallRoot 'tools\greenvpn_transport_preview_vpn_task.ps1'

@@ -5,7 +5,8 @@
 ## Изоляция
 
 - Product: `Green VPN Transport Preview`.
-- App: `%LOCALAPPDATA%\Programs\Green VPN Transport Preview\greenvpn_transport_preview.exe`.
+- Target app path after the pending protected reinstall: `%ProgramFiles%\Green VPN Transport Preview\greenvpn_transport_preview.exe`.
+- Service binary and privileged task are protected from modification by standard users; the legacy `%LOCALAPPDATA%` preview path is removed during migration.
 - Privileged service: `GreenVPNTransportPreviewService`, automatic, loopback `127.0.0.1:48739`.
 - Tunnel: `GreenVPNTransportPreview`; AWG service: `AmneziaWGTunnel$GreenVPNTransportPreview`.
 - State: `%ProgramData%\BlueVPNTransportPreview`; отдельные user state и service token.
@@ -40,17 +41,17 @@
   - original egress `5.129.237.163` was restored.
 - The first full-tunnel diagnostic exposed endpoint recursion: the route to `5.129.216.42` selected the preview adapter. This was rejected rather than reported as success.
 - The host-route fix is implemented, parser-checked, release-gated and rebuilt. Final full-tunnel physical proof still requires one UAC-confirmed smoke.
+- Security review found that the first installed preview service ran from user-writable `%LOCALAPPDATA%` as `LocalSystem`. The rebuilt installer removes that legacy path and installs the service under protected `%ProgramFiles%` ACLs. The currently installed legacy service must not be used and remains unproven until the UAC-confirmed migration completes.
 - Flutter analyze/test and Windows build passed. Release gate: `0` warnings, `0` errors.
 
 Current rebuilt artifact:
 
 - `C:\BlueVPN_Builds\windows_transport_preview_20260711\GreenVPN_Windows_Transport_Preview_0.3.0-preview1.zip`
-- size `16,315,601` bytes;
-- SHA-256 `BD982686C442E6D753B022F6342619C7A32AFD2457E20D0A19C7651834C4EA6D`;
+- size `16,315,887` bytes;
+- SHA-256 `73B100C923FDE52A5EED86CE5F24FE7A54746C7F2041AC5F790C38FF9E8D6779`;
 - manifest: `22` files, `0` mismatches;
 - packaged task SHA-256 `16A1E5AB5A0525F678FB9053CC2AC95163A76736051A0960327B315C2B86945E`.
 
 ## Rollback
 
 Run `uninstall_windows_transport_preview.ps1` as Administrator. It removes only the preview app, service, two preview tunnel services and `%ProgramData%\BlueVPNTransportPreview`. The stable/beta apps and `device20_full` are outside the allowlist.
-

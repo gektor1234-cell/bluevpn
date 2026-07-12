@@ -7,7 +7,8 @@ $ErrorActionPreference = 'Stop'
 
 $ServiceName = 'GreenVPNTransportPreviewService'
 $TunnelName = 'GreenVPNTransportPreview'
-$InstallRoot = Join-Path $env:LOCALAPPDATA 'Programs\Green VPN Transport Preview'
+$InstallRoot = Join-Path $env:ProgramFiles 'Green VPN Transport Preview'
+$LegacyInstallRoot = Join-Path $env:LOCALAPPDATA 'Programs\Green VPN Transport Preview'
 $ProgramDataRoot = Join-Path $env:ProgramData 'BlueVPNTransportPreview'
 
 function Test-IsAdministrator {
@@ -29,9 +30,14 @@ foreach ($service in @('WireGuardTunnel$GreenVPNTransportPreview', 'AmneziaWGTun
 }
 Start-Sleep -Milliseconds 500
 
-$awg = Join-Path $InstallRoot 'tools\amneziawg2\amneziawg.exe'
-if (Test-Path -LiteralPath $awg) {
-    try { & $awg /uninstalltunnelservice $TunnelName | Out-Null } catch {}
+foreach ($awg in @(
+    (Join-Path $InstallRoot 'tools\amneziawg2\amneziawg.exe'),
+    (Join-Path $LegacyInstallRoot 'tools\amneziawg2\amneziawg.exe')
+)) {
+    if (Test-Path -LiteralPath $awg) {
+        try { & $awg /uninstalltunnelservice $TunnelName | Out-Null } catch {}
+        break
+    }
 }
 foreach ($wg in @((Join-Path $env:ProgramFiles 'WireGuard\wireguard.exe'), (Join-Path ${env:ProgramFiles(x86)} 'WireGuard\wireguard.exe'))) {
     if (Test-Path -LiteralPath $wg) {
@@ -44,10 +50,16 @@ foreach ($wg in @((Join-Path $env:ProgramFiles 'WireGuard\wireguard.exe'), (Join
 Start-Sleep -Milliseconds 500
 & sc.exe delete $ServiceName 2>$null | Out-Null
 
-$allowedInstallRoot = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Programs')).TrimEnd('\') + '\'
+$allowedInstallRoot = [IO.Path]::GetFullPath($env:ProgramFiles).TrimEnd('\') + '\'
 $resolvedInstallRoot = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\') + '\'
 if ($resolvedInstallRoot.StartsWith($allowedInstallRoot, [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $InstallRoot)) {
     Remove-Item -LiteralPath $InstallRoot -Recurse -Force
+}
+
+$allowedLegacyRoot = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Programs')).TrimEnd('\') + '\'
+$resolvedLegacyRoot = [IO.Path]::GetFullPath($LegacyInstallRoot).TrimEnd('\') + '\'
+if ($resolvedLegacyRoot.StartsWith($allowedLegacyRoot, [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $LegacyInstallRoot)) {
+    Remove-Item -LiteralPath $LegacyInstallRoot -Recurse -Force
 }
 
 if (-not $KeepProgramData) {
@@ -59,4 +71,3 @@ if (-not $KeepProgramData) {
 }
 
 Write-Output 'Green VPN Transport Preview removed.'
-
