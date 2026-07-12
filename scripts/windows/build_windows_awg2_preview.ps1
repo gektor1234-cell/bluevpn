@@ -1,5 +1,7 @@
 param(
     [string]$ThirdPartyRoot = 'C:\Users\gekto\GreenVPN_Checkpoints\third_party\amneziawg-windows-client-2.0.0\extracted\AmneziaWG',
+    [string]$HysteriaRoot = 'C:\Users\gekto\GreenVPN_Checkpoints\third_party\hysteria-app-v2.9.3',
+    [string]$HevRoot = 'C:\Users\gekto\GreenVPN_Checkpoints\third_party\hev-socks5-tunnel-2.14.4-release\extracted\hev-socks5-tunnel',
     [string]$OutDir = 'C:\BlueVPN_Builds\windows_transport_preview_20260711',
     [string]$AppVersion = '0.3.0-transport-preview.1',
     [switch]$SkipChecks
@@ -10,14 +12,27 @@ $ErrorActionPreference = 'Stop'
 
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $licensePath = Join-Path $repo 'docs\licenses\AMNEZIAWG_WINDOWS_CLIENT_MIT.txt'
+$hysteriaLicensePath = Join-Path $repo 'docs\licenses\HYSTERIA_APP_MIT.txt'
+$hevLicensePath = Join-Path $repo 'docs\licenses\HEV_SOCKS5_TUNNEL_MIT.txt'
+$hevLwipLicensePath = Join-Path $repo 'docs\licenses\HEV_LWIP_BSD.txt'
+$hevWintunLicensePath = Join-Path $repo 'docs\licenses\HEV_WINTUN_PREBUILT_BINARY_LICENSE.txt'
 $expectedHashes = @{
     'amneziawg.exe' = '5B00905ED02619FE149CEAFC898E79993D4455A0CDFA92072B3BB9AEE7B2D537'
     'awg.exe' = '26AC0BE14A8353EACF2F933736F6F7912F89EC7C59C4190CC990492934C74537'
     'wintun.dll' = 'E5DA8447DC2C320EDC0FC52FA01885C103DE8C118481F683643CACC3220DAFCE'
 }
+$expectedHysteriaHashes = @{
+    'hysteria-windows-amd64.exe' = 'BCD3865B09BE2E5CC18D117DCF3AD687D1E6E27B0B050376B9CF4EA251B64D6F'
+    'hev-socks5-tunnel.exe' = '46167DBA51A2C3DD5F2E3478B0D8A30CAD03392D388DC1330D55246492F48C1E'
+    'msys-2.0.dll' = '6C0DE43EFC0F14D871CC9F3FA803B9BD1E74802F45B3C8AFFE3DACC21B2EEA18'
+    'wintun.dll' = 'E5DA8447DC2C320EDC0FC52FA01885C103DE8C118481F683643CACC3220DAFCE'
+}
 
 if (-not (Test-Path -LiteralPath $licensePath)) {
     throw "Missing AmneziaWG Windows license notice: $licensePath"
+}
+foreach ($notice in @($hysteriaLicensePath, $hevLicensePath, $hevLwipLicensePath, $hevWintunLicensePath)) {
+    if (-not (Test-Path -LiteralPath $notice)) { throw "Missing Hysteria2 preview license notice: $notice" }
 }
 
 foreach ($name in $expectedHashes.Keys) {
@@ -30,6 +45,20 @@ foreach ($name in $expectedHashes.Keys) {
 }
 if ((Get-Item -LiteralPath (Join-Path $ThirdPartyRoot 'amneziawg.exe')).VersionInfo.FileVersion -notlike '2.*') {
     throw 'AWG2 preview requires AmneziaWG Windows 2.x.'
+}
+
+$hysteriaRuntimeSources = @{
+    'hysteria-windows-amd64.exe' = (Join-Path $HysteriaRoot 'hysteria-windows-amd64.exe')
+    'hev-socks5-tunnel.exe' = (Join-Path $HevRoot 'hev-socks5-tunnel.exe')
+    'msys-2.0.dll' = (Join-Path $HevRoot 'msys-2.0.dll')
+    'wintun.dll' = (Join-Path $HevRoot 'wintun.dll')
+}
+foreach ($name in $expectedHysteriaHashes.Keys) {
+    $path = $hysteriaRuntimeSources[$name]
+    if (-not (Test-Path -LiteralPath $path)) { throw "Missing official Hysteria2 preview runtime: $path" }
+    if ((Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash -ne $expectedHysteriaHashes[$name]) {
+        throw "Hysteria2 preview runtime hash mismatch: $name"
+    }
 }
 
 Set-Location $repo
@@ -71,6 +100,7 @@ try {
         --dart-define="GREENVPN_PAID_BETA_BUILD=true" `
         --dart-define="GREENVPN_PAID_BETA_CLIENT_MARKER=green-vpn-paid-beta-v1" `
         --dart-define="GREENVPN_AWG2_PREVIEW_ENABLED=true" `
+        --dart-define="GREENVPN_HYSTERIA2_PREVIEW_ENABLED=true" `
         --dart-define="GREENVPN_WINDOWS_RUNTIME_SCOPE=$($runtime.GREENVPN_WINDOWS_RUNTIME_SCOPE)" `
         --dart-define="GREENVPN_WINDOWS_TUNNEL_NAME=$($runtime.GREENVPN_WINDOWS_TUNNEL_NAME)" `
         --dart-define="GREENVPN_WINDOWS_SERVICE_NAME=$($runtime.GREENVPN_WINDOWS_SERVICE_NAME)" `
@@ -107,13 +137,22 @@ Move-Item -LiteralPath (Join-Path $appDir 'greenvpn_service.exe') -Destination (
 
 $toolsDir = Join-Path $appDir 'tools'
 $awgDir = Join-Path $toolsDir 'amneziawg2'
+$hysteriaDir = Join-Path $toolsDir 'hysteria2'
 New-Item -ItemType Directory -Force -Path $awgDir | Out-Null
+New-Item -ItemType Directory -Force -Path $hysteriaDir | Out-Null
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\greenvpn_transport_preview_vpn_task.ps1') -Destination $toolsDir -Force
+Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\greenvpn_hysteria2_watchdog.ps1') -Destination $toolsDir -Force
 foreach ($name in $expectedHashes.Keys) { Copy-Item -LiteralPath (Join-Path $ThirdPartyRoot $name) -Destination $awgDir -Force }
+foreach ($name in $expectedHysteriaHashes.Keys) { Copy-Item -LiteralPath $hysteriaRuntimeSources[$name] -Destination $hysteriaDir -Force }
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\install_windows_transport_preview.ps1') -Destination $OutDir -Force
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\uninstall_windows_transport_preview.ps1') -Destination $OutDir -Force
 Copy-Item -LiteralPath (Join-Path $repo 'docs\THIRD_PARTY_AWG2_WINDOWS_PREVIEW.md') -Destination $OutDir -Force
 Copy-Item -LiteralPath $licensePath -Destination (Join-Path $OutDir 'AMNEZIAWG_WINDOWS_CLIENT_MIT.txt') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'docs\HYSTERIA2_CLIENT_ENGINE_LICENSE_AND_DESIGN_2026_07_12.md') -Destination $OutDir -Force
+Copy-Item -LiteralPath $hysteriaLicensePath -Destination (Join-Path $OutDir 'HYSTERIA_APP_MIT.txt') -Force
+Copy-Item -LiteralPath $hevLicensePath -Destination (Join-Path $OutDir 'HEV_SOCKS5_TUNNEL_MIT.txt') -Force
+Copy-Item -LiteralPath $hevLwipLicensePath -Destination (Join-Path $OutDir 'HEV_LWIP_BSD.txt') -Force
+Copy-Item -LiteralPath $hevWintunLicensePath -Destination (Join-Path $OutDir 'HEV_WINTUN_PREBUILT_BINARY_LICENSE.txt') -Force
 
 $artifactRows = Get-ChildItem -LiteralPath $OutDir -Recurse -File | ForEach-Object {
     [pscustomobject]@{ path = $_.FullName.Substring($OutDir.Length).TrimStart('\'); size = $_.Length; sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash }
@@ -125,6 +164,8 @@ $manifest = [ordered]@{
     serviceName = 'GreenVPNTransportPreviewService'
     localPort = 48739
     awgSource = 'https://github.com/amnezia-vpn/amneziawg-windows-client/releases/tag/2.0.0'
+    hysteriaSource = 'https://github.com/apernet/hysteria/releases/tag/app/v2.9.3'
+    hevSource = 'https://github.com/heiher/hev-socks5-tunnel/releases/tag/2.14.4'
     createdAt = (Get-Date).ToUniversalTime().ToString('o')
     files = @($artifactRows)
 }
@@ -132,6 +173,19 @@ $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $OutDi
 
 $zip = Join-Path $OutDir 'GreenVPN_Windows_Transport_Preview_0.3.0-preview1.zip'
 if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
-Compress-Archive -Path (Join-Path $OutDir 'app'), (Join-Path $OutDir 'install_windows_transport_preview.ps1'), (Join-Path $OutDir 'uninstall_windows_transport_preview.ps1'), (Join-Path $OutDir 'THIRD_PARTY_AWG2_WINDOWS_PREVIEW.md'), (Join-Path $OutDir 'AMNEZIAWG_WINDOWS_CLIENT_MIT.txt'), (Join-Path $OutDir 'manifest.json') -DestinationPath $zip -Force
+$packagePaths = @(
+    (Join-Path $OutDir 'app'),
+    (Join-Path $OutDir 'install_windows_transport_preview.ps1'),
+    (Join-Path $OutDir 'uninstall_windows_transport_preview.ps1'),
+    (Join-Path $OutDir 'THIRD_PARTY_AWG2_WINDOWS_PREVIEW.md'),
+    (Join-Path $OutDir 'AMNEZIAWG_WINDOWS_CLIENT_MIT.txt'),
+    (Join-Path $OutDir 'HYSTERIA2_CLIENT_ENGINE_LICENSE_AND_DESIGN_2026_07_12.md'),
+    (Join-Path $OutDir 'HYSTERIA_APP_MIT.txt'),
+    (Join-Path $OutDir 'HEV_SOCKS5_TUNNEL_MIT.txt'),
+    (Join-Path $OutDir 'HEV_LWIP_BSD.txt'),
+    (Join-Path $OutDir 'HEV_WINTUN_PREBUILT_BINARY_LICENSE.txt'),
+    (Join-Path $OutDir 'manifest.json')
+)
+Compress-Archive -Path $packagePaths -DestinationPath $zip -Force
 Get-Item -LiteralPath $zip | Select-Object FullName,Length
 Get-FileHash -Algorithm SHA256 -LiteralPath $zip

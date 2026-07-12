@@ -117,9 +117,14 @@ $required = @(
     'greenvpn_transport_preview.exe',
     'greenvpn_transport_preview_service.exe',
     'tools\greenvpn_transport_preview_vpn_task.ps1',
+    'tools\greenvpn_hysteria2_watchdog.ps1',
     'tools\amneziawg2\amneziawg.exe',
     'tools\amneziawg2\awg.exe',
-    'tools\amneziawg2\wintun.dll'
+    'tools\amneziawg2\wintun.dll',
+    'tools\hysteria2\hysteria-windows-amd64.exe',
+    'tools\hysteria2\hev-socks5-tunnel.exe',
+    'tools\hysteria2\msys-2.0.dll',
+    'tools\hysteria2\wintun.dll'
 )
 foreach ($relative in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $PayloadDir $relative))) {
@@ -163,6 +168,8 @@ Ensure-ServiceToken -UserSid $installingUserSid
 
 $serviceExe = Join-Path $InstallRoot 'greenvpn_transport_preview_service.exe'
 $taskScript = Join-Path $InstallRoot 'tools\greenvpn_transport_preview_vpn_task.ps1'
+& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File $taskScript -Action Disconnect
+if ($LASTEXITCODE -ne 0) { throw 'Failed to clean previous transport preview runtime.' }
 $binaryPath = '"' + $serviceExe + '" --task-script "' + $taskScript + '"'
 New-Service -Name $ServiceName -BinaryPathName $binaryPath -DisplayName 'Green VPN Transport Preview Service' -StartupType Automatic | Out-Null
 & sc.exe description $ServiceName 'Green VPN isolated privileged service for preview VPN transports.' | Out-Null

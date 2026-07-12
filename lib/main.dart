@@ -51,9 +51,14 @@ const bool kAwg2PreviewEnabled = bool.fromEnvironment(
   'GREENVPN_AWG2_PREVIEW_ENABLED',
   defaultValue: false,
 );
+const bool kHysteria2PreviewEnabled = bool.fromEnvironment(
+  'GREENVPN_HYSTERIA2_PREVIEW_ENABLED',
+  defaultValue: false,
+);
 const List<String> kSupportedVpnProtocols = <String>[
   'wireguard_udp',
   if (kAwg2PreviewEnabled) 'amneziawg',
+  if (kHysteria2PreviewEnabled) 'hysteria2',
 ];
 const bool kAdsDisabledBuild =
     kTrialOnlyNoAdsBuild || kPaidBetaBuild || kPublicProductBuild;
@@ -8066,7 +8071,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     String rawConfig, {
     ServerLocation? server,
   }) async {
-    await _cfg.writeManagedConfig(_buildManagedConfigFromBase(rawConfig));
+    final protocol = server?.protocolCode ?? 'wireguard_udp';
+    await _cfg.writeManagedConfig(
+      protocol == 'hysteria2'
+          ? rawConfig
+          : _buildManagedConfigFromBase(rawConfig),
+    );
     await _cfg.writeManagedProtocol(server?.protocolCode ?? 'wireguard_udp');
     try {
       await _cfg.writeBaseConfig(rawConfig);
@@ -9200,6 +9210,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           : config.protocol,
       protocolLabel: config.protocol == 'amneziawg'
           ? 'Защищённый режим'
+          : config.protocol == 'hysteria2'
+          ? 'Резервный режим'
           : fallback.protocolLabel,
     );
   }
@@ -9247,7 +9259,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   List<ServerLocation> _connectCandidatesForCurrentSelection() {
     final usable =
         servers
-            .where((server) => !server.isAuto && server.isCurrentClientReady)
+            .where(
+              (server) =>
+                  !server.isAuto &&
+                  server.isCurrentClientReady &&
+                  !(socialOnlyEnabled && server.protocolCode == 'hysteria2'),
+            )
             .toList()
           ..sort((a, b) {
             final byScore = _serverConnectScore(
@@ -9290,8 +9307,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     if (!server.clientConfigReady) {
       return 'для него ещё не готов безопасный клиентский конфиг';
     }
-    if (server.protocolCode != 'wireguard_udp') {
+    if (!kSupportedVpnProtocols.contains(server.protocolCode)) {
       return 'этот протокол уже есть в плане, но текущий клиент его пока не запускает';
+    }
+    if (socialOnlyEnabled && server.protocolCode == 'hysteria2') {
+      return 'этот резервный режим доступен только для полного подключения';
     }
     return 'сервер пока нельзя использовать текущим клиентом';
   }
@@ -17463,12 +17483,14 @@ class _GreenVpnSystemServiceResponse {
   final int statusCode;
   final int? exitCode;
   final String? message;
+  final Map<String, dynamic> data;
 
   const _GreenVpnSystemServiceResponse({
     required this.ok,
     required this.statusCode,
     this.exitCode,
     this.message,
+    this.data = const <String, dynamic>{},
   });
 
   bool get unavailable => statusCode == 0;
@@ -17501,6 +17523,13 @@ class _GreenVpnSystemServiceClient {
     '/disconnect',
     connectTimeout: const Duration(seconds: 2),
     responseTimeout: const Duration(seconds: 130),
+  );
+
+  Future<_GreenVpnSystemServiceResponse> status() => _request(
+    'GET',
+    '/status',
+    connectTimeout: const Duration(milliseconds: 700),
+    responseTimeout: const Duration(seconds: 3),
   );
 
   Future<_GreenVpnSystemServiceResponse> _request(
@@ -17559,6 +17588,7 @@ class _GreenVpnSystemServiceClient {
         statusCode: response.statusCode,
         exitCode: _intFromJson(json['exitCode']),
         message: json['message']?.toString(),
+        data: json,
       );
     } catch (e) {
       return _GreenVpnSystemServiceResponse(
@@ -17599,10 +17629,12 @@ class _GreenVpnSystemServiceClient {
 class WindowsTransportPreviewBackend extends VpnBackend {
   final WireGuardWindowsBackend _wireGuard;
   final AmneziaWgWindowsPreviewBackend _amneziaWg;
+  final Hysteria2WindowsPreviewBackend _hysteria2;
 
   WindowsTransportPreviewBackend({required String tunnelName})
     : _wireGuard = WireGuardWindowsBackend(tunnelName: tunnelName),
-      _amneziaWg = AmneziaWgWindowsPreviewBackend(tunnelName: tunnelName);
+      _amneziaWg = AmneziaWgWindowsPreviewBackend(tunnelName: tunnelName),
+      _hysteria2 = const Hysteria2WindowsPreviewBackend();
 
   Future<String> _managedProtocol(String configPath) async {
     try {
@@ -17621,6 +17653,9 @@ class WindowsTransportPreviewBackend extends VpnBackend {
     if (protocol == 'amneziawg') {
       return _amneziaWg.connect(configPath: configPath);
     }
+    if (protocol == 'hysteria2') {
+      return _hysteria2.connect(configPath: configPath);
+    }
     if (protocol != 'wireguard_udp') {
       return VpnBackendResult(
         ok: false,
@@ -17632,6 +17667,9 @@ class WindowsTransportPreviewBackend extends VpnBackend {
 
   @override
   Future<VpnBackendResult> disconnect() async {
+    if (await _hysteria2.isConnected()) {
+      return _hysteria2.disconnect();
+    }
     if (await _amneziaWg.isConnected()) {
       return _amneziaWg.disconnect();
     }
@@ -17640,8 +17678,98 @@ class WindowsTransportPreviewBackend extends VpnBackend {
 
   @override
   Future<bool> isConnected() async {
+    if (await _hysteria2.isConnected()) return true;
     if (await _amneziaWg.isConnected()) return true;
     return _wireGuard.isConnected();
+  }
+}
+
+class Hysteria2WindowsPreviewBackend extends VpnBackend {
+  const Hysteria2WindowsPreviewBackend();
+
+  Future<bool> _waitForState(bool running) async {
+    const service = _GreenVpnSystemServiceClient();
+    for (var attempt = 0; attempt < 80; attempt++) {
+      final status = await service.status();
+      final isRunning =
+          status.ok &&
+          status.data['protocol'] == 'hysteria2' &&
+          status.data['tunnelState'] == 'running';
+      if (isRunning == running) return true;
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+    return false;
+  }
+
+  @override
+  Future<VpnBackendResult> connect({required String configPath}) async {
+    if (!kHysteria2PreviewEnabled) {
+      return const VpnBackendResult(
+        ok: false,
+        message: 'Резервный Windows preview отключён в этой сборке.',
+      );
+    }
+    if (!File(configPath).existsSync()) {
+      return const VpnBackendResult(
+        ok: false,
+        message: 'Конфиг резервного подключения отсутствует.',
+      );
+    }
+    const service = _GreenVpnSystemServiceClient();
+    final ping = await service.ping();
+    if (!ping.ok) {
+      return const VpnBackendResult(
+        ok: false,
+        message:
+            'Системный компонент preview недоступен. Переустанови preview один раз с правами администратора.',
+      );
+    }
+    final response = await service.connect();
+    if (!response.ok) {
+      return VpnBackendResult(
+        ok: false,
+        message:
+            response.statusCode == HttpStatus.conflict || response.exitCode == 2
+            ? 'Сначала отключи другой VPN.'
+            : (response.message ?? 'Резервное подключение не запустилось.'),
+      );
+    }
+    if (!await _waitForState(true)) {
+      await service.disconnect();
+      return const VpnBackendResult(
+        ok: false,
+        message: 'Резервное подключение не подтвердило рабочее состояние.',
+      );
+    }
+    return const VpnBackendResult(ok: true);
+  }
+
+  @override
+  Future<VpnBackendResult> disconnect() async {
+    const service = _GreenVpnSystemServiceClient();
+    final response = await service.disconnect();
+    if (!response.ok) {
+      return VpnBackendResult(
+        ok: false,
+        message: response.message ?? 'Не удалось отключить резервный режим.',
+      );
+    }
+    if (!await _waitForState(false)) {
+      return const VpnBackendResult(
+        ok: false,
+        message: 'Резервный режим не завершился полностью.',
+      );
+    }
+    return const VpnBackendResult(ok: true);
+  }
+
+  @override
+  Future<bool> isConnected() async {
+    const service = _GreenVpnSystemServiceClient();
+    final status = await service.status();
+    return status.ok &&
+        status.data['protocol'] == 'hysteria2' &&
+        status.data['tunnelState'] == 'running';
   }
 }
 

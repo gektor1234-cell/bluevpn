@@ -37,6 +37,12 @@ constexpr wchar_t kBackendLogPath[] =
 constexpr char kLocalTokenPath[] =
     GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\service_token";
 constexpr char kLocalTokenHeader[] = "x-greenvpn-local-token";
+constexpr char kProtocolPath[] = GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\"
+    GREENVPN_RUNTIME_TUNNEL_NAME_A ".conf.protocol";
+constexpr char kHysteriaPidPath[] =
+    GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\hysteria2-client.pid";
+constexpr char kHevPidPath[] =
+    GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\hysteria2-hev.pid";
 
 SERVICE_STATUS_HANDLE g_status_handle = nullptr;
 SERVICE_STATUS g_status = {};
@@ -471,10 +477,89 @@ std::string QueryServiceState(const wchar_t* service_name) {
   return state;
 }
 
+std::string ReadTrimmedAsciiFile(const char* path) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input) {
+    return "";
+  }
+  std::string value((std::istreambuf_iterator<char>(input)),
+                    std::istreambuf_iterator<char>());
+  while (!value.empty() &&
+         std::isspace(static_cast<unsigned char>(value.back()))) {
+    value.pop_back();
+  }
+  size_t start = 0;
+  while (start < value.size() &&
+         std::isspace(static_cast<unsigned char>(value[start]))) {
+    ++start;
+  }
+  value = value.substr(start);
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  return value;
+}
+
+std::string QueryPidFileProcessState(const char* pid_path,
+                                     const std::wstring& expected_path) {
+  const std::string pid_text = ReadTrimmedAsciiFile(pid_path);
+  if (pid_text.empty() ||
+      !std::all_of(pid_text.begin(), pid_text.end(),
+                   [](unsigned char ch) { return std::isdigit(ch) != 0; })) {
+    return "missing";
+  }
+  unsigned long parsed = 0;
+  try {
+    parsed = std::stoul(pid_text);
+  } catch (...) {
+    return "invalid";
+  }
+  if (parsed == 0 || parsed > MAXDWORD) {
+    return "invalid";
+  }
+  HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
+                               FALSE, static_cast<DWORD>(parsed));
+  if (process == nullptr) {
+    return "stopped";
+  }
+  DWORD exit_code = 0;
+  const bool running = GetExitCodeProcess(process, &exit_code) != FALSE &&
+                       exit_code == STILL_ACTIVE;
+  std::vector<wchar_t> image_path(32768);
+  DWORD image_size = static_cast<DWORD>(image_path.size());
+  const bool path_matches =
+      QueryFullProcessImageNameW(process, 0, image_path.data(), &image_size) !=
+          FALSE &&
+      _wcsicmp(std::wstring(image_path.data(), image_size).c_str(),
+               expected_path.c_str()) == 0;
+  CloseHandle(process);
+  return running && path_matches ? "running" : "stopped";
+}
+
 std::string QueryTunnelStatusJson() {
   const std::string wireguard_state = QueryServiceState(kTunnelServiceName);
   const std::string amneziawg_state =
       QueryServiceState(kAmneziaWgTunnelServiceName);
+  const std::string managed_protocol = ReadTrimmedAsciiFile(kProtocolPath);
+  const std::wstring module_dir = GetModuleDirectory();
+  const std::string hysteria_state = QueryPidFileProcessState(
+      kHysteriaPidPath,
+      module_dir + L"\\tools\\hysteria2\\hysteria-windows-amd64.exe");
+  const std::string hev_state = QueryPidFileProcessState(
+      kHevPidPath,
+      module_dir + L"\\tools\\hysteria2\\hev-socks5-tunnel.exe");
+  if (managed_protocol == "hysteria2") {
+    const std::string state =
+        hysteria_state == "running" && hev_state == "running" ? "running"
+                                                               : "stopped";
+    return std::string("{\"ok\":true,\"service\":\"") + kServiceNameUtf8 +
+           "\",\"tunnelService\":\"GreenVPNHysteria2Preview\"," +
+           "\"tunnelState\":\"" + state + "\"," +
+           "\"protocol\":\"hysteria2\"," +
+           "\"wireGuardState\":\"" + wireguard_state + "\"," +
+           "\"amneziaWgState\":\"" + amneziawg_state + "\"," +
+           "\"hysteriaClientState\":\"" + hysteria_state + "\"," +
+           "\"hysteriaTunState\":\"" + hev_state + "\"}";
+  }
   const bool awg_selected = amneziawg_state == "running" ||
                             (amneziawg_state != "missing" &&
                              wireguard_state == "missing");

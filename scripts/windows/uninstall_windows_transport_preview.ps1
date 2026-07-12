@@ -25,6 +25,11 @@ if (-not (Test-IsAdministrator)) {
 }
 
 Get-Process -Name 'greenvpn_transport_preview' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+$protectedTask = Join-Path $InstallRoot 'tools\greenvpn_transport_preview_vpn_task.ps1'
+if (Test-Path -LiteralPath $protectedTask) {
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File $protectedTask -Action Disconnect
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to stop transport preview runtime.' }
+}
 foreach ($service in @('WireGuardTunnel$GreenVPNTransportPreview', 'AmneziaWGTunnel$GreenVPNTransportPreview')) {
     & sc.exe stop $service 2>$null | Out-Null
 }

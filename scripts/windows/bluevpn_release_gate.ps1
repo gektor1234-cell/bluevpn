@@ -68,6 +68,9 @@ $vpnTaskPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_vpn_task.ps1"
 $transportPreviewVpnTaskPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_transport_preview_vpn_task.ps1"
 $transportPreviewInstallPath = Join-Path $ProjectRoot "scripts\windows\install_windows_transport_preview.ps1"
 $transportPreviewUninstallPath = Join-Path $ProjectRoot "scripts\windows\uninstall_windows_transport_preview.ps1"
+$transportPreviewBuildPath = Join-Path $ProjectRoot "scripts\windows\build_windows_awg2_preview.ps1"
+$hysteriaWatchdogPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_hysteria2_watchdog.ps1"
+$hysteriaPhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_windows_hysteria2_preview_physical.ps1"
 $wireguardTcpCanaryPath = Join-Path $ProjectRoot "scripts\server\install_wireguard_tcp_canary.sh"
 $transportCanaryPath = Join-Path $ProjectRoot "scripts\server\install_transport_canary_service.sh"
 $transportCanaryCheckPath = Join-Path $ProjectRoot "scripts\server\check_transport_canary_readiness.sh"
@@ -89,6 +92,9 @@ $vpnTaskScript = Read-Text $vpnTaskPath
 $transportPreviewVpnTaskScript = Read-Text $transportPreviewVpnTaskPath
 $transportPreviewInstallScript = Read-Text $transportPreviewInstallPath
 $transportPreviewUninstallScript = Read-Text $transportPreviewUninstallPath
+$transportPreviewBuildScript = Read-Text $transportPreviewBuildPath
+$hysteriaWatchdogScript = Read-Text $hysteriaWatchdogPath
+$hysteriaPhysicalTestScript = Read-Text $hysteriaPhysicalTestPath
 $wireguardTcpCanaryScript = Read-Text $wireguardTcpCanaryPath
 $transportCanaryScript = Read-Text $transportCanaryPath
 $transportCanaryCheckScript = Read-Text $transportCanaryCheckPath
@@ -516,6 +522,9 @@ $requiredAutoRouteClientFragments = @(
     'defaultValue: false',
     "'wireguard_udp'",
     "if (kAwg2PreviewEnabled) 'amneziawg'",
+    'const bool kHysteria2PreviewEnabled = bool.fromEnvironment(',
+    "'GREENVPN_HYSTERIA2_PREVIEW_ENABLED'",
+    "if (kHysteria2PreviewEnabled) 'hysteria2'",
     "'X-GreenVPN-Supported-Protocols'",
     "'supportedProtocols': kSupportedVpnProtocols"
 )
@@ -800,7 +809,11 @@ $serviceFragments = @(
     'connect requires POST',
     'disconnect requires POST',
     'local service token missing',
-    'unauthorized local request'
+    'unauthorized local request',
+    'kHysteriaPidPath',
+    'QueryPidFileProcessState',
+    'QueryFullProcessImageNameW',
+    'GreenVPNHysteria2Preview'
 )
 
 foreach ($fragment in $serviceFragments) {
@@ -946,11 +959,18 @@ $transportPreviewRouteFragments = @(
     "'MSFT_NetRoute'",
     'No physical gateway route is available',
     'endpoint bypass route ready',
-    'if ($Action -eq ''Connect'') { Remove-EndpointBypassRoute }',
+    'if ($Action -eq ''Connect'') { Stop-OwnTunnel }',
     'Broad write ACL is forbidden for transport preview state',
     "@('S-1-1-0', 'S-1-5-11', 'S-1-5-32-545')",
     '[IO.FileAttributes]::ReparsePoint',
-    'Protected transport preview state directory is missing'
+    'Protected transport preview state directory is missing',
+    'Start-Hysteria2Tunnel',
+    'Stop-Hysteria2Tunnel',
+    'Assert-HysteriaRuntime',
+    '$HysteriaRouteMetric = 42732',
+    "@('0.0.0.0/1', '128.0.0.0/1', '::/1', '8000::/1')",
+    'Hysteria2 base config must not contain local listener or forwarding sections',
+    'greenvpn_hysteria2_watchdog.ps1'
 )
 
 foreach ($fragment in $transportPreviewRouteFragments) {
@@ -1004,6 +1024,10 @@ $transportPreviewInstallFragments = @(
     "'*S-1-5-32-545:(OI)(CI)RX'",
     "/remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' /T /C",
     "('*' + `$UserSid + ':(OI)(CI)M')",
+    "'tools\hysteria2\hysteria-windows-amd64.exe'",
+    "'tools\hysteria2\hev-socks5-tunnel.exe'",
+    "'tools\greenvpn_hysteria2_watchdog.ps1'",
+    '-Action Disconnect',
     "Set-PreviewAcl -UserSid `$installingUserSid",
     'Remove-Item -LiteralPath $LegacyInstallRoot -Recurse -Force'
 )
@@ -1033,6 +1057,72 @@ foreach ($scriptPath in @($transportPreviewInstallPath, $transportPreviewUninsta
         }
         else {
             Add-Pass "Windows transport preview installer parser check passed: $scriptPath"
+        }
+    }
+}
+
+foreach ($fragment in @(
+    'GREENVPN_HYSTERIA2_PREVIEW_ENABLED=true',
+    'BCD3865B09BE2E5CC18D117DCF3AD687D1E6E27B0B050376B9CF4EA251B64D6F',
+    '46167DBA51A2C3DD5F2E3478B0D8A30CAD03392D388DC1330D55246492F48C1E',
+    '6C0DE43EFC0F14D871CC9F3FA803B9BD1E74802F45B3C8AFFE3DACC21B2EEA18',
+    'HYSTERIA_APP_MIT.txt',
+    'HEV_SOCKS5_TUNNEL_MIT.txt',
+    'HEV_LWIP_BSD.txt',
+    'HEV_WINTUN_PREBUILT_BINARY_LICENSE.txt'
+)) {
+    if ($transportPreviewBuildScript.Contains($fragment)) {
+        Add-Pass "Windows Hysteria2 preview build marker present: $fragment"
+    }
+    else {
+        Add-Error "Windows Hysteria2 preview build marker missing: $fragment"
+    }
+}
+
+foreach ($fragment in @(
+    'Test-ExactProcess',
+    'ExecutablePath',
+    '$RouteMetric = 42732',
+    '$EndpointRouteMetric = 42731',
+    "@('0.0.0.0/1', '128.0.0.0/1', '::/1', '8000::/1')",
+    'Remove-ManagedRoutes',
+    'Remove-ManagedEndpointRoute'
+)) {
+    if ($hysteriaWatchdogScript.Contains($fragment)) {
+        Add-Pass "Windows Hysteria2 watchdog marker present: $fragment"
+    }
+    else {
+        Add-Error "Windows Hysteria2 watchdog marker missing: $fragment"
+    }
+}
+
+foreach ($fragment in @(
+    "ExpectedCanaryEgress = '5.129.216.42'",
+    "CompetingServiceName = 'AmneziaWGTunnel`$device20_full'",
+    "Wait-HysteriaState -Running `$true",
+    'endpoint route recursed into the preview adapter',
+    'watchdogCleanupPassed',
+    'restoredOriginalEgress',
+    "Invoke-PreviewApi -Method POST -Path '/disconnect'"
+)) {
+    if ($hysteriaPhysicalTestScript.Contains($fragment)) {
+        Add-Pass "Windows Hysteria2 physical smoke marker present: $fragment"
+    }
+    else {
+        Add-Error "Windows Hysteria2 physical smoke marker missing: $fragment"
+    }
+}
+
+foreach ($scriptPath in @($transportPreviewBuildPath, $hysteriaWatchdogPath, $hysteriaPhysicalTestPath)) {
+    if (Test-Path -LiteralPath $scriptPath) {
+        $tokens = $null
+        $parseErrors = $null
+        [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$parseErrors) | Out-Null
+        if ($parseErrors -and $parseErrors.Count -gt 0) {
+            Add-Error "Windows Hysteria2 preview parser errors in ${scriptPath}: $($parseErrors[0].ToString())"
+        }
+        else {
+            Add-Pass "Windows Hysteria2 preview parser check passed: $scriptPath"
         }
     }
 }
@@ -1161,6 +1251,52 @@ if (-not [string]::IsNullOrWhiteSpace($ReleaseZip)) {
                 $_.Replace('\', '/').EndsWith('app/greenvpn_transport_preview.exe', [System.StringComparison]::OrdinalIgnoreCase)
             })
             if ($previewExecutableEntries.Count -gt 0) {
+                $normalizedEntries = @($entries | ForEach-Object { $_.Replace('\', '/') })
+                foreach ($requiredEntry in @(
+                    'app/tools/hysteria2/hysteria-windows-amd64.exe',
+                    'app/tools/hysteria2/hev-socks5-tunnel.exe',
+                    'app/tools/hysteria2/msys-2.0.dll',
+                    'app/tools/hysteria2/wintun.dll',
+                    'app/tools/greenvpn_hysteria2_watchdog.ps1',
+                    'HYSTERIA2_CLIENT_ENGINE_LICENSE_AND_DESIGN_2026_07_12.md',
+                    'HYSTERIA_APP_MIT.txt',
+                    'HEV_SOCKS5_TUNNEL_MIT.txt',
+                    'HEV_LWIP_BSD.txt',
+                    'HEV_WINTUN_PREBUILT_BINARY_LICENSE.txt'
+                )) {
+                    if ($normalizedEntries -contains $requiredEntry) {
+                        Add-Pass "Transport preview zip contains: $requiredEntry"
+                    }
+                    else {
+                        Add-Error "Transport preview zip missing required Hysteria2 artifact: $requiredEntry"
+                    }
+                }
+
+                $expectedPackagedHashes = @{
+                    'app/tools/hysteria2/hysteria-windows-amd64.exe' = 'BCD3865B09BE2E5CC18D117DCF3AD687D1E6E27B0B050376B9CF4EA251B64D6F'
+                    'app/tools/hysteria2/hev-socks5-tunnel.exe' = '46167DBA51A2C3DD5F2E3478B0D8A30CAD03392D388DC1330D55246492F48C1E'
+                    'app/tools/hysteria2/msys-2.0.dll' = '6C0DE43EFC0F14D871CC9F3FA803B9BD1E74802F45B3C8AFFE3DACC21B2EEA18'
+                    'app/tools/hysteria2/wintun.dll' = 'E5DA8447DC2C320EDC0FC52FA01885C103DE8C118481F683643CACC3220DAFCE'
+                }
+                foreach ($expected in $expectedPackagedHashes.GetEnumerator()) {
+                    $entry = @($zip.Entries | Where-Object { $_.FullName.Replace('\', '/') -eq $expected.Key })
+                    if ($entry.Count -ne 1) { continue }
+                    $stream = $entry[0].Open()
+                    $sha = [Security.Cryptography.SHA256]::Create()
+                    try {
+                        $actualHash = ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '')
+                    } finally {
+                        $sha.Dispose()
+                        $stream.Dispose()
+                    }
+                    if ($actualHash -eq $expected.Value) {
+                        Add-Pass "Packaged Hysteria2 runtime hash valid: $($expected.Key)"
+                    }
+                    else {
+                        Add-Error "Packaged Hysteria2 runtime hash mismatch: $($expected.Key)"
+                    }
+                }
+
                 $previewInstallerEntries = @($zip.Entries | Where-Object {
                     [IO.Path]::GetFileName($_.FullName.Replace('/', '\')).Equals('install_windows_transport_preview.ps1', [System.StringComparison]::OrdinalIgnoreCase)
                 })
