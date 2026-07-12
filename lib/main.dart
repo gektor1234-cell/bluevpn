@@ -9307,24 +9307,30 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                   !server.isAuto &&
                   server.isCurrentClientReady &&
                   !(socialOnlyEnabled &&
-                      greenVpnTransportRequiresFullTunnel(
-                        server.protocolCode,
-                      )),
+                      greenVpnTransportRequiresFullTunnel(server.protocolCode)),
             )
             .toList()
           ..sort((a, b) {
             if (kTransportPreviewFallbackEnabled) {
-              final byCooldown = _routeFailureCooldown.compare(
-                _routeCooldownKey(a),
-                _routeCooldownKey(b),
+              final now = DateTime.now();
+              return greenVpnCompareTransportPreviewCandidates(
+                leftProtocol: a.protocolCode,
+                rightProtocol: b.protocolCode,
+                leftCooldownUntil: _routeFailureCooldown.coolingUntil(
+                  _routeCooldownKey(a),
+                  now: now,
+                ),
+                rightCooldownUntil: _routeFailureCooldown.coolingUntil(
+                  _routeCooldownKey(b),
+                  now: now,
+                ),
+                leftScore: _serverConnectScore(a),
+                rightScore: _serverConnectScore(b),
+                leftPingMs: a.pingMs,
+                rightPingMs: b.pingMs,
+                leftTitle: a.title,
+                rightTitle: b.title,
               );
-              if (byCooldown != 0) return byCooldown;
-              final byTransport = greenVpnTransportPreviewRank(
-                a.protocolCode,
-              ).compareTo(
-                greenVpnTransportPreviewRank(b.protocolCode),
-              );
-              if (byTransport != 0) return byTransport;
             }
             final byScore = _serverConnectScore(
               b,

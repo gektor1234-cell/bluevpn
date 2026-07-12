@@ -779,6 +779,8 @@ CLIENT_ROUTE_EVENT_STAGES = [
     "disconnect",
     "network_probe",
     "network_probe_final_failure",
+    "post_connect_probe",
+    "switch_post_connect_probe",
 ]
 CLIENT_ROUTE_EVENT_WINDOW_SECONDS = int(
     os.getenv("GREENVPN_CLIENT_ROUTE_EVENT_WINDOW_SECONDS", "1800")

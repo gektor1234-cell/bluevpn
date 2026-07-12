@@ -27,3 +27,35 @@ bool greenVpnTransportRequiresFullTunnel(String protocol) =>
     greenVpnFullTunnelOnlyPreviewProtocols.contains(
       protocol.trim().toLowerCase(),
     );
+
+int greenVpnCompareTransportPreviewCandidates({
+  required String leftProtocol,
+  required String rightProtocol,
+  required DateTime? leftCooldownUntil,
+  required DateTime? rightCooldownUntil,
+  required int leftScore,
+  required int rightScore,
+  required int? leftPingMs,
+  required int? rightPingMs,
+  required String leftTitle,
+  required String rightTitle,
+}) {
+  if (leftCooldownUntil == null && rightCooldownUntil != null) return -1;
+  if (leftCooldownUntil != null && rightCooldownUntil == null) return 1;
+  if (leftCooldownUntil != null && rightCooldownUntil != null) {
+    final byCooldown = leftCooldownUntil.compareTo(rightCooldownUntil);
+    if (byCooldown != 0) return byCooldown;
+  }
+
+  final byTransport = greenVpnTransportPreviewRank(
+    leftProtocol,
+  ).compareTo(greenVpnTransportPreviewRank(rightProtocol));
+  if (byTransport != 0) return byTransport;
+
+  final byScore = rightScore.compareTo(leftScore);
+  if (byScore != 0) return byScore;
+
+  final byPing = (leftPingMs ?? 999999).compareTo(rightPingMs ?? 999999);
+  if (byPing != 0) return byPing;
+  return leftTitle.compareTo(rightTitle);
+}

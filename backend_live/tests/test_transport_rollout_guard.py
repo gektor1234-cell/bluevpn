@@ -66,6 +66,16 @@ class TransportRolloutGuardTests(unittest.TestCase):
         )
         self.assertEqual(payload.supportedProtocols, ["wireguard_udp"])
 
+    def test_client_route_stages_accept_preview_data_plane_probes(self) -> None:
+        self.assertEqual(
+            main.normalize_client_route_stage("post_connect_probe"),
+            "post_connect_probe",
+        )
+        self.assertEqual(
+            main.normalize_client_route_stage("switch_post_connect_probe"),
+            "switch_post_connect_probe",
+        )
+
     def test_control_plane_route_signal_cannot_unlock_automatic_fallback(self) -> None:
         self.assertFalse(
             main.route_observation_automation_eligible(
