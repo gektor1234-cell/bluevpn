@@ -134,13 +134,13 @@ Last updated: 2026-07-12.
 - Both paid-beta control planes expose the same five preview-only rows and issue all five config formats. The Samsung contract probe proved `10/10` responses without exporting credentials or config bodies; latest report SHA-256 is `7540393123545F4CF0F09F567BD7EAF4EB13ADEA3C6031A96B020EE47FA80316`.
 - Main UI and Android Quick Settings now use the same dynamic preview catalog and strict cascade. Physical tile proof: AWG2 first, Hysteria2 after AWG2 cooldown, both accepted only after YouTube; report SHA-256 `CBED2FD33B0F20C37FBD67C8BB6546BD2F5B5494953D8878E537C134A1030B8A`. The original tile list was restored and every preview engine ended in `down`.
 - Paid-beta probe timers on Timeweb and RUVDS are active; latest oneshot results are `success`, status `0`, observations `posted=true`. Their route signals remain control-plane-only and cannot auto-promote a guarded transport without a trusted egress-verified data-plane probe.
-- NL2 services for all five canaries are active. The dnstt direct server data-plane smoke passed with NL2 egress and YouTube, `server_data_plane_ready=true`, stable transports active and no secrets printed. Public DNS delegation for `t.greenvpn.pro` is still absent.
+- NL2 services for all five canaries are active. The dnstt direct server data-plane smoke passed again with NL2 egress and YouTube, `server_data_plane_ready=true`, stable transports active and no secrets printed. `A tns.greenvpn.pro` and `A tns2.greenvpn.pro` are published, but the two saved NS records for `t.greenvpn.pro` are still absent from REG.RU authoritative answers. Support ticket `#20260712373018777` is open.
 - Android Naive HTTPS preview passed physical watchdog, reconnect, background, relaunch, and YouTube checks; commit `207f11e` is the local checkpoint.
 - Windows Naive HTTPS preview is implemented and compiled as `0.3.0-preview3`.
 - Its package gate and non-disruptive SOCKS data-plane smoke pass; the latter preserved both route signature and WARP service state.
 - Full Windows TUN smoke remains deferred until changing WARP is explicitly allowed.
 - The frozen stable/public transport and production catalog remain unchanged.
-- Remaining transport gate: add `A tns.greenvpn.pro -> 5.129.216.42` and `NS t.greenvpn.pro -> tns.greenvpn.pro`, wait for propagation, unlock the phone, then run the dnstt physical egress/YouTube/watchdog/reconnect test.
+- Remaining transport gate: obtain publication of the saved NS delegation for `t.greenvpn.pro`, pass readiness with `--require-delegation`, connect and unlock the phone, then run the dnstt physical egress/YouTube/watchdog/reconnect test.
 
 ## Owner gate
 

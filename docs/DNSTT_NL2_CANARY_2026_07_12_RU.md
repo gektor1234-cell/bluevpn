@@ -35,11 +35,13 @@ scripts/server/remove_dnstt_canary.sh
 
 ## Требуемая делегация DNS
 
-В зоне `greenvpn.pro` нужны ровно две записи:
+В зоне `greenvpn.pro` первоначально требовались A и NS. Интерфейс REG.RU потребовал минимум две NS-записи, поэтому сохранён следующий эквивалентный набор с двумя именами одного изолированного NL2:
 
 ```text
-A   tns.greenvpn.pro  -> 5.129.216.42
-NS  t.greenvpn.pro    -> tns.greenvpn.pro
+A   tns.greenvpn.pro   -> 5.129.216.42
+A   tns2.greenvpn.pro  -> 5.129.216.42
+NS  t.greenvpn.pro     -> tns.greenvpn.pro
+NS  t.greenvpn.pro     -> tns2.greenvpn.pro
 ```
 
 До появления обеих записей у публичных резолверов физический DoH-тест считается незавершённым. Readiness с `--require-delegation` обязан завершиться ошибкой, если делегация отсутствует.
@@ -95,8 +97,8 @@ sha256=308320429991A3278E3BA903155482D6613425D46681F180338ECB8C0929248F
 
 ## Осталось до доказанного этапа
 
-1. Добавить две DNS-записи у REG.RU.
-2. Дождаться публичной делегации и пройти server readiness с `--require-delegation`.
+1. Дождаться публикации уже сохранённой NS-делегации; A-записи опубликованы, заявка REG.RU `#20260712373018777` открыта.
+2. Пройти server readiness с `--require-delegation` после появления NS у Cloudflare/Google.
 3. Запустить `test_android_dnstt_preview_physical.ps1` на физическом телефоне.
 4. Доказать NL2 egress, production/paid-beta API, YouTube, watchdog cleanup, reconnect и удаление plaintext profile.
 5. dnstt уже включён последним только в отдельном preview selector, но до выполнения пунктов 1-4 не считается физически доказанным. Stable и production остаются без изменений.

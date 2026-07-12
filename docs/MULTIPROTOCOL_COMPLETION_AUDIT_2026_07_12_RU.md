@@ -22,16 +22,16 @@
 | Naive Android data plane | Доказано | NL2 egress, API/YouTube, watchdog, reconnect, background и plaintext cleanup зафиксированы в `NAIVE_HTTPS_NL2_CANARY_2026_07_12_RU.md` |
 | dnstt server data plane | Доказано | NL2 readiness: `server_data_plane_ready=true`, YouTube и egress прошли, stable transports active, `secrets_printed=false` |
 | dnstt Android config contract | Доказано | Primary/fallback оба выдали корректный dnstt профиль внутри общего отчёта `10/10` |
-| dnstt Android public DoH data plane | Не доказано | `tns.greenvpn.pro` и `t.greenvpn.pro` пока NXDOMAIN; без A/NS delegation физический тест намеренно fail-closed |
+| dnstt Android public DoH data plane | Не доказано | `A tns.greenvpn.pro` уже опубликована, но NS-делегация `t.greenvpn.pro` пока отсутствует даже в авторитетном ответе REG.RU; физический тест остаётся намеренно fail-closed |
 | Monitoring | Доказано в границах preview | Probe timers Timeweb/RUVDS активны; последние runs `success`, status `0`, observations `posted=true`; неподтверждённые control-plane сигналы не могут продвинуть транспорт |
 | Release gate | Доказано | Backend `28/28` и `33/33`; Flutter `11/11`; native Kotlin `3/3`; release gate `0 warnings`, `0 errors`; APK verifier и signature pass |
 | Восстановительный checkpoint | Доказано | Git bundle с полной историей, APK, безопасные отчёты, docs, rollback paths и SHA-256 manifest находятся в `C:\Users\gekto\GreenVPN_Checkpoints\five_stage_transport_preview_20260712` |
 
 ## Единственный оставшийся сценарий
 
-1. Сохранить в REG.RU `A tns.greenvpn.pro -> 5.129.216.42`.
-2. Сохранить `NS t.greenvpn.pro -> tns.greenvpn.pro`.
-3. Дождаться публичного ответа Cloudflare/Google DNS.
+1. Дождаться публикации уже сохранённых в REG.RU записей `NS t.greenvpn.pro -> tns.greenvpn.pro` и `NS t.greenvpn.pro -> tns2.greenvpn.pro`; обе A-записи указывают на изолированный NL2 `5.129.216.42`.
+2. Если NS не появятся автоматически, довести до решения открытую заявку REG.RU `#20260712373018777`.
+3. Подтвердить публичный ответ Cloudflare/Google DNS.
 4. Запустить NL2 readiness с `--require-delegation`.
 5. Запустить `test_android_dnstt_preview_physical.ps1`.
 6. Подтвердить Android NL2 egress, production и оба paid-beta API, YouTube, watchdog fail-closed cleanup, reconnect и отсутствие plaintext profile.

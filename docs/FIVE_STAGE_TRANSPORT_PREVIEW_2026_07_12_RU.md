@@ -102,12 +102,16 @@ report_sha256=CBED2FD33B0F20C37FBD67C8BB6546BD2F5B5494953D8878E537C134A1030B8A
 
 ## Незавершённый физический gate dnstt
 
-В REG.RU ещё не сохранены две записи:
+В REG.RU записи сохранены. Из-за требования интерфейса о двух NS добавлена вторая метка того же изолированного NL2:
 
 ```text
-A   tns.greenvpn.pro -> 5.129.216.42
-NS  t.greenvpn.pro   -> tns.greenvpn.pro
+A   tns.greenvpn.pro  -> 5.129.216.42
+A   tns2.greenvpn.pro -> 5.129.216.42
+NS  t.greenvpn.pro    -> tns.greenvpn.pro
+NS  t.greenvpn.pro    -> tns2.greenvpn.pro
 ```
+
+Обе A-записи уже публикуются `ns1.reg.ru`/`ns2.reg.ru`. NS-записи видны в личном кабинете, но пока отсутствуют в авторитетном ответе. Открыта заявка REG.RU `#20260712373018777`; до появления NS публичная DoH-проверка остаётся заблокированной.
 
 После сохранения и propagation нужно:
 
