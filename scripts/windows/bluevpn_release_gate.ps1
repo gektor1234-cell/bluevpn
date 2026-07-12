@@ -100,6 +100,13 @@ $androidNaiveServicePath = Join-Path $ProjectRoot "android\transport_preview\hys
 $androidNaiveConfigTestPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\test\kotlin\pro\greenvpn\naive\NaiveHttpsConfigTest.kt"
 $androidNaivePreparePath = Join-Path $ProjectRoot "scripts\windows\prepare_android_naive_https_preview.ps1"
 $androidNaivePhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_android_naive_https_preview_physical.ps1"
+$androidDnsttConfigPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\main\kotlin\pro\greenvpn\dnstt\DnsttConfig.kt"
+$androidDnsttControllerPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\main\kotlin\pro\greenvpn\dnstt\DnsttController.kt"
+$androidDnsttServicePath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\main\kotlin\pro\greenvpn\dnstt\DnsttVpnService.kt"
+$androidDnsttConfigTestPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\test\kotlin\pro\greenvpn\dnstt\DnsttConfigTest.kt"
+$androidDnsttPreparePath = Join-Path $ProjectRoot "scripts\windows\prepare_android_dnstt_preview.ps1"
+$androidDnsttPhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_android_dnstt_preview_physical.ps1"
+$androidDnsttApkVerifyPath = Join-Path $ProjectRoot "scripts\windows\verify_android_dnstt_preview_apk.ps1"
 $routeFailureCooldownPath = Join-Path $ProjectRoot "lib\services\route_failure_cooldown.dart"
 $routeFailureCooldownTestPath = Join-Path $ProjectRoot "test\route_failure_cooldown_test.dart"
 $monitoringProbePath = Join-Path $ProjectRoot "scripts\monitoring\service_probe.py"
@@ -114,6 +121,9 @@ $hysteria2ContractDeployPath = Join-Path $ProjectRoot "scripts\server\deploy_pai
 $naiveHttpsBootstrapPath = Join-Path $ProjectRoot "scripts\server\bootstrap_naive_https_canary.sh"
 $naiveHttpsReadinessPath = Join-Path $ProjectRoot "scripts\server\check_naive_https_canary_readiness.sh"
 $naiveHttpsRollbackPath = Join-Path $ProjectRoot "scripts\server\remove_naive_https_canary.sh"
+$dnsttBootstrapPath = Join-Path $ProjectRoot "scripts\server\bootstrap_dnstt_canary.sh"
+$dnsttReadinessPath = Join-Path $ProjectRoot "scripts\server\check_dnstt_canary_readiness.sh"
+$dnsttRollbackPath = Join-Path $ProjectRoot "scripts\server\remove_dnstt_canary.sh"
 
 $main = Read-Text $mainPath
 $runtimeConfig = Read-Text $runtimeConfigPath
@@ -160,6 +170,13 @@ $androidNaiveService = Read-Text $androidNaiveServicePath
 $androidNaiveConfigTest = Read-Text $androidNaiveConfigTestPath
 $androidNaivePrepareScript = Read-Text $androidNaivePreparePath
 $androidNaivePhysicalTestScript = Read-Text $androidNaivePhysicalTestPath
+$androidDnsttConfig = Read-Text $androidDnsttConfigPath
+$androidDnsttController = Read-Text $androidDnsttControllerPath
+$androidDnsttService = Read-Text $androidDnsttServicePath
+$androidDnsttConfigTest = Read-Text $androidDnsttConfigTestPath
+$androidDnsttPrepareScript = Read-Text $androidDnsttPreparePath
+$androidDnsttPhysicalTestScript = Read-Text $androidDnsttPhysicalTestPath
+$androidDnsttApkVerifyScript = Read-Text $androidDnsttApkVerifyPath
 $routeFailureCooldown = Read-Text $routeFailureCooldownPath
 $routeFailureCooldownTest = Read-Text $routeFailureCooldownTestPath
 $monitoringProbe = Read-Text $monitoringProbePath
@@ -174,6 +191,9 @@ $hysteria2ContractDeployScript = Read-Text $hysteria2ContractDeployPath
 $naiveHttpsBootstrapScript = Read-Text $naiveHttpsBootstrapPath
 $naiveHttpsReadinessScript = Read-Text $naiveHttpsReadinessPath
 $naiveHttpsRollbackScript = Read-Text $naiveHttpsRollbackPath
+$dnsttBootstrapScript = Read-Text $dnsttBootstrapPath
+$dnsttReadinessScript = Read-Text $dnsttReadinessPath
+$dnsttRollbackScript = Read-Text $dnsttRollbackPath
 
 Write-Section "CLIENT SAFETY CHECKS"
 $forbiddenClientPatterns = @(
@@ -1351,7 +1371,7 @@ $androidHysteriaSourceChecks = [ordered]@{
     'Android Hysteria2 isolated build flag' = @($androidBuildScript, 'EnableHysteria2Preview', 'GREENVPN_ANDROID_HYSTERIA2_PREVIEW_ENABLED', 'GREENVPN_HYSTERIA2_PREVIEW_ENABLED=true')
     'Android Hysteria2 physical watchdog smoke' = @($androidHysteriaPhysicalTestScript, "ExpectedEgress = '5.129.216.42'", 'watchdogState', 'finalState', 'plaintextConfigRemoved')
     'Android Hysteria2 APK verifier' = @($androidHysteriaApkVerifyScript, 'lib/arm64-v8a/libhysteria.so', 'GREENVPN_HYSTERIA2_PREVIEW_ENABLED:Z = true', 'zipalign', 'apksigner')
-    'Android stable transport isolation verifier' = @($androidStableIsolationVerifyScript, 'Stable APK contains Hysteria2 preview payload', 'GREENVPN_HYSTERIA2_PREVIEW_ENABLED:Z = false', 'pro.greenvpn.hysteria.Hysteria2VpnService')
+    'Android stable transport isolation verifier' = @($androidStableIsolationVerifyScript, 'Stable APK contains transport preview payload', 'GREENVPN_HYSTERIA2_PREVIEW_ENABLED', 'pro.greenvpn.hysteria.Hysteria2VpnService')
 }
 foreach ($check in $androidHysteriaSourceChecks.GetEnumerator()) {
     $source = [string]$check.Value[0]
@@ -1456,6 +1476,49 @@ foreach ($scriptPath in @($androidNaivePreparePath, $androidNaivePhysicalTestPat
             Add-Error "Android Naive PowerShell parser errors in ${scriptPath}: $($parseErrors[0].ToString())"
         }
         else { Add-Pass "Android Naive PowerShell parser check passed: $scriptPath" }
+    }
+}
+
+Write-Section "ANDROID DNSTT LAST-RESORT PREVIEW CHECKS"
+$androidDnsttSourceChecks = [ordered]@{
+    'Android dnstt guarded profile' = @($androidDnsttConfig, 'ZONE = "t.greenvpn.pro"', 'EXPECTED_EGRESS = "5.129.216.42"', 'https://1.1.1.1/dns-query', 'https://8.8.8.8/dns-query', 'LISTEN = "127.0.0.1:$SOCKS_PORT"')
+    'Android dnstt mapdns full tunnel' = @($androidDnsttService, '.addDnsServer("198.18.3.2")', 'mapdns:', "udp: 'tcp'", 'addDisallowedApplication(packageName)')
+    'Android dnstt persistent fail-closed state' = @($androidDnsttService, 'context.noBackupFilesDir', 'STATE_FILE = "state.json"', 'process.destroyForcibly()', 'failClosed("Transport engine stopped")', 'cleanup("down", "")')
+    'Android dnstt reconnect state reset' = @($androidDnsttController, 'DnsttVpnService.prepareForConnect(context)', 'waitForState(context, "up", 30_000L)', 'state == "error" && expected != "down"')
+    'Android dnstt config tests' = @($androidDnsttConfigTest, 'rejectsWrongZone', 'rejectsInvalidPublicKey', 'rejectsNonLoopbackListener', 'rejectsUnapprovedResolver', 'rejectsLoggingOrUnknownFields')
+    'Android dnstt pinned preparation' = @($androidDnsttPrepareScript, 'dnstt 20260501', 'AAE616C0888DB31A61555CA4FE91B578E2A6734B7CEF7497B6FE30FFCDA1FDC5', 'AD1AB35C674DF572FBCE8B0A6BC758CBC11F6276', 'public-domain software')
+    'Android dnstt isolated build flag' = @($androidBuildScript, 'EnableDnsttPreview', 'GREENVPN_ANDROID_DNSTT_PREVIEW_ENABLED', 'GREENVPN_DNSTT_PREVIEW_ENABLED=true')
+    'Android dnstt physical watchdog and reconnect' = @($androidDnsttPhysicalTestScript, "ExpectedEgress = '5.129.216.42'", "resolverMode = 'doh'", 'watchdogState', 'reconnectState', 'reconnectEgress', 'plaintextConfigRemoved')
+    'Android dnstt APK verifier' = @($androidDnsttApkVerifyScript, 'lib/arm64-v8a/libdnstt_client.so', 'GREENVPN_DNSTT_PREVIEW_ENABLED:Z = true', 'zipalign', 'apksigner')
+    'dnstt server bootstrap is isolated' = @($dnsttBootstrapScript, 'CANARY_HOST="5.129.216.42"', 'CANARY_ZONE="t.greenvpn.pro"', 'registrar_dns=not_changed', 'stable_transports=verified_unchanged', 'client_profile=root_only')
+    'dnstt readiness proves delegation and data plane' = @($dnsttReadinessScript, '--require-delegation', 'server_data_plane_ready=', 'doh_delegation_ready=', 'secrets_printed=false')
+    'dnstt rollback is host-guarded' = @($dnsttRollbackScript, 'EXPECTED_PUBLIC_IP', 'APPROVED_EXISTING_HOST', 'registrar_dns=not_changed', 'stable_transports=active')
+    'Stable APK isolation covers all preview engines' = @($androidStableIsolationVerifyScript, 'libdnstt_client', 'pro.greenvpn.dnstt.DnsttVpnService', 'GREENVPN_DNSTT_PREVIEW_ENABLED', 'GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED', 'GREENVPN_VLESS_REALITY_PREVIEW_ENABLED')
+}
+foreach ($check in $androidDnsttSourceChecks.GetEnumerator()) {
+    $source = [string]$check.Value[0]
+    $missing = @($check.Value[1..($check.Value.Count - 1)] | Where-Object { -not $source.Contains([string]$_) })
+    if ($missing.Count -eq 0) { Add-Pass "$($check.Key) markers present" }
+    else { Add-Error "$($check.Key) missing marker(s): $($missing -join ', ')" }
+}
+if ($androidHysteriaManifest.Contains('DnsttDebugReceiver')) {
+    Add-Error 'Android dnstt debug receiver leaked into the main manifest'
+}
+elseif (-not $androidHysteriaDebugManifest.Contains('DnsttDebugReceiver') -or
+    -not $androidHysteriaDebugManifest.Contains('android.permission.DUMP')) {
+    Add-Error 'Android dnstt debug receiver is not protected in the debug manifest'
+}
+else { Add-Pass 'Android dnstt debug receiver is debug-only and DUMP-protected' }
+
+foreach ($scriptPath in @($androidDnsttPreparePath, $androidDnsttPhysicalTestPath, $androidDnsttApkVerifyPath)) {
+    if (Test-Path -LiteralPath $scriptPath) {
+        $tokens = $null
+        $parseErrors = $null
+        [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$parseErrors) | Out-Null
+        if ($parseErrors -and $parseErrors.Count -gt 0) {
+            Add-Error "Android dnstt PowerShell parser errors in ${scriptPath}: $($parseErrors[0].ToString())"
+        }
+        else { Add-Pass "Android dnstt PowerShell parser check passed: $scriptPath" }
     }
 }
 

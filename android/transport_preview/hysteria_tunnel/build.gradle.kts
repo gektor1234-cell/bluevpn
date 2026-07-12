@@ -29,6 +29,7 @@ android {
     packaging {
         jniLibs.useLegacyPackaging = true
         jniLibs.keepDebugSymbols += setOf("**/libhysteria.so")
+        jniLibs.keepDebugSymbols += setOf("**/libdnstt_client.so")
     }
 
     compileOptions {

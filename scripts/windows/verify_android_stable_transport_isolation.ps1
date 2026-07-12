@@ -22,12 +22,12 @@ try {
     $forbiddenEntries = @(
         $zip.Entries.FullName |
             Where-Object {
-                $_ -match '^lib/.*/(libhysteria|libhev-socks5-tunnel|libgreenvpn-hysteria-bridge)\.so$' -or
+                $_ -match '^lib/.*/(libhysteria|libhev-socks5-tunnel|libgreenvpn-hysteria-bridge|libxray|libnaive|libdnstt_client)\.so$' -or
                 $_ -eq 'assets/transport_preview/SOURCE-MANIFEST.txt'
             }
     )
     if ($forbiddenEntries.Count -gt 0) {
-        throw "Stable APK contains Hysteria2 preview payload: $($forbiddenEntries -join ', ')"
+        throw "Stable APK contains transport preview payload: $($forbiddenEntries -join ', ')"
     }
 }
 finally { $zip.Dispose() }
@@ -40,19 +40,39 @@ if ($packageLine -notmatch "name='$([regex]::Escape($ExpectedPackage))'") {
 }
 $manifest = @(& $aapt2 dump xmltree $apk --file AndroidManifest.xml) -join "`n"
 if ($LASTEXITCODE -ne 0) { throw 'aapt2 failed to read stable Android manifest.' }
-if ($manifest.Contains('pro.greenvpn.hysteria.Hysteria2VpnService') -or
-    $manifest.Contains('pro.greenvpn.hysteria.Hysteria2DebugReceiver')) {
-    throw 'Stable Android manifest contains a Hysteria2 preview component.'
+$forbiddenComponents = @(
+    'pro.greenvpn.hysteria.Hysteria2VpnService',
+    'pro.greenvpn.hysteria.Hysteria2DebugReceiver',
+    'pro.greenvpn.vless.VlessRealityVpnService',
+    'pro.greenvpn.vless.VlessRealityDebugReceiver',
+    'pro.greenvpn.naive.NaiveHttpsVpnService',
+    'pro.greenvpn.naive.NaiveHttpsDebugReceiver',
+    'pro.greenvpn.dnstt.DnsttVpnService',
+    'pro.greenvpn.dnstt.DnsttDebugReceiver'
+)
+$leakedComponents = @($forbiddenComponents | Where-Object { $manifest.Contains($_) })
+if ($leakedComponents.Count -gt 0) {
+    throw "Stable Android manifest contains transport preview component(s): $($leakedComponents -join ', ')"
 }
 $dex = @(& $apkanalyzer dex packages --defined-only $apk) -join "`n"
 if ($LASTEXITCODE -ne 0) { throw 'apkanalyzer failed to read stable Android DEX.' }
-if ($dex -match '^P d .*pro\.greenvpn\.hysteria$' -or
-    $dex.Contains('pro.greenvpn.hysteria.Hysteria2VpnService')) {
-    throw 'Stable Android DEX contains the Hysteria2 preview engine.'
+$forbiddenDexPackages = @('pro.greenvpn.hysteria', 'pro.greenvpn.vless', 'pro.greenvpn.naive', 'pro.greenvpn.dnstt')
+$leakedDexPackages = @($forbiddenDexPackages | Where-Object { $dex.Contains($_) })
+if ($leakedDexPackages.Count -gt 0) {
+    throw "Stable Android DEX contains transport preview package(s): $($leakedDexPackages -join ', ')"
 }
 $buildConfig = @(& $apkanalyzer dex code --class pro.greenvpn.app.BuildConfig $apk) -join "`n"
-if ($LASTEXITCODE -ne 0 -or $buildConfig -notmatch 'GREENVPN_HYSTERIA2_PREVIEW_ENABLED:Z = false') {
-    throw 'Stable Android BuildConfig unexpectedly enables Hysteria2 preview.'
+if ($LASTEXITCODE -ne 0) { throw 'apkanalyzer failed to read stable Android BuildConfig.' }
+$previewFlags = @(
+    'GREENVPN_AWG2_PREVIEW_ENABLED',
+    'GREENVPN_HYSTERIA2_PREVIEW_ENABLED',
+    'GREENVPN_VLESS_REALITY_PREVIEW_ENABLED',
+    'GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED',
+    'GREENVPN_DNSTT_PREVIEW_ENABLED'
+)
+$badFlags = @($previewFlags | Where-Object { $buildConfig -notmatch "$([regex]::Escape($_)):Z = false" })
+if ($badFlags.Count -gt 0) {
+    throw "Stable Android BuildConfig does not prove preview disabled: $($badFlags -join ', ')"
 }
 
 $item = Get-Item -LiteralPath $apk

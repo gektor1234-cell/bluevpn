@@ -12,6 +12,12 @@
             android:exported="true"
             android:excludeFromRecents="true"
             android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+        <activity
+            android:name="pro.greenvpn.dnstt.DnsttPermissionDebugActivity"
+            android:permission="android.permission.DUMP"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
         <receiver
             android:name="pro.greenvpn.hysteria.Hysteria2DebugReceiver"
             android:permission="android.permission.DUMP"
@@ -34,6 +40,14 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="pro.greenvpn.naive.DEBUG_CONTROL" />
+            </intent-filter>
+        </receiver>
+        <receiver
+            android:name="pro.greenvpn.dnstt.DnsttDebugReceiver"
+            android:permission="android.permission.DUMP"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="pro.greenvpn.dnstt.DEBUG_CONTROL" />
             </intent-filter>
         </receiver>
     </application>

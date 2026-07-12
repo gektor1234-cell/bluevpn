@@ -45,6 +45,9 @@ val greenVpnVlessRealityPreviewEnabled =
 val greenVpnNaiveHttpsPreviewEnabled =
     environmentValue("GREENVPN_ANDROID_NAIVE_HTTPS_PREVIEW_ENABLED", "false").lowercase() in
         setOf("1", "true", "yes", "on")
+val greenVpnDnsttPreviewEnabled =
+    environmentValue("GREENVPN_ANDROID_DNSTT_PREVIEW_ENABLED", "false").lowercase() in
+        setOf("1", "true", "yes", "on")
 
 android {
     namespace = "pro.greenvpn.app"
@@ -69,7 +72,8 @@ android {
         jniLibs.keepDebugSymbols += setOf("**/libhysteria.so")
         jniLibs.keepDebugSymbols += setOf("**/libxray.so")
         jniLibs.keepDebugSymbols += setOf("**/libnaive.so")
-        if (greenVpnHysteria2PreviewEnabled || greenVpnVlessRealityPreviewEnabled || greenVpnNaiveHttpsPreviewEnabled) {
+        jniLibs.keepDebugSymbols += setOf("**/libdnstt_client.so")
+        if (greenVpnHysteria2PreviewEnabled || greenVpnVlessRealityPreviewEnabled || greenVpnNaiveHttpsPreviewEnabled || greenVpnDnsttPreviewEnabled) {
             jniLibs.useLegacyPackaging = true
         }
     }
@@ -107,6 +111,11 @@ android {
             "GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED",
             greenVpnNaiveHttpsPreviewEnabled.toString(),
         )
+        buildConfigField(
+            "boolean",
+            "GREENVPN_DNSTT_PREVIEW_ENABLED",
+            greenVpnDnsttPreviewEnabled.toString(),
+        )
     }
 
     if (hasReleaseKeystore) {
@@ -141,7 +150,7 @@ dependencies {
     if (greenVpnAwg2PreviewEnabled) {
         implementation(project(":awg_tunnel_preview"))
     }
-    if (greenVpnHysteria2PreviewEnabled || greenVpnVlessRealityPreviewEnabled || greenVpnNaiveHttpsPreviewEnabled) {
+    if (greenVpnHysteria2PreviewEnabled || greenVpnVlessRealityPreviewEnabled || greenVpnNaiveHttpsPreviewEnabled || greenVpnDnsttPreviewEnabled) {
         implementation(project(":hysteria_tunnel_preview"))
     }
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
