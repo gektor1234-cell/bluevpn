@@ -69,6 +69,26 @@ gate and physical compatibility tests pass.
    processes, adapter state and runtime files. Stable WireGuard services and
    the user's existing VPN are outside the allowlist.
 
+## Windows physical proof
+
+The protected Windows preview passed the full-device smoke on 2026-07-12:
+
+- base profile SHA-256:
+  `6115EF37A73C43233E4FF90481E0FD46A8748C75A502839F94AEAECC38912CBE`;
+- the competing VPN guard returned HTTP `409` before any preview mutation;
+- both executables ran from the exact protected `%ProgramFiles%` paths;
+- `GreenVPNHysteriaPreview` was up with four split-default IPv4/IPv6 routes;
+- the NL2 endpoint route remained on physical Ethernet and did not recurse;
+- external egress was exactly `5.129.216.42`;
+- production API, both paid-beta control planes and YouTube returned HTTP `200`;
+- forcibly terminating HEV caused the watchdog to remove both engines and all
+  managed route-state files;
+- `AmneziaWGTunnel$device20_full` and original egress `5.129.237.163` were
+  restored, with no preview process or managed route left behind.
+
+Authoritative report:
+`C:\Users\gekto\GreenVPN_Checkpoints\windows_hysteria2_preview_physical_20260712.json`.
+
 ## Android contract
 
 Android will use the same HEV engine through its `tun_fd` JNI API. Hysteria's

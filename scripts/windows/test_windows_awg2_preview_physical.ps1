@@ -4,7 +4,7 @@ param(
     [string]$ExpectedCanaryEgress = '5.129.216.42',
     [string]$CompetingServiceName = 'AmneziaWGTunnel$device20_full',
     [string]$ReportPath = 'C:\Users\gekto\GreenVPN_Checkpoints\windows_awg2_preview_physical_20260711.json',
-    [string]$TaskScriptSource = (Join-Path $PSScriptRoot 'greenvpn_transport_preview_vpn_task.ps1')
+    [string]$TaskScriptSource = ''
 )
 
 Set-StrictMode -Version Latest
@@ -20,6 +20,9 @@ $ServiceBase = 'http://127.0.0.1:48739'
 $InstallRoot = Join-Path $env:ProgramFiles 'Green VPN Transport Preview'
 $AwgExe = Join-Path $InstallRoot 'tools\amneziawg2\awg.exe'
 $InstalledTaskScript = Join-Path $InstallRoot 'tools\greenvpn_transport_preview_vpn_task.ps1'
+if ([string]::IsNullOrWhiteSpace($TaskScriptSource)) {
+    $TaskScriptSource = Join-Path $PSScriptRoot 'greenvpn_transport_preview_vpn_task.ps1'
+}
 
 function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -72,7 +75,7 @@ function Get-PublicIp {
 function Get-HttpStatus {
     param([string]$Uri)
     try {
-        return [int](Invoke-WebRequest -UseBasicParsing -Uri $Uri -Method Head -TimeoutSec 20).StatusCode
+        return [int](Invoke-WebRequest -UseBasicParsing -Uri $Uri -Method Get -TimeoutSec 20).StatusCode
     } catch {
         if ($null -ne $_.Exception.Response) { return [int]$_.Exception.Response.StatusCode }
         return 0

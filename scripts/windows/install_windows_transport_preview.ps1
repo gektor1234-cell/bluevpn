@@ -28,6 +28,30 @@ function Assert-SafeInstallPath {
     }
 }
 
+function Remove-PreviewDirectoryWithRetry {
+    param([Parameter(Mandatory=$true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        try { Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop } catch {}
+        if (-not (Test-Path -LiteralPath $Path)) { return }
+        Start-Sleep -Milliseconds 300
+    }
+    throw "Transport preview directory remained locked: $Path"
+}
+
+function Stop-ExitedPreviewServiceProcess {
+    foreach ($process in @(Get-Process -Name 'greenvpn_transport_preview_service' -ErrorAction SilentlyContinue)) {
+        try {
+            $path = [IO.Path]::GetFullPath($process.Path)
+            if ($path.Equals((Join-Path $InstallRoot 'greenvpn_transport_preview_service.exe'), [StringComparison]::OrdinalIgnoreCase) -or
+                $path.Equals((Join-Path $LegacyInstallRoot 'greenvpn_transport_preview_service.exe'), [StringComparison]::OrdinalIgnoreCase)) {
+                $process.WaitForExit(5000)
+                if (-not $process.HasExited) { $process.Kill() }
+            }
+        } catch {}
+    }
+}
+
 function Set-PreviewAcl {
     param([string]$UserSid)
 
@@ -147,10 +171,11 @@ Assert-SafeInstallPath
 $installingUserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 Stop-PreviewTunnel
 Remove-PreviewService
+Stop-ExitedPreviewServiceProcess
 Get-Process -Name 'greenvpn_transport_preview' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
 if (Test-Path -LiteralPath $InstallRoot) {
-    Remove-Item -LiteralPath $InstallRoot -Recurse -Force
+    Remove-PreviewDirectoryWithRetry -Path $InstallRoot
 }
 if (Test-Path -LiteralPath $LegacyInstallRoot) {
     $legacyAllowed = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Programs')).TrimEnd('\') + '\'
@@ -158,7 +183,7 @@ if (Test-Path -LiteralPath $LegacyInstallRoot) {
     if (-not $legacyCandidate.StartsWith($legacyAllowed, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Unsafe legacy transport preview path: $legacyCandidate"
     }
-    Remove-Item -LiteralPath $LegacyInstallRoot -Recurse -Force
+    Remove-PreviewDirectoryWithRetry -Path $LegacyInstallRoot
 }
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
 Copy-Item -Path (Join-Path $PayloadDir '*') -Destination $InstallRoot -Recurse -Force

@@ -76,6 +76,7 @@ $transportCanaryPath = Join-Path $ProjectRoot "scripts\server\install_transport_
 $transportCanaryCheckPath = Join-Path $ProjectRoot "scripts\server\check_transport_canary_readiness.sh"
 $transportCanaryRollbackPath = Join-Path $ProjectRoot "scripts\server\remove_transport_canary_service.sh"
 $amneziaWg2CanaryBootstrapPath = Join-Path $ProjectRoot "scripts\server\bootstrap_amneziawg2_canary.sh"
+$amneziaWg2CanaryPeerAddressPath = Join-Path $ProjectRoot "scripts\server\set_amneziawg2_canary_peer_address.sh"
 $hysteria2CanaryBootstrapPath = Join-Path $ProjectRoot "scripts\server\bootstrap_hysteria2_canary.sh"
 $hysteria2ContractDeployPath = Join-Path $ProjectRoot "scripts\server\deploy_paid_beta_hysteria2_contract.sh"
 
@@ -100,6 +101,7 @@ $transportCanaryScript = Read-Text $transportCanaryPath
 $transportCanaryCheckScript = Read-Text $transportCanaryCheckPath
 $transportCanaryRollbackScript = Read-Text $transportCanaryRollbackPath
 $amneziaWg2CanaryBootstrapScript = Read-Text $amneziaWg2CanaryBootstrapPath
+$amneziaWg2CanaryPeerAddressScript = Read-Text $amneziaWg2CanaryPeerAddressPath
 $hysteria2CanaryBootstrapScript = Read-Text $hysteria2CanaryBootstrapPath
 $hysteria2ContractDeployScript = Read-Text $hysteria2ContractDeployPath
 
@@ -667,6 +669,29 @@ foreach ($fragment in $requiredAmneziaWg2BootstrapFragments) {
     }
 }
 
+$requiredAmneziaWg2PeerAddressFragments = @(
+    'Assign a unique address to one existing AmneziaWG 2 canary peer',
+    'CANARY_HOST="5.129.216.42"',
+    'CANARY_INTERFACE="awgcanary0"',
+    '--peer-fingerprint',
+    '--client-address',
+    'Requested client address is already assigned to another peer',
+    'syncconf "$CANARY_INTERFACE"',
+    'rollback',
+    'Stable wg0 invariant changed',
+    'wg0=active_unchanged',
+    'mode=dry-run'
+)
+
+foreach ($fragment in $requiredAmneziaWg2PeerAddressFragments) {
+    if ($amneziaWg2CanaryPeerAddressScript.Contains($fragment)) {
+        Add-Pass "AmneziaWG 2 peer-address safety marker present: $fragment"
+    }
+    else {
+        Add-Error "AmneziaWG 2 peer-address safety marker missing: $fragment"
+    }
+}
+
 $requiredHysteria2BootstrapFragments = @(
     'Bootstrap the owner-approved Hysteria2 canary on Green VPN NL2',
     'CANARY_HOST="5.129.216.42"',
@@ -1029,7 +1054,8 @@ $transportPreviewInstallFragments = @(
     "'tools\greenvpn_hysteria2_watchdog.ps1'",
     '-Action Disconnect',
     "Set-PreviewAcl -UserSid `$installingUserSid",
-    'Remove-Item -LiteralPath $LegacyInstallRoot -Recurse -Force'
+    'Remove-PreviewDirectoryWithRetry -Path $LegacyInstallRoot',
+    'Stop-ExitedPreviewServiceProcess'
 )
 foreach ($fragment in $transportPreviewInstallFragments) {
     if ($transportPreviewInstallScript.Contains($fragment)) {
@@ -1313,7 +1339,8 @@ if (-not [string]::IsNullOrWhiteSpace($ReleaseZip)) {
                         "'*S-1-5-32-545:(OI)(CI)RX'",
                         "/remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' /T /C",
                         "('*' + `$UserSid + ':(OI)(CI)M')",
-                        'Remove-Item -LiteralPath $LegacyInstallRoot -Recurse -Force'
+                        'Remove-PreviewDirectoryWithRetry -Path $LegacyInstallRoot',
+                        'Stop-ExitedPreviewServiceProcess'
                     )) {
                         if ($packagedPreviewInstaller.Contains($fragment)) {
                             Add-Pass "Packaged transport preview installer marker present: $fragment"

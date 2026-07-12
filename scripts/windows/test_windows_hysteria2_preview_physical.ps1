@@ -87,7 +87,7 @@ function Get-PublicIp {
 
 function Get-HttpStatus {
     param([string]$Uri)
-    try { return [int](Invoke-WebRequest -UseBasicParsing -Uri $Uri -Method Head -TimeoutSec 20).StatusCode } catch {
+    try { return [int](Invoke-WebRequest -UseBasicParsing -Uri $Uri -Method Get -TimeoutSec 20).StatusCode } catch {
         if ($null -ne $_.Exception.Response) { return [int]$_.Exception.Response.StatusCode }
         return 0
     }

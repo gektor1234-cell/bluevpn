@@ -44,6 +44,10 @@
 10. Повторная установка и post-reinstall handshake/egress прошли.
 11. Production `/healthz` вернул `ok=true`.
 12. Единственный failed unit NL2 - старый `dnsmasq.service`; новый canary failed units не создал.
+13. Физический Android preview прошёл с отдельным адресом `10.202.0.2/32`.
+14. Первый Windows full-tunnel smoke выявил дубликат адреса peer: handshake был свежим, но live `AllowedIPs` для Windows отсутствовал и return traffic не маршрутизировался.
+15. Guarded-скрипт `set_amneziawg2_canary_peer_address.sh` назначил Windows peer уникальный `10.202.0.3/32`, синхронизировал только `awgcanary0`, сохранил rollback-копию и подтвердил неизменность active `wg0`.
+16. Повторный физический Windows smoke прошёл: gateway, NL2 egress, production API, оба paid-beta control plane и YouTube `200`; исходный VPN и egress восстановлены.
 
 ## Rollback
 
@@ -60,4 +64,4 @@ Rollback сохраняет root-only config, ключи и binaries для ди
 
 ## Ограничение
 
-Green VPN stable пока не содержит AmneziaWG client engine и продолжает объявлять только `wireguard_udp`. Следующий этап должен выполняться исключительно в отдельной preview-сборке приложения. Публиковать AWG endpoint в stable catalog до physical Android/Windows preview smoke запрещено.
+Green VPN stable пока не содержит AmneziaWG client engine и продолжает объявлять только `wireguard_udp`. Android и Windows physical preview smokes пройдены, но публикация AWG endpoint в stable catalog всё ещё запрещена до завершения health-aware fallback и staged rollout gate.
