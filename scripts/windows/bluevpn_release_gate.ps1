@@ -79,8 +79,11 @@ $androidAppManifestPath = Join-Path $ProjectRoot "android\app\src\main\AndroidMa
 $androidAppDebugManifestPath = Join-Path $ProjectRoot "android\app\src\debug\AndroidManifest.xml"
 $androidTransportContractServicePath = Join-Path $ProjectRoot "android\app\src\debug\kotlin\pro\greenvpn\app\TransportContractDebugService.kt"
 $androidTransportContractProbePath = Join-Path $ProjectRoot "scripts\windows\test_android_transport_contract_probe.ps1"
+$androidQuickTilePhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_android_quick_tile_cascade_physical.ps1"
 $androidMainActivityPath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\MainActivity.kt"
 $androidQuickTilePath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\GreenVpnQuickTileService.kt"
+$androidQuickTilePolicyPath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\GreenVpnQuickTileCascadePolicy.kt"
+$androidQuickTilePolicyTestPath = Join-Path $ProjectRoot "android\app\src\test\kotlin\pro\greenvpn\app\GreenVpnQuickTileCascadePolicyTest.kt"
 $androidHysteriaBuildPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\build.gradle.kts"
 $androidHysteriaManifestPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\main\AndroidManifest.xml"
 $androidHysteriaDebugManifestPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\debug\AndroidManifest.xml"
@@ -158,8 +161,11 @@ $androidAppManifest = Read-Text $androidAppManifestPath
 $androidAppDebugManifest = Read-Text $androidAppDebugManifestPath
 $androidTransportContractService = Read-Text $androidTransportContractServicePath
 $androidTransportContractProbe = Read-Text $androidTransportContractProbePath
+$androidQuickTilePhysicalTest = Read-Text $androidQuickTilePhysicalTestPath
 $androidMainActivity = Read-Text $androidMainActivityPath
 $androidQuickTile = Read-Text $androidQuickTilePath
+$androidQuickTilePolicy = Read-Text $androidQuickTilePolicyPath
+$androidQuickTilePolicyTest = Read-Text $androidQuickTilePolicyTestPath
 $androidHysteriaBuild = Read-Text $androidHysteriaBuildPath
 $androidHysteriaManifest = Read-Text $androidHysteriaManifestPath
 $androidHysteriaDebugManifest = Read-Text $androidHysteriaDebugManifestPath
@@ -1517,6 +1523,13 @@ $androidDnsttSourceChecks = [ordered]@{
     'Dart selector advertises and orders dnstt' = @($main, 'kDnsttPreviewEnabled', "if (kDnsttPreviewEnabled) 'dnstt'", 'greenVpnCompareTransportPreviewCandidates(', 'greenVpnTransportRequiresFullTunnel(')
     'Android app lifecycle integrates dnstt' = @($androidMainActivity, 'protocol == "dnstt"', 'GreenVpnDnsttPreview.validateConfig', 'GreenVpnDnsttPreview.connect', 'GreenVpnDnsttPreview.disconnect', 'BuildConfig.GREENVPN_DNSTT_PREVIEW_ENABLED')
     'Android quick tile integrates dnstt' = @($androidQuickTile, 'BuildConfig.GREENVPN_DNSTT_PREVIEW_ENABLED', 'GreenVpnDnsttPreview.validateConfig', 'GreenVpnDnsttPreview.connect', 'GreenVpnDnsttPreview.disconnect')
+    'Android quick tile uses the dynamic guarded cascade' = @($androidQuickTile, 'BuildConfig.GREENVPN_RELEASE_CHANNEL', 'BuildConfig.GREENVPN_CLIENT_MARKER', '/api/v1/catalog/servers?channel=', 'fetchCatalogCandidates(', 'GreenVpnQuickTileCascadePolicy.sort(', 'recordRouteFailure(', 'clearRouteFailure(', 'probeConnectedRoute()')
+    'Android quick tile cascade policy is strict and bounded' = @($androidQuickTilePolicy, '"amneziawg"', '"hysteria2"', '"vless_reality"', '"naive_https"', '"dnstt"', '"wireguard_udp"', '60_000L', '1_800_000L')
+    'Android quick tile cascade tests cover order and cooldown' = @($androidQuickTilePolicyTest, 'strictTransportOrderIsPreserved', 'coolingCandidateIsDemotedWithoutChangingBaseOrder', 'cooldownScheduleIsBounded')
+    'Android quick tile physical proof is reversible' = @($androidQuickTilePhysicalTest, "Wait-Route -ExpectedProtocol 'amneziawg'", "Wait-Route -ExpectedProtocol 'hysteria2'", 'youtubeProbeRequiredBeforeSuccessMarker', 'Set-TileList -Value $originalTiles', "Invoke-DebugCommand -Command 'disconnect_all'", "Invoke-DebugCommand -Command 'clear_tile_cooldown'")
+    'Android quick tile debug controls stay sanitized' = @($androidTransportContractService, '"set_tile_cooldown"', '"clear_tile_cooldown"', '"disconnect_all"', 'lastRouteSuccess', 'activeProtocols')
+    'Android preview build binds native paid-beta identity' = @($androidAppBuild, 'GREENVPN_ANDROID_RELEASE_CHANNEL', 'GREENVPN_ANDROID_CLIENT_MARKER', 'GREENVPN_RELEASE_CHANNEL', 'GREENVPN_CLIENT_MARKER')
+    'Android preview build script sets paid-beta identity' = @($androidBuildScript, "GREENVPN_ANDROID_RELEASE_CHANNEL = 'paid-beta'", "GREENVPN_ANDROID_CLIENT_MARKER = 'green-vpn-paid-beta-v1'")
     'Backend guarded Naive and dnstt contracts' = @($backend, 'static_naive_https_canary', 'static_dnstt_canary', 'guarded_json_client_profile_file(', 'load_naive_https_client_config(', 'load_dnstt_client_config(', 'GREENVPN_DNSTT_CLIENT_CONFIG_ENABLED', 'GREENVPN_NAIVE_HTTPS_CLIENT_CONFIG_ENABLED')
     'Paid-beta Naive/dnstt deploy is atomic and isolated' = @($naiveDnsttContractDeployScript, 'EXPECTED_CURRENT_RELEASE="paid-beta-0.3.0-paid-beta.6-2026071106-r17-vless-contract"', 'production_changed=false', 'stable_catalog_changed=false', 'bluevpn.db.before.sqlite', 'rollback_on_error', 'legacy_naive_dnstt_count=0', 'preview_naive_dnstt_count=2')
     'Android ten-contract debug probe' = @($androidTransportContractService, 'TransportContractDebugService', 'nl2-awg2-canary', 'nl2-hysteria2-canary', 'nl2-vless-reality-xhttp-canary', 'nl2-naive-https-canary', 'nl2-dnstt-canary', '"primary"', '"fallback"', 'checks.length() == bases.size * CANDIDATES.size')
@@ -1549,7 +1562,7 @@ elseif ($androidTransportContractService -match '\.put\("(accessToken|deviceId|c
 }
 else { Add-Pass 'Android transport contract probe is debug-only, DUMP-protected, and sanitized' }
 
-foreach ($scriptPath in @($androidDnsttPreparePath, $androidDnsttPhysicalTestPath, $androidDnsttApkVerifyPath, $androidTransportContractProbePath)) {
+foreach ($scriptPath in @($androidDnsttPreparePath, $androidDnsttPhysicalTestPath, $androidDnsttApkVerifyPath, $androidTransportContractProbePath, $androidQuickTilePhysicalTestPath)) {
     if (Test-Path -LiteralPath $scriptPath) {
         $tokens = $null
         $parseErrors = $null

@@ -57,6 +57,8 @@ if ($EnableAwg2Preview -or $EnableHysteria2Preview -or $EnableVlessRealityPrevie
     $env:GREENVPN_ANDROID_APP_LABEL = $Awg2PreviewAppLabel
     $env:GREENVPN_ANDROID_API_BASE_URL = $Awg2PreviewApiBaseUrl
     $env:GREENVPN_ANDROID_API_FALLBACK_BASE_URLS = $Awg2PreviewApiFallbackBaseUrls
+    $env:GREENVPN_ANDROID_RELEASE_CHANNEL = 'paid-beta'
+    $env:GREENVPN_ANDROID_CLIENT_MARKER = 'green-vpn-paid-beta-v1'
     $env:GREENVPN_APP_VERSION = $Awg2PreviewAppVersion
 }
 if ($EnableAwg2Preview) {

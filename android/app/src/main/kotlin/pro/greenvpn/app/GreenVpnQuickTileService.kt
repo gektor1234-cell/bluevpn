@@ -21,6 +21,7 @@ import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
 import java.util.concurrent.ExecutorService
@@ -39,6 +40,8 @@ class GreenVpnQuickTileService : TileService() {
             .filter { it.isNotEmpty() }
         val APP_VERSION = BuildConfig.GREENVPN_APP_VERSION
         val APP_LABEL = BuildConfig.GREENVPN_APP_LABEL
+        val RELEASE_CHANNEL = BuildConfig.GREENVPN_RELEASE_CHANNEL.trim().ifEmpty { "stable" }
+        val CLIENT_MARKER = BuildConfig.GREENVPN_CLIENT_MARKER.trim()
         const val SECURE_PREFS_NAME = "greenvpn_secure_config_store_v1"
         const val SECURE_KEY_ALIAS = "greenvpn_config_aes_v1"
         const val GCM_TAG_BITS = 128
@@ -46,6 +49,8 @@ class GreenVpnQuickTileService : TileService() {
         const val DEVICE_ID_KEY = "greenvpn_mobile_device_id_v1"
         const val MANAGED_CONFIG_KEY = "greenvpn_mobile_managed_config_v1"
         const val MANAGED_PROTOCOL_KEY = "greenvpn_mobile_managed_protocol_v1"
+        const val ROUTE_COOLDOWN_KEY = "greenvpn_quick_tile_route_cooldown_v1"
+        const val LAST_ROUTE_SUCCESS_KEY = "greenvpn_quick_tile_last_route_success_v1"
         val FREE_PLAN_CODES = setOf("trial", "free", "free_start", "support_trial", "base")
         val SUPPORTED_PROTOCOLS = buildList {
             add("wireguard_udp")
@@ -55,9 +60,22 @@ class GreenVpnQuickTileService : TileService() {
             if (BuildConfig.GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED) add("naive_https")
             if (BuildConfig.GREENVPN_DNSTT_PREVIEW_ENABLED) add("dnstt")
         }
+        val TRANSPORT_PREVIEW_ENABLED = SUPPORTED_PROTOCOLS.size > 1
     }
 
-    private data class FetchedConfig(val config: String, val protocol: String)
+    private data class FetchedConfig(
+        val config: String,
+        val protocol: String,
+        val serverId: String,
+    )
+
+    private data class CatalogCandidate(
+        val serverId: String?,
+        val protocol: String,
+        val healthScore: Int,
+        val latencyMs: Int?,
+        val cooldownUntilMs: Long?,
+    )
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
@@ -81,6 +99,9 @@ class GreenVpnQuickTileService : TileService() {
             try {
                 if (isVpnConnected()) {
                     disconnectVpn()
+                    if (TRANSPORT_PREVIEW_ENABLED) {
+                        securePrefs().edit().remove(LAST_ROUTE_SUCCESS_KEY).commit()
+                    }
                     showToast("Green VPN выключен.")
                     setTile(Tile.STATE_INACTIVE, "Отключено")
                     return@execute
@@ -111,24 +132,16 @@ class GreenVpnQuickTileService : TileService() {
                         .put("deviceName", "Android Quick Settings")
                         .put("platform", "android")
                         .put("appVersion", APP_VERSION)
+                        .put("releaseChannel", RELEASE_CHANNEL)
                         .put("supportedProtocols", JSONArray(SUPPORTED_PROTOCOLS))
+                        .apply {
+                            if (CLIENT_MARKER.isNotEmpty()) put("clientMarker", CLIENT_MARKER)
+                        }
                 )
                 val subscription = bootstrap.optJSONObject("subscription")
                 if (!canConnectFromTile(subscription)) {
                     openApp(tileBlockedMessage())
                     setTile(Tile.STATE_INACTIVE, "Нужен Trial")
-                    return@execute
-                }
-
-                val fetched = fetchFreshConfig(accessToken, deviceId, sessionApiBaseUrl)
-                val config = fetched?.config
-                    ?: readSecureString(MANAGED_CONFIG_KEY)?.trim()
-                val protocol = fetched?.protocol
-                    ?: readSecureString(MANAGED_PROTOCOL_KEY)?.trim()?.lowercase()
-                    ?: "wireguard_udp"
-                if (config.isNullOrBlank()) {
-                    openApp("Откройте Green VPN, чтобы получить VPN-конфиг.")
-                    setTile(Tile.STATE_INACTIVE, "Нужен конфиг")
                     return@execute
                 }
 
@@ -139,8 +152,75 @@ class GreenVpnQuickTileService : TileService() {
                     return@execute
                 }
 
-                val connected = connectVpn(config, protocol)
-                if (connected) {
+                val candidates = fetchCatalogCandidates(sessionApiBaseUrl)
+                if (TRANSPORT_PREVIEW_ENABLED) {
+                    securePrefs().edit().remove(LAST_ROUTE_SUCCESS_KEY).commit()
+                }
+                var connectedConfig: FetchedConfig? = null
+                for (candidate in candidates) {
+                    val fetched = try {
+                        fetchFreshConfig(
+                            accessToken = accessToken,
+                            deviceId = deviceId,
+                            preferredBaseUrl = sessionApiBaseUrl,
+                            serverId = candidate.serverId,
+                        )
+                    } catch (_: Exception) {
+                        null
+                    }
+                    if (fetched == null) {
+                        recordRouteFailure(candidate)
+                        continue
+                    }
+
+                    val connected = try {
+                        connectVpn(fetched.config, fetched.protocol)
+                    } catch (_: Exception) {
+                        false
+                    }
+                    if (!connected || (TRANSPORT_PREVIEW_ENABLED && !probeConnectedRoute())) {
+                        try { disconnectVpn() } catch (_: Exception) {}
+                        recordRouteFailure(candidate)
+                        continue
+                    }
+
+                    clearRouteFailure(candidate)
+                    writeSecureString(MANAGED_CONFIG_KEY, fetched.config)
+                    writeSecureString(MANAGED_PROTOCOL_KEY, fetched.protocol)
+                    if (TRANSPORT_PREVIEW_ENABLED) {
+                        writeSecureString(
+                            LAST_ROUTE_SUCCESS_KEY,
+                            JSONObject()
+                                .put("serverId", fetched.serverId)
+                                .put("protocol", fetched.protocol)
+                                .put("verifiedAtMs", System.currentTimeMillis())
+                                .toString(),
+                        )
+                    }
+                    connectedConfig = fetched
+                    break
+                }
+
+                if (connectedConfig == null && candidates.size == 1 && candidates.first().serverId == null) {
+                    val cachedConfig = readSecureString(MANAGED_CONFIG_KEY)?.trim()
+                    val cachedProtocol = readSecureString(MANAGED_PROTOCOL_KEY)
+                        ?.trim()?.lowercase() ?: "wireguard_udp"
+                    if (!cachedConfig.isNullOrBlank()) {
+                        val cachedConnected = try {
+                            connectVpn(cachedConfig, cachedProtocol) &&
+                                (!TRANSPORT_PREVIEW_ENABLED || probeConnectedRoute())
+                        } catch (_: Exception) {
+                            false
+                        }
+                        if (cachedConnected) {
+                            connectedConfig = FetchedConfig(cachedConfig, cachedProtocol, "cached")
+                        } else {
+                            try { disconnectVpn() } catch (_: Exception) {}
+                        }
+                    }
+                }
+
+                if (connectedConfig != null) {
                     showToast("Green VPN включен.")
                     setTile(Tile.STATE_ACTIVE, "Включено")
                 } else {
@@ -329,24 +409,151 @@ class GreenVpnQuickTileService : TileService() {
     private fun fetchFreshConfig(
         accessToken: String,
         deviceId: String,
-        preferredBaseUrl: String?
+        preferredBaseUrl: String?,
+        serverId: String?,
     ): FetchedConfig? {
+        val payload = JSONObject()
+            .put("deviceUid", deviceId)
+            .put("mode", "full")
+            .put("releaseChannel", RELEASE_CHANNEL)
+            .put("supportedProtocols", JSONArray(SUPPORTED_PROTOCOLS))
+        if (CLIENT_MARKER.isNotEmpty()) payload.put("clientMarker", CLIENT_MARKER)
+        if (!serverId.isNullOrBlank()) payload.put("serverId", serverId)
         val json = postJson(
             path = "/api/v1/client/config",
             accessToken = accessToken,
             preferredBaseUrl = preferredBaseUrl,
-            payload = JSONObject()
-                .put("deviceUid", deviceId)
-                .put("mode", "full")
-                .put("supportedProtocols", JSONArray(SUPPORTED_PROTOCOLS))
+            payload = payload,
         )
         val config = json.optString("configText").trim()
         val protocol = json.optString("protocol", "wireguard_udp").trim().lowercase()
-        if (config.isNotEmpty()) {
-            writeSecureString(MANAGED_CONFIG_KEY, config)
-            writeSecureString(MANAGED_PROTOCOL_KEY, protocol)
+        val returnedServerId = json.optString("serverId", serverId.orEmpty()).trim()
+        return if (config.isEmpty()) null else FetchedConfig(config, protocol, returnedServerId)
+    }
+
+    private fun fetchCatalogCandidates(preferredBaseUrl: String?): List<CatalogCandidate> {
+        if (!TRANSPORT_PREVIEW_ENABLED) {
+            return listOf(CatalogCandidate(null, "wireguard_udp", 100, null, null))
         }
-        return if (config.isEmpty()) null else FetchedConfig(config, protocol)
+        return try {
+            val channel = URLEncoder.encode(RELEASE_CHANNEL, StandardCharsets.UTF_8.name())
+            val version = URLEncoder.encode(APP_VERSION, StandardCharsets.UTF_8.name())
+            val response = getJson(
+                path = "/api/v1/catalog/servers?channel=$channel&currentVersion=$version",
+                preferredBaseUrl = preferredBaseUrl,
+            )
+            val servers = response.optJSONObject("catalog")?.optJSONArray("servers")
+                ?: return listOf(CatalogCandidate(null, "wireguard_udp", 100, null, null))
+            val nowMs = System.currentTimeMillis()
+            val parsed = mutableListOf<CatalogCandidate>()
+            for (index in 0 until servers.length()) {
+                val server = servers.optJSONObject(index) ?: continue
+                if (server.optBoolean("available", true).not()) continue
+                if (server.optBoolean("clientConfigReady", true).not()) continue
+                if (server.optString("status").trim().lowercase() == "disabled") continue
+                val serverId = server.optString("id").trim()
+                if (serverId.isEmpty()) continue
+                val protocols = server.optJSONArray("protocols") ?: continue
+                val protocol = protocols.optJSONObject(0)?.optString("code")
+                    ?.trim()?.lowercase().orEmpty()
+                if (protocol !in SUPPORTED_PROTOCOLS) continue
+                val latency = if (server.has("latencyMs") && !server.isNull("latencyMs")) {
+                    server.optInt("latencyMs")
+                } else {
+                    null
+                }
+                val cooldownUntil = readRouteCooldown(serverId, protocol)?.optLong("untilMs")
+                    ?.takeIf { it > nowMs }
+                parsed += CatalogCandidate(
+                    serverId = serverId,
+                    protocol = protocol,
+                    healthScore = server.optInt("healthScore", 50),
+                    latencyMs = latency,
+                    cooldownUntilMs = cooldownUntil,
+                )
+            }
+            if (parsed.isEmpty()) {
+                listOf(CatalogCandidate(null, "wireguard_udp", 100, null, null))
+            } else {
+                val indexed = parsed.associateBy { requireNotNull(it.serverId) }
+                GreenVpnQuickTileCascadePolicy.sort(
+                    candidates = parsed.map {
+                        GreenVpnTileRouteCandidate(
+                            serverId = requireNotNull(it.serverId),
+                            protocol = it.protocol,
+                            healthScore = it.healthScore,
+                            latencyMs = it.latencyMs,
+                            cooldownUntilMs = it.cooldownUntilMs,
+                        )
+                    },
+                    nowMs = nowMs,
+                ).mapNotNull { indexed[it.serverId] }
+            }
+        } catch (_: Exception) {
+            listOf(CatalogCandidate(null, "wireguard_udp", 100, null, null))
+        }
+    }
+
+    private fun routeCooldownKey(candidate: CatalogCandidate): String? {
+        val serverId = candidate.serverId?.trim().orEmpty()
+        if (serverId.isEmpty()) return null
+        return "$serverId|${candidate.protocol.trim().lowercase()}"
+    }
+
+    private fun readRouteCooldown(serverId: String, protocol: String): JSONObject? = try {
+        val document = JSONObject(readSecureString(ROUTE_COOLDOWN_KEY).orEmpty().ifBlank { "{}" })
+        document.optJSONObject("$serverId|${protocol.trim().lowercase()}")
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun recordRouteFailure(candidate: CatalogCandidate) {
+        if (!TRANSPORT_PREVIEW_ENABLED) return
+        val key = routeCooldownKey(candidate) ?: return
+        val document = try {
+            JSONObject(readSecureString(ROUTE_COOLDOWN_KEY).orEmpty().ifBlank { "{}" })
+        } catch (_: Exception) {
+            JSONObject()
+        }
+        val previousFailures = document.optJSONObject(key)?.optInt("failures", 0) ?: 0
+        val failures = previousFailures + 1
+        val untilMs = System.currentTimeMillis() +
+            GreenVpnQuickTileCascadePolicy.cooldownDurationMs(failures)
+        document.put(key, JSONObject().put("failures", failures).put("untilMs", untilMs))
+        try {
+            writeSecureString(ROUTE_COOLDOWN_KEY, document.toString())
+        } catch (_: Exception) {}
+    }
+
+    private fun clearRouteFailure(candidate: CatalogCandidate) {
+        if (!TRANSPORT_PREVIEW_ENABLED) return
+        val key = routeCooldownKey(candidate) ?: return
+        val document = try {
+            JSONObject(readSecureString(ROUTE_COOLDOWN_KEY).orEmpty().ifBlank { "{}" })
+        } catch (_: Exception) {
+            return
+        }
+        document.remove(key)
+        try {
+            writeSecureString(ROUTE_COOLDOWN_KEY, document.toString())
+        } catch (_: Exception) {}
+    }
+
+    private fun probeConnectedRoute(): Boolean {
+        val connection = (URL("https://www.youtube.com/generate_204")
+            .openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 6000
+            readTimeout = 8000
+            setRequestProperty("User-Agent", "GreenVPN/$APP_VERSION tile-route-check")
+        }
+        return try {
+            connection.responseCode in 200..399
+        } catch (_: Exception) {
+            false
+        } finally {
+            connection.disconnect()
+        }
     }
 
     private fun canConnectFromTile(subscription: JSONObject?): Boolean {
@@ -377,13 +584,29 @@ class GreenVpnQuickTileService : TileService() {
                 return postJsonToBase(baseUrl, path, accessToken, payload)
             } catch (e: Exception) {
                 lastError = e
-                val message = e.message.orEmpty()
-                if (!message.contains("HTTP 408") && !message.contains("HTTP 5")) {
-                    throw e
-                }
+                if (!isRetryableApiError(e)) throw e
             }
         }
         throw lastError ?: IllegalStateException("API недоступен")
+    }
+
+    private fun getJson(path: String, preferredBaseUrl: String?): JSONObject {
+        var lastError: Exception? = null
+        for (baseUrl in orderedApiBaseUrls(preferredBaseUrl)) {
+            try {
+                return getJsonFromBase(baseUrl, path)
+            } catch (e: Exception) {
+                lastError = e
+                if (!isRetryableApiError(e)) throw e
+            }
+        }
+        throw lastError ?: IllegalStateException("API недоступен")
+    }
+
+    private fun isRetryableApiError(error: Exception): Boolean {
+        val status = Regex("HTTP (\\d{3})").find(error.message.orEmpty())
+            ?.groupValues?.getOrNull(1)?.toIntOrNull()
+        return status == null || status == 408 || status >= 500
     }
 
     private fun orderedApiBaseUrls(preferredBaseUrl: String? = null): List<String> {
@@ -452,6 +675,9 @@ class GreenVpnQuickTileService : TileService() {
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
             setRequestProperty("Accept", "application/json")
             setRequestProperty("Authorization", "Bearer $accessToken")
+            setRequestProperty("X-GreenVPN-Release-Channel", RELEASE_CHANNEL)
+            setRequestProperty("X-GreenVPN-Version", APP_VERSION)
+            setRequestProperty("X-GreenVPN-Supported-Protocols", SUPPORTED_PROTOCOLS.joinToString(","))
         }
         val bytes = payload.toString().toByteArray(StandardCharsets.UTF_8)
         connection.outputStream.use { it.write(bytes) }
@@ -464,6 +690,29 @@ class GreenVpnQuickTileService : TileService() {
             throw IllegalStateException("сервер вернул HTTP $code: $body")
         }
         return JSONObject(body)
+    }
+
+    private fun getJsonFromBase(baseUrl: String, path: String): JSONObject {
+        val connection = (URL("$baseUrl$path").openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 5000
+            readTimeout = 10000
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("X-GreenVPN-Release-Channel", RELEASE_CHANNEL)
+            setRequestProperty("X-GreenVPN-Version", APP_VERSION)
+            setRequestProperty("X-GreenVPN-Supported-Protocols", SUPPORTED_PROTOCOLS.joinToString(","))
+        }
+        return try {
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val body = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
+            if (code !in 200..299) {
+                throw IllegalStateException("сервер вернул HTTP $code: $body")
+            }
+            JSONObject(body)
+        } finally {
+            connection.disconnect()
+        }
     }
 
     private fun readSession(): JSONObject {

@@ -22,6 +22,8 @@ class TransportContractDebugService : Service() {
         const val SECURE_KEY_ALIAS = "greenvpn_config_aes_v1"
         const val SESSION_KEY = "greenvpn_mobile_session_v1"
         const val DEVICE_ID_KEY = "greenvpn_mobile_device_id_v1"
+        const val ROUTE_COOLDOWN_KEY = "greenvpn_quick_tile_route_cooldown_v1"
+        const val LAST_ROUTE_SUCCESS_KEY = "greenvpn_quick_tile_last_route_success_v1"
         const val GCM_TAG_BITS = 128
 
         val CANDIDATES = linkedMapOf(
@@ -50,39 +52,27 @@ class TransportContractDebugService : Service() {
                 .put("checks", JSONArray())
                 .put("success", false)
             try {
-                require(intent?.getStringExtra("command").orEmpty() == "probe") {
-                    "unsupported_command"
-                }
-                val session = JSONObject(readSecureString(this, SESSION_KEY))
-                val accessToken = session.optString("accessToken").trim()
-                val deviceId = readSecureString(this, DEVICE_ID_KEY).trim()
-                require(accessToken.isNotEmpty()) { "session_missing" }
-                require(deviceId.length >= 8) { "device_missing" }
-
-                val bases = linkedMapOf(
-                    "primary" to BuildConfig.GREENVPN_API_BASE_URL.trim().trimEnd('/'),
-                    "fallback" to BuildConfig.GREENVPN_API_FALLBACK_BASE_URLS
-                        .split(',')
-                        .first { it.trim().isNotEmpty() }
-                        .trim()
-                        .trimEnd('/'),
-                )
-                for ((role, baseUrl) in bases) {
-                    for ((serverId, expectedProtocol) in CANDIDATES) {
-                        val check = probeConfig(
-                            baseUrl = baseUrl,
-                            accessToken = accessToken,
-                            deviceId = deviceId,
-                            serverId = serverId,
-                            expectedProtocol = expectedProtocol,
-                        ).put("apiRole", role)
-                        result.getJSONArray("checks").put(check)
+                when (val command = intent?.getStringExtra("command").orEmpty()) {
+                    "probe" -> runContractProbe(result)
+                    "snapshot" -> writeTransportSnapshot(result)
+                    "set_tile_cooldown" -> setTileCooldown(result, requireNotNull(intent))
+                    "clear_tile_cooldown" -> {
+                        getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE)
+                            .edit().remove(ROUTE_COOLDOWN_KEY).commit()
+                        result.put("success", true)
                     }
+                    "disconnect_all" -> {
+                        GreenVpnDnsttPreview.disconnect(this)
+                        GreenVpnNaiveHttpsPreview.disconnect(this)
+                        GreenVpnVlessRealityPreview.disconnect(this)
+                        GreenVpnHysteria2Preview.disconnect(this)
+                        GreenVpnAwg2Preview.disconnect(this)
+                        getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE)
+                            .edit().remove(LAST_ROUTE_SUCCESS_KEY).commit()
+                        writeTransportSnapshot(result)
+                    }
+                    else -> error("unsupported_command:$command")
                 }
-                val checks = result.getJSONArray("checks")
-                val allValid = checks.length() == bases.size * CANDIDATES.size &&
-                    (0 until checks.length()).all { checks.getJSONObject(it).getBoolean("valid") }
-                result.put("success", allValid)
             } catch (error: Throwable) {
                 result.put("error", safeError(error))
             } finally {
@@ -93,6 +83,100 @@ class TransportContractDebugService : Service() {
             }
         }.start()
         return START_NOT_STICKY
+    }
+
+    private fun runContractProbe(result: JSONObject) {
+        val session = JSONObject(readSecureString(this, SESSION_KEY))
+        val accessToken = session.optString("accessToken").trim()
+        val deviceId = readSecureString(this, DEVICE_ID_KEY).trim()
+        require(accessToken.isNotEmpty()) { "session_missing" }
+        require(deviceId.length >= 8) { "device_missing" }
+
+        val bases = linkedMapOf(
+            "primary" to BuildConfig.GREENVPN_API_BASE_URL.trim().trimEnd('/'),
+            "fallback" to BuildConfig.GREENVPN_API_FALLBACK_BASE_URLS
+                .split(',')
+                .first { it.trim().isNotEmpty() }
+                .trim()
+                .trimEnd('/'),
+        )
+        for ((role, baseUrl) in bases) {
+            for ((serverId, expectedProtocol) in CANDIDATES) {
+                val check = probeConfig(
+                    baseUrl = baseUrl,
+                    accessToken = accessToken,
+                    deviceId = deviceId,
+                    serverId = serverId,
+                    expectedProtocol = expectedProtocol,
+                ).put("apiRole", role)
+                result.getJSONArray("checks").put(check)
+            }
+        }
+        val checks = result.getJSONArray("checks")
+        result.put(
+            "success",
+            checks.length() == bases.size * CANDIDATES.size &&
+                (0 until checks.length()).all { checks.getJSONObject(it).getBoolean("valid") },
+        )
+    }
+
+    private fun writeTransportSnapshot(result: JSONObject) {
+        val snapshots = linkedMapOf(
+            "amneziawg" to GreenVpnAwg2Preview.snapshot(this),
+            "hysteria2" to GreenVpnHysteria2Preview.snapshot(this),
+            "vless_reality" to GreenVpnVlessRealityPreview.snapshot(this),
+            "naive_https" to GreenVpnNaiveHttpsPreview.snapshot(this),
+            "dnstt" to GreenVpnDnsttPreview.snapshot(this),
+        )
+        val engines = JSONObject()
+        val active = JSONArray()
+        for ((protocol, snapshot) in snapshots) {
+            val connected = when (snapshot) {
+                is GreenVpnAwg2Preview.Snapshot -> snapshot.connected
+                is GreenVpnHysteria2Preview.Snapshot -> snapshot.connected
+                is GreenVpnVlessRealityPreview.Snapshot -> snapshot.connected
+                is GreenVpnNaiveHttpsPreview.Snapshot -> snapshot.connected
+                is GreenVpnDnsttPreview.Snapshot -> snapshot.connected
+                else -> false
+            }
+            val state = when (snapshot) {
+                is GreenVpnAwg2Preview.Snapshot -> snapshot.state
+                is GreenVpnHysteria2Preview.Snapshot -> snapshot.state
+                is GreenVpnVlessRealityPreview.Snapshot -> snapshot.state
+                is GreenVpnNaiveHttpsPreview.Snapshot -> snapshot.state
+                is GreenVpnDnsttPreview.Snapshot -> snapshot.state
+                else -> "unknown"
+            }
+            engines.put(protocol, JSONObject().put("connected", connected).put("state", state))
+            if (connected) active.put(protocol)
+        }
+        result.put("engines", engines).put("activeProtocols", active).put("success", true)
+        val lastRoute = try {
+            JSONObject(readSecureString(this, LAST_ROUTE_SUCCESS_KEY))
+        } catch (_: Exception) {
+            JSONObject()
+        }
+        result.put("lastRouteSuccess", lastRoute)
+    }
+
+    private fun setTileCooldown(result: JSONObject, intent: Intent) {
+        val serverId = intent.getStringExtra("serverId").orEmpty().trim()
+        val protocol = intent.getStringExtra("protocol").orEmpty().trim().lowercase()
+        require(CANDIDATES[serverId] == protocol) { "unsupported_candidate" }
+        val failureCount = intent.getIntExtra("failureCount", 1).coerceIn(1, 4)
+        val document = try {
+            JSONObject(readSecureString(this, ROUTE_COOLDOWN_KEY).ifBlank { "{}" })
+        } catch (_: Exception) {
+            JSONObject()
+        }
+        val untilMs = System.currentTimeMillis() +
+            GreenVpnQuickTileCascadePolicy.cooldownDurationMs(failureCount)
+        document.put(
+            "$serverId|$protocol",
+            JSONObject().put("failures", failureCount).put("untilMs", untilMs),
+        )
+        writeSecureString(this, ROUTE_COOLDOWN_KEY, document.toString())
+        result.put("success", true).put("serverId", serverId).put("protocol", protocol)
     }
 
     private fun probeConfig(
@@ -181,6 +265,24 @@ class TransportContractDebugService : Service() {
             cipher.doFinal(Base64.decode(parts[1], Base64.NO_WRAP)),
             StandardCharsets.UTF_8,
         )
+    }
+
+    private fun writeSecureString(context: Context, key: String, value: String) {
+        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        val secretKey = (keyStore.getEntry(SECURE_KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)
+            ?.secretKey
+            ?: error("secure_key_missing")
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey)
+        val iv = Base64.encodeToString(cipher.iv, Base64.NO_WRAP)
+        val encrypted = Base64.encodeToString(
+            cipher.doFinal(value.toByteArray(StandardCharsets.UTF_8)),
+            Base64.NO_WRAP,
+        )
+        require(
+            context.getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().putString(key, "$iv:$encrypted").commit(),
+        ) { "secure_write_failed" }
     }
 
     private fun safeError(error: Throwable): String {
