@@ -26,6 +26,10 @@ constexpr wchar_t kTunnelServiceName[] =
     L"WireGuardTunnel$" GREENVPN_RUNTIME_TUNNEL_NAME_W;
 constexpr char kTunnelServiceNameUtf8[] =
     "WireGuardTunnel$" GREENVPN_RUNTIME_TUNNEL_NAME_A;
+constexpr wchar_t kAmneziaWgTunnelServiceName[] =
+    L"AmneziaWGTunnel$" GREENVPN_RUNTIME_TUNNEL_NAME_W;
+constexpr char kAmneziaWgTunnelServiceNameUtf8[] =
+    "AmneziaWGTunnel$" GREENVPN_RUNTIME_TUNNEL_NAME_A;
 constexpr unsigned short kPort = GREENVPN_RUNTIME_LOCAL_SERVICE_PORT;
 constexpr wchar_t kProgramDataRoot[] = GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_W;
 constexpr wchar_t kBackendLogPath[] =
@@ -428,11 +432,11 @@ int RunTaskAction(const wchar_t* action, DWORD timeout_ms) {
   return exit_code;
 }
 
-std::string QueryTunnelStatusJson() {
+std::string QueryServiceState(const wchar_t* service_name) {
   std::string state = "missing";
   SC_HANDLE scm = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
   if (scm != nullptr) {
-    SC_HANDLE svc = OpenServiceW(scm, kTunnelServiceName, SERVICE_QUERY_STATUS);
+    SC_HANDLE svc = OpenServiceW(scm, service_name, SERVICE_QUERY_STATUS);
     if (svc != nullptr) {
       SERVICE_STATUS_PROCESS status = {};
       DWORD needed = 0;
@@ -464,9 +468,29 @@ std::string QueryTunnelStatusJson() {
     CloseServiceHandle(scm);
   }
 
+  return state;
+}
+
+std::string QueryTunnelStatusJson() {
+  const std::string wireguard_state = QueryServiceState(kTunnelServiceName);
+  const std::string amneziawg_state =
+      QueryServiceState(kAmneziaWgTunnelServiceName);
+  const bool awg_selected = amneziawg_state == "running" ||
+                            (amneziawg_state != "missing" &&
+                             wireguard_state == "missing");
+  const char* selected_service = awg_selected
+                                     ? kAmneziaWgTunnelServiceNameUtf8
+                                     : kTunnelServiceNameUtf8;
+  const std::string& selected_state =
+      awg_selected ? amneziawg_state : wireguard_state;
+  const char* selected_protocol = awg_selected ? "amneziawg" : "wireguard_udp";
+
   return std::string("{\"ok\":true,\"service\":\"") + kServiceNameUtf8 +
-         "\",\"tunnelService\":\"" + kTunnelServiceNameUtf8 + "\"," +
-         "\"tunnelState\":\"" + state + "\"}";
+         "\",\"tunnelService\":\"" + selected_service + "\"," +
+         "\"tunnelState\":\"" + selected_state + "\"," +
+         "\"protocol\":\"" + selected_protocol + "\"," +
+         "\"wireGuardState\":\"" + wireguard_state + "\"," +
+         "\"amneziaWgState\":\"" + amneziawg_state + "\"}";
 }
 
 std::string TaskResultJson(bool ok, int exit_code, const std::string& message) {

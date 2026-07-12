@@ -65,6 +65,7 @@ $recoverPath = Join-Path $ProjectRoot "scripts\windows\bluevpn_network_recover.p
 $networkProtectionPath = Join-Path $ProjectRoot "scripts\windows\check_windows_network_protection.ps1"
 $networkTransitionSmokePath = Join-Path $ProjectRoot "scripts\windows\run_paid_beta_network_transition_smoke.ps1"
 $vpnTaskPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_vpn_task.ps1"
+$transportPreviewVpnTaskPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_transport_preview_vpn_task.ps1"
 $wireguardTcpCanaryPath = Join-Path $ProjectRoot "scripts\server\install_wireguard_tcp_canary.sh"
 $transportCanaryPath = Join-Path $ProjectRoot "scripts\server\install_transport_canary_service.sh"
 $transportCanaryCheckPath = Join-Path $ProjectRoot "scripts\server\check_transport_canary_readiness.sh"
@@ -83,6 +84,7 @@ $doctorScript = Read-Text $doctorPath
 $networkProtectionScript = Read-Text $networkProtectionPath
 $networkTransitionSmokeScript = Read-Text $networkTransitionSmokePath
 $vpnTaskScript = Read-Text $vpnTaskPath
+$transportPreviewVpnTaskScript = Read-Text $transportPreviewVpnTaskPath
 $wireguardTcpCanaryScript = Read-Text $wireguardTcpCanaryPath
 $transportCanaryScript = Read-Text $transportCanaryPath
 $transportCanaryCheckScript = Read-Text $transportCanaryCheckPath
@@ -923,6 +925,44 @@ if (Test-Path -LiteralPath $vpnTaskPath) {
     }
     else {
         Add-Pass 'Windows VPN task PowerShell parser check passed'
+    }
+}
+
+$transportPreviewRouteFragments = @(
+    'Get-ManagedIpv4Endpoint',
+    'Ensure-EndpointBypassRoute',
+    'Remove-EndpointBypassRoute',
+    '$endpoint/32',
+    'Find-NetRoute -RemoteIPAddress $endpoint',
+    "-PolicyStore ActiveStore",
+    '$EndpointBypassRouteMetric = 42731',
+    '/inheritance:r',
+    "'*S-1-5-18:F'",
+    "'*S-1-5-32-544:F'",
+    "'MSFT_NetRoute'",
+    'No physical gateway route is available',
+    'endpoint bypass route ready',
+    'if ($Action -eq ''Connect'') { Remove-EndpointBypassRoute }'
+)
+
+foreach ($fragment in $transportPreviewRouteFragments) {
+    if ($transportPreviewVpnTaskScript.Contains($fragment)) {
+        Add-Pass "Windows transport preview route guard present: $fragment"
+    }
+    else {
+        Add-Error "Windows transport preview route guard missing: $fragment"
+    }
+}
+
+if (Test-Path -LiteralPath $transportPreviewVpnTaskPath) {
+    $tokens = $null
+    $parseErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile($transportPreviewVpnTaskPath, [ref]$tokens, [ref]$parseErrors) | Out-Null
+    if ($parseErrors -and $parseErrors.Count -gt 0) {
+        Add-Error "Windows transport preview task has PowerShell parser errors: $($parseErrors[0].ToString())"
+    }
+    else {
+        Add-Pass 'Windows transport preview task PowerShell parser check passed'
     }
 }
 

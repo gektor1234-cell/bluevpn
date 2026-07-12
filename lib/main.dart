@@ -17283,6 +17283,9 @@ abstract class VpnBackend {
       );
     }
     if (Platform.isWindows) {
+      if (kAwg2PreviewEnabled) {
+        return WindowsTransportPreviewBackend(tunnelName: tunnelName);
+      }
       return WireGuardWindowsBackend(tunnelName: tunnelName);
     }
     if (Platform.isAndroid) {
@@ -17567,6 +17570,185 @@ class _GreenVpnSystemServiceClient {
       return null;
     }
   }
+}
+
+class WindowsTransportPreviewBackend extends VpnBackend {
+  final WireGuardWindowsBackend _wireGuard;
+  final AmneziaWgWindowsPreviewBackend _amneziaWg;
+
+  WindowsTransportPreviewBackend({required String tunnelName})
+    : _wireGuard = WireGuardWindowsBackend(tunnelName: tunnelName),
+      _amneziaWg = AmneziaWgWindowsPreviewBackend(tunnelName: tunnelName);
+
+  Future<String> _managedProtocol(String configPath) async {
+    try {
+      final sidecar = File('$configPath.protocol');
+      if (!sidecar.existsSync()) return 'wireguard_udp';
+      final value = (await sidecar.readAsString()).trim().toLowerCase();
+      return value.isEmpty ? 'wireguard_udp' : value;
+    } catch (_) {
+      return 'wireguard_udp';
+    }
+  }
+
+  @override
+  Future<VpnBackendResult> connect({required String configPath}) async {
+    final protocol = await _managedProtocol(configPath);
+    if (protocol == 'amneziawg') {
+      return _amneziaWg.connect(configPath: configPath);
+    }
+    if (protocol != 'wireguard_udp') {
+      return VpnBackendResult(
+        ok: false,
+        message: 'Unsupported Windows preview transport: $protocol',
+      );
+    }
+    return _wireGuard.connect(configPath: configPath);
+  }
+
+  @override
+  Future<VpnBackendResult> disconnect() async {
+    if (await _amneziaWg.isConnected()) {
+      return _amneziaWg.disconnect();
+    }
+    return _wireGuard.disconnect();
+  }
+
+  @override
+  Future<bool> isConnected() async {
+    if (await _amneziaWg.isConnected()) return true;
+    return _wireGuard.isConnected();
+  }
+}
+
+class AmneziaWgWindowsPreviewBackend extends VpnBackend {
+  final String tunnelName;
+
+  const AmneziaWgWindowsPreviewBackend({required this.tunnelName});
+
+  String get _serviceName => r'AmneziaWGTunnel$' + tunnelName;
+
+  Future<ProcessResult> _run(String executable, List<String> arguments) {
+    return Process.run(executable, arguments, runInShell: true);
+  }
+
+  bool _serviceOutputLooksRunning(ProcessResult result) {
+    if (result.exitCode != 0) return false;
+    final output = '${result.stdout}\n${result.stderr}'.toLowerCase();
+    return RegExp(r'state\s*:\s*4\b').hasMatch(output) ||
+        output.contains('running');
+  }
+
+  Future<bool> _serviceRunning() async {
+    try {
+      return _serviceOutputLooksRunning(
+        await _run('sc.exe', ['query', _serviceName]),
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> _waitForService({required bool running}) async {
+    for (var attempt = 0; attempt < 60; attempt++) {
+      final current = await _serviceRunning();
+      if (current == running) return true;
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    }
+    return false;
+  }
+
+  Future<void> _log(String message) async {
+    try {
+      final file = File(greenVpnBackendLogPathSync());
+      await file.writeAsString(
+        '[${DateTime.now().toIso8601String()}] windows-awg2 $message\n',
+        mode: FileMode.append,
+      );
+    } catch (_) {}
+  }
+
+  @override
+  Future<VpnBackendResult> connect({required String configPath}) async {
+    if (!kAwg2PreviewEnabled) {
+      return const VpnBackendResult(
+        ok: false,
+        message: 'AWG2 Windows preview is disabled in this build.',
+      );
+    }
+    if (!File(configPath).existsSync()) {
+      return VpnBackendResult(
+        ok: false,
+        message: 'Config not found: $configPath',
+      );
+    }
+
+    const service = _GreenVpnSystemServiceClient();
+    final ping = await service.ping();
+    await _log(
+      'connect ping ok=${ping.ok} http=${ping.statusCode} service=$_serviceName',
+    );
+    if (!ping.ok) {
+      return const VpnBackendResult(
+        ok: false,
+        message:
+            'Windows transport preview service is unavailable. Reinstall the preview package once with administrator rights.',
+      );
+    }
+
+    final response = await service.connect();
+    await _log(
+      'connect response ok=${response.ok} http=${response.statusCode} exit=${response.exitCode}',
+    );
+    if (!response.ok) {
+      return VpnBackendResult(
+        ok: false,
+        message:
+            response.statusCode == HttpStatus.conflict || response.exitCode == 2
+            ? 'Another VPN is active. Disconnect it before starting the protected preview transport.'
+            : (response.message ?? 'Windows AWG2 preview connect failed.'),
+      );
+    }
+    if (!await _waitForService(running: true)) {
+      return const VpnBackendResult(
+        ok: false,
+        message: 'AWG2 tunnel service did not reach Running state.',
+      );
+    }
+    return const VpnBackendResult(ok: true);
+  }
+
+  @override
+  Future<VpnBackendResult> disconnect() async {
+    const service = _GreenVpnSystemServiceClient();
+    final ping = await service.ping();
+    if (!ping.ok) {
+      return const VpnBackendResult(
+        ok: false,
+        message: 'Windows transport preview service is unavailable.',
+      );
+    }
+    final response = await service.disconnect();
+    await _log(
+      'disconnect response ok=${response.ok} http=${response.statusCode} exit=${response.exitCode}',
+    );
+    if (!response.ok) {
+      return VpnBackendResult(
+        ok: false,
+        message: response.message ?? 'Windows AWG2 preview disconnect failed.',
+      );
+    }
+    if (!await _waitForService(running: false)) {
+      return const VpnBackendResult(
+        ok: false,
+        message: 'AWG2 tunnel service is still running after disconnect.',
+      );
+    }
+    return const VpnBackendResult(ok: true);
+  }
+
+  @override
+  Future<bool> isConnected() => _serviceRunning();
 }
 
 class WireGuardWindowsBackend extends VpnBackend {

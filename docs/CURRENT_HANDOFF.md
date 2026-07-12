@@ -47,6 +47,8 @@ Last updated: 2026-07-11.
 - Paid-beta control planes run isolated r16 backend `0.9.110-transport-preview.4`. Legacy clients receive no Hysteria endpoint; an explicitly capable preview receives exactly one hidden Hysteria2 canary and still defaults to `wireguard_udp`. Transport catalogs are synchronized with canonical SHA-256 `2c9fb6e8e5245ee994cfd8585b81b1d766899e536a0b7b5a8ba64cf1904584d6`. Production remains `0.9.105`.
 - Android preview artifact: `C:\BlueVPN_Builds\GreenVPN_Android_0.2.44_awg2_transport_preview4_paid_beta_debug.apk`, SHA-256 `EAC700378406484E273DFBD4892220F8D403331167BA7DEB070E5414B30B78B1`.
 - Detailed Android result and rollback: `docs/ANDROID_AWG2_PREVIEW_2026_07_11_RU.md`.
+- Windows AWG2 transport preview is installed side-by-side with isolated app/service/tunnel/state identities. Physical narrow-route engine proof passed with a fresh handshake and exact restoration of `device20_full`; the first full-tunnel run exposed endpoint-route recursion and was correctly rejected. A guarded `/32` physical endpoint route fix is rebuilt in preview artifact SHA-256 `BD982686C442E6D753B022F6342619C7A32AFD2457E20D0A19C7651834C4EA6D`; final full-tunnel proof awaits one UAC-confirmed smoke.
+- Detailed Windows preview state and rollback: `docs/WINDOWS_AWG2_PREVIEW_2026_07_12_RU.md`.
 - Verification: 58 backend tests and 6 Flutter tests pass. `flutter analyze` returns code 0 with only the pre-existing 184 lint/info items.
 - Detailed operator runbook: `docs/TRANSPORT_CANARY_ROLLOUT_2026_07_11_RU.md`.
 
