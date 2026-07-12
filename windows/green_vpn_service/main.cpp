@@ -47,6 +47,10 @@ constexpr char kVlessXrayPidPath[] =
     GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\vless-reality-client.pid";
 constexpr char kVlessHevPidPath[] =
     GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\vless-reality-hev.pid";
+constexpr char kNaivePidPath[] =
+    GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\naive-https-client.pid";
+constexpr char kNaiveHevPidPath[] =
+    GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\naive-https-hev.pid";
 
 SERVICE_STATUS_HANDLE g_status_handle = nullptr;
 SERVICE_STATUS g_status = {};
@@ -583,6 +587,24 @@ std::string QueryTunnelStatusJson() {
            "\"amneziaWgState\":\"" + amneziawg_state + "\"," +
            "\"vlessClientState\":\"" + vless_xray_state + "\"," +
            "\"vlessTunState\":\"" + vless_hev_state + "\"}";
+  }
+  const std::string naive_state = QueryPidFileProcessState(
+      kNaivePidPath, module_dir + L"\\tools\\naive-https\\naive.exe");
+  const std::string naive_hev_state = QueryPidFileProcessState(
+      kNaiveHevPidPath,
+      module_dir + L"\\tools\\naive-https\\hev-socks5-tunnel.exe");
+  if (managed_protocol == "naive_https") {
+    const std::string state =
+        naive_state == "running" && naive_hev_state == "running" ? "running"
+                                                                     : "stopped";
+    return std::string("{\"ok\":true,\"service\":\"") + kServiceNameUtf8 +
+           "\",\"tunnelService\":\"GreenVPNNaiveHttpsPreview\"," +
+           "\"tunnelState\":\"" + state + "\"," +
+           "\"protocol\":\"naive_https\"," +
+           "\"wireGuardState\":\"" + wireguard_state + "\"," +
+           "\"amneziaWgState\":\"" + amneziawg_state + "\"," +
+           "\"naiveClientState\":\"" + naive_state + "\"," +
+           "\"naiveTunState\":\"" + naive_hev_state + "\"}";
   }
   const bool awg_selected = amneziawg_state == "running" ||
                             (amneziawg_state != "missing" &&

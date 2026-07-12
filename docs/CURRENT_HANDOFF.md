@@ -127,6 +127,14 @@ Last updated: 2026-07-12.
 - Beta `r12` is active on both control-plane nodes. Both SQLite databases pass `quick_check`, have zero pending orders, and sync timers are active.
 - Auto-renew unlink evidence is live at `https://greenvpn.pro/paid-beta/yookassa-review-20260711/`; the link was sent to YooKassa and is waiting for a manager.
 
+## Transport preview continuation (2026-07-12)
+
+- Android Naive HTTPS preview passed physical watchdog, reconnect, background, relaunch, and YouTube checks; commit `207f11e` is the local checkpoint.
+- Windows Naive HTTPS preview is implemented and compiled as `0.3.0-preview3`.
+- Its package gate and non-disruptive SOCKS data-plane smoke pass; the latter preserved both route signature and WARP service state.
+- Full Windows TUN smoke remains deferred until changing WARP is explicitly allowed.
+- The frozen stable/public transport and production catalog remain unchanged.
+
 ## Owner gate
 
 The remaining launch gate is external:

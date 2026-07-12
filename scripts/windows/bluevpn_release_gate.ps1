@@ -71,6 +71,8 @@ $transportPreviewUninstallPath = Join-Path $ProjectRoot "scripts\windows\uninsta
 $transportPreviewBuildPath = Join-Path $ProjectRoot "scripts\windows\build_windows_awg2_preview.ps1"
 $hysteriaWatchdogPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_hysteria2_watchdog.ps1"
 $hysteriaPhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_windows_hysteria2_preview_physical.ps1"
+$naiveWatchdogPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_naive_https_watchdog.ps1"
+$naiveClientSmokePath = Join-Path $ProjectRoot "scripts\windows\test_windows_naive_https_client_smoke.ps1"
 $androidSettingsPath = Join-Path $ProjectRoot "android\settings.gradle.kts"
 $androidAppBuildPath = Join-Path $ProjectRoot "android\app\build.gradle.kts"
 $androidHysteriaBuildPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\build.gradle.kts"
@@ -129,6 +131,8 @@ $transportPreviewUninstallScript = Read-Text $transportPreviewUninstallPath
 $transportPreviewBuildScript = Read-Text $transportPreviewBuildPath
 $hysteriaWatchdogScript = Read-Text $hysteriaWatchdogPath
 $hysteriaPhysicalTestScript = Read-Text $hysteriaPhysicalTestPath
+$naiveWatchdogScript = Read-Text $naiveWatchdogPath
+$naiveClientSmokeScript = Read-Text $naiveClientSmokePath
 $androidSettings = Read-Text $androidSettingsPath
 $androidAppBuild = Read-Text $androidAppBuildPath
 $androidHysteriaBuild = Read-Text $androidHysteriaBuildPath
@@ -1093,6 +1097,17 @@ $transportPreviewRouteFragments = @(
     "@('0.0.0.0/1', '128.0.0.0/1', '::/1', '8000::/1')",
     'Hysteria2 base config must not contain local listener or forwarding sections',
     'greenvpn_hysteria2_watchdog.ps1'
+    'Start-NaiveHttpsTunnel',
+    'Stop-NaiveHttpsTunnel',
+    'Assert-NaiveRuntime',
+    '$NaiveRouteMetric = 42734',
+    '$NaiveSocksPort = 1982',
+    '$NaiveCanaryHost = ''nl2.vpn.greenvpn.pro''',
+    '$NaiveCanaryIp = ''5.129.216.42''',
+    'host-resolver-rules',
+    "mapdns:",
+    "udp: 'tcp'",
+    'greenvpn_naive_https_watchdog.ps1'
 )
 
 foreach ($fragment in $transportPreviewRouteFragments) {
@@ -1126,6 +1141,22 @@ foreach ($fragment in @(
     }
 }
 
+foreach ($fragment in @(
+    "ExpectedEgress = '5.129.216.42'",
+    "--socks5-hostname",
+    'routeSignatureUnchanged',
+    'warpServiceStateUnchanged',
+    'listenerRemoved',
+    '94F99801C665D29FC071624663C6F7BFA59E8D5EFAA84CD08EF5EBB18B46CB62'
+)) {
+    if ($naiveClientSmokeScript.Contains($fragment)) {
+        Add-Pass "Windows Naive HTTPS non-disruptive smoke marker present: $fragment"
+    }
+    else {
+        Add-Error "Windows Naive HTTPS non-disruptive smoke marker missing: $fragment"
+    }
+}
+
 if (Test-Path -LiteralPath $transportPreviewVpnTaskPath) {
     $tokens = $null
     $parseErrors = $null
@@ -1149,6 +1180,9 @@ $transportPreviewInstallFragments = @(
     "'tools\hysteria2\hysteria-windows-amd64.exe'",
     "'tools\hysteria2\hev-socks5-tunnel.exe'",
     "'tools\greenvpn_hysteria2_watchdog.ps1'",
+    "'tools\greenvpn_naive_https_watchdog.ps1'",
+    "'tools\naive-https\naive.exe'",
+    "'tools\naive-https\hev-socks5-tunnel.exe'",
     '-Action Disconnect',
     "Set-PreviewAcl -UserSid `$installingUserSid",
     'Remove-PreviewDirectoryWithRetry -Path $LegacyInstallRoot',
@@ -1203,6 +1237,57 @@ foreach ($fragment in @(
 }
 
 foreach ($fragment in @(
+    'GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED=true',
+    '94F99801C665D29FC071624663C6F7BFA59E8D5EFAA84CD08EF5EBB18B46CB62',
+    'NAIVEPROXY_BSD_3_CLAUSE.txt',
+    'naiveproxy/releases/tag/v150.0.7871.63-1',
+    "Join-Path `$toolsDir 'naive-https'",
+    'greenvpn_naive_https_watchdog.ps1'
+)) {
+    if ($transportPreviewBuildScript.Contains($fragment)) {
+        Add-Pass "Windows Naive HTTPS preview build marker present: $fragment"
+    }
+    else {
+        Add-Error "Windows Naive HTTPS preview build marker missing: $fragment"
+    }
+}
+
+foreach ($fragment in @(
+    'Test-ExactProcess',
+    '$RouteMetric = 42734',
+    '$EndpointRouteMetric = 42731',
+    "[string]`$state.endpoint -eq '5.129.216.42'",
+    'Remove-ManagedRoutes',
+    'Remove-ManagedEndpointRoute',
+    'naive-https-client.runtime.json',
+    'naive-https-hev.runtime.yaml'
+)) {
+    if ($naiveWatchdogScript.Contains($fragment)) {
+        Add-Pass "Windows Naive HTTPS watchdog marker present: $fragment"
+    }
+    else {
+        Add-Error "Windows Naive HTTPS watchdog marker missing: $fragment"
+    }
+}
+
+foreach ($fragment in @(
+    'kNaivePidPath',
+    'kNaiveHevPidPath',
+    'tools\\naive-https\\naive.exe',
+    'managed_protocol == "naive_https"',
+    'GreenVPNNaiveHttpsPreview',
+    'naiveClientState',
+    'naiveTunState'
+)) {
+    if ($serviceSource.Contains($fragment)) {
+        Add-Pass "Windows Naive HTTPS service status marker present: $fragment"
+    }
+    else {
+        Add-Error "Windows Naive HTTPS service status marker missing: $fragment"
+    }
+}
+
+foreach ($fragment in @(
     'Test-ExactProcess',
     'ExecutablePath',
     '$RouteMetric = 42732',
@@ -1236,7 +1321,7 @@ foreach ($fragment in @(
     }
 }
 
-foreach ($scriptPath in @($transportPreviewBuildPath, $hysteriaWatchdogPath, $hysteriaPhysicalTestPath)) {
+foreach ($scriptPath in @($transportPreviewBuildPath, $hysteriaWatchdogPath, $hysteriaPhysicalTestPath, $naiveWatchdogPath, $naiveClientSmokePath)) {
     if (Test-Path -LiteralPath $scriptPath) {
         $tokens = $null
         $parseErrors = $null
@@ -1510,6 +1595,12 @@ if (-not [string]::IsNullOrWhiteSpace($ReleaseZip)) {
                     'HEV_SOCKS5_TUNNEL_MIT.txt',
                     'HEV_LWIP_BSD.txt',
                     'HEV_WINTUN_PREBUILT_BINARY_LICENSE.txt'
+                    'app/tools/naive-https/naive.exe',
+                    'app/tools/naive-https/hev-socks5-tunnel.exe',
+                    'app/tools/naive-https/msys-2.0.dll',
+                    'app/tools/naive-https/wintun.dll',
+                    'app/tools/greenvpn_naive_https_watchdog.ps1',
+                    'NAIVEPROXY_BSD_3_CLAUSE.txt'
                 )) {
                     if ($normalizedEntries -contains $requiredEntry) {
                         Add-Pass "Transport preview zip contains: $requiredEntry"
@@ -1524,6 +1615,10 @@ if (-not [string]::IsNullOrWhiteSpace($ReleaseZip)) {
                     'app/tools/hysteria2/hev-socks5-tunnel.exe' = '46167DBA51A2C3DD5F2E3478B0D8A30CAD03392D388DC1330D55246492F48C1E'
                     'app/tools/hysteria2/msys-2.0.dll' = '6C0DE43EFC0F14D871CC9F3FA803B9BD1E74802F45B3C8AFFE3DACC21B2EEA18'
                     'app/tools/hysteria2/wintun.dll' = 'E5DA8447DC2C320EDC0FC52FA01885C103DE8C118481F683643CACC3220DAFCE'
+                    'app/tools/naive-https/naive.exe' = '94F99801C665D29FC071624663C6F7BFA59E8D5EFAA84CD08EF5EBB18B46CB62'
+                    'app/tools/naive-https/hev-socks5-tunnel.exe' = '46167DBA51A2C3DD5F2E3478B0D8A30CAD03392D388DC1330D55246492F48C1E'
+                    'app/tools/naive-https/msys-2.0.dll' = '6C0DE43EFC0F14D871CC9F3FA803B9BD1E74802F45B3C8AFFE3DACC21B2EEA18'
+                    'app/tools/naive-https/wintun.dll' = 'E5DA8447DC2C320EDC0FC52FA01885C103DE8C118481F683643CACC3220DAFCE'
                 }
                 foreach ($expected in $expectedPackagedHashes.GetEnumerator()) {
                     $entry = @($zip.Entries | Where-Object { $_.FullName.Replace('\', '/') -eq $expected.Key })
@@ -1537,10 +1632,10 @@ if (-not [string]::IsNullOrWhiteSpace($ReleaseZip)) {
                         $stream.Dispose()
                     }
                     if ($actualHash -eq $expected.Value) {
-                        Add-Pass "Packaged Hysteria2 runtime hash valid: $($expected.Key)"
+                        Add-Pass "Packaged transport runtime hash valid: $($expected.Key)"
                     }
                     else {
-                        Add-Error "Packaged Hysteria2 runtime hash mismatch: $($expected.Key)"
+                        Add-Error "Packaged transport runtime hash mismatch: $($expected.Key)"
                     }
                 }
 

@@ -149,6 +149,7 @@ $required = @(
     'tools\greenvpn_transport_preview_vpn_task.ps1',
     'tools\greenvpn_hysteria2_watchdog.ps1',
     'tools\greenvpn_vless_reality_watchdog.ps1',
+    'tools\greenvpn_naive_https_watchdog.ps1',
     'tools\amneziawg2\amneziawg.exe',
     'tools\amneziawg2\awg.exe',
     'tools\amneziawg2\wintun.dll',
@@ -160,6 +161,10 @@ $required = @(
     'tools\vless-reality\hev-socks5-tunnel.exe',
     'tools\vless-reality\msys-2.0.dll',
     'tools\vless-reality\wintun.dll'
+    'tools\naive-https\naive.exe',
+    'tools\naive-https\hev-socks5-tunnel.exe',
+    'tools\naive-https\msys-2.0.dll',
+    'tools\naive-https\wintun.dll'
 )
 foreach ($relative in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $PayloadDir $relative))) {

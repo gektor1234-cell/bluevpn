@@ -75,6 +75,16 @@
 - Preview APK: `C:\BlueVPN_Builds\android_transport_preview_20260712_naive\GreenVPN_Android_Naive_HTTPS_Transport_Preview_0.2.45_debug.apk`, size `147,688,691`, SHA-256 `DB2439502B81A471C4D53E53C36689DD6726D5599207912EBCD8B1BA870A630E`.
 - После тестов официальный `bluevpn-phone-3` восстановлен: owner `com.wireguard.android`, session `VALIDATED`.
 
+## Windows preview
+
+- Official NaiveProxy `v150.0.7871.63-1` is packaged only in the isolated transport-preview build.
+- The client listens only on `127.0.0.1:1982`; the guarded endpoint is exactly `nl2.vpn.greenvpn.pro:8443`.
+- HEV uses the dedicated `GreenVPNNaivePreview` adapter, `mapdns`, and route metric `42734`.
+- Runtime profiles and PID files use restricted ACLs and are removed by disconnect and watchdog cleanup.
+- Windows ZIP `0.3.0-preview3` compiled successfully and passed the release gate with packaged SHA-256 validation: `C:\BlueVPN_Builds\windows_transport_preview_20260712_naive\GreenVPN_Windows_Transport_Preview_0.3.0-preview3.zip`, SHA-256 `960D90856B7438A024B8C48378D2EB21D206B4A1AC7771215F8F319EFDF55E3D`.
+- Non-disruptive SOCKS smoke passed with egress `5.129.216.42` and YouTube status `204`; route signature and WARP service state remained unchanged. Report: `C:\Users\gekto\GreenVPN_Checkpoints\windows_naive_https_client_smoke_20260712.json`, SHA-256 `98589B9DCE970BE9C1C40B43F231FC4EDD5B0431D969DE72954ACE796309FAAE`.
+- Full Windows TUN smoke is deliberately deferred while changing WARP is forbidden by the owner.
+
 ## Rollback
 
 Dry-run:

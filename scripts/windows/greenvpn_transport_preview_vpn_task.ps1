@@ -52,6 +52,28 @@ $XrayStdoutPath = Join-Path $ProgramDataRoot 'vless-reality-client.stdout.log'
 $XrayStderrPath = Join-Path $ProgramDataRoot 'vless-reality-client.stderr.log'
 $VlessHevStdoutPath = Join-Path $ProgramDataRoot 'vless-reality-hev.stdout.log'
 $VlessHevStderrPath = Join-Path $ProgramDataRoot 'vless-reality-hev.stderr.log'
+$NaiveTunnelName = 'GreenVPNNaivePreview'
+$NaiveRouteMetric = 42734
+$NaiveSocksPort = 1982
+$NaiveCanaryHost = 'nl2.vpn.greenvpn.pro'
+$NaiveCanaryIp = '5.129.216.42'
+$NaiveCanaryPort = 8443
+$NaiveToolRoot = Join-Path $PSScriptRoot 'naive-https'
+$NaiveExe = Join-Path $NaiveToolRoot 'naive.exe'
+$NaiveHevExe = Join-Path $NaiveToolRoot 'hev-socks5-tunnel.exe'
+$NaiveHevMsysDll = Join-Path $NaiveToolRoot 'msys-2.0.dll'
+$NaiveHevWintunDll = Join-Path $NaiveToolRoot 'wintun.dll'
+$NaiveWatchdogScript = Join-Path $PSScriptRoot 'greenvpn_naive_https_watchdog.ps1'
+$NaiveRuntimeConfigPath = Join-Path $ProgramDataRoot 'naive-https-client.runtime.json'
+$NaiveHevRuntimeConfigPath = Join-Path $ProgramDataRoot 'naive-https-hev.runtime.yaml'
+$NaivePidPath = Join-Path $ProgramDataRoot 'naive-https-client.pid'
+$NaiveHevPidPath = Join-Path $ProgramDataRoot 'naive-https-hev.pid'
+$NaiveWatchdogPidPath = Join-Path $ProgramDataRoot 'naive-https-watchdog.pid'
+$NaiveRouteStatePath = Join-Path $ProgramDataRoot 'naive-https-routes.json'
+$NaiveStdoutPath = Join-Path $ProgramDataRoot 'naive-https-client.stdout.log'
+$NaiveStderrPath = Join-Path $ProgramDataRoot 'naive-https-client.stderr.log'
+$NaiveHevStdoutPath = Join-Path $ProgramDataRoot 'naive-https-hev.stdout.log'
+$NaiveHevStderrPath = Join-Path $ProgramDataRoot 'naive-https-hev.stderr.log'
 $LogPath = Join-Path $ProgramDataRoot 'backend.log'
 
 $ExpectedHysteriaRuntimeHashes = @{
@@ -62,6 +84,12 @@ $ExpectedHysteriaRuntimeHashes = @{
 }
 $ExpectedVlessRuntimeHashes = @{
     'xray.exe' = '4B43C5EF596F326B233717B585D31A85DD5CD5F77D8DA872E75F7EBC00E99ACB'
+    'hev-socks5-tunnel.exe' = '46167DBA51A2C3DD5F2E3478B0D8A30CAD03392D388DC1330D55246492F48C1E'
+    'msys-2.0.dll' = '6C0DE43EFC0F14D871CC9F3FA803B9BD1E74802F45B3C8AFFE3DACC21B2EEA18'
+    'wintun.dll' = 'E5DA8447DC2C320EDC0FC52FA01885C103DE8C118481F683643CACC3220DAFCE'
+}
+$ExpectedNaiveRuntimeHashes = @{
+    'naive.exe' = '94F99801C665D29FC071624663C6F7BFA59E8D5EFAA84CD08EF5EBB18B46CB62'
     'hev-socks5-tunnel.exe' = '46167DBA51A2C3DD5F2E3478B0D8A30CAD03392D388DC1330D55246492F48C1E'
     'msys-2.0.dll' = '6C0DE43EFC0F14D871CC9F3FA803B9BD1E74802F45B3C8AFFE3DACC21B2EEA18'
     'wintun.dll' = 'E5DA8447DC2C320EDC0FC52FA01885C103DE8C118481F683643CACC3220DAFCE'
@@ -160,10 +188,25 @@ function Assert-VlessRuntime {
     }
 }
 
+function Assert-NaiveRuntime {
+    foreach ($entry in $ExpectedNaiveRuntimeHashes.GetEnumerator()) {
+        $path = Join-Path $NaiveToolRoot $entry.Key
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "Naive HTTPS preview runtime is missing: $($entry.Key)"
+        }
+        if ((Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash -ne $entry.Value) {
+            throw "Naive HTTPS preview runtime hash mismatch: $($entry.Key)"
+        }
+    }
+    if (-not (Test-Path -LiteralPath $NaiveWatchdogScript -PathType Leaf)) {
+        throw 'Naive HTTPS preview watchdog is missing.'
+    }
+}
+
 function Get-ManagedProtocol {
     if (-not (Test-Path -LiteralPath $ProtocolPath)) { return 'wireguard_udp' }
     $value = (Get-Content -LiteralPath $ProtocolPath -Raw -ErrorAction Stop).Trim().ToLowerInvariant()
-    if ($value -notin @('wireguard_udp', 'amneziawg', 'hysteria2', 'vless_reality')) {
+    if ($value -notin @('wireguard_udp', 'amneziawg', 'hysteria2', 'vless_reality', 'naive_https')) {
         throw "Unsupported managed protocol: $value"
     }
     return $value
@@ -206,6 +249,14 @@ function Ensure-GreenProgramDataAcl {
 function Get-ManagedIpv4Endpoint {
     if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "Config missing: $ConfigPath" }
     $protocol = Get-ManagedProtocol
+    if ($protocol -eq 'naive_https') {
+        $root = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
+        $proxy = [Uri][string]$root.proxy
+        if ($proxy.Scheme -ne 'https' -or $proxy.Host -ne $NaiveCanaryHost -or $proxy.Port -ne $NaiveCanaryPort) {
+            throw 'Windows Naive HTTPS preview endpoint is not the guarded canary.'
+        }
+        return $NaiveCanaryIp
+    }
     if ($protocol -eq 'vless_reality') {
         $root = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
         $candidate = [string]$root.outbounds[0].settings.vnext[0].address
@@ -444,6 +495,58 @@ function Stop-VlessRealityTunnel {
     }
 }
 
+function Stop-NaiveWatchdog {
+    $pidValue = Read-ManagedPid -Path $NaiveWatchdogPidPath
+    if ($pidValue -gt 0) {
+        try {
+            $process = Get-CimInstance Win32_Process -Filter "ProcessId=$pidValue" -ErrorAction Stop
+            $expectedPowerShell = [IO.Path]::GetFullPath((Join-Path $PSHOME 'powershell.exe'))
+            $actual = [IO.Path]::GetFullPath([string]$process.ExecutablePath)
+            $command = [string]$process.CommandLine
+            if ($actual.Equals($expectedPowerShell, [StringComparison]::OrdinalIgnoreCase) -and
+                $command.IndexOf($NaiveWatchdogScript, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                Stop-Process -Id $pidValue -Force -ErrorAction SilentlyContinue
+            }
+        } catch {}
+    }
+    Remove-Item -LiteralPath $NaiveWatchdogPidPath -Force -ErrorAction SilentlyContinue
+}
+
+function Remove-NaiveRoutes {
+    if (-not (Test-Path -LiteralPath $NaiveRouteStatePath)) { return }
+    try {
+        $state = Get-Content -LiteralPath $NaiveRouteStatePath -Raw | ConvertFrom-Json
+        if ([int]$state.metric -ne $NaiveRouteMetric) { return }
+        foreach ($prefix in @($state.prefixes)) {
+            if ($prefix -notin @('0.0.0.0/1', '128.0.0.0/1', '::/1', '8000::/1')) { continue }
+            Get-NetRoute -DestinationPrefix $prefix -InterfaceIndex ([int]$state.interfaceIndex) -ErrorAction SilentlyContinue |
+                Where-Object { $_.RouteMetric -eq $NaiveRouteMetric } |
+                Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+        }
+    } catch {
+        Write-GreenLog 'Naive HTTPS route cleanup warning'
+    } finally {
+        Remove-Item -LiteralPath $NaiveRouteStatePath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Stop-NaiveHttpsTunnel {
+    Stop-NaiveWatchdog
+    Stop-ExactProcessFromState -PidPath $NaiveHevPidPath -ExpectedPath $NaiveHevExe
+    Stop-ExactProcessFromState -PidPath $NaivePidPath -ExpectedPath $NaiveExe
+    Remove-NaiveRoutes
+    foreach ($path in @(
+        $NaiveRuntimeConfigPath,
+        $NaiveHevRuntimeConfigPath,
+        $NaiveStdoutPath,
+        $NaiveStderrPath,
+        $NaiveHevStdoutPath,
+        $NaiveHevStderrPath
+    )) {
+        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Wait-LocalTcpPort {
     param([int]$Port, [int]$Seconds = 15)
     $deadline = (Get-Date).AddSeconds($Seconds)
@@ -614,7 +717,7 @@ function New-VlessRuntimeConfigs {
     }
     $endpointRoute = Get-Content -LiteralPath $EndpointRouteStatePath -Raw | ConvertFrom-Json
     $physicalAdapter = Get-NetAdapter -InterfaceIndex ([int]$endpointRoute.interfaceIndex) -ErrorAction Stop
-    if ($null -eq $physicalAdapter -or $physicalAdapter.Name -in @($TunnelName, $HysteriaTunnelName, $VlessTunnelName)) {
+    if ($null -eq $physicalAdapter -or $physicalAdapter.Name -in @($TunnelName, $HysteriaTunnelName, $VlessTunnelName, $NaiveTunnelName)) {
         throw 'VLESS REALITY could not resolve a safe physical outbound interface.'
     }
     $physicalAddress = Get-NetIPAddress -InterfaceIndex ([int]$endpointRoute.interfaceIndex) -AddressFamily IPv4 -ErrorAction Stop |
@@ -739,12 +842,142 @@ function Start-VlessRealityTunnel {
     Write-GreenLog "VLESS REALITY preview started ifIndex=$($adapter.ifIndex)"
 }
 
+function Wait-NaiveAdapter {
+    param([int]$Seconds = 20)
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    do {
+        $adapter = Get-NetAdapter -Name $NaiveTunnelName -ErrorAction SilentlyContinue
+        if ($null -ne $adapter -and $adapter.Status -eq 'Up') { return $adapter }
+        Start-Sleep -Milliseconds 300
+    } while ((Get-Date) -lt $deadline)
+    throw 'Naive HTTPS preview adapter did not become ready.'
+}
+
+function New-NaiveRuntimeConfigs {
+    $configText = [IO.File]::ReadAllText($ConfigPath)
+    if ([Text.Encoding]::UTF8.GetByteCount($configText) -lt 64 -or [Text.Encoding]::UTF8.GetByteCount($configText) -gt 16384) {
+        throw 'Naive HTTPS config size is invalid.'
+    }
+    $root = $configText | ConvertFrom-Json
+    $properties = @($root.PSObject.Properties.Name)
+    if ($properties.Count -ne 2 -or @($properties | Where-Object { $_ -notin @('listen', 'proxy') }).Count -ne 0) {
+        throw 'Naive HTTPS config contains unsupported fields.'
+    }
+    if ([string]$root.listen -ne "socks://127.0.0.1:$NaiveSocksPort") {
+        throw 'Naive HTTPS listener must be loopback-only.'
+    }
+    $proxyText = [string]$root.proxy
+    if ([string]::IsNullOrWhiteSpace($proxyText) -or $proxyText -match '\s|[\x00-\x1f]') {
+        throw 'Naive HTTPS proxy URI is invalid.'
+    }
+    $proxy = [Uri]$proxyText
+    if ($proxy.Scheme -ne 'https' -or $proxy.Host -ne $NaiveCanaryHost -or $proxy.Port -ne $NaiveCanaryPort -or
+        $proxy.AbsolutePath -ne '/' -or -not [string]::IsNullOrEmpty($proxy.Query) -or
+        -not [string]::IsNullOrEmpty($proxy.Fragment)) {
+        throw 'Naive HTTPS profile is not the guarded TLS canary.'
+    }
+    $userInfo = [Uri]::UnescapeDataString($proxy.UserInfo)
+    $credentialParts = $userInfo.Split(':', 2)
+    if ($userInfo.Length -lt 3 -or $userInfo.Length -gt 512 -or $credentialParts.Count -ne 2 -or
+        [string]::IsNullOrWhiteSpace($credentialParts[0]) -or [string]::IsNullOrWhiteSpace($credentialParts[1])) {
+        throw 'Naive HTTPS credentials are incomplete.'
+    }
+    $endpoint = Get-ManagedIpv4Endpoint
+    if ($endpoint -ne $NaiveCanaryIp) { throw 'Naive HTTPS endpoint is inconsistent.' }
+    $root | Add-Member -NotePropertyName 'host-resolver-rules' -NotePropertyValue "MAP $NaiveCanaryHost $NaiveCanaryIp" -Force
+
+    $hevRuntime = @"
+tunnel:
+  name: $NaiveTunnelName
+  mtu: 1400
+  ipv4: 198.18.2.1
+  ipv6: 'fc00:2::1'
+socks5:
+  port: $NaiveSocksPort
+  address: 127.0.0.1
+  udp: 'tcp'
+mapdns:
+  address: 198.18.2.2
+  port: 53
+  network: 100.64.0.0
+  netmask: 255.192.0.0
+  cache-size: 10000
+misc:
+  log-file: stderr
+  log-level: warn
+  connect-timeout: 10000
+  tcp-read-write-timeout: 300000
+  udp-read-write-timeout: 60000
+"@
+    Write-PrivateRuntimeFile -Path $NaiveRuntimeConfigPath -Content ($root | ConvertTo-Json -Depth 20)
+    Write-PrivateRuntimeFile -Path $NaiveHevRuntimeConfigPath -Content $hevRuntime
+}
+
+function Add-NaiveRoutes {
+    param([int]$InterfaceIndex)
+    $prefixes = @('0.0.0.0/1', '128.0.0.0/1', '::/1', '8000::/1')
+    foreach ($prefix in $prefixes) {
+        $family = if ($prefix.Contains(':')) { 'IPv6' } else { 'IPv4' }
+        $nextHop = if ($family -eq 'IPv6') { '::' } else { '0.0.0.0' }
+        Get-NetRoute -AddressFamily $family -DestinationPrefix $prefix -InterfaceIndex $InterfaceIndex -ErrorAction SilentlyContinue |
+            Where-Object { $_.RouteMetric -eq $NaiveRouteMetric } |
+            Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+        New-NetRoute -AddressFamily $family -DestinationPrefix $prefix -InterfaceIndex $InterfaceIndex `
+            -NextHop $nextHop -RouteMetric $NaiveRouteMetric -PolicyStore ActiveStore -ErrorAction Stop | Out-Null
+    }
+    Set-DnsClientServerAddress -InterfaceIndex $InterfaceIndex -ServerAddresses @('198.18.2.2') -ErrorAction Stop
+    [ordered]@{
+        interfaceIndex = $InterfaceIndex
+        metric = $NaiveRouteMetric
+        prefixes = $prefixes
+    } | ConvertTo-Json -Compress | Set-Content -LiteralPath $NaiveRouteStatePath -Encoding ASCII
+    & attrib.exe +H $NaiveRouteStatePath 2>$null | Out-Null
+    & icacls.exe $NaiveRouteStatePath /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
+}
+
+function Start-NaiveHttpsTunnel {
+    Assert-NaiveRuntime
+    Ensure-EndpointBypassRoute
+    New-NaiveRuntimeConfigs
+
+    foreach ($path in @($NaiveStdoutPath, $NaiveStderrPath, $NaiveHevStdoutPath, $NaiveHevStderrPath)) {
+        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        Write-PrivateRuntimeFile -Path $path -Content ''
+    }
+    $naive = Start-Process -FilePath $NaiveExe -ArgumentList @($NaiveRuntimeConfigPath) `
+        -WorkingDirectory $NaiveToolRoot -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput $NaiveStdoutPath -RedirectStandardError $NaiveStderrPath
+    Write-PrivateRuntimeFile -Path $NaivePidPath -Content ([string]$naive.Id)
+    Wait-LocalTcpPort -Port $NaiveSocksPort
+
+    $hev = Start-Process -FilePath $NaiveHevExe -ArgumentList @($NaiveHevRuntimeConfigPath) `
+        -WorkingDirectory $NaiveToolRoot -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput $NaiveHevStdoutPath -RedirectStandardError $NaiveHevStderrPath
+    Write-PrivateRuntimeFile -Path $NaiveHevPidPath -Content ([string]$hev.Id)
+    $adapter = Wait-NaiveAdapter
+    Add-NaiveRoutes -InterfaceIndex ([int]$adapter.ifIndex)
+
+    $watchdog = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @(
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'RemoteSigned',
+        '-File', ('"' + $NaiveWatchdogScript + '"'),
+        '-NaivePid', $naive.Id,
+        '-HevPid', $hev.Id
+    ) -WindowStyle Hidden -PassThru
+    Write-PrivateRuntimeFile -Path $NaiveWatchdogPidPath -Content ([string]$watchdog.Id)
+
+    if (-not (Test-ExactProcess -ProcessId $naive.Id -ExpectedPath $NaiveExe) -or
+        -not (Test-ExactProcess -ProcessId $hev.Id -ExpectedPath $NaiveHevExe)) {
+        throw 'Naive HTTPS preview engine exited during startup.'
+    }
+    Write-GreenLog "Naive HTTPS preview started ifIndex=$($adapter.ifIndex)"
+}
+
 function Get-CompetingVpnLabels {
     $labels = New-Object System.Collections.Generic.List[string]
     try {
         Get-NetAdapter -ErrorAction SilentlyContinue |
             Where-Object {
-                $_.Status -eq 'Up' -and $_.Name -notin @($TunnelName, $HysteriaTunnelName, $VlessTunnelName) -and
+                $_.Status -eq 'Up' -and $_.Name -notin @($TunnelName, $HysteriaTunnelName, $VlessTunnelName, $NaiveTunnelName) -and
                 ($_.Name -match '(?i)(wireguard|wintun|amnezia|warp|cloudflare|device[0-9_]+)' -or $_.InterfaceDescription -match '(?i)(wireguard|wintun|amnezia|warp|cloudflare)')
             } | ForEach-Object { $labels.Add("adapter:$($_.Name)") | Out-Null }
     } catch {
@@ -766,6 +999,7 @@ function Get-CompetingVpnLabels {
 function Stop-OwnTunnel {
     Stop-Hysteria2Tunnel
     Stop-VlessRealityTunnel
+    Stop-NaiveHttpsTunnel
     foreach ($serviceName in @($WireGuardServiceName, $AmneziaWgServiceName)) {
         try {
             Invoke-External -FilePath 'sc.exe' -Arguments @('stop', $serviceName) -AllowedExitCodes @(0, 1056, 1060, 1062) | Out-Null
@@ -807,6 +1041,10 @@ function Start-OwnTunnel {
         Start-VlessRealityTunnel
         return
     }
+    if ($protocol -eq 'naive_https') {
+        Start-NaiveHttpsTunnel
+        return
+    }
     if ([string]::IsNullOrWhiteSpace($engine)) { throw "Engine unavailable for $protocol" }
     Ensure-NativeFullTunnelKillSwitch
     Ensure-GreenProgramDataAcl
@@ -823,7 +1061,9 @@ function Invoke-GreenGuard {
         (Test-ExactProcess -ProcessId (Read-ManagedPid -Path $HevPidPath) -ExpectedPath $HevExe)
     $vlessRunning = (Test-ExactProcess -ProcessId (Read-ManagedPid -Path $XrayPidPath) -ExpectedPath $XrayExe) -and
         (Test-ExactProcess -ProcessId (Read-ManagedPid -Path $VlessHevPidPath) -ExpectedPath $VlessHevExe)
-    if ($ownRunning.Count -eq 0 -and -not $hysteriaRunning -and -not $vlessRunning) { return }
+    $naiveRunning = (Test-ExactProcess -ProcessId (Read-ManagedPid -Path $NaivePidPath) -ExpectedPath $NaiveExe) -and
+        (Test-ExactProcess -ProcessId (Read-ManagedPid -Path $NaiveHevPidPath) -ExpectedPath $NaiveHevExe)
+    if ($ownRunning.Count -eq 0 -and -not $hysteriaRunning -and -not $vlessRunning -and -not $naiveRunning) { return }
     if (@(Get-CompetingVpnLabels).Count -gt 0) {
         Write-GreenLog 'guard disconnecting preview because a competing VPN is active'
         Stop-OwnTunnel
