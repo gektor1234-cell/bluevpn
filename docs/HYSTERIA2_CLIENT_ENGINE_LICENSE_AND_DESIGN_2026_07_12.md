@@ -89,9 +89,35 @@ The protected Windows preview passed the full-device smoke on 2026-07-12:
 Authoritative report:
 `C:\Users\gekto\GreenVPN_Checkpoints\windows_hysteria2_preview_physical_20260712.json`.
 
-## Android contract
+## Android contract and physical proof
 
-Android will use the same HEV engine through its `tun_fd` JNI API. Hysteria's
-`quic.sockopts.fdControlUnixSocket` is used with `VpnService.protect()` so the
-QUIC socket stays outside the VPN and cannot recurse into its own TUN. Android
-packaging and physical-device proof remain a separate rollout gate.
+Android uses the same HEV engine through its external `tun_fd` JNI API.
+Hysteria's `quic.sockopts.fdControlUnixSocket` is connected to a private Unix
+socket (`0600`); every QUIC socket descriptor received through `SCM_RIGHTS` is
+passed to `VpnService.protect()` before Hysteria uses it. This keeps the remote
+UDP socket outside the VPN and prevents recursion into the app's own TUN.
+
+The implementation is isolated behind both
+`GREENVPN_ANDROID_HYSTERIA2_PREVIEW_ENABLED` and
+`GREENVPN_HYSTERIA2_PREVIEW_ENABLED`. The module is not included by Gradle when
+the Android build flag is false. The base profile is parsed with SnakeYAML's
+safe constructor, aliases and deep nesting are disabled, local listeners are
+rejected, TLS verification and Salamander are mandatory, and the runtime
+listener is fixed to loopback. Runtime profiles live under `noBackupFilesDir`,
+are owner-only and are deleted on disconnect or failure.
+
+The physical Samsung SM-A226B proof passed on 2026-07-12:
+
+- one exact Hysteria child and the HEV TUN carried bidirectional traffic;
+- external egress was exactly NL2 `5.129.216.42`;
+- production API, both paid-beta control planes and YouTube returned `200`;
+- forced engine termination produced fail-closed `error`, zero child processes
+  and zero service records;
+- a subsequent explicit disconnect reached clean `down`;
+- the plaintext source/runtime profiles were removed.
+
+Authoritative report:
+`C:\Users\gekto\GreenVPN_Checkpoints\android_hysteria2_preview_physical_20260712.json`.
+
+Detailed packaging, stable-isolation and rollback evidence is in
+`docs/ANDROID_HYSTERIA2_PREVIEW_2026_07_12_RU.md`.

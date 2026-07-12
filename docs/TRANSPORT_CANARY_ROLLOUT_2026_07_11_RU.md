@@ -32,6 +32,12 @@ Canary-скрипты запрещают apply на действующих contr
 
 Hysteria2 использует на том же NL2 отдельные service `greenvpn-hysteria2-canary`, UDP/2443, TLS/ACME material, auth и Salamander secret. Он не публикуется в catalog до готовности клиентских engine. Результат зафиксирован в `docs/HYSTERIA2_NL2_CANARY_2026_07_11_RU.md`.
 
+Отдельные Windows и Android preview-engine теперь физически проверены. Это не
+меняет rollout stage `canary` и не публикует Hysteria2 stable-клиентам:
+endpoint получает только клиент, явно объявивший capability `hysteria2` в
+изолированном preview-канале. Android-доказательства и rollback находятся в
+`docs/ANDROID_HYSTERIA2_PREVIEW_2026_07_12_RU.md`.
+
 ## Первый кандидат: AmneziaWG 2
 
 1. Выделить отдельный test-only VPS, не входящий в stable/preview каталог.

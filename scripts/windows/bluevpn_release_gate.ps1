@@ -71,6 +71,21 @@ $transportPreviewUninstallPath = Join-Path $ProjectRoot "scripts\windows\uninsta
 $transportPreviewBuildPath = Join-Path $ProjectRoot "scripts\windows\build_windows_awg2_preview.ps1"
 $hysteriaWatchdogPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_hysteria2_watchdog.ps1"
 $hysteriaPhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_windows_hysteria2_preview_physical.ps1"
+$androidSettingsPath = Join-Path $ProjectRoot "android\settings.gradle.kts"
+$androidAppBuildPath = Join-Path $ProjectRoot "android\app\build.gradle.kts"
+$androidHysteriaBuildPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\build.gradle.kts"
+$androidHysteriaManifestPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\main\AndroidManifest.xml"
+$androidHysteriaDebugManifestPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\debug\AndroidManifest.xml"
+$androidHysteriaConfigPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\main\kotlin\pro\greenvpn\hysteria\Hysteria2Config.kt"
+$androidHysteriaControllerPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\main\kotlin\pro\greenvpn\hysteria\Hysteria2Controller.kt"
+$androidHysteriaServicePath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\main\kotlin\pro\greenvpn\hysteria\Hysteria2VpnService.kt"
+$androidHysteriaBridgePath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\main\jni\greenvpn_hysteria_bridge.c"
+$androidHysteriaConfigTestPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\test\kotlin\pro\greenvpn\hysteria\Hysteria2ConfigTest.kt"
+$androidBuildScriptPath = Join-Path $ProjectRoot "scripts\windows\build_android_apk.ps1"
+$androidHysteriaPreparePath = Join-Path $ProjectRoot "scripts\windows\prepare_android_hysteria2_preview.ps1"
+$androidHysteriaPhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_android_hysteria2_preview_physical.ps1"
+$androidHysteriaApkVerifyPath = Join-Path $ProjectRoot "scripts\windows\verify_android_hysteria2_preview_apk.ps1"
+$androidStableIsolationVerifyPath = Join-Path $ProjectRoot "scripts\windows\verify_android_stable_transport_isolation.ps1"
 $wireguardTcpCanaryPath = Join-Path $ProjectRoot "scripts\server\install_wireguard_tcp_canary.sh"
 $transportCanaryPath = Join-Path $ProjectRoot "scripts\server\install_transport_canary_service.sh"
 $transportCanaryCheckPath = Join-Path $ProjectRoot "scripts\server\check_transport_canary_readiness.sh"
@@ -96,6 +111,21 @@ $transportPreviewUninstallScript = Read-Text $transportPreviewUninstallPath
 $transportPreviewBuildScript = Read-Text $transportPreviewBuildPath
 $hysteriaWatchdogScript = Read-Text $hysteriaWatchdogPath
 $hysteriaPhysicalTestScript = Read-Text $hysteriaPhysicalTestPath
+$androidSettings = Read-Text $androidSettingsPath
+$androidAppBuild = Read-Text $androidAppBuildPath
+$androidHysteriaBuild = Read-Text $androidHysteriaBuildPath
+$androidHysteriaManifest = Read-Text $androidHysteriaManifestPath
+$androidHysteriaDebugManifest = Read-Text $androidHysteriaDebugManifestPath
+$androidHysteriaConfig = Read-Text $androidHysteriaConfigPath
+$androidHysteriaController = Read-Text $androidHysteriaControllerPath
+$androidHysteriaService = Read-Text $androidHysteriaServicePath
+$androidHysteriaBridge = Read-Text $androidHysteriaBridgePath
+$androidHysteriaConfigTest = Read-Text $androidHysteriaConfigTestPath
+$androidBuildScript = Read-Text $androidBuildScriptPath
+$androidHysteriaPrepareScript = Read-Text $androidHysteriaPreparePath
+$androidHysteriaPhysicalTestScript = Read-Text $androidHysteriaPhysicalTestPath
+$androidHysteriaApkVerifyScript = Read-Text $androidHysteriaApkVerifyPath
+$androidStableIsolationVerifyScript = Read-Text $androidStableIsolationVerifyPath
 $wireguardTcpCanaryScript = Read-Text $wireguardTcpCanaryPath
 $transportCanaryScript = Read-Text $transportCanaryPath
 $transportCanaryCheckScript = Read-Text $transportCanaryCheckPath
@@ -1149,6 +1179,62 @@ foreach ($scriptPath in @($transportPreviewBuildPath, $hysteriaWatchdogPath, $hy
         }
         else {
             Add-Pass "Windows Hysteria2 preview parser check passed: $scriptPath"
+        }
+    }
+}
+
+Write-Section "ANDROID HYSTERIA2 PREVIEW CHECKS"
+$androidHysteriaSourceChecks = [ordered]@{
+    'Android settings conditional module' = @($androidSettings, 'GREENVPN_ANDROID_HYSTERIA2_PREVIEW_ENABLED', 'include(":hysteria_tunnel_preview")')
+    'Android app conditional dependency' = @($androidAppBuild, 'GREENVPN_HYSTERIA2_PREVIEW_ENABLED', 'implementation(project(":hysteria_tunnel_preview"))')
+    'Android Hysteria2 library build' = @($androidHysteriaBuild, 'jniLibs.keepDebugSymbols', 'testImplementation("junit:junit:4.13.2")')
+    'Android Hysteria2 protected VPN service manifest' = @($androidHysteriaManifest, 'android.permission.FOREGROUND_SERVICE_SPECIAL_USE', 'android.permission.BIND_VPN_SERVICE', 'android:exported="false"', 'android:foregroundServiceType="specialUse"')
+    'Android Hysteria2 debug-only receiver permission' = @($androidHysteriaDebugManifest, 'Hysteria2DebugReceiver', 'android.permission.DUMP')
+    'Android Hysteria2 structured config validator' = @($androidHysteriaConfig, 'SafeConstructor(loaderOptions)', 'maxAliasesForCollections = 0', 'nestingDepthLimit = 24', 'Hysteria2 insecure TLS is forbidden', 'Hysteria2 Salamander obfuscation is required')
+    'Android Hysteria2 managed lifecycle' = @($androidHysteriaService, 'context.noBackupFilesDir', 'source.delete()', 'nativeRunFdControl(fdSocket.canonicalPath)', 'addRoute("0.0.0.0", 0)', 'addRoute("::", 0)', 'process.destroyForcibly()', 'failClosed("Hysteria2 process stopped")', 'fun requestDisconnect(context: Context)', 'val preserveFailure = cleanupStarted.get() || state == "error"')
+    'Android Hysteria2 clean down wait' = @($androidHysteriaController, 'Hysteria2VpnService.requestDisconnect(context)', 'state == "error" && expected != "down"')
+    'Android Hysteria2 FD protection bridge' = @($androidHysteriaBridge, 'SCM_RIGHTS', 'FD_CLOEXEC', 'chmod(path, 0600)', 'protectSocket')
+    'Android Hysteria2 config unit tests' = @($androidHysteriaConfigTest, 'base config cannot define any local listener', 'insecure TLS is rejected', 'yaml aliases are rejected')
+    'Android Hysteria2 audited dependency preparation' = @($androidHysteriaPrepareScript, 'app%2Fv2.9.3/hashes.txt', '623B12826D13F8BB67F581396CF22C6639ABCBB6B1F22A42BF80350FFDAF50A3', '4d6c334dbfb68a79d1970c2744e62d09f71df12f')
+    'Android Hysteria2 isolated build flag' = @($androidBuildScript, 'EnableHysteria2Preview', 'GREENVPN_ANDROID_HYSTERIA2_PREVIEW_ENABLED', 'GREENVPN_HYSTERIA2_PREVIEW_ENABLED=true')
+    'Android Hysteria2 physical watchdog smoke' = @($androidHysteriaPhysicalTestScript, "ExpectedEgress = '5.129.216.42'", 'watchdogState', 'finalState', 'plaintextConfigRemoved')
+    'Android Hysteria2 APK verifier' = @($androidHysteriaApkVerifyScript, 'lib/arm64-v8a/libhysteria.so', 'GREENVPN_HYSTERIA2_PREVIEW_ENABLED:Z = true', 'zipalign', 'apksigner')
+    'Android stable transport isolation verifier' = @($androidStableIsolationVerifyScript, 'Stable APK contains Hysteria2 preview payload', 'GREENVPN_HYSTERIA2_PREVIEW_ENABLED:Z = false', 'pro.greenvpn.hysteria.Hysteria2VpnService')
+}
+foreach ($check in $androidHysteriaSourceChecks.GetEnumerator()) {
+    $source = [string]$check.Value[0]
+    $missing = @($check.Value[1..($check.Value.Count - 1)] | Where-Object { -not $source.Contains([string]$_) })
+    if ($missing.Count -eq 0) {
+        Add-Pass "$($check.Key) markers present"
+    }
+    else {
+        Add-Error "$($check.Key) missing marker(s): $($missing -join ', ')"
+    }
+}
+
+if ($androidHysteriaManifest.Contains('Hysteria2DebugReceiver')) {
+    Add-Error 'Android Hysteria2 debug receiver leaked into the main manifest'
+}
+else {
+    Add-Pass 'Android Hysteria2 debug receiver is isolated from the main manifest'
+}
+
+foreach ($scriptPath in @(
+    $androidBuildScriptPath,
+    $androidHysteriaPreparePath,
+    $androidHysteriaPhysicalTestPath,
+    $androidHysteriaApkVerifyPath,
+    $androidStableIsolationVerifyPath
+)) {
+    if (Test-Path -LiteralPath $scriptPath) {
+        $tokens = $null
+        $parseErrors = $null
+        [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$parseErrors) | Out-Null
+        if ($parseErrors -and $parseErrors.Count -gt 0) {
+            Add-Error "Android Hysteria2 PowerShell parser errors in ${scriptPath}: $($parseErrors[0].ToString())"
+        }
+        else {
+            Add-Pass "Android Hysteria2 PowerShell parser check passed: $scriptPath"
         }
     }
 }

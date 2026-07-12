@@ -37,3 +37,16 @@ if (awg2PreviewEnabled) {
     include(":awg_tunnel_preview")
     project(":awg_tunnel_preview").projectDir = awg2ModuleDir
 }
+
+val hysteria2PreviewEnabled =
+    (System.getenv("GREENVPN_ANDROID_HYSTERIA2_PREVIEW_ENABLED") ?: "false")
+        .trim()
+        .lowercase() in setOf("1", "true", "yes", "on")
+if (hysteria2PreviewEnabled) {
+    val hysteria2ModuleDir = file("transport_preview/hysteria_tunnel")
+    require(hysteria2ModuleDir.isDirectory) {
+        "Hysteria2 preview module is missing. Run scripts/windows/prepare_android_hysteria2_preview.ps1 first."
+    }
+    include(":hysteria_tunnel_preview")
+    project(":hysteria_tunnel_preview").projectDir = hysteria2ModuleDir
+}

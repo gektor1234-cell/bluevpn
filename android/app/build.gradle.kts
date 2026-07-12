@@ -36,6 +36,9 @@ val greenVpnApiFallbackBaseUrls = environmentValue(
 val greenVpnAwg2PreviewEnabled =
     environmentValue("GREENVPN_ANDROID_AWG2_PREVIEW_ENABLED", "false").lowercase() in
         setOf("1", "true", "yes", "on")
+val greenVpnHysteria2PreviewEnabled =
+    environmentValue("GREENVPN_ANDROID_HYSTERIA2_PREVIEW_ENABLED", "false").lowercase() in
+        setOf("1", "true", "yes", "on")
 
 android {
     namespace = "pro.greenvpn.app"
@@ -56,6 +59,13 @@ android {
         buildConfig = true
     }
 
+    packaging {
+        jniLibs.keepDebugSymbols += setOf("**/libhysteria.so")
+        if (greenVpnHysteria2PreviewEnabled) {
+            jniLibs.useLegacyPackaging = true
+        }
+    }
+
     defaultConfig {
         applicationId = greenVpnApplicationId
         // You can update the following values to match your application needs.
@@ -74,6 +84,11 @@ android {
             quotedBuildConfig(greenVpnApiFallbackBaseUrls),
         )
         buildConfigField("boolean", "GREENVPN_AWG2_PREVIEW_ENABLED", greenVpnAwg2PreviewEnabled.toString())
+        buildConfigField(
+            "boolean",
+            "GREENVPN_HYSTERIA2_PREVIEW_ENABLED",
+            greenVpnHysteria2PreviewEnabled.toString(),
+        )
     }
 
     if (hasReleaseKeystore) {
@@ -107,6 +122,9 @@ dependencies {
     implementation("com.wireguard.android:tunnel:1.0.20260102")
     if (greenVpnAwg2PreviewEnabled) {
         implementation(project(":awg_tunnel_preview"))
+    }
+    if (greenVpnHysteria2PreviewEnabled) {
+        implementation(project(":hysteria_tunnel_preview"))
     }
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
 }

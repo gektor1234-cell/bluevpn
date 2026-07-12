@@ -47,10 +47,10 @@ class GreenVpnQuickTileService : TileService() {
         const val MANAGED_CONFIG_KEY = "greenvpn_mobile_managed_config_v1"
         const val MANAGED_PROTOCOL_KEY = "greenvpn_mobile_managed_protocol_v1"
         val FREE_PLAN_CODES = setOf("trial", "free", "free_start", "support_trial", "base")
-        val SUPPORTED_PROTOCOLS = if (BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
-            listOf("wireguard_udp", "amneziawg")
-        } else {
-            listOf("wireguard_udp")
+        val SUPPORTED_PROTOCOLS = buildList {
+            add("wireguard_udp")
+            if (BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) add("amneziawg")
+            if (BuildConfig.GREENVPN_HYSTERIA2_PREVIEW_ENABLED) add("hysteria2")
         }
     }
 
@@ -179,6 +179,7 @@ class GreenVpnQuickTileService : TileService() {
     }
 
     private fun isVpnConnected(): Boolean {
+        if (GreenVpnHysteria2Preview.snapshot(applicationContext).connected) return true
         if (BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
             return GreenVpnAwg2Preview.snapshot(applicationContext).connected
         }
@@ -189,7 +190,26 @@ class GreenVpnQuickTileService : TileService() {
     }
 
     private fun connectVpn(configText: String, protocol: String): Boolean {
-        if (protocol == "amneziawg" || BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
+        if (protocol == "hysteria2") {
+            require(GreenVpnHysteria2Preview.isAvailable(applicationContext)) {
+                "Этот режим не включён в текущую сборку"
+            }
+            GreenVpnAwg2Preview.disconnect(applicationContext)
+            val currentBackend = backend()
+            if (currentBackend.getRunningTunnelNames().contains(tunnel.getName())) {
+                currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
+                Thread.sleep(250)
+            }
+            val validated = GreenVpnHysteria2Preview.validateConfig(configText)
+            return GreenVpnHysteria2Preview.connect(applicationContext, validated)
+        }
+        val hysteria = GreenVpnHysteria2Preview.snapshot(applicationContext)
+        if (hysteria.connected || hysteria.state == "starting") {
+            GreenVpnHysteria2Preview.disconnect(applicationContext)
+        }
+        if (protocol == "amneziawg" ||
+            (protocol == "wireguard_udp" && BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED)
+        ) {
             if (!BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
                 val currentBackend = backend()
                 if (currentBackend.getRunningTunnelNames().contains(tunnel.getName())) {
@@ -210,6 +230,10 @@ class GreenVpnQuickTileService : TileService() {
     }
 
     private fun disconnectVpn(): Boolean {
+        val hysteria = GreenVpnHysteria2Preview.snapshot(applicationContext)
+        if (hysteria.connected || hysteria.state == "starting" || hysteria.state == "error") {
+            return GreenVpnHysteria2Preview.disconnect(applicationContext)
+        }
         if (BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
             return GreenVpnAwg2Preview.disconnect(applicationContext)
         }

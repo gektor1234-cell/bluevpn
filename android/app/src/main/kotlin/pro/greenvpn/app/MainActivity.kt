@@ -165,8 +165,12 @@ class MainActivity : FlutterActivity() {
             return
         }
 
-        val effectiveConfigText = filterVpnApplicationSelectors(configText)
-        if (protocol !in setOf("wireguard_udp", "amneziawg")) {
+        val effectiveConfigText = if (protocol == "hysteria2") {
+            configText
+        } else {
+            filterVpnApplicationSelectors(configText)
+        }
+        if (protocol !in setOf("wireguard_udp", "amneziawg", "hysteria2")) {
             result.success(
                 response(
                     ok = false,
@@ -186,12 +190,26 @@ class MainActivity : FlutterActivity() {
             )
             return
         }
+        if (protocol == "hysteria2" && !GreenVpnHysteria2Preview.isAvailable(applicationContext)) {
+            result.success(
+                response(
+                    ok = false,
+                    connected = false,
+                    message = "Этот режим доступен только в специальной preview-сборке."
+                )
+            )
+            return
+        }
 
         val parsed: Any = try {
-            if (protocol == "amneziawg" || BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
-                GreenVpnAwg2Preview.parseConfig(effectiveConfigText)
-            } else {
-                Config.parse(ByteArrayInputStream(effectiveConfigText.toByteArray(StandardCharsets.UTF_8)))
+            when {
+                protocol == "hysteria2" -> GreenVpnHysteria2Preview.validateConfig(effectiveConfigText)
+                protocol == "amneziawg" ||
+                    (protocol == "wireguard_udp" && BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) ->
+                    GreenVpnAwg2Preview.parseConfig(effectiveConfigText)
+                else -> Config.parse(
+                    ByteArrayInputStream(effectiveConfigText.toByteArray(StandardCharsets.UTF_8))
+                )
             }
         } catch (e: Exception) {
             result.success(
@@ -219,9 +237,26 @@ class MainActivity : FlutterActivity() {
     private fun connectWithConfig(protocol: String, config: Any, result: MethodChannel.Result) {
         executor.execute {
             try {
-                val connected = if (
-                    protocol == "amneziawg" || BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED
+                val connected = if (protocol == "hysteria2") {
+                    if (GreenVpnAwg2Preview.isAvailable()) {
+                        GreenVpnAwg2Preview.disconnect(applicationContext)
+                    }
+                    val currentBackend = backend()
+                    if (currentBackend.getRunningTunnelNames().contains(tunnel.getName())) {
+                        currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
+                    }
+                    if (!waitForOwnVpnNetworkInactive(2_500L)) {
+                        throw IllegalStateException("Android не завершил предыдущее VPN-подключение")
+                    }
+                    GreenVpnHysteria2Preview.connect(applicationContext, config as String)
+                } else if (
+                    protocol == "amneziawg" ||
+                    (protocol == "wireguard_udp" && BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED)
                 ) {
+                    val hysteria = GreenVpnHysteria2Preview.snapshot(applicationContext)
+                    if (hysteria.connected || hysteria.state == "starting") {
+                        GreenVpnHysteria2Preview.disconnect(applicationContext)
+                    }
                     if (!BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
                         val currentBackend = backend()
                         if (currentBackend.getRunningTunnelNames().contains(tunnel.getName())) {
@@ -230,6 +265,10 @@ class MainActivity : FlutterActivity() {
                     }
                     GreenVpnAwg2Preview.connect(applicationContext, config)
                 } else {
+                    val hysteria = GreenVpnHysteria2Preview.snapshot(applicationContext)
+                    if (hysteria.connected || hysteria.state == "starting") {
+                        GreenVpnHysteria2Preview.disconnect(applicationContext)
+                    }
                     if (GreenVpnAwg2Preview.isAvailable()) {
                         GreenVpnAwg2Preview.disconnect(applicationContext)
                     }
@@ -277,6 +316,21 @@ class MainActivity : FlutterActivity() {
     private fun handleDisconnect(result: MethodChannel.Result) {
         executor.execute {
             try {
+                val hysteria = GreenVpnHysteria2Preview.snapshot(applicationContext)
+                if (hysteria.connected || hysteria.state == "starting" || hysteria.state == "error") {
+                    val disconnected = GreenVpnHysteria2Preview.disconnect(applicationContext)
+                    if (disconnected) markOwnVpnInactive()
+                    runOnUiThread {
+                        result.success(
+                            response(
+                                ok = disconnected,
+                                connected = !disconnected,
+                                message = if (disconnected) "VPN выключен." else "VPN ещё активен."
+                            )
+                        )
+                    }
+                    return@execute
+                }
                 if (BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
                     val disconnected = GreenVpnAwg2Preview.disconnect(applicationContext)
                     if (disconnected) markOwnVpnInactive()
@@ -379,6 +433,44 @@ class MainActivity : FlutterActivity() {
             val systemOwnVpnActive = systemVpnActive && isOwnVpnNetworkActive()
             if (!systemVpnActive) {
                 markOwnVpnInactive()
+            }
+            if (BuildConfig.GREENVPN_HYSTERIA2_PREVIEW_ENABLED) {
+                val hysteria = GreenVpnHysteria2Preview.snapshot(applicationContext)
+                if (hysteria.connected || hysteria.state == "starting") {
+                    val markerOwnRunning = !systemOwnVpnActive &&
+                        systemVpnActive &&
+                        hasOwnVpnActiveMarker(systemVpnActive)
+                    val ownRunning = hysteria.connected || systemOwnVpnActive || markerOwnRunning
+                    runOnUiThread {
+                        result.success(
+                            mapOf(
+                                "ok" to hysteria.available,
+                                "connected" to ownRunning,
+                                "ownTunnelRunning" to ownRunning,
+                                "state" to if (ownRunning) "up" else hysteria.state,
+                                "rxBytes" to hysteria.rxBytes,
+                                "txBytes" to hysteria.txBytes,
+                                "version" to hysteria.version,
+                                "runningTunnels" to if (ownRunning) listOf("GreenVPN") else emptyList<String>(),
+                                "systemVpnActive" to systemVpnActive,
+                                "systemVpnActiveWithoutOwnTunnel" to (systemVpnActive && !ownRunning),
+                                "externalVpnActive" to (systemVpnActive && !ownRunning),
+                                "lastGreenVpnActive" to (systemOwnVpnActive || markerOwnRunning),
+                                "lastGreenVpnActiveAgeMs" to ownVpnMarkerAgeMs(),
+                                "ownTunnelSource" to when {
+                                    hysteria.connected -> "hysteria2"
+                                    systemOwnVpnActive -> "system_owner"
+                                    markerOwnRunning -> "marker"
+                                    else -> "none"
+                                },
+                                "nativeTunnelName" to "GreenVPN",
+                                "requestedTunnelName" to requestedName,
+                                "statusError" to hysteria.error
+                            )
+                        )
+                    }
+                    return@execute
+                }
             }
             if (BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
                 val awg = GreenVpnAwg2Preview.snapshot(applicationContext)

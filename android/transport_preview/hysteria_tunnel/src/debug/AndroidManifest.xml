@@ -1,0 +1,12 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver
+            android:name="pro.greenvpn.hysteria.Hysteria2DebugReceiver"
+            android:permission="android.permission.DUMP"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="pro.greenvpn.hysteria.DEBUG_CONTROL" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>
