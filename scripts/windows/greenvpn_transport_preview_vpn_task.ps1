@@ -95,18 +95,29 @@ function Get-SelectedServiceName {
 }
 
 function Ensure-GreenProgramDataAcl {
-    New-Item -ItemType Directory -Force -Path $ProgramDataRoot | Out-Null
+    if (-not (Test-Path -LiteralPath $ProgramDataRoot -PathType Container)) {
+        throw 'Protected transport preview state directory is missing.'
+    }
+    $broadSids = @('S-1-1-0', 'S-1-5-11', 'S-1-5-32-545')
+    $writeMask = [Security.AccessControl.FileSystemRights]::Write -bor `
+        [Security.AccessControl.FileSystemRights]::Modify -bor `
+        [Security.AccessControl.FileSystemRights]::FullControl
     foreach ($path in @($ProgramDataRoot, $ConfigPath, $ProtocolPath)) {
         if (-not (Test-Path -LiteralPath $path)) { continue }
-        try {
-            Invoke-External -FilePath 'attrib.exe' -Arguments @('-H', '-S', '-R', $path) -AllowedExitCodes @(0, 1) | Out-Null
-            if ((Get-Item -LiteralPath $path).PSIsContainer) {
-                Invoke-External -FilePath 'icacls.exe' -Arguments @($path, '/inheritance:e', '/grant', '*S-1-5-11:(OI)(CI)M', '*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F') | Out-Null
-            } else {
-                Invoke-External -FilePath 'icacls.exe' -Arguments @($path, '/inheritance:e', '/grant', '*S-1-5-11:M', '*S-1-5-18:F', '*S-1-5-32-544:F') | Out-Null
+        $item = Get-Item -LiteralPath $path -Force
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Transport preview state must not be a reparse point: $path"
+        }
+        foreach ($ace in (Get-Acl -LiteralPath $path).Access) {
+            if ($ace.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { continue }
+            try {
+                $sid = $ace.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+            } catch {
+                continue
             }
-        } catch {
-            Write-GreenLog "ACL warning for $path"
+            if ($sid -in $broadSids -and (($ace.FileSystemRights -band $writeMask) -ne 0)) {
+                throw "Broad write ACL is forbidden for transport preview state: $path sid=$sid"
+            }
         }
     }
 }

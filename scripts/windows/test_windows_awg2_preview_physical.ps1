@@ -100,6 +100,8 @@ if (-not (Test-IsAdministrator)) {
     exit $process.ExitCode
 }
 
+$CurrentUserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+
 $competing = Get-Service -Name $CompetingServiceName -ErrorAction SilentlyContinue
 if ($null -eq $competing -or $competing.Status -ne 'Running') {
     throw "Expected competing VPN service is not running: $CompetingServiceName"
@@ -144,8 +146,8 @@ try {
     Copy-Item -LiteralPath $SourceConfig -Destination $ConfigPath -Force
     [IO.File]::WriteAllText($ProtocolPath, 'amneziawg', [Text.UTF8Encoding]::new($false))
     & attrib.exe +H $ConfigPath $ProtocolPath 2>$null | Out-Null
-    & icacls.exe $ConfigPath /inheritance:r /grant '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-11:R' | Out-Null
-    & icacls.exe $ProtocolPath /inheritance:r /grant '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-11:R' | Out-Null
+    & icacls.exe $ConfigPath /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' ('*' + $CurrentUserSid + ':R') | Out-Null
+    & icacls.exe $ProtocolPath /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' ('*' + $CurrentUserSid + ':R') | Out-Null
 
     $blocked = Invoke-PreviewApi -Method POST -Path '/connect'
     $report.competitorGuardStatus = $blocked.StatusCode

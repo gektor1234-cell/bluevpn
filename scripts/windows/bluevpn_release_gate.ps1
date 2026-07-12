@@ -946,7 +946,11 @@ $transportPreviewRouteFragments = @(
     "'MSFT_NetRoute'",
     'No physical gateway route is available',
     'endpoint bypass route ready',
-    'if ($Action -eq ''Connect'') { Remove-EndpointBypassRoute }'
+    'if ($Action -eq ''Connect'') { Remove-EndpointBypassRoute }',
+    'Broad write ACL is forbidden for transport preview state',
+    "@('S-1-1-0', 'S-1-5-11', 'S-1-5-32-545')",
+    '[IO.FileAttributes]::ReparsePoint',
+    'Protected transport preview state directory is missing'
 )
 
 foreach ($fragment in $transportPreviewRouteFragments) {
@@ -955,6 +959,28 @@ foreach ($fragment in $transportPreviewRouteFragments) {
     }
     else {
         Add-Error "Windows transport preview route guard missing: $fragment"
+    }
+}
+
+if ($transportPreviewVpnTaskScript.Contains("'*S-1-5-11:(OI)(CI)M'")) {
+    Add-Error 'Windows transport preview task must not grant broad Authenticated Users write access'
+}
+else {
+    Add-Pass 'Windows transport preview task does not grant broad Authenticated Users write access'
+}
+
+foreach ($fragment in @(
+    "greenVpnWindowsRuntimeScope == 'transport-preview'",
+    "'*`$userSid:(OI)(CI)M'",
+    "'*`$userSid:F'",
+    "WindowsLocalSecurity.prepareSharedConfigDirectory(f.parent.path)",
+    "WindowsLocalSecurity.prepareSharedConfigFile(f.path)"
+)) {
+    if ($main.Contains($fragment)) {
+        Add-Pass "Windows transport preview client ACL marker present: $fragment"
+    }
+    else {
+        Add-Error "Windows transport preview client ACL marker missing: $fragment"
     }
 }
 
@@ -976,6 +1002,8 @@ $transportPreviewInstallFragments = @(
     "'*S-1-5-18:(OI)(CI)F'",
     "'*S-1-5-32-544:(OI)(CI)F'",
     "'*S-1-5-32-545:(OI)(CI)RX'",
+    "/remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' /T /C",
+    "('*' + `$UserSid + ':(OI)(CI)M')",
     "Set-PreviewAcl -UserSid `$installingUserSid",
     'Remove-Item -LiteralPath $LegacyInstallRoot -Recurse -Force'
 )
@@ -1147,6 +1175,8 @@ if (-not [string]::IsNullOrWhiteSpace($ReleaseZip)) {
                         "'*S-1-5-18:(OI)(CI)F'",
                         "'*S-1-5-32-544:(OI)(CI)F'",
                         "'*S-1-5-32-545:(OI)(CI)RX'",
+                        "/remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' /T /C",
+                        "('*' + `$UserSid + ':(OI)(CI)M')",
                         'Remove-Item -LiteralPath $LegacyInstallRoot -Recurse -Force'
                     )) {
                         if ($packagedPreviewInstaller.Contains($fragment)) {

@@ -40,8 +40,15 @@ function Set-PreviewAcl {
     & icacls.exe $ProgramDataRoot /inheritance:r /grant:r `
         '*S-1-5-18:(OI)(CI)F' `
         '*S-1-5-32-544:(OI)(CI)F' `
-        ($UserSid + ':(OI)(CI)M') | Out-Null
+        ('*' + $UserSid + ':(OI)(CI)M') | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to protect transport preview state.' }
+    & icacls.exe $ProgramDataRoot /remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' /T /C | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to remove broad transport preview state access.' }
+    & icacls.exe $ProgramDataRoot /grant:r `
+        '*S-1-5-18:(OI)(CI)F' `
+        '*S-1-5-32-544:(OI)(CI)F' `
+        ('*' + $UserSid + ':(OI)(CI)M') /T /C | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to apply recursive transport preview state ACLs.' }
 }
 
 function Stop-PreviewTunnel {
@@ -101,7 +108,7 @@ function Ensure-ServiceToken {
     & icacls.exe $tokenPath /inheritance:r /grant:r `
         '*S-1-5-18:F' `
         '*S-1-5-32-544:F' `
-        ($UserSid + ':R') | Out-Null
+        ('*' + $UserSid + ':R') | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to protect transport preview service token.' }
 }
 

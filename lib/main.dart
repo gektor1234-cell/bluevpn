@@ -1360,14 +1360,26 @@ try {
         '-R',
         dir.path,
       ], runInShell: true);
-      await Process.run('icacls', [
-        dir.path,
-        '/inheritance:e',
-        '/grant',
-        '*S-1-5-11:(OI)(CI)M',
-        '*S-1-5-18:(OI)(CI)F',
-        '*S-1-5-32-544:(OI)(CI)F',
-      ], runInShell: true);
+      final userSid = await _currentUserSid();
+      final args =
+          greenVpnWindowsRuntimeScope == 'transport-preview' && userSid != null
+          ? [
+              dir.path,
+              '/inheritance:r',
+              '/grant:r',
+              '*$userSid:(OI)(CI)M',
+              '*S-1-5-18:(OI)(CI)F',
+              '*S-1-5-32-544:(OI)(CI)F',
+            ]
+          : [
+              dir.path,
+              '/inheritance:e',
+              '/grant',
+              '*S-1-5-11:(OI)(CI)M',
+              '*S-1-5-18:(OI)(CI)F',
+              '*S-1-5-32-544:(OI)(CI)F',
+            ];
+      await Process.run('icacls', args, runInShell: true);
     } catch (_) {}
   }
 
@@ -1377,14 +1389,26 @@ try {
       final f = File(path);
       if (!f.existsSync()) return;
       await Process.run('attrib', ['-H', '-S', '-R', path], runInShell: true);
-      await Process.run('icacls', [
-        path,
-        '/inheritance:e',
-        '/grant',
-        '*S-1-5-11:M',
-        '*S-1-5-18:F',
-        '*S-1-5-32-544:F',
-      ], runInShell: true);
+      final userSid = await _currentUserSid();
+      final args =
+          greenVpnWindowsRuntimeScope == 'transport-preview' && userSid != null
+          ? [
+              path,
+              '/inheritance:r',
+              '/grant:r',
+              '*$userSid:F',
+              '*S-1-5-18:F',
+              '*S-1-5-32-544:F',
+            ]
+          : [
+              path,
+              '/inheritance:e',
+              '/grant',
+              '*S-1-5-11:M',
+              '*S-1-5-18:F',
+              '*S-1-5-32-544:F',
+            ];
+      await Process.run('icacls', args, runInShell: true);
     } catch (_) {}
   }
 }
@@ -17928,35 +17952,9 @@ if ($null -eq $svc) { exit 0 }
         if (!f.parent.existsSync()) {
           f.parent.createSync(recursive: true);
         }
-        await Process.run('attrib', [
-          '-H',
-          '-S',
-          '-R',
-          f.parent.path,
-        ], runInShell: true);
-        await Process.run('icacls', [
-          f.parent.path,
-          '/inheritance:e',
-          '/grant',
-          '*S-1-5-11:(OI)(CI)M',
-          '*S-1-5-18:(OI)(CI)F',
-          '*S-1-5-32-544:(OI)(CI)F',
-        ], runInShell: true);
+        await WindowsLocalSecurity.prepareSharedConfigDirectory(f.parent.path);
         if (f.existsSync()) {
-          await Process.run('attrib', [
-            '-H',
-            '-S',
-            '-R',
-            f.path,
-          ], runInShell: true);
-          await Process.run('icacls', [
-            f.path,
-            '/inheritance:e',
-            '/grant',
-            '*S-1-5-11:M',
-            '*S-1-5-18:F',
-            '*S-1-5-32-544:F',
-          ], runInShell: true);
+          await WindowsLocalSecurity.prepareSharedConfigFile(f.path);
         }
       } catch (_) {}
     }
