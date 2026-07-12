@@ -22,7 +22,7 @@
 | `preview` | Есть отдельный клиентский engine и физический smoke | Только явно совместимому preview-клиенту |
 | `public` | Пройдены server, client, route-health и rollback gates | Да |
 
-Текущее состояние: `wireguard_udp=public`; `amneziawg=canary`; `hysteria2=canary`; `wireguard_tcp`, `openvpn_tcp`, `shadowsocks`, `trojan_tls`, `vless_reality=canary_prepared`; `masque_udp=research`.
+Текущее состояние: `wireguard_udp=public`; `amneziawg=canary`; `hysteria2=canary`; `vless_reality=canary`; `naive_https=canary` вне catalog; `wireguard_tcp`, `openvpn_tcp`, `shadowsocks`, `trojan_tls=canary_prepared`; `masque_udp=research`.
 
 ## Защищённые серверы
 
@@ -70,7 +70,7 @@ sudo scripts/server/check_transport_canary_readiness.sh \
 1. AmneziaWG 2: быстрый маскированный UDP.
 2. Hysteria2: QUIC fallback.
 3. VLESS + REALITY + XHTTP на TCP/443: fallback при блокировке UDP.
-4. NaiveProxy/AnyTLS: HTTPS-подобный резерв после отдельного лицензионного и engine-аудита.
+4. NaiveProxy: HTTPS-подобный резерв. Server canary уже доказан на NL2 TCP/8443 вне catalog; client engines и безопасный SNI sharing TCP/443 ещё не готовы. AnyTLS оставлен research из-за отсутствия явной лицензии у reference implementation и GPL у основного готового sing-box engine.
 5. OpenVPN TCP/443: совместимость.
 6. MASQUE и Tor transports: исследовательский контур.
 7. DNS/ICMP-туннели: только аварийная лаборатория, не продуктовый auto-selection.
@@ -84,3 +84,10 @@ sudo scripts/server/check_transport_canary_readiness.sh \
 - Старый stable-клиент не видит endpoint даже при ошибочной пометке записи public.
 - Rollback проверен до публикации.
 - Лицензия движка допускает коммерческое распространение выбранным способом.
+
+## Автоматический выбор в preview
+
+- Failure cooldown хранится только в памяти клиента и ограничен интервалами `1/3/10/30` минут; перезапуск приложения очищает накопленные штрафы.
+- Механизм включается только транспортными preview-флагами. Frozen stable продолжает выбирать `wireguard_udp` по прежней логике.
+- В автоматическое состояние маршрута допускаются только `automationEligible=true`, `egressVerified=true` и data-plane сигналы вида tunnel/proxy.
+- Обычный HTTP service probe считается control-plane сигналом: он может использоваться для диагностики, но не может разблокировать или повысить транспорт.

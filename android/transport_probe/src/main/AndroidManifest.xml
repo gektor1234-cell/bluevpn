@@ -1,0 +1,17 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:allowBackup="false"
+        android:label="Green VPN Transport Probe"
+        android:supportsRtl="false">
+        <receiver
+            android:name=".TransportProbeReceiver"
+            android:permission="android.permission.DUMP"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="pro.greenvpn.transportprobe.RUN" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

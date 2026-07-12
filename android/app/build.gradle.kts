@@ -39,6 +39,9 @@ val greenVpnAwg2PreviewEnabled =
 val greenVpnHysteria2PreviewEnabled =
     environmentValue("GREENVPN_ANDROID_HYSTERIA2_PREVIEW_ENABLED", "false").lowercase() in
         setOf("1", "true", "yes", "on")
+val greenVpnVlessRealityPreviewEnabled =
+    environmentValue("GREENVPN_ANDROID_VLESS_REALITY_PREVIEW_ENABLED", "false").lowercase() in
+        setOf("1", "true", "yes", "on")
 
 android {
     namespace = "pro.greenvpn.app"
@@ -61,7 +64,8 @@ android {
 
     packaging {
         jniLibs.keepDebugSymbols += setOf("**/libhysteria.so")
-        if (greenVpnHysteria2PreviewEnabled) {
+        jniLibs.keepDebugSymbols += setOf("**/libxray.so")
+        if (greenVpnHysteria2PreviewEnabled || greenVpnVlessRealityPreviewEnabled) {
             jniLibs.useLegacyPackaging = true
         }
     }
@@ -88,6 +92,11 @@ android {
             "boolean",
             "GREENVPN_HYSTERIA2_PREVIEW_ENABLED",
             greenVpnHysteria2PreviewEnabled.toString(),
+        )
+        buildConfigField(
+            "boolean",
+            "GREENVPN_VLESS_REALITY_PREVIEW_ENABLED",
+            greenVpnVlessRealityPreviewEnabled.toString(),
         )
     }
 
@@ -123,7 +132,7 @@ dependencies {
     if (greenVpnAwg2PreviewEnabled) {
         implementation(project(":awg_tunnel_preview"))
     }
-    if (greenVpnHysteria2PreviewEnabled) {
+    if (greenVpnHysteria2PreviewEnabled || greenVpnVlessRealityPreviewEnabled) {
         implementation(project(":hysteria_tunnel_preview"))
     }
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")

@@ -1342,7 +1342,9 @@ def main() -> int:
                 "message": result.message,
                 "details": {
                     "probeMode": route_candidate["signalKind"],
-                    "routeSignalKind": "configured_route_candidate",
+                    "routeSignalKind": "control_plane_reachability",
+                    "automationEligible": False,
+                    "egressVerified": False,
                     "protocol": route_candidate["protocol"],
                     "transport": route_candidate["transport"],
                     "endpointId": route_candidate["endpointId"],

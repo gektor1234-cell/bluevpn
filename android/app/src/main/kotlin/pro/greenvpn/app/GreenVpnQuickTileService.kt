@@ -51,6 +51,7 @@ class GreenVpnQuickTileService : TileService() {
             add("wireguard_udp")
             if (BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) add("amneziawg")
             if (BuildConfig.GREENVPN_HYSTERIA2_PREVIEW_ENABLED) add("hysteria2")
+            if (BuildConfig.GREENVPN_VLESS_REALITY_PREVIEW_ENABLED) add("vless_reality")
         }
     }
 
@@ -179,6 +180,7 @@ class GreenVpnQuickTileService : TileService() {
     }
 
     private fun isVpnConnected(): Boolean {
+        if (GreenVpnVlessRealityPreview.snapshot(applicationContext).connected) return true
         if (GreenVpnHysteria2Preview.snapshot(applicationContext).connected) return true
         if (BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
             return GreenVpnAwg2Preview.snapshot(applicationContext).connected
@@ -190,11 +192,26 @@ class GreenVpnQuickTileService : TileService() {
     }
 
     private fun connectVpn(configText: String, protocol: String): Boolean {
+        if (protocol == "vless_reality") {
+            require(GreenVpnVlessRealityPreview.isAvailable(applicationContext)) {
+                "This mode is not included in the current build"
+            }
+            GreenVpnHysteria2Preview.disconnect(applicationContext)
+            GreenVpnAwg2Preview.disconnect(applicationContext)
+            val currentBackend = backend()
+            if (currentBackend.getRunningTunnelNames().contains(tunnel.getName())) {
+                currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
+                Thread.sleep(250)
+            }
+            val validated = GreenVpnVlessRealityPreview.validateConfig(configText)
+            return GreenVpnVlessRealityPreview.connect(applicationContext, validated)
+        }
         if (protocol == "hysteria2") {
             require(GreenVpnHysteria2Preview.isAvailable(applicationContext)) {
                 "Этот режим не включён в текущую сборку"
             }
             GreenVpnAwg2Preview.disconnect(applicationContext)
+            GreenVpnVlessRealityPreview.disconnect(applicationContext)
             val currentBackend = backend()
             if (currentBackend.getRunningTunnelNames().contains(tunnel.getName())) {
                 currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
@@ -202,6 +219,10 @@ class GreenVpnQuickTileService : TileService() {
             }
             val validated = GreenVpnHysteria2Preview.validateConfig(configText)
             return GreenVpnHysteria2Preview.connect(applicationContext, validated)
+        }
+        val vless = GreenVpnVlessRealityPreview.snapshot(applicationContext)
+        if (vless.connected || vless.state == "starting") {
+            GreenVpnVlessRealityPreview.disconnect(applicationContext)
         }
         val hysteria = GreenVpnHysteria2Preview.snapshot(applicationContext)
         if (hysteria.connected || hysteria.state == "starting") {
@@ -230,6 +251,10 @@ class GreenVpnQuickTileService : TileService() {
     }
 
     private fun disconnectVpn(): Boolean {
+        val vless = GreenVpnVlessRealityPreview.snapshot(applicationContext)
+        if (vless.connected || vless.state == "starting" || vless.state == "error") {
+            return GreenVpnVlessRealityPreview.disconnect(applicationContext)
+        }
         val hysteria = GreenVpnHysteria2Preview.snapshot(applicationContext)
         if (hysteria.connected || hysteria.state == "starting" || hysteria.state == "error") {
             return GreenVpnHysteria2Preview.disconnect(applicationContext)

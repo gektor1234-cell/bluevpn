@@ -76,6 +76,12 @@ function Set-PreviewAcl {
 }
 
 function Stop-PreviewTunnel {
+    $installedTask = Join-Path $InstallRoot 'tools\greenvpn_transport_preview_vpn_task.ps1'
+    if (Test-Path -LiteralPath $installedTask) {
+        try {
+            & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned -File $installedTask -Action Disconnect
+        } catch {}
+    }
     foreach ($service in @($WireGuardTunnelService, $AmneziaWgTunnelService)) {
         & sc.exe stop $service 2>$null | Out-Null
     }
@@ -142,13 +148,18 @@ $required = @(
     'greenvpn_transport_preview_service.exe',
     'tools\greenvpn_transport_preview_vpn_task.ps1',
     'tools\greenvpn_hysteria2_watchdog.ps1',
+    'tools\greenvpn_vless_reality_watchdog.ps1',
     'tools\amneziawg2\amneziawg.exe',
     'tools\amneziawg2\awg.exe',
     'tools\amneziawg2\wintun.dll',
     'tools\hysteria2\hysteria-windows-amd64.exe',
     'tools\hysteria2\hev-socks5-tunnel.exe',
     'tools\hysteria2\msys-2.0.dll',
-    'tools\hysteria2\wintun.dll'
+    'tools\hysteria2\wintun.dll',
+    'tools\vless-reality\xray.exe',
+    'tools\vless-reality\hev-socks5-tunnel.exe',
+    'tools\vless-reality\msys-2.0.dll',
+    'tools\vless-reality\wintun.dll'
 )
 foreach ($relative in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $PayloadDir $relative))) {

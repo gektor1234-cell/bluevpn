@@ -86,6 +86,15 @@ $androidHysteriaPreparePath = Join-Path $ProjectRoot "scripts\windows\prepare_an
 $androidHysteriaPhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_android_hysteria2_preview_physical.ps1"
 $androidHysteriaApkVerifyPath = Join-Path $ProjectRoot "scripts\windows\verify_android_hysteria2_preview_apk.ps1"
 $androidStableIsolationVerifyPath = Join-Path $ProjectRoot "scripts\windows\verify_android_stable_transport_isolation.ps1"
+$androidVlessConfigPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\main\kotlin\pro\greenvpn\vless\VlessRealityConfig.kt"
+$androidVlessControllerPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\main\kotlin\pro\greenvpn\vless\VlessRealityController.kt"
+$androidVlessServicePath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\main\kotlin\pro\greenvpn\vless\VlessRealityVpnService.kt"
+$androidVlessConfigTestPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\test\kotlin\pro\greenvpn\vless\VlessRealityConfigTest.kt"
+$androidVlessPreparePath = Join-Path $ProjectRoot "scripts\windows\prepare_android_vless_reality_preview.ps1"
+$androidVlessPhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_android_vless_reality_preview_physical.ps1"
+$routeFailureCooldownPath = Join-Path $ProjectRoot "lib\services\route_failure_cooldown.dart"
+$routeFailureCooldownTestPath = Join-Path $ProjectRoot "test\route_failure_cooldown_test.dart"
+$monitoringProbePath = Join-Path $ProjectRoot "scripts\monitoring\service_probe.py"
 $wireguardTcpCanaryPath = Join-Path $ProjectRoot "scripts\server\install_wireguard_tcp_canary.sh"
 $transportCanaryPath = Join-Path $ProjectRoot "scripts\server\install_transport_canary_service.sh"
 $transportCanaryCheckPath = Join-Path $ProjectRoot "scripts\server\check_transport_canary_readiness.sh"
@@ -94,6 +103,9 @@ $amneziaWg2CanaryBootstrapPath = Join-Path $ProjectRoot "scripts\server\bootstra
 $amneziaWg2CanaryPeerAddressPath = Join-Path $ProjectRoot "scripts\server\set_amneziawg2_canary_peer_address.sh"
 $hysteria2CanaryBootstrapPath = Join-Path $ProjectRoot "scripts\server\bootstrap_hysteria2_canary.sh"
 $hysteria2ContractDeployPath = Join-Path $ProjectRoot "scripts\server\deploy_paid_beta_hysteria2_contract.sh"
+$naiveHttpsBootstrapPath = Join-Path $ProjectRoot "scripts\server\bootstrap_naive_https_canary.sh"
+$naiveHttpsReadinessPath = Join-Path $ProjectRoot "scripts\server\check_naive_https_canary_readiness.sh"
+$naiveHttpsRollbackPath = Join-Path $ProjectRoot "scripts\server\remove_naive_https_canary.sh"
 
 $main = Read-Text $mainPath
 $runtimeConfig = Read-Text $runtimeConfigPath
@@ -126,6 +138,15 @@ $androidHysteriaPrepareScript = Read-Text $androidHysteriaPreparePath
 $androidHysteriaPhysicalTestScript = Read-Text $androidHysteriaPhysicalTestPath
 $androidHysteriaApkVerifyScript = Read-Text $androidHysteriaApkVerifyPath
 $androidStableIsolationVerifyScript = Read-Text $androidStableIsolationVerifyPath
+$androidVlessConfig = Read-Text $androidVlessConfigPath
+$androidVlessController = Read-Text $androidVlessControllerPath
+$androidVlessService = Read-Text $androidVlessServicePath
+$androidVlessConfigTest = Read-Text $androidVlessConfigTestPath
+$androidVlessPrepareScript = Read-Text $androidVlessPreparePath
+$androidVlessPhysicalTestScript = Read-Text $androidVlessPhysicalTestPath
+$routeFailureCooldown = Read-Text $routeFailureCooldownPath
+$routeFailureCooldownTest = Read-Text $routeFailureCooldownTestPath
+$monitoringProbe = Read-Text $monitoringProbePath
 $wireguardTcpCanaryScript = Read-Text $wireguardTcpCanaryPath
 $transportCanaryScript = Read-Text $transportCanaryPath
 $transportCanaryCheckScript = Read-Text $transportCanaryCheckPath
@@ -134,6 +155,9 @@ $amneziaWg2CanaryBootstrapScript = Read-Text $amneziaWg2CanaryBootstrapPath
 $amneziaWg2CanaryPeerAddressScript = Read-Text $amneziaWg2CanaryPeerAddressPath
 $hysteria2CanaryBootstrapScript = Read-Text $hysteria2CanaryBootstrapPath
 $hysteria2ContractDeployScript = Read-Text $hysteria2ContractDeployPath
+$naiveHttpsBootstrapScript = Read-Text $naiveHttpsBootstrapPath
+$naiveHttpsReadinessScript = Read-Text $naiveHttpsReadinessPath
+$naiveHttpsRollbackScript = Read-Text $naiveHttpsRollbackPath
 
 Write-Section "CLIENT SAFETY CHECKS"
 $forbiddenClientPatterns = @(
@@ -779,6 +803,37 @@ foreach ($fragment in $requiredHysteria2ContractDeployFragments) {
     }
 }
 
+Write-Section "NAIVE HTTPS CANARY CHECKS"
+$naiveHttpsChecks = [ordered]@{
+    'Naive HTTPS guarded bootstrap' = @($naiveHttpsBootstrapScript, 'CANARY_HOST="5.129.216.42"', 'CANARY_PORT="8443"', 'CADDY_VERSION="v2.11.4"', 'XCADDY_VERSION="v0.4.5"', 'FORWARDPROXY_COMMIT="d62c80d3dd2c706b6b87579844d2397bddd18317"', 'NAIVE_VERSION="v150.0.7871.63-1"', 'pinned_binaries=reused_after_build_metadata_verification', 'stable_transports=verified_unchanged')
+    'Naive HTTPS secret-safe readiness' = @($naiveHttpsReadinessScript, 'ready=true', 'credentials=not_printed', 'tls_camouflage_http=404', 'egress=', 'unexpected_udp_listener')
+    'Naive HTTPS exact-host rollback' = @($naiveHttpsRollbackScript, 'Refusing Naive HTTPS rollback outside exact NL2 host', '--approved-existing-host', 'rm -rf -- "${CONFIG_FILE}" "${INSTALL_ROOT}"', 'stable_transports=active', 'Dry-run only')
+}
+foreach ($check in $naiveHttpsChecks.GetEnumerator()) {
+    $source = [string]$check.Value[0]
+    $missing = @($check.Value[1..($check.Value.Count - 1)] | Where-Object { -not $source.Contains([string]$_) })
+    if ($missing.Count -eq 0) {
+        Add-Pass "$($check.Key) markers present"
+    }
+    else {
+        Add-Error "$($check.Key) missing marker(s): $($missing -join ', ')"
+    }
+}
+
+foreach ($scriptPath in @($naiveHttpsBootstrapPath, $naiveHttpsReadinessPath, $naiveHttpsRollbackPath)) {
+    if (Test-Path -LiteralPath $scriptPath) {
+        $gitBash = Join-Path $env:ProgramFiles 'Git\bin\bash.exe'
+        $bashCommand = if (Test-Path -LiteralPath $gitBash) { $gitBash } else { 'bash' }
+        & $bashCommand -n $scriptPath
+        if ($LASTEXITCODE -eq 0) {
+            Add-Pass "Naive HTTPS Bash parser check passed: $scriptPath"
+        }
+        else {
+            Add-Error "Naive HTTPS Bash parser check failed: $scriptPath"
+        }
+    }
+}
+
 Write-Section "INSTALLER CHECKS"
 if ($installer.Contains("/uninstalltunnelservice BlueVPNDev1")) {
     Add-Pass "Installer/uninstaller stops only BlueVPNDev1 via WireGuard"
@@ -1235,6 +1290,45 @@ foreach ($scriptPath in @(
         }
         else {
             Add-Pass "Android Hysteria2 PowerShell parser check passed: $scriptPath"
+        }
+    }
+}
+
+Write-Section "ANDROID VLESS REALITY PREVIEW AND FALLBACK CHECKS"
+$androidVlessSourceChecks = [ordered]@{
+    'Android VLESS guarded config' = @($androidVlessConfig, 'CANARY_HOST = "5.129.216.42"', 'stream-up', 'maxConnections', 'https://1.1.1.1/dns-query', 'outboundTag", "dns-out"')
+    'Android VLESS persistent fail-closed state' = @($androidVlessService, 'context.noBackupFilesDir', 'STATE_FILE = "state.json"', 'fun prepareForConnect(context: Context)', 'VPN service stopped unexpectedly', 'process.destroyForcibly()', 'cleanup("down", "")')
+    'Android VLESS reconnect state reset' = @($androidVlessController, 'VlessRealityVpnService.prepareForConnect(context)', 'waitForState(context, "up", 30_000L)', 'state == "error" && expected != "down"')
+    'Android VLESS config tests' = @($androidVlessConfigTest, 'rejectsServerPrivateMaterial', 'rejectsEndpointDrift', 'rejectsSniDrift')
+    'Android VLESS pinned preparation' = @($androidVlessPrepareScript, 'v26.7.11', 'EA227CFB125FA093257F1A8227B5C6E30D93301D05F2E6AB8B79152F7AFF8CDB', 'source notice is bundled from docs/licenses')
+    'Android VLESS physical watchdog and reconnect' = @($androidVlessPhysicalTestScript, "ExpectedEgress = '5.129.216.42'", 'watchdogState', 'reconnectState', 'reconnectEgress', 'plaintextConfigRemoved')
+    'Canary-only route cooldown' = @($main, 'kTransportPreviewFallbackEnabled', '_recordRouteFailure', '_recordRouteSuccess', '_routeFailureCooldown.compare')
+    'Bounded cooldown implementation' = @($routeFailureCooldown, 'Duration(minutes: 1)', 'Duration(minutes: 3)', 'Duration(minutes: 10)', 'Duration(minutes: 30)', 'recordSuccess')
+    'Cooldown unit tests' = @($routeFailureCooldownTest, 'bounded exponential cooldown', 'healthy candidates sort before cooling candidates')
+    'Route monitoring is control-plane-only by default' = @($monitoringProbe, 'routeSignalKind": "control_plane_reachability"', 'automationEligible": False', 'egressVerified": False')
+    'Backend accepts only verified data-plane automation' = @($backend, 'def route_observation_automation_eligible(', '"tunnel_data_plane", "proxy_data_plane"', 'details.get("egressVerified") is True', 'ignoredControlPlaneOnly')
+}
+foreach ($check in $androidVlessSourceChecks.GetEnumerator()) {
+    $source = [string]$check.Value[0]
+    $missing = @($check.Value[1..($check.Value.Count - 1)] | Where-Object { -not $source.Contains([string]$_) })
+    if ($missing.Count -eq 0) {
+        Add-Pass "$($check.Key) markers present"
+    }
+    else {
+        Add-Error "$($check.Key) missing marker(s): $($missing -join ', ')"
+    }
+}
+
+foreach ($scriptPath in @($androidVlessPreparePath, $androidVlessPhysicalTestPath)) {
+    if (Test-Path -LiteralPath $scriptPath) {
+        $tokens = $null
+        $parseErrors = $null
+        [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$parseErrors) | Out-Null
+        if ($parseErrors -and $parseErrors.Count -gt 0) {
+            Add-Error "Android VLESS PowerShell parser errors in ${scriptPath}: $($parseErrors[0].ToString())"
+        }
+        else {
+            Add-Pass "Android VLESS PowerShell parser check passed: $scriptPath"
         }
     }
 }

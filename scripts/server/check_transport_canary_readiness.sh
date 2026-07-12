@@ -193,6 +193,7 @@ host_has_protected_ip() {
 if host_has_protected_ip; then
   approved_nl2_awg=0
   approved_nl2_hysteria=0
+  approved_nl2_vless=0
   if [[ "$APPROVED_EXISTING_HOST" == "5.129.216.42" \
     && "$PROTOCOL" == "amneziawg" \
     && "$SERVICE_NAME" == "greenvpn-amneziawg-canary" \
@@ -205,7 +206,15 @@ if host_has_protected_ip; then
     && "$CONFIG_FILE" == "/etc/greenvpn-transport/hysteria2-canary.yaml" ]]; then
     approved_nl2_hysteria=1
   fi
-  if [[ "$approved_nl2_awg" -ne 1 && "$approved_nl2_hysteria" -ne 1 ]]; then
+  if [[ "$APPROVED_EXISTING_HOST" == "5.129.216.42" \
+    && "$PROTOCOL" == "vless_reality" \
+    && "$SERVICE_NAME" == "greenvpn-vless-reality-canary" \
+    && "$CONFIG_FILE" == "/etc/greenvpn-transport/vless-reality-xhttp-canary.json" ]]; then
+    approved_nl2_vless=1
+  fi
+  if [[ "$approved_nl2_awg" -ne 1 \
+    && "$approved_nl2_hysteria" -ne 1 \
+    && "$approved_nl2_vless" -ne 1 ]]; then
     add_blocker "protected_production_host_refused"
   fi
 fi
@@ -274,6 +283,36 @@ if [[ -n "$CONFIG_FILE" ]]; then
       fi
       if ! grep -Eq '^[[:space:]]*type:[[:space:]]*salamander[[:space:]]*$' "$CONFIG_FILE"; then
         add_blocker "hysteria2_obfuscation_missing"
+      fi
+    elif [[ "$PROTOCOL" == "vless_reality" ]]; then
+      if ! python3 - "$CONFIG_FILE" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    root = json.load(handle)
+inbounds = root.get("inbounds")
+if not isinstance(inbounds, list) or len(inbounds) != 1:
+    raise SystemExit(1)
+inbound = inbounds[0]
+stream = inbound.get("streamSettings") or {}
+reality = stream.get("realitySettings") or {}
+xhttp = stream.get("xhttpSettings") or {}
+if inbound.get("protocol") != "vless":
+    raise SystemExit(1)
+if stream.get("network") != "xhttp" or stream.get("security") != "reality":
+    raise SystemExit(1)
+if not isinstance(reality.get("target"), str) or ":443" not in reality["target"]:
+    raise SystemExit(1)
+if not reality.get("serverNames") or not reality.get("privateKey") or not reality.get("shortIds"):
+    raise SystemExit(1)
+if not isinstance(xhttp.get("path"), str) or not xhttp["path"].startswith("/"):
+    raise SystemExit(1)
+if xhttp.get("mode", "auto") not in {"auto", "stream-one", "stream-up", "packet-up"}:
+    raise SystemExit(1)
+PY
+      then
+        add_blocker "vless_reality_xhttp_config_invalid"
       fi
     fi
   fi

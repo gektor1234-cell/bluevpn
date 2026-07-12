@@ -179,6 +179,20 @@ HYSTERIA2_CANARY_SERVER_IDS = {
     if item.strip()
 }
 HYSTERIA2_CANARY_SNI = os.getenv("GREENVPN_HYSTERIA2_CANARY_SNI", "").strip().lower()
+VLESS_REALITY_CLIENT_CONFIG_ROOT = Path(
+    os.getenv(
+        "GREENVPN_VLESS_REALITY_CLIENT_CONFIG_ROOT",
+        "/etc/bluevpn/transport_clients",
+    )
+).resolve()
+VLESS_REALITY_CANARY_SERVER_IDS = {
+    item.strip().lower()
+    for item in split_env_list(os.getenv("GREENVPN_VLESS_REALITY_CANARY_SERVER_IDS", ""))
+    if item.strip()
+}
+VLESS_REALITY_CANARY_SNI = os.getenv(
+    "GREENVPN_VLESS_REALITY_CANARY_SNI", ""
+).strip().lower()
 DB_PATH = DATA_DIR / "bluevpn.db"
 DB_BUSY_TIMEOUT_SECONDS = env_float("BLUEVPN_DB_BUSY_TIMEOUT_SECONDS", 30.0, min_value=1.0)
 DB_BUSY_TIMEOUT_MS = int(DB_BUSY_TIMEOUT_SECONDS * 1000)
@@ -627,6 +641,7 @@ SERVER_CLIENT_CONFIG_PROFILES = [
     "remote_ssh_wg0",
     "remote_ssh_awg2",
     "static_hysteria2_canary",
+    "static_vless_reality_canary",
 ]
 SERVER_CLIENT_CONFIG_PROFILE_TITLES = {
     "none": "Не выдавать клиентам",
@@ -634,6 +649,7 @@ SERVER_CLIENT_CONFIG_PROFILE_TITLES = {
     "remote_ssh_wg0": "Удалённый WireGuard wg0",
     "remote_ssh_awg2": "Удалённый AmneziaWG 2",
     "static_hysteria2_canary": "Hysteria2 canary",
+    "static_vless_reality_canary": "VLESS REALITY canary",
 }
 SERVER_PROTOCOL_TITLES = {
     "wireguard_udp": "WireGuard UDP",
@@ -672,6 +688,13 @@ if os.getenv("GREENVPN_HYSTERIA2_CLIENT_CONFIG_ENABLED", "0").strip().lower() in
     "on",
 }:
     SERVER_CLIENT_READY_PROTOCOLS.add("hysteria2")
+if os.getenv("GREENVPN_VLESS_REALITY_CLIENT_CONFIG_ENABLED", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}:
+    SERVER_CLIENT_READY_PROTOCOLS.add("vless_reality")
 SERVER_DEFAULT_CLIENT_PROTOCOLS = frozenset({"wireguard_udp"})
 SERVER_TRANSPORT_ROLLOUT_STAGES = {
     "wireguard_udp": "public",
@@ -681,7 +704,7 @@ SERVER_TRANSPORT_ROLLOUT_STAGES = {
     "shadowsocks": "canary_prepared",
     "hysteria2": "canary",
     "trojan_tls": "canary_prepared",
-    "vless_reality": "canary_prepared",
+    "vless_reality": "canary",
     "masque_udp": "research",
 }
 RESILIENCE_ROUTE_STATUSES = ["green", "yellow", "red", "unknown"]
@@ -9135,6 +9158,174 @@ def load_hysteria2_client_config(server_id: str, *, row_host: str, row_port: int
     return config
 
 
+def vless_reality_client_config_check(
+    server_id: str,
+    *,
+    row_host: Optional[str] = None,
+    row_port: Optional[int] = None,
+) -> tuple[dict, list[dict]]:
+    clean_server_id = clean_limited_text(server_id, 80).strip().lower()
+    blockers: list[dict] = []
+
+    def add_blocker(code: str, message: str) -> None:
+        blockers.append({"code": code, "message": message})
+
+    if clean_server_id not in VLESS_REALITY_CANARY_SERVER_IDS:
+        add_blocker(
+            "vless_reality_server_not_allowlisted",
+            "VLESS REALITY config разрешён только для явно указанного canary serverId.",
+        )
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{2,79}", clean_server_id):
+        add_blocker("vless_reality_server_id_invalid", "Некорректный VLESS REALITY serverId.")
+        return {}, blockers
+
+    config_path = VLESS_REALITY_CLIENT_CONFIG_ROOT / f"{clean_server_id}.vless-reality.json"
+    try:
+        resolved_root = VLESS_REALITY_CLIENT_CONFIG_ROOT.resolve()
+        resolved_path = config_path.resolve(strict=False)
+        resolved_path.relative_to(resolved_root)
+    except (OSError, ValueError):
+        add_blocker("vless_reality_config_path_unsafe", "Путь VLESS REALITY config вышел за разрешённый root.")
+        return {}, blockers
+
+    try:
+        if config_path.is_symlink():
+            add_blocker("vless_reality_config_symlink_refused", "VLESS REALITY config не может быть symlink.")
+            return {}, blockers
+        metadata = config_path.stat()
+        if not config_path.is_file():
+            raise FileNotFoundError(str(config_path))
+        if getattr(metadata, "st_uid", 0) != 0:
+            add_blocker("vless_reality_config_not_root_owned", "VLESS REALITY config должен принадлежать root.")
+        if os.name != "nt" and metadata.st_mode & 0o077:
+            add_blocker("vless_reality_config_not_root_only", "VLESS REALITY config должен иметь mode 0600.")
+        if metadata.st_size < 128 or metadata.st_size > 65536:
+            add_blocker("vless_reality_config_size_invalid", "Некорректный размер VLESS REALITY config.")
+        config_text = config_path.read_text(encoding="utf-8")
+        root = json.loads(config_text)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        add_blocker("vless_reality_config_unreadable", "Root-only VLESS REALITY config недоступен или не является JSON.")
+        return {"path": str(config_path)}, blockers
+
+    if not isinstance(root, dict):
+        add_blocker("vless_reality_config_root_invalid", "VLESS REALITY config должен быть JSON object.")
+        return {"path": str(config_path)}, blockers
+    if root.get("inbounds") != []:
+        add_blocker(
+            "vless_reality_base_config_contains_local_listener",
+            "Control-plane хранит только base config без локального listener.",
+        )
+
+    def has_forbidden_key(value: object) -> bool:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if str(key).strip().lower() in {"privatekey", "mldsa65seed"}:
+                    return True
+                if has_forbidden_key(child):
+                    return True
+        elif isinstance(value, list):
+            return any(has_forbidden_key(child) for child in value)
+        return False
+
+    if has_forbidden_key(root):
+        add_blocker("vless_reality_private_material_refused", "Client config содержит серверный private material.")
+
+    config_host = ""
+    config_port = 0
+    try:
+        outbounds = root["outbounds"]
+        if not isinstance(outbounds, list) or not outbounds:
+            raise ValueError("outbounds")
+        outbound = outbounds[0]
+        if outbound.get("protocol") != "vless":
+            add_blocker("vless_reality_protocol_invalid", "Первый outbound должен быть VLESS.")
+        vnext = outbound["settings"]["vnext"]
+        if not isinstance(vnext, list) or len(vnext) != 1:
+            raise ValueError("vnext")
+        server = vnext[0]
+        config_host = str(server["address"]).strip().strip("[]").lower()
+        config_port = int(server["port"])
+        ipaddress.ip_address(config_host)
+        users = server["users"]
+        if not isinstance(users, list) or len(users) != 1:
+            raise ValueError("users")
+        user = users[0]
+        if not str(user.get("id") or "").strip():
+            add_blocker("vless_reality_client_id_missing", "VLESS client ID отсутствует.")
+        if user.get("encryption") != "none":
+            add_blocker("vless_reality_encryption_invalid", "VLESS encryption должен быть none.")
+
+        stream = outbound["streamSettings"]
+        if stream.get("network") != "xhttp" or stream.get("security") != "reality":
+            add_blocker("vless_reality_transport_invalid", "Требуется XHTTP поверх REALITY.")
+        reality = stream["realitySettings"]
+        server_name = str(reality.get("serverName") or "").strip().lower()
+        if not VLESS_REALITY_CANARY_SNI or server_name != VLESS_REALITY_CANARY_SNI:
+            add_blocker("vless_reality_sni_not_allowlisted", "REALITY SNI не совпадает с canary allowlist.")
+        if not str(reality.get("fingerprint") or "").strip():
+            add_blocker("vless_reality_fingerprint_missing", "REALITY fingerprint отсутствует.")
+        if not str(reality.get("password") or "").strip():
+            add_blocker("vless_reality_password_missing", "REALITY client password отсутствует.")
+        short_id = str(reality.get("shortId") or "").strip().lower()
+        if not re.fullmatch(r"(?:[0-9a-f]{2}){1,8}", short_id):
+            add_blocker("vless_reality_short_id_invalid", "REALITY shortId имеет некорректный формат.")
+        xhttp = stream["xhttpSettings"]
+        path_value = str(xhttp.get("path") or "").strip()
+        if not path_value.startswith("/") or len(path_value) > 256:
+            add_blocker("vless_reality_xhttp_path_invalid", "XHTTP path отсутствует или некорректен.")
+        if str(xhttp.get("mode") or "auto").strip().lower() not in {"auto", "stream-one"}:
+            add_blocker("vless_reality_xhttp_mode_invalid", "XHTTP mode должен быть auto или stream-one.")
+    except (KeyError, TypeError, ValueError, IndexError):
+        add_blocker("vless_reality_config_shape_invalid", "VLESS REALITY base config не прошёл shape-проверку.")
+
+    expected_host = str(row_host or "").strip().strip("[]").lower()
+    expected_port = int(row_port or 0)
+    if expected_host and config_host and expected_host != config_host:
+        add_blocker("vless_reality_endpoint_host_mismatch", "Host config не совпадает с catalog row.")
+    if expected_port and config_port and expected_port != config_port:
+        add_blocker("vless_reality_endpoint_port_mismatch", "Port config не совпадает с catalog row.")
+    if config_port and config_port != 443:
+        add_blocker("vless_reality_endpoint_port_not_443", "VLESS REALITY canary должен использовать TCP/443.")
+
+    return {
+        "serverId": clean_server_id,
+        "path": str(config_path),
+        "host": config_host,
+        "port": config_port,
+        "root": root,
+    }, blockers
+
+
+def load_vless_reality_client_config(server_id: str, *, row_host: str, row_port: int) -> dict:
+    config, blockers = vless_reality_client_config_check(
+        server_id,
+        row_host=row_host,
+        row_port=row_port,
+    )
+    if blockers:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "vless_reality_client_config_not_ready",
+                "message": "VLESS REALITY canary пока не готов к безопасной выдаче.",
+                "blockers": [item["code"] for item in blockers],
+            },
+        )
+    root = json.loads(json.dumps(config["root"]))
+    root["inbounds"] = [
+        {
+            "listen": "127.0.0.1",
+            "port": 1981,
+            "protocol": "socks",
+            "settings": {"udp": True},
+            "tag": "managed-socks",
+        }
+    ]
+    config["configText"] = json.dumps(root, ensure_ascii=True, indent=2) + "\n"
+    config.pop("root", None)
+    return config
+
+
 def server_row_client_config_profile(row: sqlite3.Row) -> str:
     try:
         raw_profile = row["client_config_profile"]
@@ -9245,6 +9436,24 @@ def server_client_config_readiness(row: sqlite3.Row) -> dict:
             row_port=int(row["port"] or 0),
         )
         blockers.extend(hysteria_blockers)
+    elif profile == "static_vless_reality_canary":
+        server_id = str(row["server_id"] or "").strip().lower()
+        if row["protocol"] != "vless_reality":
+            add_blocker(
+                "client_config_protocol_mismatch",
+                "Профиль static_vless_reality_canary поддерживает только VLESS REALITY.",
+            )
+        if row["transport"] != "reality":
+            add_blocker(
+                "client_config_transport_mismatch",
+                "VLESS REALITY canary требует transport reality.",
+            )
+        vless_reality_config, vless_reality_blockers = vless_reality_client_config_check(
+            server_id,
+            row_host=str(row["host"] or "").strip().lower(),
+            row_port=int(row["port"] or 0),
+        )
+        blockers.extend(vless_reality_blockers)
     else:
         add_blocker(
             "client_config_profile_unknown",
@@ -9264,6 +9473,17 @@ def server_client_config_readiness(row: sqlite3.Row) -> dict:
             "host": hysteria_config.get("host") or row["host"],
             "port": hysteria_config.get("port") or int(row["port"] or 0),
             "configPath": hysteria_config.get("path") or "",
+        }
+        managed_by = profile
+    elif (
+        profile == "static_vless_reality_canary"
+        and "vless_reality_config" in locals()
+        and vless_reality_config
+    ):
+        expected_endpoint = {
+            "host": vless_reality_config.get("host") or row["host"],
+            "port": vless_reality_config.get("port") or int(row["port"] or 0),
+            "configPath": vless_reality_config.get("path") or "",
         }
         managed_by = profile
     else:
@@ -12632,6 +12852,8 @@ def create_resilience_route_observation(
 
 
 def sync_resilience_route_observation_incident(observation: dict) -> None:
+    if not route_observation_automation_eligible(observation):
+        return
     endpoint_id = clean_limited_text(observation.get("endpointId"), 120).strip()
     protocol = normalize_server_catalog_protocol(observation.get("protocol") or "wireguard_udp")
     target_id = normalize_monitoring_target_id(observation.get("targetId"))
@@ -13101,6 +13323,18 @@ def route_status_score(status: str, ok: bool) -> int:
     return 0
 
 
+def route_observation_automation_eligible(observation: dict) -> bool:
+    details = observation.get("details") if isinstance(observation, dict) else {}
+    if not isinstance(details, dict):
+        return False
+    signal_kind = clean_limited_text(details.get("routeSignalKind"), 80).strip().lower()
+    return (
+        details.get("automationEligible") is True
+        and details.get("egressVerified") is True
+        and signal_kind in {"tunnel_data_plane", "proxy_data_plane"}
+    )
+
+
 def public_endpoint_protocol_map(servers: Optional[list[dict]]) -> dict[str, dict]:
     mapping: dict[str, dict] = {}
     for server in servers or []:
@@ -13188,11 +13422,14 @@ def build_resilience_route_decision(servers: Optional[list[dict]] = None) -> dic
         targets = []
     target_ids = required_public_target_ids(targets)
     try:
-        route_observations = latest_resilience_route_observations()
+        all_route_observations = latest_resilience_route_observations()
     except sqlite3.OperationalError as exc:
         if "database is locked" not in str(exc).lower():
             raise
-        route_observations = []
+        all_route_observations = []
+    route_observations = [
+        item for item in all_route_observations if route_observation_automation_eligible(item)
+    ]
     service_score = latest_service_status_score(target_ids)
     latest_by_protocol_target: dict[tuple[str, str], dict] = {}
     for observation in route_observations:
@@ -13316,6 +13553,7 @@ def build_resilience_route_decision(servers: Optional[list[dict]] = None) -> dic
         "serviceProbeSignal": service_score,
         "routeObservationSignal": {
             "freshObservations": len(route_observations),
+            "ignoredControlPlaneOnly": len(all_route_observations) - len(route_observations),
             "statuses": {
                 status: len([item for item in route_observations if item.get("status") == status])
                 for status in RESILIENCE_ROUTE_STATUSES
@@ -27275,6 +27513,75 @@ def client_config(
             "endpoint": f"{hysteria_config['host']}:{hysteria_config['port']}",
             "serverId": selected_server_id,
             "clientConfigProfile": "static_hysteria2_canary",
+            "resilience": config_resilience,
+            "endpointAssignment": endpoint_assignment,
+            "rateLimitPolicy": sub.get("rateLimitPolicy"),
+            "fairUsePolicy": sub.get("fairUsePolicy"),
+            "trafficUsage": traffic_usage,
+            "supportConfigRefreshApplied": False,
+            "subscription": sub,
+            "accessPolicy": access_policy,
+            "adGate": {
+                **ad_gate,
+                "grantConsumed": consumed_ad_grant is not None,
+                "consumedGrant": consumed_ad_grant,
+            },
+        }
+
+    if selected_protocol == "vless_reality":
+        selected_server_id = str(selected_server.get("id") or "").strip()
+        selected_row = get_managed_server_catalog_row_by_server_id(selected_server_id)
+        if (
+            selected_row is None
+            or server_row_client_config_profile(selected_row) != "static_vless_reality_canary"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Для выбранного VLESS REALITY canary не настроен безопасный профиль выдачи.",
+            )
+        selected_endpoint = selected_server.get("endpoint") or {}
+        vless_reality_config = load_vless_reality_client_config(
+            selected_server_id,
+            row_host=str(selected_endpoint.get("host") or ""),
+            row_port=int(selected_endpoint.get("port") or 0),
+        )
+        touch_device(device["device_uid"], config_issued=True)
+        if (
+            not access_policy["adsDisabled"]
+            and FREE_AD_GATE_ENABLED
+            and free_ad_gate_required_for(
+                sub,
+                device["platform"],
+                device["app_version"],
+            )
+        ):
+            consumed_ad_grant = consume_free_access_grant(
+                int(user["id"]),
+                device["device_uid"],
+            )
+        config_resilience = client_route_probe_safe_resilience(
+            {
+                "selectedBy": endpoint_assignment.get("selectedBy") or "auto",
+                "strategy": "capacity_aware_sticky_endpoint",
+                "selectedProtocol": selected_protocol,
+                "routeDecision": route_decision,
+                "clientReadyProtocols": sorted(SERVER_CLIENT_READY_PROTOCOLS),
+            },
+            platform=device["platform"],
+            app_version=device["app_version"],
+        )
+        return {
+            "ok": True,
+            "protocol": selected_protocol,
+            "configFormat": "xray-json",
+            "configText": vless_reality_config["configText"],
+            "deviceUid": device["device_uid"],
+            "assignedIp": None,
+            "endpoint": (
+                f"{vless_reality_config['host']}:{vless_reality_config['port']}"
+            ),
+            "serverId": selected_server_id,
+            "clientConfigProfile": "static_vless_reality_canary",
             "resilience": config_resilience,
             "endpointAssignment": endpoint_assignment,
             "rateLimitPolicy": sub.get("rateLimitPolicy"),

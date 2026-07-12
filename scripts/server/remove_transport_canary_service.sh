@@ -92,6 +92,7 @@ for protected_ip in "${PROTECTED_HOST_IPS[@]}"; do
   if [[ "$PUBLIC_IP" == "$protected_ip" && "$APPLY" -eq 1 ]]; then
     approved_nl2_awg=0
     approved_nl2_hysteria=0
+    approved_nl2_vless=0
     if [[ "$PUBLIC_IP" == "5.129.216.42" \
       && "$APPROVED_EXISTING_HOST" == "5.129.216.42" \
       && "$PROTOCOL" == "amneziawg" \
@@ -104,7 +105,15 @@ for protected_ip in "${PROTECTED_HOST_IPS[@]}"; do
       && "$SERVICE_NAME" == "greenvpn-hysteria2-canary" ]]; then
       approved_nl2_hysteria=1
     fi
-    if [[ "$approved_nl2_awg" -ne 1 && "$approved_nl2_hysteria" -ne 1 ]]; then
+    if [[ "$PUBLIC_IP" == "5.129.216.42" \
+      && "$APPROVED_EXISTING_HOST" == "5.129.216.42" \
+      && "$PROTOCOL" == "vless_reality" \
+      && "$SERVICE_NAME" == "greenvpn-vless-reality-canary" ]]; then
+      approved_nl2_vless=1
+    fi
+    if [[ "$approved_nl2_awg" -ne 1 \
+      && "$approved_nl2_hysteria" -ne 1 \
+      && "$approved_nl2_vless" -ne 1 ]]; then
       echo "Refusing canary rollback mutation on protected Green VPN host ${protected_ip}." >&2
       exit 1
     fi

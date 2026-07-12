@@ -1,0 +1,10 @@
+Xray-core transport engine
+Version: v26.7.11
+Source: https://github.com/XTLS/Xray-core/tree/v26.7.11
+Release: https://github.com/XTLS/Xray-core/releases/tag/v26.7.11
+License: Mozilla Public License 2.0
+License text: https://github.com/XTLS/Xray-core/blob/v26.7.11/LICENSE
+
+Green VPN distributes the upstream binary without source modifications. The
+exact upstream LICENSE file must be packaged next to every Xray executable,
+and this source notice must be included in the same distribution.

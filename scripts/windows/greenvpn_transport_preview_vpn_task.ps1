@@ -33,10 +33,35 @@ $HysteriaStdoutPath = Join-Path $ProgramDataRoot 'hysteria2-client.stdout.log'
 $HysteriaStderrPath = Join-Path $ProgramDataRoot 'hysteria2-client.stderr.log'
 $HevStdoutPath = Join-Path $ProgramDataRoot 'hysteria2-hev.stdout.log'
 $HevStderrPath = Join-Path $ProgramDataRoot 'hysteria2-hev.stderr.log'
+$VlessTunnelName = 'GreenVPNVlessPreview'
+$VlessRouteMetric = 42733
+$VlessSocksPort = 1981
+$VlessToolRoot = Join-Path $PSScriptRoot 'vless-reality'
+$XrayExe = Join-Path $VlessToolRoot 'xray.exe'
+$VlessHevExe = Join-Path $VlessToolRoot 'hev-socks5-tunnel.exe'
+$VlessHevMsysDll = Join-Path $VlessToolRoot 'msys-2.0.dll'
+$VlessHevWintunDll = Join-Path $VlessToolRoot 'wintun.dll'
+$VlessWatchdogScript = Join-Path $PSScriptRoot 'greenvpn_vless_reality_watchdog.ps1'
+$VlessRuntimeConfigPath = Join-Path $ProgramDataRoot 'vless-reality-client.runtime.json'
+$VlessHevRuntimeConfigPath = Join-Path $ProgramDataRoot 'vless-reality-hev.runtime.yaml'
+$XrayPidPath = Join-Path $ProgramDataRoot 'vless-reality-client.pid'
+$VlessHevPidPath = Join-Path $ProgramDataRoot 'vless-reality-hev.pid'
+$VlessWatchdogPidPath = Join-Path $ProgramDataRoot 'vless-reality-watchdog.pid'
+$VlessRouteStatePath = Join-Path $ProgramDataRoot 'vless-reality-routes.json'
+$XrayStdoutPath = Join-Path $ProgramDataRoot 'vless-reality-client.stdout.log'
+$XrayStderrPath = Join-Path $ProgramDataRoot 'vless-reality-client.stderr.log'
+$VlessHevStdoutPath = Join-Path $ProgramDataRoot 'vless-reality-hev.stdout.log'
+$VlessHevStderrPath = Join-Path $ProgramDataRoot 'vless-reality-hev.stderr.log'
 $LogPath = Join-Path $ProgramDataRoot 'backend.log'
 
 $ExpectedHysteriaRuntimeHashes = @{
     'hysteria-windows-amd64.exe' = 'BCD3865B09BE2E5CC18D117DCF3AD687D1E6E27B0B050376B9CF4EA251B64D6F'
+    'hev-socks5-tunnel.exe' = '46167DBA51A2C3DD5F2E3478B0D8A30CAD03392D388DC1330D55246492F48C1E'
+    'msys-2.0.dll' = '6C0DE43EFC0F14D871CC9F3FA803B9BD1E74802F45B3C8AFFE3DACC21B2EEA18'
+    'wintun.dll' = 'E5DA8447DC2C320EDC0FC52FA01885C103DE8C118481F683643CACC3220DAFCE'
+}
+$ExpectedVlessRuntimeHashes = @{
+    'xray.exe' = '4B43C5EF596F326B233717B585D31A85DD5CD5F77D8DA872E75F7EBC00E99ACB'
     'hev-socks5-tunnel.exe' = '46167DBA51A2C3DD5F2E3478B0D8A30CAD03392D388DC1330D55246492F48C1E'
     'msys-2.0.dll' = '6C0DE43EFC0F14D871CC9F3FA803B9BD1E74802F45B3C8AFFE3DACC21B2EEA18'
     'wintun.dll' = 'E5DA8447DC2C320EDC0FC52FA01885C103DE8C118481F683643CACC3220DAFCE'
@@ -120,10 +145,25 @@ function Assert-HysteriaRuntime {
     }
 }
 
+function Assert-VlessRuntime {
+    foreach ($entry in $ExpectedVlessRuntimeHashes.GetEnumerator()) {
+        $path = Join-Path $VlessToolRoot $entry.Key
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "VLESS REALITY preview runtime is missing: $($entry.Key)"
+        }
+        if ((Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash -ne $entry.Value) {
+            throw "VLESS REALITY preview runtime hash mismatch: $($entry.Key)"
+        }
+    }
+    if (-not (Test-Path -LiteralPath $VlessWatchdogScript -PathType Leaf)) {
+        throw 'VLESS REALITY preview watchdog is missing.'
+    }
+}
+
 function Get-ManagedProtocol {
     if (-not (Test-Path -LiteralPath $ProtocolPath)) { return 'wireguard_udp' }
     $value = (Get-Content -LiteralPath $ProtocolPath -Raw -ErrorAction Stop).Trim().ToLowerInvariant()
-    if ($value -notin @('wireguard_udp', 'amneziawg', 'hysteria2')) {
+    if ($value -notin @('wireguard_udp', 'amneziawg', 'hysteria2', 'vless_reality')) {
         throw "Unsupported managed protocol: $value"
     }
     return $value
@@ -165,8 +205,18 @@ function Ensure-GreenProgramDataAcl {
 
 function Get-ManagedIpv4Endpoint {
     if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "Config missing: $ConfigPath" }
-    $configText = [IO.File]::ReadAllText($ConfigPath)
     $protocol = Get-ManagedProtocol
+    if ($protocol -eq 'vless_reality') {
+        $root = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
+        $candidate = [string]$root.outbounds[0].settings.vnext[0].address
+        $address = $null
+        if (-not [Net.IPAddress]::TryParse($candidate, [ref]$address) -or
+            $address.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) {
+            throw 'Windows VLESS preview endpoint is not valid IPv4.'
+        }
+        return $address.IPAddressToString
+    }
+    $configText = [IO.File]::ReadAllText($ConfigPath)
     $pattern = if ($protocol -eq 'hysteria2') {
         '(?im)^\s*server\s*:\s*(\d{1,3}(?:\.\d{1,3}){3}):\d+\s*$'
     } else {
@@ -349,6 +399,51 @@ function Stop-Hysteria2Tunnel {
     }
 }
 
+function Stop-VlessWatchdog {
+    $pidValue = Read-ManagedPid -Path $VlessWatchdogPidPath
+    if ($pidValue -gt 0) {
+        try {
+            $process = Get-CimInstance Win32_Process -Filter "ProcessId=$pidValue" -ErrorAction Stop
+            $expectedPowerShell = [IO.Path]::GetFullPath((Join-Path $PSHOME 'powershell.exe'))
+            $actual = [IO.Path]::GetFullPath([string]$process.ExecutablePath)
+            $command = [string]$process.CommandLine
+            if ($actual.Equals($expectedPowerShell, [StringComparison]::OrdinalIgnoreCase) -and
+                $command.IndexOf($VlessWatchdogScript, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                Stop-Process -Id $pidValue -Force -ErrorAction SilentlyContinue
+            }
+        } catch {}
+    }
+    Remove-Item -LiteralPath $VlessWatchdogPidPath -Force -ErrorAction SilentlyContinue
+}
+
+function Remove-VlessRoutes {
+    if (-not (Test-Path -LiteralPath $VlessRouteStatePath)) { return }
+    try {
+        $state = Get-Content -LiteralPath $VlessRouteStatePath -Raw | ConvertFrom-Json
+        if ([int]$state.metric -ne $VlessRouteMetric) { return }
+        foreach ($prefix in @($state.prefixes)) {
+            if ($prefix -notin @('0.0.0.0/1', '128.0.0.0/1', '::/1', '8000::/1')) { continue }
+            Get-NetRoute -DestinationPrefix $prefix -InterfaceIndex ([int]$state.interfaceIndex) -ErrorAction SilentlyContinue |
+                Where-Object { $_.RouteMetric -eq $VlessRouteMetric } |
+                Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+        }
+    } catch {
+        Write-GreenLog 'VLESS REALITY route cleanup warning'
+    } finally {
+        Remove-Item -LiteralPath $VlessRouteStatePath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Stop-VlessRealityTunnel {
+    Stop-VlessWatchdog
+    Stop-ExactProcessFromState -PidPath $VlessHevPidPath -ExpectedPath $VlessHevExe
+    Stop-ExactProcessFromState -PidPath $XrayPidPath -ExpectedPath $XrayExe
+    Remove-VlessRoutes
+    foreach ($path in @($VlessRuntimeConfigPath, $VlessHevRuntimeConfigPath)) {
+        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Wait-LocalTcpPort {
     param([int]$Port, [int]$Seconds = 15)
     $deadline = (Get-Date).AddSeconds($Seconds)
@@ -480,12 +575,176 @@ function Start-Hysteria2Tunnel {
     Write-GreenLog "Hysteria2 preview started ifIndex=$($adapter.ifIndex)"
 }
 
+function Wait-VlessAdapter {
+    param([int]$Seconds = 20)
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    do {
+        $adapter = Get-NetAdapter -Name $VlessTunnelName -ErrorAction SilentlyContinue
+        if ($null -ne $adapter -and $adapter.Status -eq 'Up') { return $adapter }
+        Start-Sleep -Milliseconds 300
+    } while ((Get-Date) -lt $deadline)
+    throw 'VLESS REALITY preview adapter did not become ready.'
+}
+
+function New-VlessRuntimeConfigs {
+    $configText = [IO.File]::ReadAllText($ConfigPath)
+    $root = $configText | ConvertFrom-Json
+    if (@($root.inbounds).Count -ne 1 -or [string]$root.inbounds[0].protocol -ne 'socks' -or
+        [string]$root.inbounds[0].listen -ne '127.0.0.1' -or [int]$root.inbounds[0].port -ne $VlessSocksPort -or
+        $root.inbounds[0].settings.udp -ne $true) {
+        throw 'VLESS REALITY profile must expose exactly one guarded loopback SOCKS listener.'
+    }
+    $outbound = $root.outbounds[0]
+    $server = $outbound.settings.vnext[0]
+    $user = $server.users[0]
+    $stream = $outbound.streamSettings
+    if ([string]$outbound.protocol -ne 'vless' -or [int]$server.port -ne 443 -or
+        [string]$user.encryption -ne 'none' -or [string]::IsNullOrWhiteSpace([string]$user.id) -or
+        [string]$stream.network -ne 'xhttp' -or [string]$stream.security -ne 'reality' -or
+        [string]::IsNullOrWhiteSpace([string]$stream.realitySettings.serverName) -or
+        [string]::IsNullOrWhiteSpace([string]$stream.realitySettings.password) -or
+        [string]::IsNullOrWhiteSpace([string]$stream.realitySettings.shortId) -or
+        [string]::IsNullOrWhiteSpace([string]$stream.xhttpSettings.path)) {
+        throw 'VLESS REALITY profile failed the safe XHTTP contract.'
+    }
+    $endpoint = Get-ManagedIpv4Endpoint
+    if ([string]$server.address -ne $endpoint) { throw 'VLESS REALITY profile endpoint is inconsistent.' }
+    if (-not (Test-Path -LiteralPath $EndpointRouteStatePath)) {
+        throw 'VLESS REALITY endpoint route state is missing.'
+    }
+    $endpointRoute = Get-Content -LiteralPath $EndpointRouteStatePath -Raw | ConvertFrom-Json
+    $physicalAdapter = Get-NetAdapter -InterfaceIndex ([int]$endpointRoute.interfaceIndex) -ErrorAction Stop
+    if ($null -eq $physicalAdapter -or $physicalAdapter.Name -in @($TunnelName, $HysteriaTunnelName, $VlessTunnelName)) {
+        throw 'VLESS REALITY could not resolve a safe physical outbound interface.'
+    }
+    $physicalAddress = Get-NetIPAddress -InterfaceIndex ([int]$endpointRoute.interfaceIndex) -AddressFamily IPv4 -ErrorAction Stop |
+        Where-Object { $_.IPAddress -notlike '169.254.*' -and $_.AddressState -eq 'Preferred' } |
+        Select-Object -First 1
+    if ($null -eq $physicalAddress) { throw 'VLESS REALITY physical IPv4 source address is unavailable.' }
+    $sockopt = if ($null -ne $stream.PSObject.Properties['sockopt']) {
+        $stream.sockopt
+    } else {
+        [pscustomobject]@{}
+    }
+    $sockopt | Add-Member -NotePropertyName interface -NotePropertyValue ([string]$physicalAdapter.Name) -Force
+    $stream | Add-Member -NotePropertyName sockopt -NotePropertyValue $sockopt -Force
+    $outbound | Add-Member -NotePropertyName sendThrough -NotePropertyValue ([string]$physicalAddress.IPAddress) -Force
+    $blockOutbound = [pscustomobject]@{
+        protocol = 'blackhole'
+        tag = 'block'
+    }
+    $existingBlock = @($root.outbounds | Where-Object { [string]$_.tag -eq 'block' })
+    if ($existingBlock.Count -eq 0) {
+        $root.outbounds = @($root.outbounds) + @($blockOutbound)
+    }
+    $root | Add-Member -NotePropertyName routing -NotePropertyValue ([pscustomobject]@{
+        domainStrategy = 'AsIs'
+        rules = @(
+            [pscustomobject]@{
+                type = 'field'
+                network = 'udp'
+                port = '443'
+                outboundTag = 'block'
+            },
+            [pscustomobject]@{
+                type = 'field'
+                ip = @(
+                    '0.0.0.0/8', '10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8',
+                    '169.254.0.0/16', '172.16.0.0/12', '192.0.0.0/24', '192.168.0.0/16',
+                    '198.18.0.0/15', '224.0.0.0/4', '240.0.0.0/4',
+                    '::1/128', 'fc00::/7', 'fe80::/10', 'ff00::/8'
+                )
+                outboundTag = 'block'
+            }
+        )
+    }) -Force
+
+    $hevRuntime = @"
+tunnel:
+  name: $VlessTunnelName
+  mtu: 1400
+  ipv4: 198.18.1.1
+  ipv6: 'fc00:1::1'
+socks5:
+  port: $VlessSocksPort
+  address: 127.0.0.1
+  udp: 'tcp'
+misc:
+  log-file: stderr
+  log-level: warn
+  connect-timeout: 10000
+  tcp-read-write-timeout: 300000
+  udp-read-write-timeout: 60000
+"@
+    Write-PrivateRuntimeFile -Path $VlessRuntimeConfigPath -Content ($root | ConvertTo-Json -Depth 100)
+    Write-PrivateRuntimeFile -Path $VlessHevRuntimeConfigPath -Content $hevRuntime
+}
+
+function Add-VlessRoutes {
+    param([int]$InterfaceIndex)
+    $prefixes = @('0.0.0.0/1', '128.0.0.0/1', '::/1', '8000::/1')
+    foreach ($prefix in $prefixes) {
+        $family = if ($prefix.Contains(':')) { 'IPv6' } else { 'IPv4' }
+        $nextHop = if ($family -eq 'IPv6') { '::' } else { '0.0.0.0' }
+        Get-NetRoute -AddressFamily $family -DestinationPrefix $prefix -InterfaceIndex $InterfaceIndex -ErrorAction SilentlyContinue |
+            Where-Object { $_.RouteMetric -eq $VlessRouteMetric } |
+            Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+        New-NetRoute -AddressFamily $family -DestinationPrefix $prefix -InterfaceIndex $InterfaceIndex `
+            -NextHop $nextHop -RouteMetric $VlessRouteMetric -PolicyStore ActiveStore -ErrorAction Stop | Out-Null
+    }
+    Set-DnsClientServerAddress -InterfaceIndex $InterfaceIndex -ServerAddresses @('1.1.1.1', '1.0.0.1') -ErrorAction Stop
+    [ordered]@{
+        interfaceIndex = $InterfaceIndex
+        metric = $VlessRouteMetric
+        prefixes = $prefixes
+    } | ConvertTo-Json -Compress | Set-Content -LiteralPath $VlessRouteStatePath -Encoding ASCII
+    & attrib.exe +H $VlessRouteStatePath 2>$null | Out-Null
+    & icacls.exe $VlessRouteStatePath /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
+}
+
+function Start-VlessRealityTunnel {
+    Assert-VlessRuntime
+    Ensure-EndpointBypassRoute
+    New-VlessRuntimeConfigs
+
+    foreach ($path in @($XrayStdoutPath, $XrayStderrPath, $VlessHevStdoutPath, $VlessHevStderrPath)) {
+        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    }
+    $xray = Start-Process -FilePath $XrayExe -ArgumentList @(
+        'run', '-config', $VlessRuntimeConfigPath
+    ) -WorkingDirectory $VlessToolRoot -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput $XrayStdoutPath -RedirectStandardError $XrayStderrPath
+    Write-PrivateRuntimeFile -Path $XrayPidPath -Content ([string]$xray.Id)
+    Wait-LocalTcpPort -Port $VlessSocksPort
+
+    $hev = Start-Process -FilePath $VlessHevExe -ArgumentList @($VlessHevRuntimeConfigPath) `
+        -WorkingDirectory $VlessToolRoot -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput $VlessHevStdoutPath -RedirectStandardError $VlessHevStderrPath
+    Write-PrivateRuntimeFile -Path $VlessHevPidPath -Content ([string]$hev.Id)
+    $adapter = Wait-VlessAdapter
+    Add-VlessRoutes -InterfaceIndex ([int]$adapter.ifIndex)
+
+    $watchdog = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @(
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'RemoteSigned',
+        '-File', ('"' + $VlessWatchdogScript + '"'),
+        '-XrayPid', $xray.Id,
+        '-HevPid', $hev.Id
+    ) -WindowStyle Hidden -PassThru
+    Write-PrivateRuntimeFile -Path $VlessWatchdogPidPath -Content ([string]$watchdog.Id)
+
+    if (-not (Test-ExactProcess -ProcessId $xray.Id -ExpectedPath $XrayExe) -or
+        -not (Test-ExactProcess -ProcessId $hev.Id -ExpectedPath $VlessHevExe)) {
+        throw 'VLESS REALITY preview engine exited during startup.'
+    }
+    Write-GreenLog "VLESS REALITY preview started ifIndex=$($adapter.ifIndex)"
+}
+
 function Get-CompetingVpnLabels {
     $labels = New-Object System.Collections.Generic.List[string]
     try {
         Get-NetAdapter -ErrorAction SilentlyContinue |
             Where-Object {
-                $_.Status -eq 'Up' -and $_.Name -notin @($TunnelName, $HysteriaTunnelName) -and
+                $_.Status -eq 'Up' -and $_.Name -notin @($TunnelName, $HysteriaTunnelName, $VlessTunnelName) -and
                 ($_.Name -match '(?i)(wireguard|wintun|amnezia|warp|cloudflare|device[0-9_]+)' -or $_.InterfaceDescription -match '(?i)(wireguard|wintun|amnezia|warp|cloudflare)')
             } | ForEach-Object { $labels.Add("adapter:$($_.Name)") | Out-Null }
     } catch {
@@ -506,6 +765,7 @@ function Get-CompetingVpnLabels {
 
 function Stop-OwnTunnel {
     Stop-Hysteria2Tunnel
+    Stop-VlessRealityTunnel
     foreach ($serviceName in @($WireGuardServiceName, $AmneziaWgServiceName)) {
         try {
             Invoke-External -FilePath 'sc.exe' -Arguments @('stop', $serviceName) -AllowedExitCodes @(0, 1056, 1060, 1062) | Out-Null
@@ -543,6 +803,10 @@ function Start-OwnTunnel {
         Start-Hysteria2Tunnel
         return
     }
+    if ($protocol -eq 'vless_reality') {
+        Start-VlessRealityTunnel
+        return
+    }
     if ([string]::IsNullOrWhiteSpace($engine)) { throw "Engine unavailable for $protocol" }
     Ensure-NativeFullTunnelKillSwitch
     Ensure-GreenProgramDataAcl
@@ -557,7 +821,9 @@ function Invoke-GreenGuard {
     $ownRunning = @(Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | Where-Object { $_.Name -in @($WireGuardServiceName, $AmneziaWgServiceName) -and $_.State -eq 'Running' })
     $hysteriaRunning = (Test-ExactProcess -ProcessId (Read-ManagedPid -Path $HysteriaPidPath) -ExpectedPath $HysteriaExe) -and
         (Test-ExactProcess -ProcessId (Read-ManagedPid -Path $HevPidPath) -ExpectedPath $HevExe)
-    if ($ownRunning.Count -eq 0 -and -not $hysteriaRunning) { return }
+    $vlessRunning = (Test-ExactProcess -ProcessId (Read-ManagedPid -Path $XrayPidPath) -ExpectedPath $XrayExe) -and
+        (Test-ExactProcess -ProcessId (Read-ManagedPid -Path $VlessHevPidPath) -ExpectedPath $VlessHevExe)
+    if ($ownRunning.Count -eq 0 -and -not $hysteriaRunning -and -not $vlessRunning) { return }
     if (@(Get-CompetingVpnLabels).Count -gt 0) {
         Write-GreenLog 'guard disconnecting preview because a competing VPN is active'
         Stop-OwnTunnel

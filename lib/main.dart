@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:yandex_mobileads/mobile_ads.dart';
 
 import 'runtime_config.dart';
+import 'services/route_failure_cooldown.dart';
 
 /*
   Green VPN — режим "как пользовательский продукт":
@@ -55,11 +56,20 @@ const bool kHysteria2PreviewEnabled = bool.fromEnvironment(
   'GREENVPN_HYSTERIA2_PREVIEW_ENABLED',
   defaultValue: false,
 );
+const bool kVlessRealityPreviewEnabled = bool.fromEnvironment(
+  'GREENVPN_VLESS_REALITY_PREVIEW_ENABLED',
+  defaultValue: false,
+);
 const List<String> kSupportedVpnProtocols = <String>[
   'wireguard_udp',
   if (kAwg2PreviewEnabled) 'amneziawg',
   if (kHysteria2PreviewEnabled) 'hysteria2',
+  if (kVlessRealityPreviewEnabled) 'vless_reality',
 ];
+const bool kTransportPreviewFallbackEnabled =
+    kAwg2PreviewEnabled ||
+    kHysteria2PreviewEnabled ||
+    kVlessRealityPreviewEnabled;
 const bool kAdsDisabledBuild =
     kTrialOnlyNoAdsBuild || kPaidBetaBuild || kPublicProductBuild;
 const bool kYandexRewardedAdsEnabled = bool.fromEnvironment(
@@ -6239,6 +6249,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   final _api = const BlueVpnApi(baseUrl: kApiBaseUrl);
   final _cfg = ConfigStore();
   final _pendingBillingOrderStore = PendingBillingOrderStore();
+  final RouteFailureCooldown _routeFailureCooldown = RouteFailureCooldown();
 
   // device identifier (for server-side provisioning) — hidden from user
   final DeviceIdStore _deviceStore = DeviceIdStore();
@@ -8073,7 +8084,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }) async {
     final protocol = server?.protocolCode ?? 'wireguard_udp';
     await _cfg.writeManagedConfig(
-      protocol == 'hysteria2'
+      protocol == 'hysteria2' || protocol == 'vless_reality'
           ? rawConfig
           : _buildManagedConfigFromBase(rawConfig),
     );
@@ -9210,7 +9221,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           : config.protocol,
       protocolLabel: config.protocol == 'amneziawg'
           ? 'Защищённый режим'
-          : config.protocol == 'hysteria2'
+          : config.protocol == 'hysteria2' || config.protocol == 'vless_reality'
           ? 'Резервный режим'
           : fallback.protocolLabel,
     );
@@ -9256,6 +9267,25 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     return health + readinessBonus + routeBonus - latencyPenalty;
   }
 
+  String _routeCooldownKey(ServerLocation server) =>
+      '${server.id.trim()}|${server.protocolCode.trim()}';
+
+  void _recordRouteFailure(ServerLocation server, String stage) {
+    if (!kTransportPreviewFallbackEnabled || server.isAuto) return;
+    final key = _routeCooldownKey(server);
+    final duration = _routeFailureCooldown.recordFailure(key);
+    unawaited(
+      appendBlueVpnClientLog(
+        'route cooldown started server=${server.id} protocol=${server.protocolCode} stage=$stage failures=${_routeFailureCooldown.failureCount(key)} seconds=${duration.inSeconds}',
+      ),
+    );
+  }
+
+  void _recordRouteSuccess(ServerLocation server) {
+    if (!kTransportPreviewFallbackEnabled || server.isAuto) return;
+    _routeFailureCooldown.recordSuccess(_routeCooldownKey(server));
+  }
+
   List<ServerLocation> _connectCandidatesForCurrentSelection() {
     final usable =
         servers
@@ -9263,10 +9293,19 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               (server) =>
                   !server.isAuto &&
                   server.isCurrentClientReady &&
-                  !(socialOnlyEnabled && server.protocolCode == 'hysteria2'),
+                  !(socialOnlyEnabled &&
+                      (server.protocolCode == 'hysteria2' ||
+                          server.protocolCode == 'vless_reality')),
             )
             .toList()
           ..sort((a, b) {
+            if (kTransportPreviewFallbackEnabled) {
+              final byCooldown = _routeFailureCooldown.compare(
+                _routeCooldownKey(a),
+                _routeCooldownKey(b),
+              );
+              if (byCooldown != 0) return byCooldown;
+            }
             final byScore = _serverConnectScore(
               b,
             ).compareTo(_serverConnectScore(a));
@@ -9310,7 +9349,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     if (!kSupportedVpnProtocols.contains(server.protocolCode)) {
       return 'этот протокол уже есть в плане, но текущий клиент его пока не запускает';
     }
-    if (socialOnlyEnabled && server.protocolCode == 'hysteria2') {
+    if (socialOnlyEnabled &&
+        (server.protocolCode == 'hysteria2' ||
+            server.protocolCode == 'vless_reality')) {
       return 'этот резервный режим доступен только для полного подключения';
     }
     return 'сервер пока нельзя использовать текущим клиентом';
@@ -9549,6 +9590,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             ),
           );
           if (!ok) {
+            _recordRouteFailure(candidate, 'config_fetch');
             lastError = 'не удалось получить конфиг для ${candidate.title}';
             if (canTryNext) continue;
             _toast(context, 'Не удалось получить VPN-конфиг.');
@@ -9589,6 +9631,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             ),
           );
           if (!res.ok) {
+            _recordRouteFailure(candidate, 'connect');
             lastError =
                 res.message ?? 'не удалось подключить ${candidate.title}';
             await _syncVpnStatus();
@@ -9629,6 +9672,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             ),
           );
           if (!vpnEnabled) {
+            _recordRouteFailure(candidate, 'handshake');
             lastError =
                 'VPN не подтвердился после запуска ${greenVpnPublicServerTitle(candidate)}';
             if (canTryNext) continue;
@@ -9667,6 +9711,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               ),
             );
             if (!probe.ok) {
+              _recordRouteFailure(candidate, 'post_connect_probe');
               lastError =
                   'YouTube не открылся через ${greenVpnPublicServerTitle(candidate)}';
               await appendBlueVpnClientLog(
@@ -9693,6 +9738,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           await appendBlueVpnClientLog(
             'post connect checks accepted tunnel server=${candidate.id}',
           );
+          _recordRouteSuccess(candidate);
           if (kPaidBetaBuild) {
             unawaited(_recordPaidBetaEvent('vpn_connected'));
           }
@@ -17629,12 +17675,20 @@ class _GreenVpnSystemServiceClient {
 class WindowsTransportPreviewBackend extends VpnBackend {
   final WireGuardWindowsBackend _wireGuard;
   final AmneziaWgWindowsPreviewBackend _amneziaWg;
-  final Hysteria2WindowsPreviewBackend _hysteria2;
+  final SystemServiceWindowsPreviewBackend _hysteria2;
+  final SystemServiceWindowsPreviewBackend _vlessReality;
 
   WindowsTransportPreviewBackend({required String tunnelName})
     : _wireGuard = WireGuardWindowsBackend(tunnelName: tunnelName),
       _amneziaWg = AmneziaWgWindowsPreviewBackend(tunnelName: tunnelName),
-      _hysteria2 = const Hysteria2WindowsPreviewBackend();
+      _hysteria2 = const SystemServiceWindowsPreviewBackend(
+        protocol: 'hysteria2',
+        enabled: kHysteria2PreviewEnabled,
+      ),
+      _vlessReality = const SystemServiceWindowsPreviewBackend(
+        protocol: 'vless_reality',
+        enabled: kVlessRealityPreviewEnabled,
+      );
 
   Future<String> _managedProtocol(String configPath) async {
     try {
@@ -17656,6 +17710,9 @@ class WindowsTransportPreviewBackend extends VpnBackend {
     if (protocol == 'hysteria2') {
       return _hysteria2.connect(configPath: configPath);
     }
+    if (protocol == 'vless_reality') {
+      return _vlessReality.connect(configPath: configPath);
+    }
     if (protocol != 'wireguard_udp') {
       return VpnBackendResult(
         ok: false,
@@ -17667,6 +17724,9 @@ class WindowsTransportPreviewBackend extends VpnBackend {
 
   @override
   Future<VpnBackendResult> disconnect() async {
+    if (await _vlessReality.isConnected()) {
+      return _vlessReality.disconnect();
+    }
     if (await _hysteria2.isConnected()) {
       return _hysteria2.disconnect();
     }
@@ -17678,14 +17738,21 @@ class WindowsTransportPreviewBackend extends VpnBackend {
 
   @override
   Future<bool> isConnected() async {
+    if (await _vlessReality.isConnected()) return true;
     if (await _hysteria2.isConnected()) return true;
     if (await _amneziaWg.isConnected()) return true;
     return _wireGuard.isConnected();
   }
 }
 
-class Hysteria2WindowsPreviewBackend extends VpnBackend {
-  const Hysteria2WindowsPreviewBackend();
+class SystemServiceWindowsPreviewBackend extends VpnBackend {
+  final String protocol;
+  final bool enabled;
+
+  const SystemServiceWindowsPreviewBackend({
+    required this.protocol,
+    required this.enabled,
+  });
 
   Future<bool> _waitForState(bool running) async {
     const service = _GreenVpnSystemServiceClient();
@@ -17693,7 +17760,7 @@ class Hysteria2WindowsPreviewBackend extends VpnBackend {
       final status = await service.status();
       final isRunning =
           status.ok &&
-          status.data['protocol'] == 'hysteria2' &&
+          status.data['protocol'] == protocol &&
           status.data['tunnelState'] == 'running';
       if (isRunning == running) return true;
       await Future<void>.delayed(const Duration(milliseconds: 250));
@@ -17703,7 +17770,7 @@ class Hysteria2WindowsPreviewBackend extends VpnBackend {
 
   @override
   Future<VpnBackendResult> connect({required String configPath}) async {
-    if (!kHysteria2PreviewEnabled) {
+    if (!enabled) {
       return const VpnBackendResult(
         ok: false,
         message: 'Резервный Windows preview отключён в этой сборке.',
@@ -17768,7 +17835,7 @@ class Hysteria2WindowsPreviewBackend extends VpnBackend {
     const service = _GreenVpnSystemServiceClient();
     final status = await service.status();
     return status.ok &&
-        status.data['protocol'] == 'hysteria2' &&
+        status.data['protocol'] == protocol &&
         status.data['tunnelState'] == 'running';
   }
 }

@@ -50,7 +50,8 @@ Examples:
 Safety:
   - intended for a separate canary node;
   - refuses apply mode on every known production/control-plane host;
-  - the only narrow exceptions are the owner-approved NL2 AWG2 and Hysteria2 canaries;
+  - the only narrow exceptions are the owner-approved NL2 AWG2, Hysteria2 and
+    VLESS REALITY/XHTTP canaries, each bound to one exact service/config tuple;
   - apply mode requires --expected-public-ip to prevent wrong-host deployment;
   - requires trusted/pinned binaries to be installed before this script runs;
   - requires a root-owned config file that is not world-readable;
@@ -186,6 +187,7 @@ for protected_ip in "${PROTECTED_HOST_IPS[@]}"; do
   if [[ "${PUBLIC_IP}" == "${protected_ip}" && "${APPLY}" -eq 1 ]]; then
     approved_nl2_awg=0
     approved_nl2_hysteria=0
+    approved_nl2_vless=0
     if [[ "${PUBLIC_IP}" == "5.129.216.42" \
       && "${APPROVED_EXISTING_HOST}" == "5.129.216.42" \
       && "${PROTOCOL}" == "amneziawg" \
@@ -200,7 +202,16 @@ for protected_ip in "${PROTECTED_HOST_IPS[@]}"; do
       && "${CONFIG_FILE}" == "/etc/greenvpn-transport/hysteria2-canary.yaml" ]]; then
       approved_nl2_hysteria=1
     fi
-    if [[ "${approved_nl2_awg}" -ne 1 && "${approved_nl2_hysteria}" -ne 1 ]]; then
+    if [[ "${PUBLIC_IP}" == "5.129.216.42" \
+      && "${APPROVED_EXISTING_HOST}" == "5.129.216.42" \
+      && "${PROTOCOL}" == "vless_reality" \
+      && "${SERVICE_NAME}" == "greenvpn-vless-reality-canary" \
+      && "${CONFIG_FILE}" == "/etc/greenvpn-transport/vless-reality-xhttp-canary.json" ]]; then
+      approved_nl2_vless=1
+    fi
+    if [[ "${approved_nl2_awg}" -ne 1 \
+      && "${approved_nl2_hysteria}" -ne 1 \
+      && "${approved_nl2_vless}" -ne 1 ]]; then
       echo "Refusing to install canary service on protected Green VPN host ${protected_ip}." >&2
       echo "Use a separate test-only canary node." >&2
       exit 1

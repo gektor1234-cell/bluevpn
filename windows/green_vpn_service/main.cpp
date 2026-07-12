@@ -43,6 +43,10 @@ constexpr char kHysteriaPidPath[] =
     GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\hysteria2-client.pid";
 constexpr char kHevPidPath[] =
     GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\hysteria2-hev.pid";
+constexpr char kVlessXrayPidPath[] =
+    GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\vless-reality-client.pid";
+constexpr char kVlessHevPidPath[] =
+    GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\vless-reality-hev.pid";
 
 SERVICE_STATUS_HANDLE g_status_handle = nullptr;
 SERVICE_STATUS g_status = {};
@@ -559,6 +563,26 @@ std::string QueryTunnelStatusJson() {
            "\"amneziaWgState\":\"" + amneziawg_state + "\"," +
            "\"hysteriaClientState\":\"" + hysteria_state + "\"," +
            "\"hysteriaTunState\":\"" + hev_state + "\"}";
+  }
+  const std::string vless_xray_state = QueryPidFileProcessState(
+      kVlessXrayPidPath,
+      module_dir + L"\\tools\\vless-reality\\xray.exe");
+  const std::string vless_hev_state = QueryPidFileProcessState(
+      kVlessHevPidPath,
+      module_dir + L"\\tools\\vless-reality\\hev-socks5-tunnel.exe");
+  if (managed_protocol == "vless_reality") {
+    const std::string state =
+        vless_xray_state == "running" && vless_hev_state == "running"
+            ? "running"
+            : "stopped";
+    return std::string("{\"ok\":true,\"service\":\"") + kServiceNameUtf8 +
+           "\",\"tunnelService\":\"GreenVPNVlessRealityPreview\"," +
+           "\"tunnelState\":\"" + state + "\"," +
+           "\"protocol\":\"vless_reality\"," +
+           "\"wireGuardState\":\"" + wireguard_state + "\"," +
+           "\"amneziaWgState\":\"" + amneziawg_state + "\"," +
+           "\"vlessClientState\":\"" + vless_xray_state + "\"," +
+           "\"vlessTunState\":\"" + vless_hev_state + "\"}";
   }
   const bool awg_selected = amneziawg_state == "running" ||
                             (amneziawg_state != "missing" &&
