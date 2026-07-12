@@ -49,11 +49,11 @@ RUVDS:  /root/greenvpn-preview-probe-contract-prechange/20260712T145423Z-ruvds
 ## Android
 
 ```text
-apk=C:\BlueVPN_Builds\android_transport_preview_20260712_cascade_r19\GreenVPN_Android_five_stage_preview_0.2.45_2026071203.apk
+apk=C:\BlueVPN_Builds\android_transport_preview_20260712_cascade_r19\GreenVPN_Android_five_stage_preview_0.2.45_2026071204.apk
 package=pro.greenvpn.app.transportpreview
-versionCode=2026071203
-size=140063000
-sha256=DDAC4184FB0A7DABA8B7C70BE66084B8C8ED45D2D554A681538B05A69CDCF447
+versionCode=2026071204
+size=140139681
+sha256=984CBEF0EB4C0A88A4D982AC63C1A1DFB3F597CF785F51D639E6DEE05C1FEFD1
 ```
 
 APK прошёл pinned dnstt binary/license, manifest, DEX, BuildConfig, zipalign и APK signature checks. На Samsung SM-A226B сохранена существующая сессия.
@@ -66,18 +66,35 @@ http=200
 primary=5/5
 fallback=5/5
 report=C:\Users\gekto\GreenVPN_Checkpoints\android_transport_contract_probe_20260712.json
-report_sha256=C8C6F9312EAD88AD32233CA681207083DCEFB4BE18D84F4436EB6DDCB9FF39E5
+report_sha256=7540393123545F4CF0F09F567BD7EAF4EB13ADEA3C6031A96B020EE47FA80316
 ```
 
 Токены, device ID и конфиги в отчёт не выводятся. Временный `dnstt-client-android-arm64` из `/data/local/tmp` удалён.
 
 Отдельный readiness smoke на NL2 прошёл реальный dnstt data plane напрямую к UDP/53, подтвердил egress `5.129.216.42`, YouTube и активность stable-транспортов. Итог: `server_data_plane_ready=true`, `doh_delegation_ready=false`, `secrets_printed=false`. Второй флаг станет положительным только после публичной DNS-делегации.
 
+## Quick Settings cascade
+
+Native Quick Settings использует тот же `paid-beta` marker/channel и динамический серверный каталог, что основной Flutter-экран. Stable при выключенных preview-флагах сохраняет прежний одноконфиговый путь.
+
+Физический reversible-тест временно добавил tile через ADB, сохранил исходный список панели и затем восстановил его. Доказано:
+
+- без cooldown первым принят `amneziawg`;
+- после cooldown AWG2 принят `hysteria2`;
+- success marker пишется только после YouTube data-plane probe;
+- после теста все пять preview engines находятся в `down`, cooldown очищен.
+
+```text
+report=C:\Users\gekto\GreenVPN_Checkpoints\android_quick_tile_cascade_physical_20260712.json
+report_sha256=CBED2FD33B0F20C37FBD67C8BB6546BD2F5B5494953D8878E537C134A1030B8A
+```
+
 ## Проверки
 
 - Flutter tests: `11/11`.
 - Transport backend tests: `28/28`.
 - Paid-beta backend tests: `33/33`.
+- Native Quick Settings cascade tests: `3/3`.
 - Android config contract: `10/10` на физическом телефоне.
 - Release gate: `0 warnings`, `0 errors`.
 - Stable APK isolation: исходный production SHA-256 `308320429991A3278E3BA903155482D6613425D46681F180338ECB8C0929248F`, preview payload отсутствует.

@@ -70,9 +70,9 @@ NS  t.greenvpn.pro    -> tns.greenvpn.pro
 Текущий пятиступенчатый preview APK:
 
 ```text
-C:\BlueVPN_Builds\android_transport_preview_20260712_cascade_r19\GreenVPN_Android_five_stage_preview_0.2.45_2026071203.apk
-size=140063000
-sha256=DDAC4184FB0A7DABA8B7C70BE66084B8C8ED45D2D554A681538B05A69CDCF447
+C:\BlueVPN_Builds\android_transport_preview_20260712_cascade_r19\GreenVPN_Android_five_stage_preview_0.2.45_2026071204.apk
+size=140139681
+sha256=984CBEF0EB4C0A88A4D982AC63C1A1DFB3F597CF785F51D639E6DEE05C1FEFD1
 ```
 
 `verify_android_dnstt_preview_apk.ps1` проверил package, versionCode, закреплённый бинарник, license asset, manifest, DEX, BuildConfig, zipalign и APK signature.

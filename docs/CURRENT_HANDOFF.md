@@ -28,7 +28,7 @@ Last updated: 2026-07-12.
 - Billing guard checkpoint/tag: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_billing_single_writer_20260711`, `greenvpn-paid-beta-billing-single-writer-20260711`.
 - Real-payment/sync checkpoint/tag: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_real_payment_sync_ready_20260711`, `greenvpn-paid-beta-real-payment-sync-ready-20260711`.
 - Public billing-guard checkpoint/tag: `C:\Users\gekto\GreenVPN_Checkpoints\public_candidate_billing_guard_20260711`, `greenvpn-public-candidate-billing-guard-20260711`.
-- Five-stage preview checkpoint: `C:\Users\gekto\GreenVPN_Checkpoints\five_stage_transport_preview_20260712`; latest proven code commit before documentation is `96a73c4`.
+- Five-stage preview checkpoint: `C:\Users\gekto\GreenVPN_Checkpoints\five_stage_transport_preview_20260712`; latest proven code commit before this documentation update is `5ed6e8e`.
 - Private Windows session/config recovery copy: `C:\Users\gekto\GreenVPN_Checkpoints\paid_beta_windows_0.3.0-paid-beta.10_private_state_20260711`; ACL is limited to the owner, SYSTEM and Administrators. Never publish or commit it.
 
 ## Isolated transport canary foundation
@@ -46,7 +46,7 @@ Last updated: 2026-07-12.
 - Detailed live result: `docs/AMNEZIAWG2_NL2_CANARY_2026_07_11_RU.md`.
 - Android transport preview is physically proven on Samsung SM-A226B: separate `10.202.0.2`, NL2 egress `5.129.216.42`, YouTube playback, Recents swipe survival, session persistence and accurate selected-server restoration.
 - Paid-beta control planes run isolated r19 backend `0.9.113-transport-preview.7`. A capable preview receives five hidden canaries in strict order: AWG2, Hysteria2, VLESS REALITY/XHTTP, Naive HTTPS and dnstt. Legacy/stable clients cannot negotiate them. Production remains `0.9.105`.
-- Android five-stage preview artifact: `C:\BlueVPN_Builds\android_transport_preview_20260712_cascade_r19\GreenVPN_Android_five_stage_preview_0.2.45_2026071203.apk`, size `140,063,000`, SHA-256 `DDAC4184FB0A7DABA8B7C70BE66084B8C8ED45D2D554A681538B05A69CDCF447`.
+- Android five-stage preview artifact: `C:\BlueVPN_Builds\android_transport_preview_20260712_cascade_r19\GreenVPN_Android_five_stage_preview_0.2.45_2026071204.apk`, size `140,139,681`, SHA-256 `984CBEF0EB4C0A88A4D982AC63C1A1DFB3F597CF785F51D639E6DEE05C1FEFD1`.
 - Detailed Android result and rollback: `docs/ANDROID_AWG2_PREVIEW_2026_07_11_RU.md`.
 - Windows transport preview remains isolated from stable. The protected `%ProgramFiles%` migration removed the unsafe legacy path and broad ProgramData ACLs. AWG2 full-tunnel proof passed after the Windows peer received unique `10.202.0.3/32`; Hysteria2 full-tunnel and watchdog cleanup also passed. Both tests proved NL2 egress, production/paid-beta APIs, YouTube, endpoint route isolation and exact restoration of `device20_full` with egress `5.129.237.163`. Artifact SHA-256 is `2B8A4D0EB2DD78A57CB979012A5881ABB0F2A4D6A18E09D8E858053DF1B9D6A2`; manifest has 32 files and 0 mismatches.
 - Detailed Windows preview state and rollback: `docs/WINDOWS_AWG2_PREVIEW_2026_07_12_RU.md`.
@@ -62,7 +62,7 @@ Last updated: 2026-07-12.
 - Preview-only route selection now applies a bounded in-memory failure cooldown of `1/3/10/30` minutes. Automatic route observations are accepted only for automation-eligible, verified tunnel/proxy data-plane probes; ordinary control-plane health cannot unlock or promote a transport. Stable flags remain off.
 - Android Hysteria2 preview artifact: `C:\BlueVPN_Builds\GreenVPN_Android_0.2.44_awg2_hysteria2_transport_preview5_build2026070515_debug.apk`, size `117,990,976`, SHA-256 `6D84E4F89296DE095133025BE3E4333F232DDC53A022FABD625F5A7E8F98D84E`. Exact official Hysteria hashes, three HEV/bridge ABIs, license assets, zip alignment and signature pass the APK verifier. A separate stable build has the preview flag `false` and contains no Hysteria engine/service/native payload.
 - Detailed Android Hysteria2 state and rollback: `docs/ANDROID_HYSTERIA2_PREVIEW_2026_07_12_RU.md`.
-- Verification: 28 transport-backend tests, 33 paid-beta backend tests and 11 Flutter tests pass. The Android package compiles, its dnstt/APK/signature verifier passes, and the physical device contract probe returned `10/10` valid config responses across both control planes. `flutter analyze` remains at the pre-existing baseline of 184 lint/info items with no increase; release gate is `0 warnings`, `0 errors`.
+- Verification: 28 transport-backend tests, 33 paid-beta backend tests, 11 Flutter tests and 3 native Quick Settings cascade tests pass. The Android package compiles, its dnstt/APK/signature verifier passes, and the physical device contract probe returned `10/10` valid config responses across both control planes. The physical Quick Settings proof selected AWG2 first and Hysteria2 after AWG2 cooldown, with a YouTube probe required before success. `flutter analyze` remains at the pre-existing baseline of 184 lint/info items with no increase; release gate is `0 warnings`, `0 errors`.
 - Detailed operator runbook: `docs/TRANSPORT_CANARY_ROLLOUT_2026_07_11_RU.md`.
 
 ## Frozen production stable
@@ -131,7 +131,9 @@ Last updated: 2026-07-12.
 ## Transport preview continuation (2026-07-12)
 
 - Strict preview order is implemented as `AmneziaWG2 -> Hysteria2 -> VLESS REALITY/XHTTP -> Naive HTTPS -> dnstt`, with bounded failure cooldown `1/3/10/30` minutes. Stable flags remain off.
-- Both paid-beta control planes expose the same five preview-only rows and issue all five config formats. The Samsung contract probe proved `10/10` responses without exporting credentials or config bodies; report SHA-256 is `C8C6F9312EAD88AD32233CA681207083DCEFB4BE18D84F4436EB6DDCB9FF39E5`.
+- Both paid-beta control planes expose the same five preview-only rows and issue all five config formats. The Samsung contract probe proved `10/10` responses without exporting credentials or config bodies; latest report SHA-256 is `7540393123545F4CF0F09F567BD7EAF4EB13ADEA3C6031A96B020EE47FA80316`.
+- Main UI and Android Quick Settings now use the same dynamic preview catalog and strict cascade. Physical tile proof: AWG2 first, Hysteria2 after AWG2 cooldown, both accepted only after YouTube; report SHA-256 `CBED2FD33B0F20C37FBD67C8BB6546BD2F5B5494953D8878E537C134A1030B8A`. The original tile list was restored and every preview engine ended in `down`.
+- Paid-beta probe timers on Timeweb and RUVDS are active; latest oneshot results are `success`, status `0`, observations `posted=true`. Their route signals remain control-plane-only and cannot auto-promote a guarded transport without a trusted egress-verified data-plane probe.
 - NL2 services for all five canaries are active. The dnstt direct server data-plane smoke passed with NL2 egress and YouTube, `server_data_plane_ready=true`, stable transports active and no secrets printed. Public DNS delegation for `t.greenvpn.pro` is still absent.
 - Android Naive HTTPS preview passed physical watchdog, reconnect, background, relaunch, and YouTube checks; commit `207f11e` is the local checkpoint.
 - Windows Naive HTTPS preview is implemented and compiled as `0.3.0-preview3`.
