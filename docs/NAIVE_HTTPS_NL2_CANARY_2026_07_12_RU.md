@@ -41,6 +41,7 @@
 - Installed Naive binary SHA-256 `BAEA1E9B9F8DD879A6374110BD7BDCA80C2ECBDCA8DEBC4F84F784A8739EAEA7`.
 - Windows archive SHA-256 `D09E35F9FDE6206A775A1B930D7D8252053BEE1408EE1C910B5681346C68D1A1`.
 - Android arm64 plugin APK SHA-256 `733FBBBEBB383A91F42036992C21CFD19B99E089AC3D15D7C077DF79FC471A89`.
+- Извлечённый Android `libnaive.so` SHA-256 `55B64ADBDA9FC09F4137800D74AC6772B797F96E224C12F69A8E001886BB82EB`.
 
 ## Защита
 
@@ -61,6 +62,18 @@
 - внешний TLS status `404`, verify result `0`;
 - реальный SOCKS data-plane egress `5.129.216.42`;
 - активность WireGuard, AWG2, Hysteria2 и VLESS.
+
+## Android preview
+
+- Отдельный package `pro.greenvpn.app.transportpreview`; `GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED` по умолчанию выключен.
+- Строгий validator принимает только loopback SOCKS `127.0.0.1:1982`, HTTPS, точный `nl2.vpn.greenvpn.pro:8443` и обязательные credentials; logging/netlog поля запрещены.
+- HEV `mapdns` на `198.18.2.2` передаёт доменные имена через SOCKS CONNECT без UDP DNS. Обычный stable-клиент модуль и бинарник не включает.
+- Full physical report: `C:\Users\gekto\GreenVPN_Checkpoints\android_naive_https_preview_physical_20260712.json`, SHA-256 `E2217CE98D011CEBC0729E45B578DACEC88B66D8EA4213613D9E02931BDB5521`.
+- NL2 egress, production и оба paid-beta API вернули `200`; YouTube вернул `204`; один точный Naive process имел ненулевые RX/TX.
+- Engine-kill дал fail-closed `error` без процесса/VPN service; reconnect вернулся в `up`; финальная очистка удалила runtime и plaintext profile.
+- Background/Home/YouTube/relaunch report: `C:\Users\gekto\GreenVPN_Checkpoints\android_naive_https_background_youtube_20260712.json`, SHA-256 `AD3C408D595A2F04EADBCF8905A116364A30D3E0C3EA87432836F2F3AA253666`.
+- Preview APK: `C:\BlueVPN_Builds\android_transport_preview_20260712_naive\GreenVPN_Android_Naive_HTTPS_Transport_Preview_0.2.45_debug.apk`, size `147,688,691`, SHA-256 `DB2439502B81A471C4D53E53C36689DD6726D5599207912EBCD8B1BA870A630E`.
+- После тестов официальный `bluevpn-phone-3` восстановлен: owner `com.wireguard.android`, session `VALIDATED`.
 
 ## Rollback
 
@@ -83,7 +96,6 @@ Rollback сохраняет root-only backup, удаляет только servic
 
 ## Осталось до клиентского rollout
 
-- Собрать отдельные Windows и Android preview engines поверх существующего HEV bridge.
-- Провести physical full-tunnel, watchdog, background и restore проверки.
+- Собрать и проверить отдельный Windows preview engine поверх существующего HEV bridge; Windows WARP нельзя переключать без отдельного разрешения владельца.
 - Для реальной последней линии перевести Naive с 8443 на общий TCP/443 через проверенный SNI router; VLESS нельзя переносить до отдельного rollback/proof.
 - Только после этого добавлять `naive_https` capability и endpoint в изолированный control plane.

@@ -165,12 +165,12 @@ class MainActivity : FlutterActivity() {
             return
         }
 
-        val effectiveConfigText = if (protocol == "hysteria2" || protocol == "vless_reality") {
+        val effectiveConfigText = if (protocol in setOf("hysteria2", "vless_reality", "naive_https")) {
             configText
         } else {
             filterVpnApplicationSelectors(configText)
         }
-        if (protocol !in setOf("wireguard_udp", "amneziawg", "hysteria2", "vless_reality")) {
+        if (protocol !in setOf("wireguard_udp", "amneziawg", "hysteria2", "vless_reality", "naive_https")) {
             result.success(
                 response(
                     ok = false,
@@ -210,11 +210,22 @@ class MainActivity : FlutterActivity() {
             )
             return
         }
+        if (protocol == "naive_https" && !GreenVpnNaiveHttpsPreview.isAvailable(applicationContext)) {
+            result.success(
+                response(
+                    ok = false,
+                    connected = false,
+                    message = "This mode is available only in a dedicated preview build."
+                )
+            )
+            return
+        }
 
         val parsed: Any = try {
             when {
                 protocol == "hysteria2" -> GreenVpnHysteria2Preview.validateConfig(effectiveConfigText)
                 protocol == "vless_reality" -> GreenVpnVlessRealityPreview.validateConfig(effectiveConfigText)
+                protocol == "naive_https" -> GreenVpnNaiveHttpsPreview.validateConfig(effectiveConfigText)
                 protocol == "amneziawg" ||
                     (protocol == "wireguard_udp" && BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) ->
                     GreenVpnAwg2Preview.parseConfig(effectiveConfigText)
@@ -248,7 +259,31 @@ class MainActivity : FlutterActivity() {
     private fun connectWithConfig(protocol: String, config: Any, result: MethodChannel.Result) {
         executor.execute {
             try {
-                val connected = if (protocol == "vless_reality") {
+                val connected = if (protocol == "naive_https") {
+                    val vless = GreenVpnVlessRealityPreview.snapshot(applicationContext)
+                    if (vless.connected || vless.state == "starting") {
+                        GreenVpnVlessRealityPreview.disconnect(applicationContext)
+                    }
+                    val hysteria = GreenVpnHysteria2Preview.snapshot(applicationContext)
+                    if (hysteria.connected || hysteria.state == "starting") {
+                        GreenVpnHysteria2Preview.disconnect(applicationContext)
+                    }
+                    if (GreenVpnAwg2Preview.isAvailable()) {
+                        GreenVpnAwg2Preview.disconnect(applicationContext)
+                    }
+                    val currentBackend = backend()
+                    if (currentBackend.getRunningTunnelNames().contains(tunnel.getName())) {
+                        currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
+                    }
+                    if (!waitForOwnVpnNetworkInactive(2_500L)) {
+                        throw IllegalStateException("Android did not stop the previous VPN connection")
+                    }
+                    GreenVpnNaiveHttpsPreview.connect(applicationContext, config as String)
+                } else if (protocol == "vless_reality") {
+                    val naive = GreenVpnNaiveHttpsPreview.snapshot(applicationContext)
+                    if (naive.connected || naive.state == "starting") {
+                        GreenVpnNaiveHttpsPreview.disconnect(applicationContext)
+                    }
                     val hysteria = GreenVpnHysteria2Preview.snapshot(applicationContext)
                     if (hysteria.connected || hysteria.state == "starting") {
                         GreenVpnHysteria2Preview.disconnect(applicationContext)
@@ -265,6 +300,10 @@ class MainActivity : FlutterActivity() {
                     }
                     GreenVpnVlessRealityPreview.connect(applicationContext, config as String)
                 } else if (protocol == "hysteria2") {
+                    val naive = GreenVpnNaiveHttpsPreview.snapshot(applicationContext)
+                    if (naive.connected || naive.state == "starting") {
+                        GreenVpnNaiveHttpsPreview.disconnect(applicationContext)
+                    }
                     val vless = GreenVpnVlessRealityPreview.snapshot(applicationContext)
                     if (vless.connected || vless.state == "starting") {
                         GreenVpnVlessRealityPreview.disconnect(applicationContext)
@@ -284,6 +323,10 @@ class MainActivity : FlutterActivity() {
                     protocol == "amneziawg" ||
                     (protocol == "wireguard_udp" && BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED)
                 ) {
+                    val naive = GreenVpnNaiveHttpsPreview.snapshot(applicationContext)
+                    if (naive.connected || naive.state == "starting") {
+                        GreenVpnNaiveHttpsPreview.disconnect(applicationContext)
+                    }
                     val vless = GreenVpnVlessRealityPreview.snapshot(applicationContext)
                     if (vless.connected || vless.state == "starting") {
                         GreenVpnVlessRealityPreview.disconnect(applicationContext)
@@ -300,6 +343,10 @@ class MainActivity : FlutterActivity() {
                     }
                     GreenVpnAwg2Preview.connect(applicationContext, config)
                 } else {
+                    val naive = GreenVpnNaiveHttpsPreview.snapshot(applicationContext)
+                    if (naive.connected || naive.state == "starting") {
+                        GreenVpnNaiveHttpsPreview.disconnect(applicationContext)
+                    }
                     val vless = GreenVpnVlessRealityPreview.snapshot(applicationContext)
                     if (vless.connected || vless.state == "starting") {
                         GreenVpnVlessRealityPreview.disconnect(applicationContext)
@@ -355,6 +402,21 @@ class MainActivity : FlutterActivity() {
     private fun handleDisconnect(result: MethodChannel.Result) {
         executor.execute {
             try {
+                val naive = GreenVpnNaiveHttpsPreview.snapshot(applicationContext)
+                if (naive.connected || naive.state == "starting" || naive.state == "error") {
+                    val disconnected = GreenVpnNaiveHttpsPreview.disconnect(applicationContext)
+                    if (disconnected) markOwnVpnInactive()
+                    runOnUiThread {
+                        result.success(
+                            response(
+                                ok = disconnected,
+                                connected = !disconnected,
+                                message = if (disconnected) "VPN disabled." else "VPN is still active."
+                            )
+                        )
+                    }
+                    return@execute
+                }
                 val vless = GreenVpnVlessRealityPreview.snapshot(applicationContext)
                 if (vless.connected || vless.state == "starting" || vless.state == "error") {
                     val disconnected = GreenVpnVlessRealityPreview.disconnect(applicationContext)
@@ -487,6 +549,44 @@ class MainActivity : FlutterActivity() {
             val systemOwnVpnActive = systemVpnActive && isOwnVpnNetworkActive()
             if (!systemVpnActive) {
                 markOwnVpnInactive()
+            }
+            if (BuildConfig.GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED) {
+                val naive = GreenVpnNaiveHttpsPreview.snapshot(applicationContext)
+                if (naive.connected || naive.state == "starting") {
+                    val markerOwnRunning = !systemOwnVpnActive &&
+                        systemVpnActive &&
+                        hasOwnVpnActiveMarker(systemVpnActive)
+                    val ownRunning = naive.connected || systemOwnVpnActive || markerOwnRunning
+                    runOnUiThread {
+                        result.success(
+                            mapOf(
+                                "ok" to naive.available,
+                                "connected" to ownRunning,
+                                "ownTunnelRunning" to ownRunning,
+                                "state" to if (ownRunning) "up" else naive.state,
+                                "rxBytes" to naive.rxBytes,
+                                "txBytes" to naive.txBytes,
+                                "version" to naive.version,
+                                "runningTunnels" to if (ownRunning) listOf("GreenVPN") else emptyList<String>(),
+                                "systemVpnActive" to systemVpnActive,
+                                "systemVpnActiveWithoutOwnTunnel" to (systemVpnActive && !ownRunning),
+                                "externalVpnActive" to (systemVpnActive && !ownRunning),
+                                "lastGreenVpnActive" to (systemOwnVpnActive || markerOwnRunning),
+                                "lastGreenVpnActiveAgeMs" to ownVpnMarkerAgeMs(),
+                                "ownTunnelSource" to when {
+                                    naive.connected -> "naive_https"
+                                    systemOwnVpnActive -> "system_owner"
+                                    markerOwnRunning -> "marker"
+                                    else -> "none"
+                                },
+                                "nativeTunnelName" to "GreenVPN",
+                                "requestedTunnelName" to requestedName,
+                                "statusError" to naive.error
+                            )
+                        )
+                    }
+                    return@execute
+                }
             }
             if (BuildConfig.GREENVPN_VLESS_REALITY_PREVIEW_ENABLED) {
                 val vless = GreenVpnVlessRealityPreview.snapshot(applicationContext)

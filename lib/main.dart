@@ -60,16 +60,22 @@ const bool kVlessRealityPreviewEnabled = bool.fromEnvironment(
   'GREENVPN_VLESS_REALITY_PREVIEW_ENABLED',
   defaultValue: false,
 );
+const bool kNaiveHttpsPreviewEnabled = bool.fromEnvironment(
+  'GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED',
+  defaultValue: false,
+);
 const List<String> kSupportedVpnProtocols = <String>[
   'wireguard_udp',
   if (kAwg2PreviewEnabled) 'amneziawg',
   if (kHysteria2PreviewEnabled) 'hysteria2',
   if (kVlessRealityPreviewEnabled) 'vless_reality',
+  if (kNaiveHttpsPreviewEnabled) 'naive_https',
 ];
 const bool kTransportPreviewFallbackEnabled =
     kAwg2PreviewEnabled ||
     kHysteria2PreviewEnabled ||
-    kVlessRealityPreviewEnabled;
+    kVlessRealityPreviewEnabled ||
+    kNaiveHttpsPreviewEnabled;
 const bool kAdsDisabledBuild =
     kTrialOnlyNoAdsBuild || kPaidBetaBuild || kPublicProductBuild;
 const bool kYandexRewardedAdsEnabled = bool.fromEnvironment(
@@ -8084,7 +8090,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }) async {
     final protocol = server?.protocolCode ?? 'wireguard_udp';
     await _cfg.writeManagedConfig(
-      protocol == 'hysteria2' || protocol == 'vless_reality'
+      protocol == 'hysteria2' ||
+              protocol == 'vless_reality' ||
+              protocol == 'naive_https'
           ? rawConfig
           : _buildManagedConfigFromBase(rawConfig),
     );
@@ -9221,7 +9229,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           : config.protocol,
       protocolLabel: config.protocol == 'amneziawg'
           ? 'Защищённый режим'
-          : config.protocol == 'hysteria2' || config.protocol == 'vless_reality'
+          : config.protocol == 'hysteria2' ||
+                config.protocol == 'vless_reality' ||
+                config.protocol == 'naive_https'
           ? 'Резервный режим'
           : fallback.protocolLabel,
     );
@@ -9295,7 +9305,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                   server.isCurrentClientReady &&
                   !(socialOnlyEnabled &&
                       (server.protocolCode == 'hysteria2' ||
-                          server.protocolCode == 'vless_reality')),
+                          server.protocolCode == 'vless_reality' ||
+                          server.protocolCode == 'naive_https')),
             )
             .toList()
           ..sort((a, b) {
@@ -9351,7 +9362,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
     if (socialOnlyEnabled &&
         (server.protocolCode == 'hysteria2' ||
-            server.protocolCode == 'vless_reality')) {
+            server.protocolCode == 'vless_reality' ||
+            server.protocolCode == 'naive_https')) {
       return 'этот резервный режим доступен только для полного подключения';
     }
     return 'сервер пока нельзя использовать текущим клиентом';
@@ -17677,6 +17689,7 @@ class WindowsTransportPreviewBackend extends VpnBackend {
   final AmneziaWgWindowsPreviewBackend _amneziaWg;
   final SystemServiceWindowsPreviewBackend _hysteria2;
   final SystemServiceWindowsPreviewBackend _vlessReality;
+  final SystemServiceWindowsPreviewBackend _naiveHttps;
 
   WindowsTransportPreviewBackend({required String tunnelName})
     : _wireGuard = WireGuardWindowsBackend(tunnelName: tunnelName),
@@ -17688,6 +17701,10 @@ class WindowsTransportPreviewBackend extends VpnBackend {
       _vlessReality = const SystemServiceWindowsPreviewBackend(
         protocol: 'vless_reality',
         enabled: kVlessRealityPreviewEnabled,
+      ),
+      _naiveHttps = const SystemServiceWindowsPreviewBackend(
+        protocol: 'naive_https',
+        enabled: kNaiveHttpsPreviewEnabled,
       );
 
   Future<String> _managedProtocol(String configPath) async {
@@ -17713,6 +17730,9 @@ class WindowsTransportPreviewBackend extends VpnBackend {
     if (protocol == 'vless_reality') {
       return _vlessReality.connect(configPath: configPath);
     }
+    if (protocol == 'naive_https') {
+      return _naiveHttps.connect(configPath: configPath);
+    }
     if (protocol != 'wireguard_udp') {
       return VpnBackendResult(
         ok: false,
@@ -17724,6 +17744,9 @@ class WindowsTransportPreviewBackend extends VpnBackend {
 
   @override
   Future<VpnBackendResult> disconnect() async {
+    if (await _naiveHttps.isConnected()) {
+      return _naiveHttps.disconnect();
+    }
     if (await _vlessReality.isConnected()) {
       return _vlessReality.disconnect();
     }
@@ -17738,6 +17761,7 @@ class WindowsTransportPreviewBackend extends VpnBackend {
 
   @override
   Future<bool> isConnected() async {
+    if (await _naiveHttps.isConnected()) return true;
     if (await _vlessReality.isConnected()) return true;
     if (await _hysteria2.isConnected()) return true;
     if (await _amneziaWg.isConnected()) return true;

@@ -6,6 +6,7 @@ param(
     [switch]$EnableAwg2Preview,
     [switch]$EnableHysteria2Preview,
     [switch]$EnableVlessRealityPreview,
+    [switch]$EnableNaiveHttpsPreview,
     [string]$Awg2PreviewApplicationId = "pro.greenvpn.app.transportpreview",
     [string]$Awg2PreviewAppLabel = "Green VPN Transport Preview",
     [string]$Awg2PreviewAppVersion = "0.2.45-vless-transport-preview.1",
@@ -39,7 +40,8 @@ $env:Path = "$jdkDir\bin;$androidSdk\platform-tools;$androidSdk\cmdline-tools\la
 $env:GREENVPN_ANDROID_AWG2_PREVIEW_ENABLED = if ($EnableAwg2Preview) { 'true' } else { 'false' }
 $env:GREENVPN_ANDROID_HYSTERIA2_PREVIEW_ENABLED = if ($EnableHysteria2Preview) { 'true' } else { 'false' }
 $env:GREENVPN_ANDROID_VLESS_REALITY_PREVIEW_ENABLED = if ($EnableVlessRealityPreview) { 'true' } else { 'false' }
-if ($EnableAwg2Preview -or $EnableHysteria2Preview -or $EnableVlessRealityPreview) {
+$env:GREENVPN_ANDROID_NAIVE_HTTPS_PREVIEW_ENABLED = if ($EnableNaiveHttpsPreview) { 'true' } else { 'false' }
+if ($EnableAwg2Preview -or $EnableHysteria2Preview -or $EnableVlessRealityPreview -or $EnableNaiveHttpsPreview) {
     if (-not $Awg2PreviewApiBaseUrl.Contains('/paid-beta-api')) {
         throw 'AWG2 preview primary API must use /paid-beta-api.'
     }
@@ -66,6 +68,12 @@ if ($EnableVlessRealityPreview) {
         & (Join-Path $PSScriptRoot 'prepare_android_hysteria2_preview.ps1')
     }
     & (Join-Path $PSScriptRoot 'prepare_android_vless_reality_preview.ps1')
+}
+if ($EnableNaiveHttpsPreview) {
+    if (-not $EnableHysteria2Preview -and -not $EnableVlessRealityPreview) {
+        & (Join-Path $PSScriptRoot 'prepare_android_hysteria2_preview.ps1')
+    }
+    & (Join-Path $PSScriptRoot 'prepare_android_naive_https_preview.ps1')
 }
 
 flutter config --android-sdk $androidSdk | Out-Host
@@ -128,6 +136,20 @@ if ($Mode -eq "debug" -or $Mode -eq "both") {
             $debugArgs += "--build-number=$Awg2PreviewBuildNumber"
         }
     }
+    if ($EnableNaiveHttpsPreview) {
+        $debugArgs += '--dart-define=GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED=true'
+        if (-not $EnableAwg2Preview -and -not $EnableHysteria2Preview -and -not $EnableVlessRealityPreview) {
+            $debugArgs += "--dart-define=GREENVPN_APP_VERSION=$Awg2PreviewAppVersion"
+            $debugArgs += '--dart-define=GREENVPN_PAID_BETA_BUILD=true'
+            $debugArgs += '--dart-define=GREENVPN_PAID_BETA_CLIENT_MARKER=green-vpn-paid-beta-v1'
+            $debugArgs += '--dart-define=GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=false'
+            $debugArgs += '--dart-define=GREENVPN_YANDEX_REWARDED_ADS_ENABLED=false'
+            $debugArgs += "--dart-define=BLUEVPN_API_BASE_URL=$Awg2PreviewApiBaseUrl"
+            $debugArgs += "--dart-define=BLUEVPN_API_BASE_URLS=$Awg2PreviewApiFallbackBaseUrls"
+            $debugArgs += "--build-name=$Awg2PreviewBuildName"
+            $debugArgs += "--build-number=$Awg2PreviewBuildNumber"
+        }
+    }
     flutter @debugArgs | Out-Host
     $builds += "build\app\outputs\flutter-apk\app-debug.apk"
 }
@@ -136,7 +158,7 @@ if ($Mode -eq "release" -or $Mode -eq "both") {
     $releaseArgs += "--dart-define=GREENVPN_APP_VERSION=$releaseAppVersion"
     $releaseArgs += "--build-name=$releaseBuildName"
     $releaseArgs += "--build-number=$releaseBuildNumber"
-    if ($EnableYandexRewardedAds -or $EnableAwg2Preview -or $EnableHysteria2Preview -or $EnableVlessRealityPreview -or $DeployPreview) {
+    if ($EnableYandexRewardedAds -or $EnableAwg2Preview -or $EnableHysteria2Preview -or $EnableVlessRealityPreview -or $EnableNaiveHttpsPreview -or $DeployPreview) {
         $releaseAppVersion = "0.2.43-preview"
         $releaseBuildName = "0.2.43"
         $releaseBuildNumber = "2026070503"
@@ -166,6 +188,15 @@ if ($Mode -eq "release" -or $Mode -eq "both") {
     if ($EnableVlessRealityPreview) {
         $releaseArgs += '--dart-define=GREENVPN_VLESS_REALITY_PREVIEW_ENABLED=true'
         if (-not $EnableAwg2Preview -and -not $EnableHysteria2Preview) {
+            $releaseArgs += '--dart-define=GREENVPN_PAID_BETA_BUILD=true'
+            $releaseArgs += '--dart-define=GREENVPN_PAID_BETA_CLIENT_MARKER=green-vpn-paid-beta-v1'
+            $releaseArgs += "--dart-define=BLUEVPN_API_BASE_URL=$Awg2PreviewApiBaseUrl"
+            $releaseArgs += "--dart-define=BLUEVPN_API_BASE_URLS=$Awg2PreviewApiFallbackBaseUrls"
+        }
+    }
+    if ($EnableNaiveHttpsPreview) {
+        $releaseArgs += '--dart-define=GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED=true'
+        if (-not $EnableAwg2Preview -and -not $EnableHysteria2Preview -and -not $EnableVlessRealityPreview) {
             $releaseArgs += '--dart-define=GREENVPN_PAID_BETA_BUILD=true'
             $releaseArgs += '--dart-define=GREENVPN_PAID_BETA_CLIENT_MARKER=green-vpn-paid-beta-v1'
             $releaseArgs += "--dart-define=BLUEVPN_API_BASE_URL=$Awg2PreviewApiBaseUrl"

@@ -55,7 +55,11 @@ val vlessRealityPreviewEnabled =
     (System.getenv("GREENVPN_ANDROID_VLESS_REALITY_PREVIEW_ENABLED") ?: "false")
         .trim()
         .lowercase() in setOf("1", "true", "yes", "on")
-if (hysteria2PreviewEnabled || vlessRealityPreviewEnabled) {
+val naiveHttpsPreviewEnabled =
+    (System.getenv("GREENVPN_ANDROID_NAIVE_HTTPS_PREVIEW_ENABLED") ?: "false")
+        .trim()
+        .lowercase() in setOf("1", "true", "yes", "on")
+if (hysteria2PreviewEnabled || vlessRealityPreviewEnabled || naiveHttpsPreviewEnabled) {
     val hysteria2ModuleDir = file("transport_preview/hysteria_tunnel")
     require(hysteria2ModuleDir.isDirectory) {
         "Transport preview module is missing. Run the Android transport preparation scripts first."

@@ -92,6 +92,12 @@ $androidVlessServicePath = Join-Path $ProjectRoot "android\transport_preview\hys
 $androidVlessConfigTestPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\test\kotlin\pro\greenvpn\vless\VlessRealityConfigTest.kt"
 $androidVlessPreparePath = Join-Path $ProjectRoot "scripts\windows\prepare_android_vless_reality_preview.ps1"
 $androidVlessPhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_android_vless_reality_preview_physical.ps1"
+$androidNaiveConfigPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\main\kotlin\pro\greenvpn\naive\NaiveHttpsConfig.kt"
+$androidNaiveControllerPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\main\kotlin\pro\greenvpn\naive\NaiveHttpsController.kt"
+$androidNaiveServicePath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\main\kotlin\pro\greenvpn\naive\NaiveHttpsVpnService.kt"
+$androidNaiveConfigTestPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\test\kotlin\pro\greenvpn\naive\NaiveHttpsConfigTest.kt"
+$androidNaivePreparePath = Join-Path $ProjectRoot "scripts\windows\prepare_android_naive_https_preview.ps1"
+$androidNaivePhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_android_naive_https_preview_physical.ps1"
 $routeFailureCooldownPath = Join-Path $ProjectRoot "lib\services\route_failure_cooldown.dart"
 $routeFailureCooldownTestPath = Join-Path $ProjectRoot "test\route_failure_cooldown_test.dart"
 $monitoringProbePath = Join-Path $ProjectRoot "scripts\monitoring\service_probe.py"
@@ -144,6 +150,12 @@ $androidVlessService = Read-Text $androidVlessServicePath
 $androidVlessConfigTest = Read-Text $androidVlessConfigTestPath
 $androidVlessPrepareScript = Read-Text $androidVlessPreparePath
 $androidVlessPhysicalTestScript = Read-Text $androidVlessPhysicalTestPath
+$androidNaiveConfig = Read-Text $androidNaiveConfigPath
+$androidNaiveController = Read-Text $androidNaiveControllerPath
+$androidNaiveService = Read-Text $androidNaiveServicePath
+$androidNaiveConfigTest = Read-Text $androidNaiveConfigTestPath
+$androidNaivePrepareScript = Read-Text $androidNaivePreparePath
+$androidNaivePhysicalTestScript = Read-Text $androidNaivePhysicalTestPath
 $routeFailureCooldown = Read-Text $routeFailureCooldownPath
 $routeFailureCooldownTest = Read-Text $routeFailureCooldownTestPath
 $monitoringProbe = Read-Text $monitoringProbePath
@@ -1330,6 +1342,35 @@ foreach ($scriptPath in @($androidVlessPreparePath, $androidVlessPhysicalTestPat
         else {
             Add-Pass "Android VLESS PowerShell parser check passed: $scriptPath"
         }
+    }
+}
+
+Write-Section "ANDROID NAIVE HTTPS PREVIEW CHECKS"
+$androidNaiveSourceChecks = [ordered]@{
+    'Android Naive guarded config' = @($androidNaiveConfig, 'CANARY_HOST = "nl2.vpn.greenvpn.pro"', 'CANARY_IP = "5.129.216.42"', 'CANARY_PORT = 8443', 'host-resolver-rules', 'allowedKeys')
+    'Android Naive mapdns full tunnel' = @($androidNaiveService, '.addDnsServer("198.18.2.2")', 'mapdns:', "udp: 'tcp'", 'addDisallowedApplication(packageName)')
+    'Android Naive persistent fail-closed state' = @($androidNaiveService, 'context.noBackupFilesDir', 'STATE_FILE = "state.json"', 'fun prepareForConnect(context: Context)', 'process.destroyForcibly()', 'cleanup("down", "")')
+    'Android Naive reconnect state reset' = @($androidNaiveController, 'NaiveHttpsVpnService.prepareForConnect(context)', 'waitForState(context, "up", 30_000L)', 'state == "error" && expected != "down"')
+    'Android Naive config tests' = @($androidNaiveConfigTest, 'rejectsWrongEndpoint', 'rejectsPlainHttp', 'rejectsMissingCredentials', 'rejectsLoggingFields')
+    'Android Naive pinned preparation' = @($androidNaivePrepareScript, 'v150.0.7871.63-1', '733FBBBEBB383A91F42036992C21CFD19B99E089AC3D15D7C077DF79FC471A89', '55B64ADBDA9FC09F4137800D74AC6772B797F96E224C12F69A8E001886BB82EB', 'BSD-3-Clause')
+    'Android Naive physical watchdog and reconnect' = @($androidNaivePhysicalTestScript, "ExpectedEgress = '5.129.216.42'", 'watchdogState', 'reconnectState', 'reconnectEgress', 'plaintextConfigRemoved')
+    'Naive capability remains preview-only' = @($main, 'kNaiveHttpsPreviewEnabled', "if (kNaiveHttpsPreviewEnabled) 'naive_https'", 'kTransportPreviewFallbackEnabled')
+}
+foreach ($check in $androidNaiveSourceChecks.GetEnumerator()) {
+    $source = [string]$check.Value[0]
+    $missing = @($check.Value[1..($check.Value.Count - 1)] | Where-Object { -not $source.Contains([string]$_) })
+    if ($missing.Count -eq 0) { Add-Pass "$($check.Key) markers present" }
+    else { Add-Error "$($check.Key) missing marker(s): $($missing -join ', ')" }
+}
+foreach ($scriptPath in @($androidNaivePreparePath, $androidNaivePhysicalTestPath)) {
+    if (Test-Path -LiteralPath $scriptPath) {
+        $tokens = $null
+        $parseErrors = $null
+        [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$parseErrors) | Out-Null
+        if ($parseErrors -and $parseErrors.Count -gt 0) {
+            Add-Error "Android Naive PowerShell parser errors in ${scriptPath}: $($parseErrors[0].ToString())"
+        }
+        else { Add-Pass "Android Naive PowerShell parser check passed: $scriptPath" }
     }
 }
 
