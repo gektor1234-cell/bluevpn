@@ -61,6 +61,12 @@ No code or server defect currently blocks those three external gates.
 
 ## Rollback
 
+- Technical-final handoff tag: `greenvpn-technical-final-20260713`.
+- Verified encrypted technical-final checkpoint:
+  `C:\Users\gekto\GreenVPN_Checkpoints\full_project_technical_final_green_ci_20260713_185901`.
+- Technical-final server/local SHA-256:
+  `86847313267BFCD2F06E11CF064AA5D8F2A77C403AB9C8997569577DCD139C68` /
+  `FA0B97F32F1323E092B9C5E042C46E48FC1FE6167534CEC5EC2DDB4363B3A39F`.
 - Stable Git tag: `greenvpn-stable-pre-paid-beta-20260710`.
 - Multiprotocol checkpoint tag:
   `greenvpn-multiprotocol-preview-complete-20260713`.

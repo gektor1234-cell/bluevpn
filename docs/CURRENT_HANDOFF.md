@@ -30,7 +30,9 @@ This is the current operational entry point. Read it together with
 
 - Root: `C:\Users\gekto\projects\bluevpn`.
 - Active branch: `green-vpn-transport-canary-20260711`.
-- Current pre-finalization base: `d31c6d78337ce9d212d497e7e112085efd407f26`
+- Technical-final code checkpoint: `1048312b75d05bf7b5a553927160a367cec6eece`.
+- Final handoff tag: `greenvpn-technical-final-20260713`.
+- Multiprotocol preview base: `d31c6d78337ce9d212d497e7e112085efd407f26`
   (`greenvpn-multiprotocol-preview-complete-20260713`).
 - Stable rollback tag: `greenvpn-stable-pre-paid-beta-20260710`.
 - Generated binaries belong in `C:\BlueVPN_Builds`, encrypted restore points in
@@ -155,16 +157,25 @@ material. KZ is not in DNS, catalogs or assignment state.
 
 ## Restore points
 
+- Verified encrypted technical-final checkpoint:
+  `C:\Users\gekto\GreenVPN_Checkpoints\full_project_technical_final_green_ci_20260713_185901`.
+- Technical-final `server_state.7z` SHA-256:
+  `86847313267BFCD2F06E11CF064AA5D8F2A77C403AB9C8997569577DCD139C68`.
+- Technical-final `local_state.7z` SHA-256:
+  `FA0B97F32F1323E092B9C5E042C46E48FC1FE6167534CEC5EC2DDB4363B3A39F`.
+- The local archive records repository head
+  `1048312b75d05bf7b5a553927160a367cec6eece` with a clean working tree.
+- Both final archives use encrypted headers, pass `7z t`, reject a wrong
+  password, have exact owner/SYSTEM/Administrators ACLs and leave no plaintext
+  or password-rotation staging directory.
 - Verified encrypted pre-cleanup checkpoint:
   `C:\Users\gekto\GreenVPN_Checkpoints\full_project_pre_cleanup_20260713_124114`.
 - `server_state.7z` SHA-256:
   `89DF0C132CC1E12D9284BB57B752C5A9F07D059804C2015CC80715A462D03578`.
 - `local_state.7z` SHA-256:
   `D1324849CFB9CC6A3CEA72AA65B36CDFEF33F6102433D017E4C9B118631F03EF`.
-- Both archives use encrypted headers, pass `7z t`, have restricted ACLs and
-  left no plaintext staging data.
-- Create a new post-finalization encrypted checkpoint after the final commit and
-  record it here or in the checkpoint manifest.
+- The pre-cleanup archives use encrypted headers, pass `7z t`, have restricted
+  ACLs and left no plaintext staging data.
 
 ## Remaining owner/external launch gates
 
