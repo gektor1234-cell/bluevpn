@@ -1807,9 +1807,11 @@ else {
 
 foreach ($fragment in @(
     'Set-RestrictedCheckpointAcl',
-    'SetAccessRuleProtection($true, $false)',
-    "SecurityIdentifier]::new('S-1-5-18')",
-    "SecurityIdentifier]::new('S-1-5-32-544')",
+    "'icacls.exe'",
+    "'/reset'",
+    "'/inheritance:r'",
+    "'*S-1-5-18:(OI)(CI)F'",
+    "'*S-1-5-32-544:(OI)(CI)F'",
     "'-O', '-q'"
 )) {
     if ($fullProjectCheckpointScript.Contains($fragment)) {
@@ -1822,9 +1824,11 @@ foreach ($fragment in @(
 
 foreach ($fragment in @(
     'Set-RestrictedCheckpointAcl',
-    'SetAccessRuleProtection($true, $false)',
-    "SecurityIdentifier]::new('S-1-5-18')",
-    "SecurityIdentifier]::new('S-1-5-32-544')"
+    "'icacls.exe'",
+    "'/reset'",
+    "'/inheritance:r'",
+    "'*S-1-5-18:(OI)(CI)F'",
+    "'*S-1-5-32-544:(OI)(CI)F'"
 )) {
     if ($localRestoreSnapshotScript.Contains($fragment)) {
         Add-Pass "Local checkpoint hardening marker present: $fragment"
