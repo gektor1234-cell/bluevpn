@@ -1805,6 +1805,35 @@ else {
     Add-Pass 'Full checkpoint invokes the encrypted local-state snapshot'
 }
 
+foreach ($fragment in @(
+    'Set-RestrictedCheckpointAcl',
+    'SetAccessRuleProtection($true, $false)',
+    "SecurityIdentifier]::new('S-1-5-18')",
+    "SecurityIdentifier]::new('S-1-5-32-544')",
+    "'-O', '-q'"
+)) {
+    if ($fullProjectCheckpointScript.Contains($fragment)) {
+        Add-Pass "Full checkpoint hardening marker present: $fragment"
+    }
+    else {
+        Add-Error "Full checkpoint hardening marker missing: $fragment"
+    }
+}
+
+foreach ($fragment in @(
+    'Set-RestrictedCheckpointAcl',
+    'SetAccessRuleProtection($true, $false)',
+    "SecurityIdentifier]::new('S-1-5-18')",
+    "SecurityIdentifier]::new('S-1-5-32-544')"
+)) {
+    if ($localRestoreSnapshotScript.Contains($fragment)) {
+        Add-Pass "Local checkpoint hardening marker present: $fragment"
+    }
+    else {
+        Add-Error "Local checkpoint hardening marker missing: $fragment"
+    }
+}
+
 if (Test-Path -LiteralPath $localRestoreSnapshotPath) {
     $tokens = $null
     $parseErrors = $null

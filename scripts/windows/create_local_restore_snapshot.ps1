@@ -48,6 +48,32 @@ function Invoke-Checked {
     }
 }
 
+function Set-RestrictedCheckpointAcl {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $acl = [System.Security.AccessControl.DirectorySecurity]::new()
+    $acl.SetAccessRuleProtection($true, $false)
+    $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+        [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    foreach ($sid in @(
+        $currentSid,
+        [System.Security.Principal.SecurityIdentifier]::new('S-1-5-18'),
+        [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+    )) {
+        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+            $sid,
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            $inheritance,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Allow
+        )
+        [void]$acl.AddAccessRule($rule)
+    }
+    $acl.SetOwner($currentSid)
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
+
 function Copy-SafeTree {
     param(
         [Parameter(Mandatory = $true)][string]$SourceRoot,
@@ -110,6 +136,7 @@ foreach ($requiredFile in @($sevenZip, $passwordPath)) {
         throw "Required file is missing: $requiredFile"
     }
 }
+Set-RestrictedCheckpointAcl -Path $checkpoint
 if (Test-Path -LiteralPath $localRoot) {
     throw "Local-state checkpoint already exists: $localRoot"
 }

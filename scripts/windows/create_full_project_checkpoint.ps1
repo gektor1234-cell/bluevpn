@@ -47,6 +47,32 @@ function Invoke-Checked {
     }
 }
 
+function Set-RestrictedCheckpointAcl {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $acl = [System.Security.AccessControl.DirectorySecurity]::new()
+    $acl.SetAccessRuleProtection($true, $false)
+    $inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+        [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    foreach ($sid in @(
+        $currentSid,
+        [System.Security.Principal.SecurityIdentifier]::new('S-1-5-18'),
+        [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-544')
+    )) {
+        $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+            $sid,
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            $inheritance,
+            [System.Security.AccessControl.PropagationFlags]::None,
+            [System.Security.AccessControl.AccessControlType]::Allow
+        )
+        [void]$acl.AddAccessRule($rule)
+    }
+    $acl.SetOwner($currentSid)
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
+
 $checkpointParent = [System.IO.Path]::GetFullPath('C:\Users\gekto\GreenVPN_Checkpoints')
 $checkpoint = Resolve-ContainedPath -Path $CheckpointRoot -Parent $checkpointParent
 $serverPlainRoot = Resolve-ContainedPath -Path (Join-Path $checkpoint 'server_archives\plaintext') -Parent $checkpoint
@@ -66,6 +92,7 @@ if (-not (Test-Path -LiteralPath $SecretRoot -PathType Container)) {
     throw "Secret root does not exist: $SecretRoot"
 }
 
+Set-RestrictedCheckpointAcl -Path $checkpoint
 New-Item -ItemType Directory -Path $serverPlainRoot -Force | Out-Null
 
 if (-not (Test-Path -LiteralPath $passwordPath -PathType Leaf)) {
@@ -111,7 +138,7 @@ foreach ($ip in $Hosts) {
     $localArchive = Join-Path $serverPlainRoot ("{0}.tar.gz" -f $ip.Replace('.', '_'))
 
     Invoke-Checked -FilePath 'scp.exe' -ArgumentList @(
-        '-q', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
+        '-O', '-q', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
         $scriptPath.Path, "root@${ip}:$remoteScript"
     )
     Invoke-Checked -FilePath 'ssh.exe' -ArgumentList @(
@@ -119,7 +146,7 @@ foreach ($ip in $Hosts) {
         "chmod 700 '$remoteScript' && '$remoteScript' --label '$Label' --output '$remoteArchive'"
     )
     Invoke-Checked -FilePath 'scp.exe' -ArgumentList @(
-        '-q', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
+        '-O', '-q', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
         "root@${ip}:$remoteArchive", $localArchive
     )
     Invoke-Checked -FilePath 'ssh.exe' -ArgumentList @(
