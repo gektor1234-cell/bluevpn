@@ -174,10 +174,11 @@ $sshFileCount = Copy-SafeTree -SourceRoot $SshRoot -DestinationRoot $sshDestinat
 $excludedInventory = foreach ($name in $ExcludedGeneratedSecretDuplicates) {
     $path = Resolve-ContainedPath -Path (Join-Path $secretStore $name) -Parent $secretStore
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw "Expected generated duplicate is missing: $name"
+        [ordered]@{ name = $name; present = $false; size = 0 }
+        continue
     }
     $item = Get-Item -LiteralPath $path
-    [ordered]@{ name = $name; size = $item.Length }
+    [ordered]@{ name = $name; present = $true; size = $item.Length }
 }
 $excludedInventory | ConvertTo-Json -Depth 3 | Set-Content `
     -LiteralPath (Join-Path $plainRoot 'excluded_generated_sensitive_duplicates.json') `

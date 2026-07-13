@@ -9264,6 +9264,10 @@ def load_remote_vpn_node_config(server_id: str) -> dict:
     return config
 
 
+def guarded_config_metadata_owned_by_root(metadata: os.stat_result) -> bool:
+    return getattr(metadata, "st_uid", 0) == 0
+
+
 def hysteria2_client_config_check(
     server_id: str,
     *,
@@ -9301,7 +9305,7 @@ def hysteria2_client_config_check(
         metadata = config_path.stat()
         if not config_path.is_file():
             raise FileNotFoundError(str(config_path))
-        if getattr(metadata, "st_uid", 0) != 0:
+        if not guarded_config_metadata_owned_by_root(metadata):
             add_blocker("hysteria2_config_not_root_owned", "Hysteria2 config должен принадлежать root.")
         if os.name != "nt" and metadata.st_mode & 0o077:
             add_blocker("hysteria2_config_not_root_only", "Hysteria2 config должен иметь mode 0600.")
@@ -9431,7 +9435,7 @@ def vless_reality_client_config_check(
         metadata = config_path.stat()
         if not config_path.is_file():
             raise FileNotFoundError(str(config_path))
-        if getattr(metadata, "st_uid", 0) != 0:
+        if not guarded_config_metadata_owned_by_root(metadata):
             add_blocker("vless_reality_config_not_root_owned", "VLESS REALITY config должен принадлежать root.")
         if os.name != "nt" and metadata.st_mode & 0o077:
             add_blocker("vless_reality_config_not_root_only", "VLESS REALITY config должен иметь mode 0600.")
@@ -9590,7 +9594,7 @@ def guarded_json_client_profile_file(
         metadata = config_path.stat()
         if not config_path.is_file():
             raise FileNotFoundError(str(config_path))
-        if getattr(metadata, "st_uid", 0) != 0:
+        if not guarded_config_metadata_owned_by_root(metadata):
             add_blocker(f"{blocker_prefix}_config_not_root_owned", "Config must be owned by root.")
         if os.name != "nt" and metadata.st_mode & 0o077:
             add_blocker(f"{blocker_prefix}_config_not_root_only", "Config must have mode 0600.")

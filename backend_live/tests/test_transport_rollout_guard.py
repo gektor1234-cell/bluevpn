@@ -229,6 +229,7 @@ class TransportRolloutGuardTests(unittest.TestCase):
                 patch.object(main, "VLESS_REALITY_CLIENT_CONFIG_ROOT", Path(config_root)),
                 patch.object(main, "VLESS_REALITY_CANARY_SERVER_IDS", {server_id}),
                 patch.object(main, "VLESS_REALITY_CANARY_SNI", "www.amazon.com"),
+                patch.object(main, "guarded_config_metadata_owned_by_root", return_value=True),
             ):
                 readiness = main.server_client_config_readiness(row)
                 loaded = main.load_vless_reality_client_config(
@@ -308,6 +309,7 @@ class TransportRolloutGuardTests(unittest.TestCase):
                 patch.object(main, "HYSTERIA2_CLIENT_CONFIG_ROOT", Path(config_root)),
                 patch.object(main, "HYSTERIA2_CANARY_SERVER_IDS", {server_id}),
                 patch.object(main, "HYSTERIA2_CANARY_SNI", "nl2.vpn.greenvpn.pro"),
+                patch.object(main, "guarded_config_metadata_owned_by_root", return_value=True),
             ):
                 readiness = main.server_client_config_readiness(row)
                 loaded = main.load_hysteria2_client_config(
@@ -831,6 +833,7 @@ class TransportRolloutGuardTests(unittest.TestCase):
                 patch.object(main, "NAIVE_HTTPS_CANARY_SERVER_IDS", {server_id}),
                 patch.object(main, "NAIVE_HTTPS_CANARY_HOST", "nl2.vpn.greenvpn.pro"),
                 patch.object(main, "NAIVE_HTTPS_CANARY_IP", "203.0.113.42"),
+                patch.object(main, "guarded_config_metadata_owned_by_root", return_value=True),
             ):
                 readiness = main.server_client_config_readiness(row)
                 loaded = main.load_naive_https_client_config(
@@ -913,6 +916,7 @@ class TransportRolloutGuardTests(unittest.TestCase):
                 patch.object(main, "DNSTT_CANARY_SERVER_IDS", {server_id}),
                 patch.object(main, "DNSTT_CANARY_ZONE", "t.greenvpn.pro"),
                 patch.object(main, "DNSTT_CANARY_IP", "203.0.113.42"),
+                patch.object(main, "guarded_config_metadata_owned_by_root", return_value=True),
             ):
                 readiness = main.server_client_config_readiness(row)
                 loaded = main.load_dnstt_client_config(
