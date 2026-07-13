@@ -5,7 +5,9 @@ param(
     [string]$ProbePackage = 'pro.greenvpn.transportprobe',
     [string]$SourceConfig = 'C:\Users\gekto\GreenVPN_Checkpoints\transport_canary_dnstt_20260712\dnstt-canary.client.json',
     [string]$ExpectedEgress = '5.129.216.42',
-    [string]$ReportPath = 'C:\Users\gekto\GreenVPN_Checkpoints\android_dnstt_preview_physical_20260712.json'
+    [string]$ReportPath = 'C:\Users\gekto\GreenVPN_Checkpoints\android_dnstt_preview_physical_20260712.json',
+    [ValidateRange(1, 5)][int]$ProbeAttempts = 3,
+    [ValidateRange(5000, 60000)][int]$ProbeTimeoutMs = 30000
 )
 
 Set-StrictMode -Version Latest
@@ -64,28 +66,36 @@ function Invoke-ExternalProbe {
     param([int]$TimeoutSeconds = 120)
     $result = [ordered]@{}
     foreach ($target in @('egress','productionApi','paidBetaPrimary','paidBetaFallback','youtube')) {
-        Invoke-Adb -Arguments @('shell', 'run-as', $ProbePackage, 'rm', '-f', 'files/transport-probe-result.json') | Out-Null
-        Invoke-Adb -Arguments @(
-            'shell', 'am', 'broadcast', '--receiver-foreground', '--include-stopped-packages',
-            '-a', 'pro.greenvpn.transportprobe.RUN',
-            '-n', "$ProbePackage/pro.greenvpn.transportprobe.TransportProbeReceiver",
-            '--es', 'target', $target
-        ) | Out-Null
-        $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
         $probe = $null
-        do {
-            $previousPreference = $ErrorActionPreference
-            try {
-                $ErrorActionPreference = 'Continue'
-                $raw = (@(& $Adb -s $Serial shell run-as $ProbePackage cat files/transport-probe-result.json 2>$null) -join '').Trim()
-                $readExitCode = $LASTEXITCODE
-            } finally { $ErrorActionPreference = $previousPreference }
-            if ($readExitCode -eq 0 -and $raw.StartsWith('{')) { $probe = $raw | ConvertFrom-Json; break }
-            Start-Sleep -Milliseconds 300
-        } while ((Get-Date) -lt $deadline)
+        $attemptUsed = 0
+        for ($attempt = 1; $attempt -le $ProbeAttempts; $attempt++) {
+            $attemptUsed = $attempt
+            Invoke-Adb -Arguments @('shell', 'run-as', $ProbePackage, 'rm', '-f', 'files/transport-probe-result.json') | Out-Null
+            Invoke-Adb -Arguments @(
+                'shell', 'am', 'broadcast', '--receiver-foreground', '--include-stopped-packages',
+                '-a', 'pro.greenvpn.transportprobe.RUN',
+                '-n', "$ProbePackage/pro.greenvpn.transportprobe.TransportProbeReceiver",
+                '--es', 'target', $target,
+                '--ei', 'timeoutMs', ([string]$ProbeTimeoutMs)
+            ) | Out-Null
+            $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+            do {
+                $previousPreference = $ErrorActionPreference
+                try {
+                    $ErrorActionPreference = 'Continue'
+                    $raw = (@(& $Adb -s $Serial shell run-as $ProbePackage cat files/transport-probe-result.json 2>$null) -join '').Trim()
+                    $readExitCode = $LASTEXITCODE
+                } finally { $ErrorActionPreference = $previousPreference }
+                if ($readExitCode -eq 0 -and $raw.StartsWith('{')) { $probe = $raw | ConvertFrom-Json; break }
+                Start-Sleep -Milliseconds 300
+            } while ((Get-Date) -lt $deadline)
+            if ($null -ne $probe -and [int]$probe.status -ne 0) { break }
+            if ($attempt -lt $ProbeAttempts) { Start-Sleep -Milliseconds 750 }
+        }
         if ($null -eq $probe) { throw "Timed out waiting for Android transport probe: $target" }
         $result[$target + 'Status'] = [int]$probe.status
         $result[$target + 'Error'] = [string]$probe.error
+        $result[$target + 'Attempts'] = $attemptUsed
         if ($target -eq 'egress') {
             $ipMatch = [regex]::Match([string]$probe.body, '(?m)^ip=([^\r\n]+)')
             $result.egress = if ($ipMatch.Success) { $ipMatch.Groups[1].Value.Trim() } else { '' }
@@ -112,10 +122,13 @@ if (((Invoke-Adb -Arguments @('get-state')) -join '').Trim() -ne 'device') { thr
 $report = [ordered]@{
     startedAt = (Get-Date).ToUniversalTime().ToString('o'); serial = $Serial; package = $Package
     probePackage = $ProbePackage; versionCode = ''
+    probeTimeoutMs = $ProbeTimeoutMs
     sourceConfigSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $SourceConfig).Hash
     resolverMode = 'doh'; connected = $false; canaryEgress = ''; egressStatus = 0; egressError = ''
     productionApiStatus = 0; productionApiError = ''; paidBetaPrimaryStatus = 0; paidBetaPrimaryError = ''
     paidBetaFallbackStatus = 0; paidBetaFallbackError = ''; youtubeStatus = 0; youtubeError = ''
+    egressAttempts = 0; productionApiAttempts = 0; paidBetaPrimaryAttempts = 0
+    paidBetaFallbackAttempts = 0; youtubeAttempts = 0
     rxBytes = 0; txBytes = 0; processCountWhileUp = 0; watchdogState = ''; watchdogProcessCount = -1
     watchdogServiceCount = -1; reconnectState = ''; reconnectEgress = ''; finalState = ''
     finalProcessCount = -1; finalServiceCount = -1; runtimeConfigRemoved = $false
@@ -154,9 +167,10 @@ try {
     Invoke-Adb -Arguments @('shell', 'rm', '-f', '/data/local/tmp/greenvpn-dnstt-debug.json') | Out-Null
 
     $connected = Invoke-DebugCommand -Command connect
+    Start-Sleep -Seconds 1
     $external = Invoke-ExternalProbe
     $report.connected = [bool]$connected.connected; $report.canaryEgress = [string]$external.egress
-    foreach ($name in @('egressStatus','egressError','productionApiStatus','productionApiError','paidBetaPrimaryStatus','paidBetaPrimaryError','paidBetaFallbackStatus','paidBetaFallbackError','youtubeStatus','youtubeError')) {
+    foreach ($name in @('egressStatus','egressError','productionApiStatus','productionApiError','paidBetaPrimaryStatus','paidBetaPrimaryError','paidBetaFallbackStatus','paidBetaFallbackError','youtubeStatus','youtubeError','egressAttempts','productionApiAttempts','paidBetaPrimaryAttempts','paidBetaFallbackAttempts','youtubeAttempts')) {
         $report[$name] = $external.$name
     }
     $report.rxBytes = [int64]$connected.rxBytes; $report.txBytes = [int64]$connected.txBytes

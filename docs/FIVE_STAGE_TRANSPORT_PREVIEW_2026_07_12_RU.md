@@ -71,7 +71,7 @@ report_sha256=7540393123545F4CF0F09F567BD7EAF4EB13ADEA3C6031A96B020EE47FA80316
 
 Токены, device ID и конфиги в отчёт не выводятся. Временный `dnstt-client-android-arm64` из `/data/local/tmp` удалён.
 
-Отдельный readiness smoke на NL2 прошёл реальный dnstt data plane напрямую к UDP/53, подтвердил egress `5.129.216.42`, YouTube и активность stable-транспортов. Итог: `server_data_plane_ready=true`, `doh_delegation_ready=false`, `secrets_printed=false`. Второй флаг станет положительным только после публичной DNS-делегации.
+Отдельный readiness smoke на NL2 прошёл реальный dnstt data plane через публичный авторитетный dnsdist frontend, подтвердил egress `5.129.216.42`, YouTube и активность stable-транспортов. Итог: `server_data_plane_ready=true`, `doh_delegation_ready=true`, `secrets_printed=false`.
 
 ## Quick Settings cascade
 
@@ -100,7 +100,7 @@ report_sha256=CBED2FD33B0F20C37FBD67C8BB6546BD2F5B5494953D8878E537C134A1030B8A
 - Stable APK isolation: исходный production SHA-256 `308320429991A3278E3BA903155482D6613425D46681F180338ECB8C0929248F`, preview payload отсутствует.
 - Analyzer: прежний baseline `184` lint/info, новых blocking errors нет.
 
-## Незавершённый физический gate dnstt
+## Завершённый физический gate dnstt
 
 В REG.RU записи сохранены. Из-за требования интерфейса о двух NS добавлена вторая метка того же изолированного NL2:
 
@@ -111,13 +111,8 @@ NS  t.greenvpn.pro    -> tns.greenvpn.pro
 NS  t.greenvpn.pro    -> tns2.greenvpn.pro
 ```
 
-Обе A-записи уже публикуются `ns1.reg.ru`/`ns2.reg.ru`. NS-записи видны в личном кабинете, но пока отсутствуют в авторитетном ответе. Открыта заявка REG.RU `#20260712373018777`; до появления NS публичная DoH-проверка остаётся заблокированной.
+Обе A- и NS-записи опубликованы. Cloudflare возвращает два NS и SOA. Изолированный dnsdist frontend обслуживает публичные UDP+TCP/53, а dnstt слушает только loopback UDP/5353.
 
-После сохранения и propagation нужно:
+Физический Samsung прошёл egress `5.129.216.42`, production и оба paid-beta API `200`, YouTube `204`, watchdog fail-closed cleanup, reconnect и удаление plaintext/runtime profile. Отчёт SHA-256: `1D4B1F8A3350CA3CD6FA0DA25A1967A3AFE265A3586E2DD7A9EA3A4A9D9562C4`.
 
-1. Запустить server readiness с `--require-delegation`.
-2. Разблокировать телефон.
-3. Запустить `test_android_dnstt_preview_physical.ps1`.
-4. Подтвердить NL2 egress, production и оба paid-beta API, YouTube, watchdog fail-closed cleanup, reconnect и удаление plaintext profile.
-
-До этого dnstt остаётся последним preview-only кандидатом и не считается полностью физически доказанным. Публикация в stable запрещена.
+Все пять transport физически доказаны внутри отдельного preview-контура. Это не означает автоматическую публикацию в stable: stable APK и production-каталог остаются неизменными до отдельного решения о rollout.

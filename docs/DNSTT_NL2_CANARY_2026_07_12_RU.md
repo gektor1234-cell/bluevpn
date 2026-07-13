@@ -16,8 +16,9 @@
 
 - Узел: NL2, `5.129.216.42`.
 - DNS-зона туннеля: `t.greenvpn.pro`.
-- Авторитетный сервер: `tns.greenvpn.pro`.
-- Публичный listener: только `5.129.216.42:53/udp`.
+- Авторитетные серверы: `tns.greenvpn.pro` и `tns2.greenvpn.pro`.
+- Публичный frontend: dnsdist `2.1.0`, `5.129.216.42:53/udp+tcp`.
+- dnstt backend: только `127.0.0.1:5353/udp`.
 - Внутренний SOCKS: только `127.0.0.1:1083/tcp`, с аутентификацией.
 - Сервисы: `greenvpn-dnstt-canary.service` и `greenvpn-dnstt-socks-canary.service`.
 - Клиентский профиль: `/etc/greenvpn-transport/dnstt-canary.client.json`, `root:root`, mode `0600`.
@@ -27,7 +28,9 @@ Bootstrap, readiness и rollback:
 
 ```text
 scripts/server/bootstrap_dnstt_canary.sh
+scripts/server/bootstrap_dnstt_dns_frontend.sh
 scripts/server/check_dnstt_canary_readiness.sh
+scripts/server/remove_dnstt_dns_frontend.sh
 scripts/server/remove_dnstt_canary.sh
 ```
 
@@ -44,7 +47,7 @@ NS  t.greenvpn.pro     -> tns.greenvpn.pro
 NS  t.greenvpn.pro     -> tns2.greenvpn.pro
 ```
 
-До появления обеих записей у публичных резолверов физический DoH-тест считается незавершённым. Readiness с `--require-delegation` обязан завершиться ошибкой, если делегация отсутствует.
+Обе NS-записи и SOA опубликованы и видны через Cloudflare. dnsdist авторитативно синтезирует NS/SOA с `AA=true`, отказывает внешним зонам и отправляет остальные имена подзоны на loopback dnstt. Readiness с `--require-delegation` прошёл с `doh_delegation_ready=true`.
 
 ## Закреплённый upstream
 
@@ -95,10 +98,16 @@ sha256=308320429991A3278E3BA903155482D6613425D46681F180338ECB8C0929248F
 
 Общий `bluevpn_release_gate.ps1` после добавления dnstt: `0 warnings`, `0 errors`.
 
-## Осталось до доказанного этапа
+## Итог физического этапа 2026-07-13
 
-1. Дождаться публикации уже сохранённой NS-делегации; A-записи опубликованы, заявка REG.RU `#20260712373018777` открыта.
-2. Пройти server readiness с `--require-delegation` после появления NS у Cloudflare/Google.
-3. Запустить `test_android_dnstt_preview_physical.ps1` на физическом телефоне.
-4. Доказать NL2 egress, production/paid-beta API, YouTube, watchdog cleanup, reconnect и удаление plaintext profile.
-5. dnstt уже включён последним только в отдельном preview selector, но до выполнения пунктов 1-4 не считается физически доказанным. Stable и production остаются без изменений.
+`check_dnstt_canary_readiness.sh --require-delegation` подтвердил `server_data_plane_ready=true` и `doh_delegation_ready=true`. Физический `test_android_dnstt_preview_physical.ps1` прошёл с первой попытки по всем endpoint:
+
+- NL2 egress `5.129.216.42`, HTTP `200`;
+- production API и оба paid-beta API `200`;
+- YouTube `204`;
+- один child process и двусторонний трафик;
+- engine kill дал состояние `error`, 0 процессов и 0 service records;
+- reconnect вернул `up` и тот же NL2 egress;
+- финальный `down`, runtime и plaintext config удалены.
+
+Отчёт: `C:\Users\gekto\GreenVPN_Checkpoints\android_dnstt_preview_physical_20260712.json`, SHA-256 `1D4B1F8A3350CA3CD6FA0DA25A1967A3AFE265A3586E2DD7A9EA3A4A9D9562C4`. dnstt остаётся последним preview-only кандидатом; stable и production не изменены.

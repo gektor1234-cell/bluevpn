@@ -22,9 +22,12 @@ class TransportProbeReceiver : BroadcastReceiver() {
                 )
                 val target = intent.getStringExtra("target").orEmpty().trim()
                 val uri = targets[target] ?: throw IllegalArgumentException("Unsupported probe target")
-                val probe = probe(uri)
+                val timeoutMs = intent.getIntExtra("timeoutMs", DEFAULT_TIMEOUT_MS)
+                    .coerceIn(MIN_TIMEOUT_MS, MAX_TIMEOUT_MS)
+                val probe = probe(uri, timeoutMs)
                 val result = JSONObject()
                     .put("target", target)
+                    .put("timeoutMs", timeoutMs)
                     .put("status", probe.status)
                     .put("body", probe.body.trim())
                     .put("error", probe.error)
@@ -46,11 +49,11 @@ class TransportProbeReceiver : BroadcastReceiver() {
         }, "GreenVPN-External-Transport-Probe").start()
     }
 
-    private fun probe(uri: String): Probe = try {
+    private fun probe(uri: String, timeoutMs: Int): Probe = try {
         val connection = URL(uri).openConnection() as HttpURLConnection
         connection.instanceFollowRedirects = true
-        connection.connectTimeout = 5_000
-        connection.readTimeout = 5_000
+        connection.connectTimeout = timeoutMs
+        connection.readTimeout = timeoutMs
         connection.requestMethod = "GET"
         connection.setRequestProperty("User-Agent", "GreenVPN-External-Transport-Probe")
         val status = connection.responseCode
@@ -78,5 +81,8 @@ class TransportProbeReceiver : BroadcastReceiver() {
 
     companion object {
         const val RESULT_NAME = "transport-probe-result.json"
+        private const val DEFAULT_TIMEOUT_MS = 5_000
+        private const val MIN_TIMEOUT_MS = 1_000
+        private const val MAX_TIMEOUT_MS = 60_000
     }
 }

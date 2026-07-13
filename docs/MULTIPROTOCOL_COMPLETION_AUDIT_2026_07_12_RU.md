@@ -4,7 +4,7 @@
 
 ## Решение
 
-Контур технически готов за исключением одного обязательного физического gate: Android dnstt через публичную DNS-делегацию. До его прохождения цель не считается полностью завершённой и preview нельзя переносить в stable.
+Тестовый multiprotocol-контур технически завершён: публичная DNS-делегация dnstt, server readiness и физический Android data-plane gate пройдены. Все transport остаются preview-only; этот аудит не является разрешением переносить их в stable.
 
 ## Матрица доказательств
 
@@ -22,19 +22,13 @@
 | Naive Android data plane | Доказано | NL2 egress, API/YouTube, watchdog, reconnect, background и plaintext cleanup зафиксированы в `NAIVE_HTTPS_NL2_CANARY_2026_07_12_RU.md` |
 | dnstt server data plane | Доказано | NL2 readiness: `server_data_plane_ready=true`, YouTube и egress прошли, stable transports active, `secrets_printed=false` |
 | dnstt Android config contract | Доказано | Primary/fallback оба выдали корректный dnstt профиль внутри общего отчёта `10/10` |
-| dnstt Android public DoH data plane | Не доказано | `A tns.greenvpn.pro` уже опубликована, но NS-делегация `t.greenvpn.pro` пока отсутствует даже в авторитетном ответе REG.RU; физический тест остаётся намеренно fail-closed |
+| dnstt Android public DoH data plane | Доказано | Cloudflare возвращает оба NS и SOA; readiness: `doh_delegation_ready=true`; Samsung: NL2 egress, production/оба paid-beta API, YouTube, watchdog, reconnect и cleanup; report SHA-256 `1D4B1F8A3350CA3CD6FA0DA25A1967A3AFE265A3586E2DD7A9EA3A4A9D9562C4` |
 | Monitoring | Доказано в границах preview | Probe timers Timeweb/RUVDS активны; последние runs `success`, status `0`, observations `posted=true`; неподтверждённые control-plane сигналы не могут продвинуть транспорт |
 | Release gate | Доказано | Backend `28/28` и `33/33`; Flutter `11/11`; native Kotlin `3/3`; release gate `0 warnings`, `0 errors`; APK verifier и signature pass |
 | Восстановительный checkpoint | Доказано | Git bundle с полной историей, APK, безопасные отчёты, docs, rollback paths и SHA-256 manifest находятся в `C:\Users\gekto\GreenVPN_Checkpoints\five_stage_transport_preview_20260712` |
 
-## Единственный оставшийся сценарий
+## Итог
 
-1. Дождаться публикации уже сохранённых в REG.RU записей `NS t.greenvpn.pro -> tns.greenvpn.pro` и `NS t.greenvpn.pro -> tns2.greenvpn.pro`; обе A-записи указывают на изолированный NL2 `5.129.216.42`.
-2. Если NS не появятся автоматически, довести до решения открытую заявку REG.RU `#20260712373018777`.
-3. Подтвердить публичный ответ Cloudflare/Google DNS.
-4. Запустить NL2 readiness с `--require-delegation`.
-5. Запустить `test_android_dnstt_preview_physical.ps1`.
-6. Подтвердить Android NL2 egress, production и оба paid-beta API, YouTube, watchdog fail-closed cleanup, reconnect и отсутствие plaintext profile.
-7. Обновить checkpoint и только после этого отметить цель выполненной.
+Обязательные multiprotocol gates закрыты. Следующее добавление сервера выполняется по `SERVER_SECURITY_CONTOUR_INTEGRATION_RUNBOOK_RU.md`: новый паспорт, guarded canary, оба control plane, физический data-plane proof, release gate и отдельный checkpoint. На другие серверы в рамках этого этапа ничего не развёрнуто.
 
 YooKassa recurring-payment review является отдельным внешним launch gate и не подменяет multiprotocol-аудит.

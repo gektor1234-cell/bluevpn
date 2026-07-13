@@ -133,9 +133,12 @@ $naiveHttpsBootstrapPath = Join-Path $ProjectRoot "scripts\server\bootstrap_naiv
 $naiveHttpsReadinessPath = Join-Path $ProjectRoot "scripts\server\check_naive_https_canary_readiness.sh"
 $naiveHttpsRollbackPath = Join-Path $ProjectRoot "scripts\server\remove_naive_https_canary.sh"
 $dnsttBootstrapPath = Join-Path $ProjectRoot "scripts\server\bootstrap_dnstt_canary.sh"
+$dnsttDnsFrontendBootstrapPath = Join-Path $ProjectRoot "scripts\server\bootstrap_dnstt_dns_frontend.sh"
+$dnsttDnsFrontendRollbackPath = Join-Path $ProjectRoot "scripts\server\remove_dnstt_dns_frontend.sh"
 $dnsttReadinessPath = Join-Path $ProjectRoot "scripts\server\check_dnstt_canary_readiness.sh"
 $dnsttRollbackPath = Join-Path $ProjectRoot "scripts\server\remove_dnstt_canary.sh"
 $naiveDnsttContractDeployPath = Join-Path $ProjectRoot "scripts\server\deploy_paid_beta_naive_dnstt_contract.sh"
+$serverSecurityRunbookPath = Join-Path $ProjectRoot "docs\SERVER_SECURITY_CONTOUR_INTEGRATION_RUNBOOK_RU.md"
 
 $main = Read-Text $mainPath
 $runtimeConfig = Read-Text $runtimeConfigPath
@@ -215,9 +218,12 @@ $naiveHttpsBootstrapScript = Read-Text $naiveHttpsBootstrapPath
 $naiveHttpsReadinessScript = Read-Text $naiveHttpsReadinessPath
 $naiveHttpsRollbackScript = Read-Text $naiveHttpsRollbackPath
 $dnsttBootstrapScript = Read-Text $dnsttBootstrapPath
+$dnsttDnsFrontendBootstrapScript = Read-Text $dnsttDnsFrontendBootstrapPath
+$dnsttDnsFrontendRollbackScript = Read-Text $dnsttDnsFrontendRollbackPath
 $dnsttReadinessScript = Read-Text $dnsttReadinessPath
 $dnsttRollbackScript = Read-Text $dnsttRollbackPath
 $naiveDnsttContractDeployScript = Read-Text $naiveDnsttContractDeployPath
+$serverSecurityRunbook = Read-Text $serverSecurityRunbookPath
 
 Write-Section "CLIENT SAFETY CHECKS"
 $forbiddenClientPatterns = @(
@@ -1515,8 +1521,11 @@ $androidDnsttSourceChecks = [ordered]@{
     'Android dnstt physical watchdog and reconnect' = @($androidDnsttPhysicalTestScript, "ExpectedEgress = '5.129.216.42'", "resolverMode = 'doh'", 'watchdogState', 'reconnectState', 'reconnectEgress', 'plaintextConfigRemoved')
     'Android dnstt APK verifier' = @($androidDnsttApkVerifyScript, 'lib/arm64-v8a/libdnstt_client.so', 'GREENVPN_DNSTT_PREVIEW_ENABLED:Z = true', 'zipalign', 'apksigner')
     'dnstt server bootstrap is isolated' = @($dnsttBootstrapScript, 'CANARY_HOST="5.129.216.42"', 'CANARY_ZONE="t.greenvpn.pro"', 'registrar_dns=not_changed', 'stable_transports=verified_unchanged', 'client_profile=root_only')
+    'dnstt authoritative DNS frontend is guarded' = @($dnsttDnsFrontendBootstrapScript, 'DNSDIST_VERSION="2.1.0-1pdns.ubuntu24.04"', 'BACKEND_PORT="5353"', 'healthCheckMode="up"', 'TasksMax=8192', 'LimitNOFILE=16384', 'authoritative_ns_soa=ready', 'restore_direct_listener', 'stable_transports=verified_unchanged')
+    'dnstt authoritative DNS frontend rollback is host-guarded' = @($dnsttDnsFrontendRollbackScript, 'EXPECTED_PUBLIC_IP', 'APPROVED_EXISTING_HOST', 'direct_dnstt_listener=restored', 'stable_transports=active')
     'dnstt readiness proves delegation and data plane' = @($dnsttReadinessScript, '--require-delegation', 'server_data_plane_ready=', 'doh_delegation_ready=', 'secrets_printed=false')
     'dnstt rollback is host-guarded' = @($dnsttRollbackScript, 'EXPECTED_PUBLIC_IP', 'APPROVED_EXISTING_HOST', 'registrar_dns=not_changed', 'stable_transports=active')
+    'Reusable server security contour runbook' = @($serverSecurityRunbook, 'change_id:', 'stable.before.sha256', 'base64 -d | bash -s --', 'clientConfigReady=true', 'payment data', 'Git bundle')
     'Stable APK isolation covers all preview engines' = @($androidStableIsolationVerifyScript, 'libdnstt_client', 'pro.greenvpn.dnstt.DnsttVpnService', 'GREENVPN_DNSTT_PREVIEW_ENABLED', 'GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED', 'GREENVPN_VLESS_REALITY_PREVIEW_ENABLED')
     'Five-stage preview cascade policy' = @($transportPreviewPolicy, "'amneziawg'", "'hysteria2'", "'vless_reality'", "'naive_https'", "'dnstt'", 'greenVpnTransportPreviewRank', 'greenVpnTransportRequiresFullTunnel')
     'Five-stage preview cascade tests' = @($transportPreviewPolicyTest, 'preview cascade keeps the guarded transport order', 'proxy transports are restricted to full-tunnel mode', 'cooldown demotes a failed route without changing cascade order', "'wireguard_udp'")

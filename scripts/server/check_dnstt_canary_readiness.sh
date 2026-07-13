@@ -6,12 +6,17 @@ SKIP_SMOKE=0
 CANARY_HOST="5.129.216.42"
 CANARY_ZONE="t.greenvpn.pro"
 CANARY_NS="tns.greenvpn.pro"
+CANARY_NS2="tns2.greenvpn.pro"
 SOCKS_PORT="1083"
+DNSTT_BACKEND_PORT="5353"
 SERVER_SERVICE="greenvpn-dnstt-canary"
 SOCKS_SERVICE="greenvpn-dnstt-socks-canary"
+DNS_FRONT_SERVICE="greenvpn-dnstt-dns-front"
 INSTALL_ROOT="/opt/greenvpn-canary/dnstt"
 CONFIG_ROOT="/etc/greenvpn-dnstt-canary"
 CLIENT_CONFIG_FILE="/etc/greenvpn-transport/dnstt-canary.client.json"
+DNSDIST_CONFIG="/etc/dnsdist/dnsdist-greenvpn-dnstt.conf"
+DNSDIST_VERSION="2.1.0-1pdns.ubuntu24.04"
 DNSTT_SERVER_SHA256="cf3e6a3091752b72e94e360eaad76e3cb14b69923af691e6477aa3f33e740895"
 DNSTT_CLIENT_SHA256="366e30297caf3289d9c03bf0a3c8f4522e8972fa7ddd3d289d7887ad01daf8fe"
 XRAY_SHA256="5200ed9b358cf380b2d9f1fe28c7e56220c0159adcd86a64592246d8257a043c"
@@ -29,14 +34,14 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "${EUID}" -eq 0 ]] || { echo "Run as root on NL2." >&2; exit 1; }
-for command in curl dig python3 sha256sum ss systemctl stat; do
+for command in curl dig dpkg-query python3 sha256sum ss systemctl stat; do
   command -v "${command}" >/dev/null 2>&1 || { echo "Required command missing: ${command}" >&2; exit 1; }
 done
 
 PUBLIC_IP="$(curl -4fsS --max-time 5 https://api.ipify.org || true)"
 [[ "${PUBLIC_IP}" == "${CANARY_HOST}" ]] || { echo "Readiness refused outside exact NL2 host." >&2; exit 1; }
 
-for unit in "${SERVER_SERVICE}" "${SOCKS_SERVICE}" wg-quick@wg0 greenvpn-hysteria2-canary greenvpn-vless-reality-canary greenvpn-naive-https-canary; do
+for unit in "${SERVER_SERVICE}" "${SOCKS_SERVICE}" "${DNS_FRONT_SERVICE}" wg-quick@wg0 greenvpn-hysteria2-canary greenvpn-vless-reality-canary greenvpn-naive-https-canary; do
   systemctl is-active --quiet "${unit}.service" || { echo "Required unit is not active: ${unit}" >&2; exit 1; }
 done
 
@@ -63,13 +68,13 @@ check_file "${CONFIG_ROOT}/server.pub" root root 644
 check_file "${CONFIG_ROOT}/xray-socks.json" root greenvpn-dnstt 640
 check_file "${CONFIG_ROOT}/socks-auth.json" root root 600
 check_file "${CLIENT_CONFIG_FILE}" root root 600
+check_file "${DNSDIST_CONFIG}" root _dnsdist 640
 
 [[ "$(stat -c '%U:%G:%a' "${CONFIG_ROOT}")" == "root:greenvpn-dnstt:750" ]] || { echo "Config directory ACL is invalid." >&2; exit 1; }
-ss -H -lunp | awk -v endpoint="${CANARY_HOST}:53" '$4 == endpoint {found=1} END {exit !found}' || { echo "Exact public dnstt UDP listener is missing." >&2; exit 1; }
-if ss -H -lntp | awk -v endpoint="${CANARY_HOST}:53" '$4 == endpoint {found=1} END {exit !found}'; then
-  echo "dnstt must not expose public TCP/53." >&2
-  exit 1
-fi
+[[ "$(dpkg-query -W -f='${Version}' dnsdist)" == "${DNSDIST_VERSION}" ]] || { echo "Pinned dnsdist version is missing." >&2; exit 1; }
+ss -H -lunp | awk -v endpoint="127.0.0.1:${DNSTT_BACKEND_PORT}" '$4 == endpoint && /dnstt-server/ {found=1} END {exit !found}' || { echo "Loopback dnstt backend listener is missing." >&2; exit 1; }
+ss -H -lunp | awk -v endpoint="${CANARY_HOST}:53" '$4 == endpoint && /dnsdist/ {found=1} END {exit !found}' || { echo "Public dnsdist UDP/53 frontend is missing." >&2; exit 1; }
+ss -H -lntp | awk -v endpoint="${CANARY_HOST}:53" '$4 == endpoint && /dnsdist/ {found=1} END {exit !found}' || { echo "Public dnsdist TCP/53 frontend is missing." >&2; exit 1; }
 ss -H -lntp | awk -v endpoint="127.0.0.1:${SOCKS_PORT}" '$4 == endpoint {found=1} END {exit !found}' || { echo "Loopback SOCKS listener is missing." >&2; exit 1; }
 "${INSTALL_ROOT}/bin/xray" run -test -config "${CONFIG_ROOT}/xray-socks.json" >/dev/null
 
@@ -113,16 +118,21 @@ fi
 
 delegated_a="$(dig +short A "${CANARY_NS}" @1.1.1.1 | sed '/^$/d' | sort -u | tr '\n' ' ')"
 delegated_ns="$(dig +short NS "${CANARY_ZONE}" @1.1.1.1 | tr '[:upper:]' '[:lower:]' | sed 's/\.$//' | sort -u | tr '\n' ' ')"
+delegated_soa="$(dig +short SOA "${CANARY_ZONE}" @1.1.1.1 | tr '[:upper:]' '[:lower:]')"
 doh_delegation_ready=false
-if grep -qw "${CANARY_HOST}" <<<"${delegated_a}" && grep -qw "${CANARY_NS}" <<<"${delegated_ns}"; then
+if grep -qw "${CANARY_HOST}" <<<"${delegated_a}" \
+  && grep -qw "${CANARY_NS}" <<<"${delegated_ns}" \
+  && grep -qw "${CANARY_NS2}" <<<"${delegated_ns}" \
+  && grep -Fq "${CANARY_NS}." <<<"${delegated_soa}"; then
   doh_delegation_ready=true
 fi
 
 echo "dnstt_server_service=active"
 echo "dnstt_socks_service=active"
+echo "dnstt_dns_frontend_service=active"
 echo "server_data_plane_ready=${server_data_plane_ready}"
 echo "doh_delegation_ready=${doh_delegation_ready}"
-echo "dns_records_required=A:${CANARY_NS}->${CANARY_HOST},NS:${CANARY_ZONE}->${CANARY_NS}"
+echo "dns_records_required=A:${CANARY_NS}->${CANARY_HOST},A:${CANARY_NS2}->${CANARY_HOST},NS:${CANARY_ZONE}->${CANARY_NS},${CANARY_NS2}"
 echo "stable_transports=active"
 echo "secrets_printed=false"
 
