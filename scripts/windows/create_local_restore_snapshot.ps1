@@ -62,8 +62,6 @@ function Set-RestrictedCheckpointAcl {
         "*$currentSid`:(OI)(CI)F",
         '*S-1-5-18:(OI)(CI)F',
         '*S-1-5-32-544:(OI)(CI)F',
-        '/T',
-        '/C',
         '/Q'
     )
 }
