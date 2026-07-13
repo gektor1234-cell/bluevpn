@@ -53,12 +53,14 @@ class SocialOnlyState {
   factory SocialOnlyState.fromJson(Map<String, dynamic> json) {
     return SocialOnlyState(
       enabled: (json['enabled'] as bool?) ?? false,
-      selectedApps: (json['selectedApps'] as List<dynamic>?)
+      selectedApps:
+          (json['selectedApps'] as List<dynamic>?)
               ?.map((e) => e.toString())
               .toList() ??
           const [],
       lastAppliedMode: (json['lastAppliedMode'] as String?) ?? 'full_tunnel',
-      lastAppliedAllowedIps: (json['lastAppliedAllowedIps'] as List<dynamic>?)
+      lastAppliedAllowedIps:
+          (json['lastAppliedAllowedIps'] as List<dynamic>?)
               ?.map((e) => e.toString())
               .toList() ??
           const [],

@@ -14,6 +14,30 @@ val hasReleaseKeystore = keystorePropertiesFile.exists()
 if (hasReleaseKeystore) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
+val releaseTaskRequested = gradle.startParameter.taskNames.any {
+    it.contains("release", ignoreCase = true)
+}
+if (releaseTaskRequested && !hasReleaseKeystore) {
+    throw GradleException(
+        "Release signing is required: android/key.properties is missing. " +
+            "A release APK must never fall back to the debug certificate.",
+    )
+}
+if (hasReleaseKeystore) {
+    val requiredSigningKeys = listOf("keyAlias", "keyPassword", "storeFile", "storePassword")
+    val missingSigningKeys = requiredSigningKeys.filter {
+        keystoreProperties.getProperty(it).isNullOrBlank()
+    }
+    if (missingSigningKeys.isNotEmpty()) {
+        throw GradleException(
+            "Release signing configuration is incomplete: ${missingSigningKeys.joinToString()}",
+        )
+    }
+    val configuredStore = rootProject.file(keystoreProperties.getProperty("storeFile"))
+    if (!configuredStore.isFile) {
+        throw GradleException("Release keystore does not exist: ${configuredStore.absolutePath}")
+    }
+}
 
 fun quotedBuildConfig(value: String): String {
     return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
@@ -23,9 +47,9 @@ fun environmentValue(name: String, defaultValue: String): String {
     return (System.getenv(name) ?: defaultValue).trim().ifEmpty { defaultValue }
 }
 
-val greenVpnAppVersion = (System.getenv("GREENVPN_APP_VERSION") ?: "0.2.23-trial-only-android-vpn-takeover")
+val greenVpnAppVersion = (System.getenv("GREENVPN_APP_VERSION") ?: "0.2.44")
     .trim()
-    .ifEmpty { "0.2.23-trial-only-android-vpn-takeover" }
+    .ifEmpty { "0.2.44" }
 val greenVpnApplicationId = environmentValue("GREENVPN_ANDROID_APPLICATION_ID", "pro.greenvpn.app")
 val greenVpnAppLabel = environmentValue("GREENVPN_ANDROID_APP_LABEL", "Green VPN")
 val greenVpnApiBaseUrl = environmentValue("GREENVPN_ANDROID_API_BASE_URL", "https://api.greenvpn.pro")
@@ -135,10 +159,8 @@ android {
 
     buildTypes {
         release {
-            signingConfig = if (hasReleaseKeystore) {
-                signingConfigs.getByName("release")
-            } else {
-                signingConfigs.getByName("debug")
+            if (hasReleaseKeystore) {
+                signingConfig = signingConfigs.getByName("release")
             }
         }
     }

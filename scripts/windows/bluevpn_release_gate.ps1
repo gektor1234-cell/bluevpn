@@ -44,7 +44,7 @@ function Read-Text {
     return Get-Content -LiteralPath $Path -Raw
 }
 
-Write-Section "BLUEVPN RELEASE GATE"
+Write-Section "GREEN VPN RELEASE GATE"
 Write-Host "ProjectRoot: $ProjectRoot"
 if (-not [string]::IsNullOrWhiteSpace($ReleaseZip)) {
     Write-Host "ReleaseZip:  $ReleaseZip"
@@ -93,6 +93,7 @@ $androidHysteriaServicePath = Join-Path $ProjectRoot "android\transport_preview\
 $androidHysteriaBridgePath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\main\jni\greenvpn_hysteria_bridge.c"
 $androidHysteriaConfigTestPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\test\kotlin\pro\greenvpn\hysteria\Hysteria2ConfigTest.kt"
 $androidBuildScriptPath = Join-Path $ProjectRoot "scripts\windows\build_android_apk.ps1"
+$androidReleaseSignerPath = Join-Path $ProjectRoot "android\release_signer_sha256.txt"
 $androidHysteriaPreparePath = Join-Path $ProjectRoot "scripts\windows\prepare_android_hysteria2_preview.ps1"
 $androidHysteriaPhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_android_hysteria2_preview_physical.ps1"
 $androidHysteriaApkVerifyPath = Join-Path $ProjectRoot "scripts\windows\verify_android_hysteria2_preview_apk.ps1"
@@ -139,6 +140,17 @@ $dnsttReadinessPath = Join-Path $ProjectRoot "scripts\server\check_dnstt_canary_
 $dnsttRollbackPath = Join-Path $ProjectRoot "scripts\server\remove_dnstt_canary.sh"
 $naiveDnsttContractDeployPath = Join-Path $ProjectRoot "scripts\server\deploy_paid_beta_naive_dnstt_contract.sh"
 $serverSecurityRunbookPath = Join-Path $ProjectRoot "docs\SERVER_SECURITY_CONTOUR_INTEGRATION_RUNBOOK_RU.md"
+$projectMapPath = Join-Path $ProjectRoot "docs\PROJECT_MAP_RU.md"
+$projectOperationsRunbookPath = Join-Path $ProjectRoot "docs\PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md"
+$fullServerSnapshotPath = Join-Path $ProjectRoot "scripts\server\create_full_restore_snapshot.sh"
+$fullProjectCheckpointPath = Join-Path $ProjectRoot "scripts\windows\create_full_project_checkpoint.ps1"
+$localRestoreSnapshotPath = Join-Path $ProjectRoot "scripts\windows\create_local_restore_snapshot.ps1"
+$repositorySecretScannerPath = Join-Path $ProjectRoot "scripts\security\scan_tracked_secrets.py"
+$sqliteStateSyncPath = Join-Path $ProjectRoot "scripts\ops\greenvpn_sqlite_state_sync.py"
+$sqliteSnapshotPath = Join-Path $ProjectRoot "scripts\ops\greenvpn_sqlite_snapshot_stdout.py"
+$dbSyncShellPath = Join-Path $ProjectRoot "scripts\ops\greenvpn_db_sync_from_peer.sh"
+$paidBetaBackendBundlePath = Join-Path $ProjectRoot "scripts\windows\prepare_paid_beta_backend_bundle.ps1"
+$paidBetaBackendInstallerPath = Join-Path $ProjectRoot "scripts\server\install_paid_beta_backend_release.sh"
 
 $main = Read-Text $mainPath
 $runtimeConfig = Read-Text $runtimeConfigPath
@@ -178,6 +190,7 @@ $androidHysteriaService = Read-Text $androidHysteriaServicePath
 $androidHysteriaBridge = Read-Text $androidHysteriaBridgePath
 $androidHysteriaConfigTest = Read-Text $androidHysteriaConfigTestPath
 $androidBuildScript = Read-Text $androidBuildScriptPath
+$androidReleaseSigner = (Read-Text $androidReleaseSignerPath).Trim().ToLowerInvariant()
 $androidHysteriaPrepareScript = Read-Text $androidHysteriaPreparePath
 $androidHysteriaPhysicalTestScript = Read-Text $androidHysteriaPhysicalTestPath
 $androidHysteriaApkVerifyScript = Read-Text $androidHysteriaApkVerifyPath
@@ -224,6 +237,17 @@ $dnsttReadinessScript = Read-Text $dnsttReadinessPath
 $dnsttRollbackScript = Read-Text $dnsttRollbackPath
 $naiveDnsttContractDeployScript = Read-Text $naiveDnsttContractDeployPath
 $serverSecurityRunbook = Read-Text $serverSecurityRunbookPath
+$projectMap = Read-Text $projectMapPath
+$projectOperationsRunbook = Read-Text $projectOperationsRunbookPath
+$fullServerSnapshotScript = Read-Text $fullServerSnapshotPath
+$fullProjectCheckpointScript = Read-Text $fullProjectCheckpointPath
+$localRestoreSnapshotScript = Read-Text $localRestoreSnapshotPath
+$repositorySecretScanner = Read-Text $repositorySecretScannerPath
+$sqliteStateSyncScript = Read-Text $sqliteStateSyncPath
+$sqliteSnapshotScript = Read-Text $sqliteSnapshotPath
+$dbSyncShellScript = Read-Text $dbSyncShellPath
+$paidBetaBackendBundleScript = Read-Text $paidBetaBackendBundlePath
+$paidBetaBackendInstallerScript = Read-Text $paidBetaBackendInstallerPath
 
 Write-Section "CLIENT SAFETY CHECKS"
 $forbiddenClientPatterns = @(
@@ -1580,6 +1604,220 @@ foreach ($scriptPath in @($androidDnsttPreparePath, $androidDnsttPhysicalTestPat
             Add-Error "Android dnstt PowerShell parser errors in ${scriptPath}: $($parseErrors[0].ToString())"
         }
         else { Add-Pass "Android dnstt PowerShell parser check passed: $scriptPath" }
+    }
+}
+
+Write-Section "RELEASE INTEGRITY CHECKS"
+
+$androidReleaseSigningFragments = @(
+    'releaseTaskRequested',
+    'android/key.properties is missing',
+    'A release APK must never fall back to the debug certificate',
+    'requiredSigningKeys',
+    'configuredStore.isFile'
+)
+foreach ($fragment in $androidReleaseSigningFragments) {
+    if ($androidAppBuild.Contains($fragment)) {
+        Add-Pass "Android release signing invariant present: $fragment"
+    }
+    else {
+        Add-Error "Android release signing invariant missing: $fragment"
+    }
+}
+if ($androidAppBuild.Contains('signingConfigs.getByName("debug")')) {
+    Add-Error 'Android release build still has a debug-signing fallback'
+}
+else {
+    Add-Pass 'Android release build has no debug-signing fallback'
+}
+if ($androidReleaseSigner -match '^[0-9a-f]{64}$') {
+    Add-Pass 'Android release signer SHA-256 is pinned'
+}
+else {
+    Add-Error 'Android release signer SHA-256 pin is missing or invalid'
+}
+foreach ($fragment in @(
+    'release_signer_sha256.txt',
+    'apksigner verify --print-certs',
+    'certificate SHA-256 digest',
+    'Unexpected Android release signer'
+)) {
+    if ($androidBuildScript.Contains($fragment)) {
+        Add-Pass "Android build verifies release signer: $fragment"
+    }
+    else {
+        Add-Error "Android build signer verification missing: $fragment"
+    }
+}
+
+foreach ($fragment in @(
+    'billing_payment_smoke_candidate',
+    'providerPaymentMethodSaved',
+    'PUBLIC_PRODUCT_PLAN_CODE',
+    'expected_amount',
+    'autoRenew'
+)) {
+    if ($backend.Contains($fragment)) {
+        Add-Pass "Payment smoke strictness marker present: $fragment"
+    }
+    else {
+        Add-Error "Payment smoke strictness marker missing: $fragment"
+    }
+}
+
+foreach ($fragment in @(
+    'replication_tombstones',
+    'record_replication_tombstone',
+    'GREENVPN_SQLITE_NODE_ID_BASE',
+    'GREENVPN_REPLICATION_NODE_ID'
+)) {
+    if ($backend.Contains($fragment)) {
+        Add-Pass "Backend replication safety marker present: $fragment"
+    }
+    else {
+        Add-Error "Backend replication safety marker missing: $fragment"
+    }
+}
+foreach ($fragment in @(
+    'replication_tombstones',
+    'user_id_map',
+    '_remap_replication_tombstone',
+    'not source_has_table and not target_has_table',
+    'deleted'
+)) {
+    if ($sqliteStateSyncScript.Contains($fragment)) {
+        Add-Pass "SQLite state sync safety marker present: $fragment"
+    }
+    else {
+        Add-Error "SQLite state sync safety marker missing: $fragment"
+    }
+}
+
+foreach ($fragment in @(
+    'GREENVPN_SNAPSHOT_COMPRESSION',
+    'gzip.GzipFile',
+    'compresslevel=1',
+    'mtime=0'
+)) {
+    if ($sqliteSnapshotScript.Contains($fragment)) {
+        Add-Pass "SQLite snapshot compression marker present: $fragment"
+    }
+    else {
+        Add-Error "SQLite snapshot compression marker missing: $fragment"
+    }
+}
+foreach ($fragment in @(
+    'GREENVPN_DB_SYNC_SNAPSHOT_COMPRESSION',
+    'gzip -t',
+    'gzip -dc',
+    'TRANSFER_TMP',
+    'trap cleanup EXIT'
+)) {
+    if ($dbSyncShellScript.Contains($fragment)) {
+        Add-Pass "DB sync compressed-transfer marker present: $fragment"
+    }
+    else {
+        Add-Error "DB sync compressed-transfer marker missing: $fragment"
+    }
+}
+foreach ($fragment in @(
+    'changesClientArtifacts = $false',
+    'changesSite = $false',
+    'backend-release-manifest.json',
+    'client_artifacts_changed=false'
+)) {
+    if ($paidBetaBackendBundleScript.Contains($fragment)) {
+        Add-Pass "Backend-only bundle isolation marker present: $fragment"
+    }
+    else {
+        Add-Error "Backend-only bundle isolation marker missing: $fragment"
+    }
+}
+foreach ($fragment in @(
+    'GREENVPN_REPLICATION_NODE_ID',
+    'GREENVPN_SQLITE_NODE_ID_BASE',
+    'replication_tombstones_ready',
+    'client_artifacts_changed=false',
+    'site_changed=false',
+    'rollback_on_error'
+)) {
+    if ($paidBetaBackendInstallerScript.Contains($fragment)) {
+        Add-Pass "Backend-only installer safety marker present: $fragment"
+    }
+    else {
+        Add-Error "Backend-only installer safety marker missing: $fragment"
+    }
+}
+
+if (Test-Path -LiteralPath $paidBetaBackendBundlePath) {
+    $tokens = $null
+    $parseErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile(
+        $paidBetaBackendBundlePath,
+        [ref]$tokens,
+        [ref]$parseErrors
+    ) | Out-Null
+    if ($parseErrors -and $parseErrors.Count -gt 0) {
+        Add-Error "Backend-only bundle script has PowerShell parser errors: $($parseErrors[0].ToString())"
+    }
+    else {
+        Add-Pass 'Backend-only bundle script PowerShell parser check passed'
+    }
+}
+
+$operationsFiles = [ordered]@{
+    'Project map' = $projectMap
+    'Operations master runbook' = $projectOperationsRunbook
+    'Server restore snapshot script' = $fullServerSnapshotScript
+    'Full project checkpoint script' = $fullProjectCheckpointScript
+    'Local restore snapshot script' = $localRestoreSnapshotScript
+    'Repository secret scanner' = $repositorySecretScanner
+}
+foreach ($entry in $operationsFiles.GetEnumerator()) {
+    if ([string]::IsNullOrWhiteSpace([string]$entry.Value)) {
+        Add-Error "$($entry.Key) is missing or empty"
+    }
+    else {
+        Add-Pass "$($entry.Key) is present"
+    }
+}
+
+if (Test-Path -LiteralPath $fullProjectCheckpointPath) {
+    $tokens = $null
+    $parseErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile(
+        $fullProjectCheckpointPath,
+        [ref]$tokens,
+        [ref]$parseErrors
+    ) | Out-Null
+    if ($parseErrors -and $parseErrors.Count -gt 0) {
+        Add-Error "Full checkpoint script has PowerShell parser errors: $($parseErrors[0].ToString())"
+    }
+    else {
+        Add-Pass 'Full checkpoint script PowerShell parser check passed'
+    }
+}
+
+if (-not $fullProjectCheckpointScript.Contains('create_local_restore_snapshot.ps1')) {
+    Add-Error 'Full checkpoint does not invoke the encrypted local-state snapshot'
+}
+else {
+    Add-Pass 'Full checkpoint invokes the encrypted local-state snapshot'
+}
+
+if (Test-Path -LiteralPath $localRestoreSnapshotPath) {
+    $tokens = $null
+    $parseErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile(
+        $localRestoreSnapshotPath,
+        [ref]$tokens,
+        [ref]$parseErrors
+    ) | Out-Null
+    if ($parseErrors -and $parseErrors.Count -gt 0) {
+        Add-Error "Local restore snapshot script has PowerShell parser errors: $($parseErrors[0].ToString())"
+    }
+    else {
+        Add-Pass 'Local restore snapshot script PowerShell parser check passed'
     }
 }
 

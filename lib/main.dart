@@ -462,20 +462,20 @@ class _BlueVPNAppState extends State<BlueVPNApp> {
         colorScheme: scheme,
         scaffoldBackgroundColor: isDark ? kBrandDarkBg : kBrandLightBg,
       ).copyWith(
-        dividerColor: scheme.onSurface.withOpacity(isDark ? 0.18 : 0.10),
+        dividerColor: scheme.onSurface.withValues(alpha: isDark ? 0.18 : 0.10),
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: isDark ? kBrandDarkSurface : Colors.white,
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(14),
             borderSide: BorderSide(
-              color: scheme.onSurface.withOpacity(isDark ? 0.18 : 0.12),
+              color: scheme.onSurface.withValues(alpha: isDark ? 0.18 : 0.12),
             ),
           ),
           enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(14),
             borderSide: BorderSide(
-              color: scheme.onSurface.withOpacity(isDark ? 0.18 : 0.12),
+              color: scheme.onSurface.withValues(alpha: isDark ? 0.18 : 0.12),
             ),
           ),
           focusedBorder: OutlineInputBorder(
@@ -487,17 +487,17 @@ class _BlueVPNAppState extends State<BlueVPNApp> {
           style: ElevatedButton.styleFrom(
             backgroundColor: kBrandPrimary,
             foregroundColor: Colors.white,
-            disabledBackgroundColor: scheme.onSurface.withOpacity(0.10),
-            disabledForegroundColor: scheme.onSurface.withOpacity(0.42),
+            disabledBackgroundColor: scheme.onSurface.withValues(alpha: 0.10),
+            disabledForegroundColor: scheme.onSurface.withValues(alpha: 0.42),
             elevation: 0,
-            shadowColor: kBrandPrimary.withOpacity(0.22),
+            shadowColor: kBrandPrimary.withValues(alpha: 0.22),
           ),
         ),
         outlinedButtonTheme: OutlinedButtonThemeData(
           style: OutlinedButton.styleFrom(
             foregroundColor: isDark ? Colors.white : kBrandPrimaryDeep,
             side: BorderSide(
-              color: scheme.onSurface.withOpacity(isDark ? 0.22 : 0.16),
+              color: scheme.onSurface.withValues(alpha: isDark ? 0.22 : 0.16),
             ),
           ),
         ),
@@ -510,17 +510,19 @@ class _BlueVPNAppState extends State<BlueVPNApp> {
           trackColor: WidgetStateProperty.resolveWith(
             (states) => states.contains(WidgetState.selected)
                 ? kBrandPrimary
-                : scheme.onSurface.withOpacity(isDark ? 0.18 : 0.12),
+                : scheme.onSurface.withValues(alpha: isDark ? 0.18 : 0.12),
           ),
           trackOutlineColor: WidgetStatePropertyAll(
-            scheme.onSurface.withOpacity(isDark ? 0.22 : 0.12),
+            scheme.onSurface.withValues(alpha: isDark ? 0.22 : 0.12),
           ),
         ),
         sliderTheme: SliderThemeData(
           activeTrackColor: kBrandPrimary,
-          inactiveTrackColor: kBrandPrimary.withOpacity(isDark ? 0.20 : 0.16),
+          inactiveTrackColor: kBrandPrimary.withValues(
+            alpha: isDark ? 0.20 : 0.16,
+          ),
           thumbColor: kBrandPrimary,
-          overlayColor: kBrandPrimary.withOpacity(0.14),
+          overlayColor: kBrandPrimary.withValues(alpha: 0.14),
           valueIndicatorColor: kBrandPrimaryDeep,
           valueIndicatorTextStyle: const TextStyle(
             color: Colors.white,
@@ -749,7 +751,7 @@ class _CenteredLoading extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     final surface = isDark ? kBrandDarkSurface : Colors.white;
     final textColor = theme.colorScheme.onSurface;
-    final mutedColor = textColor.withOpacity(0.62);
+    final mutedColor = textColor.withValues(alpha: 0.62);
 
     return Scaffold(
       body: DecoratedBox(
@@ -772,11 +774,13 @@ class _CenteredLoading extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: surface,
                   borderRadius: BorderRadius.circular(28),
-                  border: Border.all(color: kBrandPrimary.withOpacity(0.14)),
+                  border: Border.all(
+                    color: kBrandPrimary.withValues(alpha: 0.14),
+                  ),
                   boxShadow: [
                     BoxShadow(
-                      color: kBrandPrimaryDeep.withOpacity(
-                        isDark ? 0.22 : 0.10,
+                      color: kBrandPrimaryDeep.withValues(
+                        alpha: isDark ? 0.22 : 0.10,
                       ),
                       blurRadius: 34,
                       offset: const Offset(0, 18),
@@ -833,7 +837,7 @@ class _CenteredLoading extends StatelessWidget {
                       borderRadius: BorderRadius.circular(999),
                       child: LinearProgressIndicator(
                         minHeight: 8,
-                        backgroundColor: kBrandPrimary.withOpacity(0.10),
+                        backgroundColor: kBrandPrimary.withValues(alpha: 0.10),
                         valueColor: const AlwaysStoppedAnimation<Color>(
                           kBrandPrimary,
                         ),
@@ -2147,8 +2151,7 @@ Future<bool> isWindowsProcessElevated() async {
   if (kIsWeb || !Platform.isWindows) return false;
   try {
     final res = await Process.run('whoami', ['/groups'], runInShell: true);
-    final out =
-        ((res.stdout ?? '').toString() + '\n' + (res.stderr ?? '').toString());
+    final out = ('${res.stdout ?? ''}\n${res.stderr ?? ''}');
     return out.contains('S-1-16-12288') || out.contains('S-1-16-16384');
   } catch (_) {
     return false;
@@ -2520,14 +2523,14 @@ class Prefs {
   static Prefs fromJson(Map<String, dynamic> map) {
     final d = Prefs.defaults();
 
-    String _s(String k, String def) {
+    String s0(String k, String def) {
       final v = map[k];
       if (v == null) return def;
       final s = v.toString().trim();
       return s.isEmpty ? def : s;
     }
 
-    bool _b(String k, bool def) {
+    bool b(String k, bool def) {
       final v = map[k];
       if (v is bool) return v;
       if (v is num) return v != 0;
@@ -2539,7 +2542,7 @@ class Prefs {
       return def;
     }
 
-    int _i(String k, int def) {
+    int i(String k, int def) {
       final v = map[k];
       if (v is int) return v;
       if (v is num) return v.round();
@@ -2547,7 +2550,7 @@ class Prefs {
       return def;
     }
 
-    double _d(String k, double def) {
+    double d0(String k, double def) {
       final v = map[k];
       if (v is double) return v;
       if (v is int) return v.toDouble();
@@ -2556,7 +2559,7 @@ class Prefs {
       return def;
     }
 
-    List<String> _ls(String k, List<String> def) {
+    List<String> ls(String k, List<String> def) {
       final v = map[k];
       if (v is List) {
         final out = <String>[];
@@ -2570,29 +2573,29 @@ class Prefs {
       return def;
     }
 
-    final theme = _s('themeMode', d.themeMode);
+    final theme = s0('themeMode', d.themeMode);
     final safeTheme = (theme == 'dark' || theme == 'light')
         ? theme
         : d.themeMode;
 
     return d.copyWith(
       themeMode: safeTheme,
-      language: _s('language', d.language),
-      serverId: _s('serverId', d.serverId),
-      socialOnlyEnabled: _b('socialOnlyEnabled', d.socialOnlyEnabled),
-      socialOnlyApps: _ls('socialOnlyApps', d.socialOnlyApps),
-      socialOnlyCustomPackages: _ls(
+      language: s0('language', d.language),
+      serverId: s0('serverId', d.serverId),
+      socialOnlyEnabled: b('socialOnlyEnabled', d.socialOnlyEnabled),
+      socialOnlyApps: ls('socialOnlyApps', d.socialOnlyApps),
+      socialOnlyCustomPackages: ls(
         'socialOnlyCustomPackages',
         d.socialOnlyCustomPackages,
       ),
-      selectedApps: _ls('selectedApps', d.selectedApps),
-      trafficPack: _s('trafficPack', d.trafficPack),
-      trafficGb: _d('trafficGb', d.trafficGb).clamp(1.0, 800.0),
-      devices: _i('devices', d.devices).clamp(1, 5),
-      optNoAds: _b('optNoAds', d.optNoAds),
-      optSmartRouting: _b('optSmartRouting', d.optSmartRouting),
-      optDedicatedIp: _b('optDedicatedIp', d.optDedicatedIp),
-      optAutoRenew: _b('optAutoRenew', d.optAutoRenew),
+      selectedApps: ls('selectedApps', d.selectedApps),
+      trafficPack: s0('trafficPack', d.trafficPack),
+      trafficGb: d0('trafficGb', d.trafficGb).clamp(1.0, 800.0),
+      devices: i('devices', d.devices).clamp(1, 5),
+      optNoAds: b('optNoAds', d.optNoAds),
+      optSmartRouting: b('optSmartRouting', d.optSmartRouting),
+      optDedicatedIp: b('optDedicatedIp', d.optDedicatedIp),
+      optAutoRenew: b('optAutoRenew', d.optAutoRenew),
     );
   }
 }
@@ -3546,7 +3549,7 @@ while True:
           _markApiBaseFailure(candidateBaseUrl, e, retriable: retriable);
           if (!retriable) {
             if (normalizedPreferredBaseUrl != null) {
-              throw e;
+              rethrow;
             }
             break;
           }
@@ -3588,7 +3591,7 @@ while True:
       final f = _authLogFile();
       if (f == null) return;
       final ts = DateTime.now().toIso8601String();
-      await f.writeAsString('[' + ts + '] ' + s + '\n', mode: FileMode.append);
+      await f.writeAsString('[$ts] $s\n', mode: FileMode.append);
     } catch (_) {}
   }
 
@@ -3602,12 +3605,11 @@ while True:
         uri.port,
         timeout: const Duration(seconds: 5),
       );
-      final remote =
-          socket.remoteAddress.address + ':' + socket.remotePort.toString();
+      final remote = '${socket.remoteAddress.address}:${socket.remotePort}';
       await socket.close();
-      return 'tcp=ok remote=' + remote;
+      return 'tcp=ok remote=$remote';
     } catch (e) {
-      return 'tcp=fail error=' + e.toString();
+      return 'tcp=fail error=$e';
     }
   }
 
@@ -3662,10 +3664,10 @@ while True:
       {
         'email': email,
         'code': code,
-        if (deviceUid != null) 'deviceUid': deviceUid,
-        if (deviceName != null) 'deviceName': deviceName,
-        if (platform != null) 'platform': platform,
-        if (appVersion != null) 'appVersion': appVersion,
+        'deviceUid': ?deviceUid,
+        'deviceName': ?deviceName,
+        'platform': ?platform,
+        'appVersion': ?appVersion,
       },
       preferredApiBaseUrl: _pendingAuthApiBaseUrl,
     );
@@ -3702,10 +3704,10 @@ while True:
       {
         'phone': phone,
         'code': code,
-        if (deviceUid != null) 'deviceUid': deviceUid,
-        if (deviceName != null) 'deviceName': deviceName,
-        if (platform != null) 'platform': platform,
-        if (appVersion != null) 'appVersion': appVersion,
+        'deviceUid': ?deviceUid,
+        'deviceName': ?deviceName,
+        'platform': ?platform,
+        'appVersion': ?appVersion,
       },
       preferredApiBaseUrl: _pendingAuthApiBaseUrl,
     );
@@ -3719,11 +3721,7 @@ while True:
     final res = await _jsonRequest(
       method: 'POST',
       path: '/api/v1/auth/challenge/start',
-      payload: {
-        'method': method,
-        if (phone != null) 'phone': phone,
-        if (email != null) 'email': email,
-      },
+      payload: {'method': method, 'phone': ?phone, 'email': ?email},
       onSuccessBaseUrl: (baseUrl) {
         _pendingAuthApiBaseUrl = _normalizeApiBaseUrl(baseUrl);
       },
@@ -3748,12 +3746,12 @@ while True:
     return _postSession('/api/v1/auth/challenge/verify', {
       'method': method,
       'code': code,
-      if (phone != null) 'phone': phone,
-      if (email != null) 'email': email,
-      if (deviceUid != null) 'deviceUid': deviceUid,
-      if (deviceName != null) 'deviceName': deviceName,
-      if (platform != null) 'platform': platform,
-      if (appVersion != null) 'appVersion': appVersion,
+      'phone': ?phone,
+      'email': ?email,
+      'deviceUid': ?deviceUid,
+      'deviceName': ?deviceName,
+      'platform': ?platform,
+      'appVersion': ?appVersion,
     }, preferredApiBaseUrl: _pendingAuthApiBaseUrl);
   }
 
@@ -4047,7 +4045,7 @@ while True:
         'unlimitedApps': unlimitedApps,
         'devices': devices,
         'dedicatedIp': dedicatedIp,
-        if (billingPlanCode != null) 'billingPlanCode': billingPlanCode,
+        'billingPlanCode': ?billingPlanCode,
         if (kPaidBetaBuild) 'clientMarker': kPaidBetaClientMarker,
         if (kPaidBetaBuild) 'releaseChannel': kPaidBetaReleaseChannel,
       },
@@ -4082,7 +4080,7 @@ while True:
         'devices': devices,
         'dedicatedIp': dedicatedIp,
         'autoRenew': autoRenew,
-        if (billingPlanCode != null) 'billingPlanCode': billingPlanCode,
+        'billingPlanCode': ?billingPlanCode,
         if (kPaidBetaBuild) 'clientMarker': kPaidBetaClientMarker,
         if (kPaidBetaBuild) 'releaseChannel': kPaidBetaReleaseChannel,
       },
@@ -4382,7 +4380,7 @@ while True:
       'stage': stage,
       'ok': ok,
       'appVersion': kAppVersion,
-      if (latencyMs != null) 'latencyMs': latencyMs,
+      'latencyMs': ?latencyMs,
       if ((errorCode ?? '').trim().isNotEmpty) 'errorCode': errorCode!.trim(),
       if ((message ?? '').trim().isNotEmpty) 'message': message!.trim(),
       if (details != null && details.isNotEmpty) 'details': details,
@@ -4406,9 +4404,7 @@ while True:
     String? preferredApiBaseUrl,
   }) async {
     try {
-      await _authLog(
-        'POST ' + path + ' email=' + ((payload['email'] ?? '').toString()),
-      );
+      await _authLog('POST $path email=${payload['email'] ?? ''}');
       unawaited(_tcpPreflight(path).then(_authLog));
       String? sessionApiBaseUrl;
       final body = await _withHttpRetry<String>((
@@ -4426,14 +4422,7 @@ while True:
             .decodeStream(res)
             .timeout(const Duration(seconds: 5));
         await _authLog(
-          'HTTP ' +
-              path +
-              ' status=' +
-              res.statusCode.toString() +
-              ' route=' +
-              (direct ? 'direct' : 'system') +
-              ' base=' +
-              resolvedBaseUrl,
+          'HTTP $path status=${res.statusCode} route=${direct ? 'direct' : 'system'} base=$resolvedBaseUrl',
         );
         if (res.statusCode < 200 || res.statusCode >= 300) {
           final friendly = _friendlyAuthError(
@@ -4470,7 +4459,7 @@ while True:
         return ApiResult.ok(session);
       }
     } catch (e) {
-      await _authLog('HTTP ' + path + ' exception=' + e.toString());
+      await _authLog('HTTP $path exception=$e');
       return ApiResult.err(authUserMessage(e, fallback: 'Ошибка авторизации.'));
     }
   }
@@ -5098,7 +5087,7 @@ class ConfigStore {
       return _mobileManagedProtocol;
     }
     if (Platform.isWindows) {
-      final path = '${managedConfigPath}.protocol';
+      final path = '$managedConfigPath.protocol';
       final file = File(path);
       if (file.existsSync()) {
         final normalized = (await file.readAsString()).trim().toLowerCase();
@@ -5120,7 +5109,7 @@ class ConfigStore {
       return;
     }
     if (Platform.isWindows) {
-      final file = File('${managedConfigPath}.protocol');
+      final file = File('$managedConfigPath.protocol');
       if (!file.parent.existsSync()) file.parent.createSync(recursive: true);
       await file.writeAsString(_mobileManagedProtocol);
     }
@@ -5400,7 +5389,6 @@ class _AuthPageState extends State<AuthPage>
     with SingleTickerProviderStateMixin {
   late final TabController _tabs;
   final _api = const BlueVpnApi(baseUrl: kApiBaseUrl);
-  final _cfg = ConfigStore();
   final _deviceStore = DeviceIdStore();
 
   final _phone = TextEditingController();
@@ -6023,7 +6011,7 @@ class _AuthPageState extends State<AuthPage>
                                   _authStatus!,
                                   style: TextStyle(
                                     color: theme.colorScheme.onSurface
-                                        .withOpacity(0.72),
+                                        .withValues(alpha: 0.72),
                                     fontWeight: FontWeight.w700,
                                     fontSize: 12,
                                   ),
@@ -7603,7 +7591,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           if (selection is Map)
             'selection': Map<String, dynamic>.from(selection),
           if (quote is Map) 'quote': Map<String, dynamic>.from(quote),
-          if (orderMap != null) 'order': orderMap,
+          'order': ?orderMap,
         };
         if (orderMap != null) {
           _pendingBillingOrder = orderMap;
@@ -7615,6 +7603,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       });
       if (orderMap != null) {
         await _pendingBillingOrderStore.write(orderMap);
+        if (!mounted) return;
         _startPendingBillingPolling();
       }
       _schedulePrefsSave();
@@ -7643,6 +7632,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
     final order =
         _pendingBillingOrder ?? await _pendingBillingOrderStore.read();
+    if (!mounted) return;
     final orderId = (order?['orderId'] ?? '').toString().trim();
     if (orderId.isEmpty) {
       _stopPendingBillingPolling();
@@ -7675,6 +7665,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
       if (status == 'activated' || status == 'paid') {
         await _pendingBillingOrderStore.clear();
+        if (!mounted) return;
         _stopPendingBillingPolling();
         setState(() {
           _pendingBillingOrder = null;
@@ -7683,6 +7674,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         await _syncTariffFromServerSilently();
         await _syncPlanSilently();
         await _refreshTariffServerState(showToast: false);
+        if (!mounted) return;
         if (showToast && mounted) {
           _toast(context, 'Оплата подтверждена, тариф активирован.');
         }
@@ -7691,6 +7683,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
       if (status == 'canceled' || status == 'expired') {
         await _pendingBillingOrderStore.clear();
+        if (!mounted) return;
         _stopPendingBillingPolling();
         setState(() {
           _pendingBillingOrder = null;
@@ -7705,6 +7698,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       }
 
       await _pendingBillingOrderStore.write(freshOrder);
+      if (!mounted) return;
       setState(() {
         _pendingBillingOrder = freshOrder;
         _tariffStatus =
@@ -7746,19 +7740,6 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     final lastColon = value.lastIndexOf(':');
     if (lastColon <= 0) return value;
     return value.substring(0, lastColon);
-  }
-
-  bool _configLooksLikeDedicatedDev1(String rawConfig) {
-    final endpointHost = _endpointHostFromConfig(rawConfig);
-    if (endpointHost == null || endpointHost.isEmpty) return false;
-
-    if (rawConfig.contains('engage.cloudflareclient.com')) return false;
-    if (rawConfig.contains('\n    S1 =') ||
-        rawConfig.contains('\r\n    S1 =')) {
-      return false;
-    }
-
-    return endpointHost == kIntelligentSmewHost;
   }
 
   String _normalizeDevEndpoint(String rawConfig) {
@@ -8197,6 +8178,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     await _cfg.ensureBaseSeededFromManagedIfMissing();
 
     final base = await _cfg.readBaseConfig();
+    if (!mounted) return false;
     if (base == null || base.trim().isEmpty) {
       if (showToastOnSuccess) {
         _toast(
@@ -8210,12 +8192,14 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
 
     await _cfg.writeManagedConfig(_buildManagedConfigFromBase(base));
+    if (!mounted) return false;
 
     if (reconnectIfNeeded && vpnEnabled) {
       if (!kIsWeb && Platform.isAndroid) {
         final applied = await _vpnBackend.connect(
           configPath: _cfg.managedConfigPath,
         );
+        if (!mounted) return false;
         if (!applied.ok) {
           _toast(
             context,
@@ -8226,6 +8210,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         }
       } else {
         final off = await _vpnBackend.disconnect();
+        if (!mounted) return false;
         if (!off.ok) {
           _toast(context, off.message ?? 'Не удалось переподключить VPN.');
           await _syncVpnStatus();
@@ -8235,6 +8220,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         final on = await _vpnBackend.connect(
           configPath: _cfg.managedConfigPath,
         );
+        if (!mounted) return false;
         if (!on.ok) {
           _toast(context, on.message ?? 'Не удалось заново подключить VPN.');
           await _syncVpnStatus();
@@ -8243,6 +8229,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       }
 
       await _syncVpnStatus();
+      if (!mounted) return false;
       if (!vpnEnabled) {
         _toast(context, 'Android не подтвердил новое VPN-подключение.');
         return false;
@@ -8955,6 +8942,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           : 'test_web',
       appVersion: kAppVersion,
     );
+    if (!mounted) return false;
 
     if (!start.ok || start.data == null) {
       if (greenVpnIsInvalidSessionMessage(start.message)) {
@@ -9013,6 +9001,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     );
 
     final completed = await _waitForAdChallengeCompletion(challengeId);
+    if (!mounted) return false;
     if (!completed) {
       _toast(
         context,
@@ -9071,6 +9060,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         serverOverride: effectiveServer,
       );
       await appendBlueVpnClientLog('ensure config interactive dev result=$ok');
+      if (!mounted) {
+        return const ProvisionedConfigResult.err('screen_closed');
+      }
       if (ok) return ProvisionedConfigResult.ok(effectiveServer);
       _toast(
         context,
@@ -9083,6 +9075,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     await appendBlueVpnClientLog(
       'ensure config bootstrap ok=${boot.ok} message=${boot.message ?? ""}',
     );
+    if (!mounted) {
+      return const ProvisionedConfigResult.err('screen_closed');
+    }
 
     if (!boot.ok || boot.data == null) {
       if (greenVpnIsInvalidSessionMessage(boot.message)) {
@@ -9098,12 +9093,18 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         serverOverride: effectiveServer,
       );
       if (reused) return ProvisionedConfigResult.ok(effectiveServer);
+      if (!mounted) {
+        return const ProvisionedConfigResult.err('screen_closed');
+      }
       _toast(context, boot.message ?? 'Не удалось пройти bootstrap.');
       return ProvisionedConfigResult.err(boot.message);
     }
 
     final did = await _ensureDeviceId();
     await appendBlueVpnClientLog('ensure config deviceId=${did ?? "null"}');
+    if (!mounted) {
+      return const ProvisionedConfigResult.err('screen_closed');
+    }
     if (did == null || did.isEmpty) {
       _toast(context, 'Не удалось получить device id.');
       return const ProvisionedConfigResult.err('device_id_missing');
@@ -9168,6 +9169,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               effectiveServer,
               source: 'interactive_config',
             ));
+    if (!mounted) {
+      return const ProvisionedConfigResult.err('screen_closed');
+    }
     if (!res.ok || res.data == null || res.data!.configText.trim().isEmpty) {
       if (greenVpnIsInvalidSessionMessage(res.message)) {
         await _handleInvalidSession(
@@ -9189,6 +9193,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         serverOverride: effectiveServer,
       );
       if (reused) return ProvisionedConfigResult.ok(effectiveServer);
+      if (!mounted) {
+        return const ProvisionedConfigResult.err('screen_closed');
+      }
       _toast(context, res.message ?? 'Не удалось получить конфиг с сервера.');
       return ProvisionedConfigResult.err(res.message);
     }
@@ -9500,6 +9507,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     await appendBlueVpnClientLog(
       'toggle requested vpnEnabled=$vpnEnabled busy=$vpnBusy cooldown=$_vpnTapCooldown',
     );
+    if (!mounted) return;
     if (vpnBusy) {
       _toast(
         context,
@@ -9556,12 +9564,14 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     await appendBlueVpnClientLog(
       'toggle elevated=$elevated vpnEnabled=$vpnEnabled',
     );
+    if (!mounted) return;
 
     try {
       if (!vpnEnabled) {
         await appendBlueVpnClientLog('toggle connect branch start');
         await _prepareAndroidConnectControlPlane('toggle_connect');
         await _refreshServerCatalog(showToast: false);
+        if (!mounted) return;
         final candidates = _connectCandidatesForCurrentSelection();
         if (candidates.isEmpty) {
           final reason = _serverUnsupportedReason(selectedServer);
@@ -9599,6 +9609,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           await appendBlueVpnClientLog(
             'toggle connect ensureConfig server=${candidate.id} ok=$ok',
           );
+          if (!mounted) return;
           unawaited(
             _reportRouteEvent(
               candidate,
@@ -9640,6 +9651,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           await appendBlueVpnClientLog(
             'toggle connect backend server=${candidate.id} ok=${res.ok} message=${res.message ?? ""}',
           );
+          if (!mounted) return;
           unawaited(
             _reportRouteEvent(
               candidate,
@@ -9660,6 +9672,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             lastError =
                 res.message ?? 'не удалось подключить ${candidate.title}';
             await _syncVpnStatus();
+            if (!mounted) return;
             if (canTryNext) {
               _setVpnBusyUi(
                 stage: 'Пробуем запасной узел...',
@@ -9680,6 +9693,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           await appendBlueVpnClientLog(
             'toggle connect sync done server=${candidate.id} vpnEnabled=$vpnEnabled',
           );
+          if (!mounted) return;
           unawaited(
             _reportRouteEvent(
               candidate,
@@ -9711,6 +9725,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               hint: 'VPN включён. Проверяем, что YouTube открывается.',
             );
             final probe = await _probeConnectedTunnelRoute(candidate);
+            if (!mounted) return;
             unawaited(
               _reportRouteEvent(
                 candidate,
@@ -9744,6 +9759,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               );
               await _vpnBackend.disconnect();
               await _syncVpnStatus();
+              if (!mounted) return;
               if (canTryNext) {
                 _setVpnBusyUi(
                   stage: 'Пробуем запасной узел...',
@@ -9763,6 +9779,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           await appendBlueVpnClientLog(
             'post connect checks accepted tunnel server=${candidate.id}',
           );
+          if (!mounted) return;
           _recordRouteSuccess(candidate);
           if (kPaidBetaBuild) {
             unawaited(_recordPaidBetaEvent('vpn_connected'));
@@ -9796,6 +9813,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         await appendBlueVpnClientLog(
           'toggle disconnect backend ok=${res.ok} message=${res.message ?? ""}',
         );
+        if (!mounted) return;
         if (!res.ok) {
           _toast(context, res.message ?? 'Не удалось отключить VPN.');
           await _syncVpnStatus();
@@ -9814,6 +9832,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         await appendBlueVpnClientLog(
           'toggle disconnect sync done vpnEnabled=$vpnEnabled',
         );
+        if (!mounted) return;
         _startVpnTapCooldown(
           hint:
               'VPN только что выключился. Кнопка разблокируется через секунду, чтобы состояние успело обновиться.',
@@ -9979,6 +9998,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   Future<void> _openServerPicker(BuildContext context) async {
     await _prepareAndroidControlPlaneAccess('server_picker');
     await _refreshServerCatalog(showToast: false);
+    if (!context.mounted) return;
     final picked = await showDialog<ServerLocation>(
       context: context,
       builder: (ctx) {
@@ -10057,6 +10077,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _schedulePrefsSave();
 
     await _syncVpnStatus();
+    if (!mounted) return;
     if (!vpnEnabled) {
       unawaited(_cfg.deleteManagedConfig());
       return;
@@ -10078,6 +10099,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       await appendBlueVpnClientLog(
         'server switch disconnect ok=${off.ok} message=${off.message ?? ""}',
       );
+      if (!mounted) return;
       unawaited(
         _reportRouteEvent(
           picked,
@@ -10090,11 +10112,13 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       );
       if (!off.ok) {
         await _syncVpnStatus();
+        if (!mounted) return;
         _toast(context, off.message ?? 'Не удалось остановить текущий VPN.');
         return;
       }
 
       await _syncVpnStatus();
+      if (!mounted) return;
       final candidates = _connectCandidatesForCurrentSelection().isNotEmpty
           ? _connectCandidatesForCurrentSelection()
           : <ServerLocation>[picked];
@@ -10122,6 +10146,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         await appendBlueVpnClientLog(
           'server switch config ok=${provisioned.ok} requested=${picked.id} candidate=${candidate.id} effective=${effectiveServer.id}',
         );
+        if (!mounted) return;
         unawaited(
           _reportRouteEvent(
             effectiveServer,
@@ -10140,6 +10165,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         if (!provisioned.ok) {
           lastError = 'не удалось получить конфиг для ${candidate.title}';
           await _syncVpnStatus();
+          if (!mounted) return;
           if (canTryNext) continue;
           break;
         }
@@ -10178,6 +10204,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           ),
         );
         await _syncVpnStatus();
+        if (!mounted) return;
         if (!on.ok) {
           lastError =
               on.message ??
@@ -10198,6 +10225,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             hint: 'VPN включён. Проверяем, что YouTube открывается.',
           );
           final probe = await _probeConnectedTunnelRoute(effectiveServer);
+          if (!mounted) return;
           unawaited(
             _reportRouteEvent(
               effectiveServer,
@@ -10230,6 +10258,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             );
             await _vpnBackend.disconnect();
             await _syncVpnStatus();
+            if (!mounted) return;
             if (canTryNext) continue;
             break;
           }
@@ -10246,6 +10275,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         return;
       }
 
+      if (!mounted) return;
       _toast(
         context,
         lastError == null
@@ -10735,7 +10765,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
                                       color: theme.colorScheme.onSurface
-                                          .withOpacity(0.62),
+                                          .withValues(alpha: 0.62),
                                       fontWeight: FontWeight.w700,
                                     ),
                                   ),
@@ -10748,8 +10778,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                         Text(
                           'Можно продолжить пользоваться приложением, но лучше поставить свежую версию: исправления приезжают через обновление.',
                           style: TextStyle(
-                            color: theme.colorScheme.onSurface.withOpacity(
-                              0.72,
+                            color: theme.colorScheme.onSurface.withValues(
+                              alpha: 0.72,
                             ),
                             fontWeight: FontWeight.w600,
                             height: 1.28,
@@ -11098,7 +11128,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               shrinkWrap: true,
               padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
               itemCount: items.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              separatorBuilder: (_, _) => const SizedBox(height: 10),
               itemBuilder: (_, i) {
                 final it = items[i];
                 final on = it == current;
@@ -11130,7 +11160,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                               ? kBrandPrimary
                               : Theme.of(
                                   ctx,
-                                ).colorScheme.onSurface.withOpacity(0.35),
+                                ).colorScheme.onSurface.withValues(alpha: 0.35),
                         ),
                       ],
                     ),
@@ -11208,7 +11238,7 @@ class VpnPage extends StatelessWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final textColor = theme.colorScheme.onSurface;
-    final mutedColor = textColor.withOpacity(isDark ? 0.72 : 0.62);
+    final mutedColor = textColor.withValues(alpha: isDark ? 0.72 : 0.62);
     final statusText = vpnBusy
         ? (vpnBusyStage ?? (vpnEnabled ? 'Отключаем...' : 'Подключаем...'))
         : (vpnEnabled
@@ -11935,7 +11965,7 @@ class TariffPage extends StatelessWidget {
                       style: TextStyle(
                         color: Theme.of(
                           context,
-                        ).colorScheme.onSurface.withOpacity(0.65),
+                        ).colorScheme.onSurface.withValues(alpha: 0.65),
                         fontWeight: FontWeight.w700,
                         fontSize: 12,
                       ),
@@ -11970,7 +12000,7 @@ class TariffPage extends StatelessWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final textColor = theme.colorScheme.onSurface;
-    final mutedColor = textColor.withOpacity(isDark ? 0.72 : 0.62);
+    final mutedColor = textColor.withValues(alpha: isDark ? 0.72 : 0.62);
     final rawPlans = (tariffCatalog?['plans'] as List?) ?? const [];
     final plans = rawPlans
         .whereType<Map>()
@@ -12051,7 +12081,7 @@ class TariffPage extends StatelessWidget {
               width: selected ? 2 : 1,
             ),
             color: selected
-                ? kBrandPrimary.withOpacity(isDark ? 0.14 : 0.08)
+                ? kBrandPrimary.withValues(alpha: isDark ? 0.14 : 0.08)
                 : Colors.transparent,
           ),
           child: Row(
@@ -12282,11 +12312,12 @@ class TariffPage extends StatelessWidget {
   }
 
   // Archived configurable tariff UI. Kept for a possible post-launch experiment.
+  // ignore: unused_element
   Widget _buildPublicProduct(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final textColor = theme.colorScheme.onSurface;
-    final mutedColor = textColor.withOpacity(isDark ? 0.72 : 0.62);
+    final mutedColor = textColor.withValues(alpha: isDark ? 0.72 : 0.62);
     final quoteRaw = tariffQuote?['quote'];
     final quote = quoteRaw is Map
         ? Map<String, dynamic>.from(quoteRaw)
@@ -12643,7 +12674,7 @@ class TariffPage extends StatelessWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final textColor = theme.colorScheme.onSurface;
-    final mutedColor = textColor.withOpacity(isDark ? 0.72 : 0.62);
+    final mutedColor = textColor.withValues(alpha: isDark ? 0.72 : 0.62);
     final quoteRaw = tariffQuote?['quote'];
     final quote = quoteRaw is Map
         ? Map<String, dynamic>.from(quoteRaw)
@@ -12908,7 +12939,7 @@ class TariffPage extends StatelessWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final textColor = theme.colorScheme.onSurface;
-    final mutedColor = textColor.withOpacity(isDark ? 0.72 : 0.62);
+    final mutedColor = textColor.withValues(alpha: isDark ? 0.72 : 0.62);
 
     if (kPaidBetaBuild) {
       return _buildPaidBeta(context);
@@ -13124,17 +13155,17 @@ class TariffPage extends StatelessWidget {
                         decoration: BoxDecoration(
                           color: isDark
                               ? const Color(0xFF091F18)
-                              : kBrandPrimarySoft.withOpacity(0.55),
+                              : kBrandPrimarySoft.withValues(alpha: 0.55),
                           borderRadius: BorderRadius.circular(18),
                           border: Border.all(
                             color: isDark
-                                ? kBrandPrimary.withOpacity(0.38)
-                                : kBrandPrimary.withOpacity(0.14),
+                                ? kBrandPrimary.withValues(alpha: 0.38)
+                                : kBrandPrimary.withValues(alpha: 0.14),
                           ),
                           boxShadow: isDark
                               ? [
                                   BoxShadow(
-                                    color: Colors.black.withOpacity(0.18),
+                                    color: Colors.black.withValues(alpha: 0.18),
                                     blurRadius: 18,
                                     offset: const Offset(0, 10),
                                   ),
@@ -13176,10 +13207,12 @@ class TariffPage extends StatelessWidget {
                               data: SliderTheme.of(context).copyWith(
                                 activeTrackColor: kBrandPrimary,
                                 inactiveTrackColor: isDark
-                                    ? Colors.white.withOpacity(0.12)
-                                    : kBrandPrimary.withOpacity(0.18),
+                                    ? Colors.white.withValues(alpha: 0.12)
+                                    : kBrandPrimary.withValues(alpha: 0.18),
                                 thumbColor: kBrandPrimary,
-                                overlayColor: kBrandPrimary.withOpacity(0.14),
+                                overlayColor: kBrandPrimary.withValues(
+                                  alpha: 0.14,
+                                ),
                                 valueIndicatorColor: isDark
                                     ? const Color(0xFF123528)
                                     : kBrandPrimary,
@@ -13457,7 +13490,9 @@ class TariffPage extends StatelessWidget {
                     color: isDark ? kBrandDarkSurface : Colors.white,
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(
-                      color: kBrandPrimary.withOpacity(isDark ? 0.28 : 0.18),
+                      color: kBrandPrimary.withValues(
+                        alpha: isDark ? 0.28 : 0.18,
+                      ),
                     ),
                   ),
                   child: Column(
@@ -13524,8 +13559,8 @@ class TariffPage extends StatelessWidget {
                             : const Color(0xFFFFFFFF),
                         borderRadius: BorderRadius.circular(14),
                         border: Border.all(
-                          color: theme.colorScheme.onSurface.withOpacity(
-                            isDark ? 0.16 : 0.10,
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: isDark ? 0.16 : 0.10,
                           ),
                         ),
                       ),
@@ -13773,7 +13808,7 @@ class SettingsPage extends StatelessWidget {
                     style: TextStyle(
                       color: Theme.of(
                         context,
-                      ).colorScheme.onSurface.withOpacity(0.62),
+                      ).colorScheme.onSurface.withValues(alpha: 0.62),
                       fontWeight: FontWeight.w700,
                       fontSize: 12,
                     ),
@@ -13814,7 +13849,7 @@ class SettingsPage extends StatelessWidget {
                     style: TextStyle(
                       color: Theme.of(
                         context,
-                      ).colorScheme.onSurface.withOpacity(0.62),
+                      ).colorScheme.onSurface.withValues(alpha: 0.62),
                       fontWeight: FontWeight.w700,
                       fontSize: 12,
                     ),
@@ -14505,7 +14540,7 @@ class _UpdatesPageState extends State<UpdatesPage> {
                               style: TextStyle(
                                 color: Theme.of(
                                   context,
-                                ).colorScheme.onSurface.withOpacity(0.62),
+                                ).colorScheme.onSurface.withValues(alpha: 0.62),
                                 fontWeight: FontWeight.w600,
                               ),
                             ),
@@ -14716,7 +14751,7 @@ class _BackendAdminPageState extends State<BackendAdminPage> {
     final active = map['isActive'] == true ? 'активна' : 'неактивна';
     final monthlyPrice = map['monthlyPriceRub'];
     final selection = map['selection'];
-    final parts = <String>['$plan', active];
+    final parts = <String>[plan, active];
     final price = _formatRub(monthlyPrice);
     if (price != null) parts.add('$price/мес');
     final selectionText = _selectionShort(selection);
@@ -15989,7 +16024,7 @@ class _BottomSheetFrame extends StatelessWidget {
             width: 44,
             height: 5,
             decoration: BoxDecoration(
-              color: theme.colorScheme.onSurface.withOpacity(0.15),
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(999),
             ),
           ),
@@ -16025,7 +16060,9 @@ class _BottomSheetFrame extends StatelessWidget {
                       Text(
                         subtitle,
                         style: TextStyle(
-                          color: theme.colorScheme.onSurface.withOpacity(0.6),
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.6,
+                          ),
                           fontWeight: FontWeight.w700,
                           fontSize: 12,
                         ),
@@ -16098,7 +16135,7 @@ class _PageTitle extends StatelessWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final textColor = theme.colorScheme.onSurface;
-    final mutedColor = textColor.withOpacity(isDark ? 0.72 : 0.62);
+    final mutedColor = textColor.withValues(alpha: isDark ? 0.72 : 0.62);
     return Row(
       children: [
         Container(
@@ -16186,7 +16223,7 @@ class _SwitchRow extends StatelessWidget {
               Text(
                 subtitle,
                 style: TextStyle(
-                  color: theme.colorScheme.onSurface.withOpacity(0.6),
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
                   fontWeight: FontWeight.w700,
                   fontSize: 12,
                 ),
@@ -16246,7 +16283,7 @@ class _SettingsNavRow extends StatelessWidget {
                 Text(
                   subtitle,
                   style: TextStyle(
-                    color: theme.colorScheme.onSurface.withOpacity(0.6),
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
                     fontWeight: FontWeight.w700,
                     fontSize: 12,
                   ),
@@ -16256,7 +16293,7 @@ class _SettingsNavRow extends StatelessWidget {
           ),
           Icon(
             Icons.chevron_right_rounded,
-            color: theme.colorScheme.onSurface.withOpacity(0.35),
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.35),
           ),
         ],
       ),
@@ -16310,7 +16347,7 @@ class _SettingsActionRow extends StatelessWidget {
                 Text(
                   subtitle,
                   style: TextStyle(
-                    color: theme.colorScheme.onSurface.withOpacity(0.6),
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
                     fontWeight: FontWeight.w700,
                     fontSize: 12,
                   ),
@@ -16320,7 +16357,7 @@ class _SettingsActionRow extends StatelessWidget {
           ),
           Icon(
             Icons.chevron_right_rounded,
-            color: theme.colorScheme.onSurface.withOpacity(0.35),
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.35),
           ),
         ],
       ),
@@ -16350,8 +16387,8 @@ class _ChipButton extends StatelessWidget {
         : (isDark ? kBrandDarkSurface : kBrandPrimarySoft);
     final fg = selected ? Colors.white : theme.colorScheme.onSurface;
     final borderColor = selected
-        ? kBrandPrimary.withOpacity(0.20)
-        : theme.colorScheme.onSurface.withOpacity(isDark ? 0.16 : 0.12);
+        ? kBrandPrimary.withValues(alpha: 0.20)
+        : theme.colorScheme.onSurface.withValues(alpha: isDark ? 0.16 : 0.12);
 
     return InkWell(
       borderRadius: BorderRadius.circular(999),
@@ -16396,7 +16433,9 @@ class _IncludedBadge extends StatelessWidget {
         color: isDark ? kBrandDarkSurface : Colors.white,
         borderRadius: BorderRadius.circular(999),
         border: Border.all(
-          color: theme.colorScheme.onSurface.withOpacity(isDark ? 0.16 : 0.10),
+          color: theme.colorScheme.onSurface.withValues(
+            alpha: isDark ? 0.16 : 0.10,
+          ),
         ),
       ),
       child: Row(
@@ -16431,7 +16470,9 @@ class _Card extends StatelessWidget {
     final surface = theme.colorScheme.surface;
     final fill = tint == null
         ? surface
-        : (isDark ? Color.alphaBlend(tint!.withOpacity(0.16), surface) : tint!);
+        : (isDark
+              ? Color.alphaBlend(tint!.withValues(alpha: 0.16), surface)
+              : tint!);
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -16439,16 +16480,16 @@ class _Card extends StatelessWidget {
         borderRadius: BorderRadius.circular(18),
         border: Border.all(
           color: isDark
-              ? Colors.white.withOpacity(0.10)
-              : kBrandPrimaryDeep.withOpacity(0.10),
+              ? Colors.white.withValues(alpha: 0.10)
+              : kBrandPrimaryDeep.withValues(alpha: 0.10),
         ),
         boxShadow: [
           BoxShadow(
             blurRadius: 22,
             offset: const Offset(0, 12),
             color: isDark
-                ? Colors.black.withOpacity(0.24)
-                : kBrandPrimaryDeep.withOpacity(0.08),
+                ? Colors.black.withValues(alpha: 0.24)
+                : kBrandPrimaryDeep.withValues(alpha: 0.08),
           ),
         ],
       ),
@@ -16615,11 +16656,7 @@ class WireGuardRuntimeStatus {
     if (wireguardExePath.trim().isNotEmpty &&
         wireguardExePath.toLowerCase().endsWith(r'\wireguard.exe')) {
       final wgPath =
-          wireguardExePath.substring(
-            0,
-            wireguardExePath.length - 'wireguard.exe'.length,
-          ) +
-          'wg.exe';
+          '${wireguardExePath.substring(0, wireguardExePath.length - 'wireguard.exe'.length)}wg.exe';
       if (File(wgPath).existsSync()) return wgPath;
     }
 
@@ -16806,9 +16843,7 @@ if ($route) { $route.InterfaceAlias }
         tunnelName,
         'dump',
       ], runInShell: true);
-      final rawWgDump =
-          ((res.stdout ?? '').toString() + '\n' + (res.stderr ?? '').toString())
-              .trim();
+      final rawWgDump = ('${res.stdout ?? ''}\n${res.stderr ?? ''}').trim();
 
       if (res.exitCode != 0 || rawWgDump.isEmpty) {
         return WireGuardRuntimeStatus(
@@ -17272,7 +17307,7 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
                         style: TextStyle(
                           color: Theme.of(
                             context,
-                          ).colorScheme.onSurface.withOpacity(0.62),
+                          ).colorScheme.onSurface.withValues(alpha: 0.62),
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -17337,7 +17372,7 @@ class _SupportStatusLine extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final valueStyle = TextStyle(
-      color: theme.colorScheme.onSurface.withOpacity(0.65),
+      color: theme.colorScheme.onSurface.withValues(alpha: 0.65),
       fontWeight: FontWeight.w800,
     );
     return Row(
@@ -18089,10 +18124,7 @@ if ($null -eq $ip) { "ip=missing" } else { "ip=present" }
       '-Command',
       _adapterStateScript(),
     ]);
-    return ((res.stdout ?? '').toString() +
-            '\n' +
-            (res.stderr ?? '').toString())
-        .trim();
+    return ('${res.stdout ?? ''}\n${res.stderr ?? ''}').trim();
   }
 
   Future<int?> _queryServicePid() async {
@@ -18111,9 +18143,7 @@ if ($null -eq $svc) { exit 0 }
       '-Command',
       script,
     ]);
-    final raw =
-        ((res.stdout ?? '').toString() + '\n' + (res.stderr ?? '').toString())
-            .trim();
+    final raw = ('${res.stdout ?? ''}\n${res.stderr ?? ''}').trim();
     return int.tryParse(raw);
   }
 
@@ -18122,9 +18152,7 @@ if ($null -eq $svc) { exit 0 }
   }) async {
     final pid = await _queryServicePid();
     await log(
-      'service pid=' +
-          (pid?.toString() ?? 'none') +
-          '; taskkill skipped by safety policy',
+      'service pid=${pid?.toString() ?? 'none'}; taskkill skipped by safety policy',
     );
   }
 
@@ -18142,8 +18170,7 @@ if ($null -eq $svc) { exit 0 }
     for (var i = 0; i < loops; i++) {
       final state = await _queryAdapterState();
       await log(
-        'adapter-state[$i] ' +
-            state.replaceAll('\r', ' ').replaceAll('\n', ' | '),
+        'adapter-state[$i] ${state.replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
       );
       if (!_adapterStillBlocksTraffic(state)) return true;
       await Future.delayed(const Duration(milliseconds: 350));
@@ -18159,16 +18186,12 @@ if ($null -eq $svc) { exit 0 }
     Future<void> log(String s) async {
       try {
         final ts = DateTime.now().toIso8601String();
-        await logFile.writeAsString(
-          '[' + ts + '] ' + s + '\n',
-          mode: FileMode.append,
-        );
+        await logFile.writeAsString('[$ts] $s\n', mode: FileMode.append);
       } catch (_) {}
     }
 
     String outOf(ProcessResult r) =>
-        ((r.stdout ?? '').toString() + '\n' + (r.stderr ?? '').toString())
-            .trim();
+        ('${r.stdout ?? ''}\n${r.stderr ?? ''}').trim();
 
     bool isRunningText(String out) => out.contains('RUNNING');
     Future<ProcessResult> scQueryEx() => _run('sc', ['queryex', _serviceName]);
@@ -18196,8 +18219,7 @@ if ($null -eq $svc) { exit 0 }
         final q = await scQueryEx();
         final o = outOf(q);
         await log(
-          'queryex(connect)[$i] ec=${q.exitCode} :: ' +
-              o.replaceAll('\r', ' ').replaceAll('\n', ' | '),
+          'queryex(connect)[$i] ec=${q.exitCode} :: ${o.replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
         );
         if (q.exitCode == 0 && isRunningText(o)) return true;
         await Future.delayed(const Duration(milliseconds: 250));
@@ -18208,10 +18230,7 @@ if ($null -eq $svc) { exit 0 }
     Future<bool> isAdmin() async {
       try {
         final res = await _run('whoami', ['/groups']);
-        final out =
-            ((res.stdout ?? '').toString() +
-            '\n' +
-            (res.stderr ?? '').toString());
+        final out = ('${res.stdout ?? ''}\n${res.stderr ?? ''}');
         return out.contains('S-1-16-12288') || out.contains('S-1-16-16384');
       } catch (_) {
         return false;
@@ -18220,9 +18239,9 @@ if ($null -eq $svc) { exit 0 }
 
     try {
       await log('=== CONNECT requested ===');
-      await log('service=' + _serviceName);
-      await log('exe=' + _exe);
-      await log('cfg=' + configPath);
+      await log('service=$_serviceName');
+      await log('exe=$_exe');
+      await log('cfg=$configPath');
       await prepareConfigForService();
 
       if (!File(configPath).existsSync()) {
@@ -18238,11 +18257,10 @@ if ($null -eq $svc) { exit 0 }
         configPath: configPath,
         wireguardExePath: _exe,
       );
-      await log('preflight(connect) ' + preflight.describe());
+      await log('preflight(connect) ${preflight.describe()}');
       if (preflight.hasCompetingTunnel) {
         await log(
-          '=== CONNECT BLOCKED: competing VPN active :: ' +
-              preflight.competingTunnelsLabel,
+          '=== CONNECT BLOCKED: competing VPN active :: ${preflight.competingTunnelsLabel}',
         );
         return VpnBackendResult(
           ok: false,
@@ -18254,64 +18272,51 @@ if ($null -eq $svc) { exit 0 }
       final q0 = await scQueryEx();
       final o0 = outOf(q0);
       await log(
-        'queryex(initial) ec=${q0.exitCode} :: ' +
-            o0.replaceAll('\r', ' ').replaceAll('\n', ' | '),
+        'queryex(initial) ec=${q0.exitCode} :: ${o0.replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
       );
 
       final admin = await isAdmin();
-      await log('isAdmin=' + admin.toString());
+      await log('isAdmin=$admin');
 
       if (admin) {
         if (q0.exitCode == 0) {
           final stop = await _run('sc', ['stop', _serviceName]);
           await log(
-            'sc stop before reinstall ec=${stop.exitCode} :: ' +
-                outOf(stop).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+            'sc stop before reinstall ec=${stop.exitCode} :: ${outOf(stop).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
           );
           await Future.delayed(const Duration(milliseconds: 700));
           final un = await _run(_exe, ['/uninstalltunnelservice', tunnelName]);
           await log(
-            'wireguard uninstall before reinstall ec=${un.exitCode} :: ' +
-                outOf(un).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+            'wireguard uninstall before reinstall ec=${un.exitCode} :: ${outOf(un).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
           );
         }
 
         final cleanup = await _cleanupLingeringAdapter(elevated: true);
         await log(
-          'adapter cleanup before install ec=${cleanup.exitCode} :: ' +
-              outOf(cleanup).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+          'adapter cleanup before install ec=${cleanup.exitCode} :: ${outOf(cleanup).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
         );
         final cleaned = await _waitForAdapterCleanup(log: log);
-        await log(
-          'adapter cleanup before install settled=' + cleaned.toString(),
-        );
+        await log('adapter cleanup before install settled=$cleaned');
 
         final ins = await _run(_exe, ['/installtunnelservice', configPath]);
         await log(
-          'wireguard install ec=${ins.exitCode} :: ' +
-              outOf(ins).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+          'wireguard install ec=${ins.exitCode} :: ${outOf(ins).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
         );
         final manualStart = await _setTunnelServiceManualStart();
         await log(
-          'sc config demand ec=${manualStart.exitCode} :: ' +
-              outOf(manualStart).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+          'sc config demand ec=${manualStart.exitCode} :: ${outOf(manualStart).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
         );
         final st = await _run('sc', ['start', _serviceName]);
         await log(
-          'sc start ec=${st.exitCode} :: ' +
-              outOf(st).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+          'sc start ec=${st.exitCode} :: ${outOf(st).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
         );
       } else {
         final cleanup = await _cleanupLingeringAdapter(elevated: false);
         await log(
-          'scheduled adapter cleanup before install ec=${cleanup.exitCode} :: ' +
-              outOf(cleanup).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+          'scheduled adapter cleanup before install ec=${cleanup.exitCode} :: ${outOf(cleanup).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
         );
         final cleaned = await _waitForAdapterCleanup(log: log);
-        await log(
-          'scheduled adapter cleanup before install settled=' +
-              cleaned.toString(),
-        );
+        await log('scheduled adapter cleanup before install settled=$cleaned');
 
         var elevatedStarted = false;
         const systemService = _GreenVpnSystemServiceClient();
@@ -18354,8 +18359,7 @@ if ($null -eq $svc) { exit 0 }
         if (await isAdmin()) {
           final un = await _run(_exe, ['/uninstalltunnelservice', tunnelName]);
           await log(
-            'wireguard uninstall after failed start ec=${un.exitCode} :: ' +
-                outOf(un).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+            'wireguard uninstall after failed start ec=${un.exitCode} :: ${outOf(un).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
           );
         } else {
           const systemService = _GreenVpnSystemServiceClient();
@@ -18377,7 +18381,7 @@ if ($null -eq $svc) { exit 0 }
 
       for (var i = 0; i < 35; i++) {
         final status = await runtimeStatus();
-        await log('verify(connect)[$i] ' + status.describe());
+        await log('verify(connect)[$i] ${status.describe()}');
         if (status.isReallyConnected) {
           await log('=== CONNECT OK ===');
           return const VpnBackendResult(ok: true);
@@ -18387,7 +18391,7 @@ if ($null -eq $svc) { exit 0 }
 
       final status = await runtimeStatus();
       await log(
-        '=== CONNECT FAIL: real tunnel not confirmed :: ' + status.describe(),
+        '=== CONNECT FAIL: real tunnel not confirmed :: ${status.describe()}',
       );
       return VpnBackendResult(
         ok: false,
@@ -18395,7 +18399,7 @@ if ($null -eq $svc) { exit 0 }
             'VPN запустился, но подключение не подтвердилось. Открой диагностику и отправь отчёт в поддержку.',
       );
     } catch (e) {
-      await log('EXCEPTION(connect): ' + e.toString());
+      await log('EXCEPTION(connect): $e');
       return VpnBackendResult(
         ok: false,
         message: 'Connect error: $e (see backend.log)',
@@ -18410,16 +18414,12 @@ if ($null -eq $svc) { exit 0 }
     Future<void> log(String s) async {
       try {
         final ts = DateTime.now().toIso8601String();
-        await logFile.writeAsString(
-          '[' + ts + '] ' + s + '\n',
-          mode: FileMode.append,
-        );
+        await logFile.writeAsString('[$ts] $s\n', mode: FileMode.append);
       } catch (_) {}
     }
 
     String outOf(ProcessResult r) =>
-        ((r.stdout ?? '').toString() + '\n' + (r.stderr ?? '').toString())
-            .trim();
+        ('${r.stdout ?? ''}\n${r.stderr ?? ''}').trim();
 
     bool isStoppedText(String out) => out.contains('STOPPED');
     Future<ProcessResult> scQueryEx() => _run('sc', ['queryex', _serviceName]);
@@ -18429,8 +18429,7 @@ if ($null -eq $svc) { exit 0 }
         final q = await scQueryEx();
         final o = outOf(q);
         await log(
-          'queryex[$i] ec=${q.exitCode} :: ' +
-              o.replaceAll('\r', ' ').replaceAll('\n', ' | '),
+          'queryex[$i] ec=${q.exitCode} :: ${o.replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
         );
         if (q.exitCode != 0) return true;
         if (isStoppedText(o)) return true;
@@ -18442,10 +18441,7 @@ if ($null -eq $svc) { exit 0 }
     Future<bool> isAdmin() async {
       try {
         final res = await _run('whoami', ['/groups']);
-        final out =
-            ((res.stdout ?? '').toString() +
-            '\n' +
-            (res.stderr ?? '').toString());
+        final out = ('${res.stdout ?? ''}\n${res.stderr ?? ''}');
         return out.contains('S-1-16-12288') || out.contains('S-1-16-16384');
       } catch (_) {
         return false;
@@ -18454,25 +18450,22 @@ if ($null -eq $svc) { exit 0 }
 
     try {
       await log('=== DISCONNECT requested ===');
-      await log('service=' + _serviceName);
+      await log('service=$_serviceName');
       final admin = await isAdmin();
-      await log('isAdmin=' + admin.toString());
+      await log('isAdmin=$admin');
 
       if (admin) {
         final stop = await _run('sc', ['stop', _serviceName]);
         await log(
-          'sc stop ec=${stop.exitCode} :: ' +
-              outOf(stop).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+          'sc stop ec=${stop.exitCode} :: ${outOf(stop).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
         );
         final un = await _run(_exe, ['/uninstalltunnelservice', tunnelName]);
         await log(
-          'wireguard uninstall ec=${un.exitCode} :: ' +
-              outOf(un).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+          'wireguard uninstall ec=${un.exitCode} :: ${outOf(un).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
         );
         final cleanup = await _cleanupLingeringAdapter(elevated: true);
         await log(
-          'adapter cleanup ec=${cleanup.exitCode} :: ' +
-              outOf(cleanup).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+          'adapter cleanup ec=${cleanup.exitCode} :: ${outOf(cleanup).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
         );
       } else {
         var elevatedStopped = false;
@@ -18501,8 +18494,7 @@ if ($null -eq $svc) { exit 0 }
         }
         final cleanup = await _cleanupLingeringAdapter(elevated: false);
         await log(
-          'scheduled adapter cleanup ec=${cleanup.exitCode} :: ' +
-              outOf(cleanup).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+          'scheduled adapter cleanup ec=${cleanup.exitCode} :: ${outOf(cleanup).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
         );
       }
 
@@ -18514,8 +18506,7 @@ if ($null -eq $svc) { exit 0 }
         await _forceKillServicePid(log: log);
         final un2 = await _run(_exe, ['/uninstalltunnelservice', tunnelName]);
         await log(
-          'wireguard uninstall retry ec=${un2.exitCode} :: ' +
-              outOf(un2).replaceAll('\r', ' ').replaceAll('\n', ' | '),
+          'wireguard uninstall retry ec=${un2.exitCode} :: ${outOf(un2).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
         );
       }
 
@@ -18544,7 +18535,7 @@ if ($null -eq $svc) { exit 0 }
       await log('=== DISCONNECT OK ===');
       return const VpnBackendResult(ok: true);
     } catch (e) {
-      await log('EXCEPTION: ' + e.toString());
+      await log('EXCEPTION: $e');
       return VpnBackendResult(
         ok: false,
         message: 'Disconnect error: $e (see backend.log)',

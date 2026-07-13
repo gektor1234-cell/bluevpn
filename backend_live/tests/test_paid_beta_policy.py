@@ -796,6 +796,19 @@ class PaidBetaPolicyTests(unittest.TestCase):
             [(30, 249), (90, 649), (180, 1099)],
         )
 
+    def test_public_product_pricing_overrides_legacy_beta_marker(self) -> None:
+        payload = self.beta_payload()
+        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+            catalog = main.build_tariff_catalog(paid_beta=True)
+            normalized = main.normalize_tariff_selection(payload)
+            quote = main.quote_tariff(normalized)
+
+        self.assertEqual(catalog["pricingModel"], "fixed_term_plans")
+        self.assertEqual(normalized["policyMode"], "public_product")
+        self.assertEqual(normalized["planCode"], "green_30d")
+        self.assertEqual(quote["monthlyPriceRub"], 249)
+        self.assertTrue(quote["autoRenew"])
+
     def test_public_product_quotes_selected_term_and_ignores_old_constructor_fields(self) -> None:
         with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
             normalized = main.normalize_tariff_selection(
@@ -906,6 +919,82 @@ class PaidBetaPolicyTests(unittest.TestCase):
         self.assertIsNotNone(renewal_order)
         self.assertEqual(renewal_order["amount_rub"], 249)
         self.assertIsNone(renewal_order["payment_url"])
+
+    def test_payment_smoke_rejects_activated_order_without_saved_method(self) -> None:
+        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(plan_code="green_30d"),
+            )
+            main.mark_billing_order_paid_and_activate(
+                order["orderId"],
+                provider_payment_id="legacy-payment-without-saved-method",
+            )
+        with main.db() as conn:
+            conn.execute(
+                "UPDATE billing_orders SET provider = 'yookassa', payment_url = ? WHERE public_id = ?",
+                ("https://yookassa.test/legacy", order["orderId"]),
+            )
+            conn.commit()
+
+        with (
+            patch.object(
+                main,
+                "yookassa_payment_readiness",
+                return_value={"productionReady": True},
+            ),
+            patch.object(
+                main,
+                "public_site_readiness",
+                return_value={"productionReady": True, "summary": {}},
+            ),
+        ):
+            readiness = main.billing_payment_smoke_readiness_payload()
+
+        self.assertFalse(readiness["smokeCompleted"])
+        self.assertFalse(readiness["productionReady"])
+        self.assertEqual(readiness["summary"]["successfulSmokeCandidates"], 0)
+        self.assertEqual(readiness["summary"]["activatedLegacyOrIncomplete"], 1)
+
+    def test_payment_smoke_accepts_current_saved_method_contract(self) -> None:
+        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(plan_code="green_30d"),
+            )
+            main.mark_billing_order_paid_and_activate(
+                order["orderId"],
+                provider_payment_id="current-public-payment",
+                provider_payment_method_id="current-saved-method",
+            )
+        with main.db() as conn:
+            conn.execute(
+                "UPDATE billing_orders SET provider = 'yookassa', payment_url = ? WHERE public_id = ?",
+                ("https://yookassa.test/current", order["orderId"]),
+            )
+            conn.commit()
+
+        with (
+            patch.object(
+                main,
+                "yookassa_payment_readiness",
+                return_value={"productionReady": True},
+            ),
+            patch.object(
+                main,
+                "public_site_readiness",
+                return_value={"productionReady": True, "summary": {}},
+            ),
+        ):
+            readiness = main.billing_payment_smoke_readiness_payload()
+
+        self.assertTrue(readiness["smokeCompleted"])
+        self.assertTrue(readiness["productionReady"])
+        self.assertEqual(readiness["summary"]["successfulSmokeCandidates"], 1)
+        self.assertEqual(
+            readiness["latestSuccessfulOrder"]["amountRub"],
+            249,
+        )
 
     def test_auto_renewal_executor_is_inert_on_fallback(self) -> None:
         with (

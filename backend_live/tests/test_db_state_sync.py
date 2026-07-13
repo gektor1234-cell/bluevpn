@@ -105,6 +105,50 @@ class DbStateSyncTests(unittest.TestCase):
                 ).fetchone()
             self.assertEqual(row, ("paid_beta_v1", "invite-alpha"))
 
+    def test_optional_table_missing_on_both_nodes_is_not_an_error(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="greenvpn-optional-table-absent-",
+            ignore_cleanup_errors=True,
+        ) as root:
+            source_db = Path(root) / "source.sqlite"
+            target_db = Path(root) / "target.sqlite"
+            for path in (source_db, target_db):
+                with sqlite3.connect(path) as conn:
+                    conn.execute("CREATE TABLE placeholder(id INTEGER PRIMARY KEY)")
+                    conn.commit()
+
+            result = self.run_sync(
+                source_db,
+                target_db,
+                tables=["beta_invites"],
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_table_present_on_only_one_node_remains_an_error(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="greenvpn-table-schema-mismatch-",
+            ignore_cleanup_errors=True,
+        ) as root:
+            source_db = Path(root) / "source.sqlite"
+            target_db = Path(root) / "target.sqlite"
+            with sqlite3.connect(source_db) as conn:
+                conn.execute(
+                    "CREATE TABLE beta_invites(public_id TEXT PRIMARY KEY)"
+                )
+                conn.commit()
+            with sqlite3.connect(target_db) as conn:
+                conn.execute("CREATE TABLE placeholder(id INTEGER PRIMARY KEY)")
+                conn.commit()
+
+            result = self.run_sync(
+                source_db,
+                target_db,
+                tables=["beta_invites"],
+            )
+
+            self.assertEqual(result.returncode, 3, result.stderr or result.stdout)
+
     def test_beta_invite_redemption_and_funnel_event_reach_peer(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="greenvpn-beta-sync-",
@@ -349,6 +393,304 @@ class DbStateSyncTests(unittest.TestCase):
                     "SELECT access_cohort, acquisition_source FROM users WHERE id = 1"
                 ).fetchone()
             self.assertEqual(row, ("paid_beta_v1", "payment"))
+
+    def test_explicit_tombstone_deletes_peer_row(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="greenvpn-tombstone-sync-",
+            ignore_cleanup_errors=True,
+        ) as root:
+            source_db = Path(root) / "source.sqlite"
+            target_db = Path(root) / "target.sqlite"
+            schema = """
+                CREATE TABLE users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT
+                );
+                CREATE TABLE replication_tombstones (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    table_name TEXT NOT NULL,
+                    natural_key_json TEXT NOT NULL,
+                    deleted_at TEXT NOT NULL,
+                    origin_node TEXT NOT NULL,
+                    UNIQUE(table_name, natural_key_json)
+                );
+            """
+            for path in (source_db, target_db):
+                with sqlite3.connect(path) as conn:
+                    conn.executescript(schema)
+                    conn.commit()
+            with sqlite3.connect(target_db) as conn:
+                conn.execute(
+                    "INSERT INTO users(email, created_at, updated_at) VALUES (?, ?, ?)",
+                    (
+                        "deleted@example.test",
+                        "2026-07-13T08:00:00+00:00",
+                        "2026-07-13T08:00:00+00:00",
+                    ),
+                )
+                conn.commit()
+            with sqlite3.connect(source_db) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO replication_tombstones(
+                        table_name, natural_key_json, deleted_at, origin_node
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        "users",
+                        '{"email":"deleted@example.test"}',
+                        "2026-07-13T09:00:00+00:00",
+                        "timeweb",
+                    ),
+                )
+                conn.commit()
+
+            result = self.run_sync(
+                source_db,
+                target_db,
+                tables=["users", "replication_tombstones"],
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            with sqlite3.connect(target_db) as conn:
+                user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+                tombstone_count = conn.execute(
+                    "SELECT COUNT(*) FROM replication_tombstones"
+                ).fetchone()[0]
+            self.assertEqual(user_count, 0)
+            self.assertEqual(tombstone_count, 1)
+
+    def test_newer_recreated_row_survives_old_tombstone(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="greenvpn-tombstone-recreate-",
+            ignore_cleanup_errors=True,
+        ) as root:
+            source_db = Path(root) / "source.sqlite"
+            target_db = Path(root) / "target.sqlite"
+            schema = """
+                CREATE TABLE users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT
+                );
+                CREATE TABLE replication_tombstones (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    table_name TEXT NOT NULL,
+                    natural_key_json TEXT NOT NULL,
+                    deleted_at TEXT NOT NULL,
+                    origin_node TEXT NOT NULL,
+                    UNIQUE(table_name, natural_key_json)
+                );
+            """
+            for path in (source_db, target_db):
+                with sqlite3.connect(path) as conn:
+                    conn.executescript(schema)
+                    conn.execute(
+                        """
+                        INSERT INTO replication_tombstones(
+                            table_name, natural_key_json, deleted_at, origin_node
+                        ) VALUES (?, ?, ?, ?)
+                        """,
+                        (
+                            "users",
+                            '{"email":"recreated@example.test"}',
+                            "2026-07-13T09:00:00+00:00",
+                            "timeweb",
+                        ),
+                    )
+                    conn.commit()
+            with sqlite3.connect(target_db) as conn:
+                conn.execute(
+                    "INSERT INTO users(email, created_at, updated_at) VALUES (?, ?, ?)",
+                    (
+                        "recreated@example.test",
+                        "2026-07-13T10:00:00+00:00",
+                        "2026-07-13T10:00:00+00:00",
+                    ),
+                )
+                conn.commit()
+
+            result = self.run_sync(
+                source_db,
+                target_db,
+                tables=["users", "replication_tombstones"],
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            with sqlite3.connect(target_db) as conn:
+                row = conn.execute(
+                    "SELECT email FROM users WHERE email = ?",
+                    ("recreated@example.test",),
+                ).fetchone()
+            self.assertEqual(row, ("recreated@example.test",))
+
+    def test_user_foreign_key_is_remapped_when_local_ids_differ(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="greenvpn-user-id-remap-",
+            ignore_cleanup_errors=True,
+        ) as root:
+            source_db = Path(root) / "source.sqlite"
+            target_db = Path(root) / "target.sqlite"
+            schema = """
+                CREATE TABLE users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT
+                );
+                CREATE TABLE subscriptions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL UNIQUE,
+                    plan_code TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                );
+            """
+            for path in (source_db, target_db):
+                with sqlite3.connect(path) as conn:
+                    conn.executescript(schema)
+                    conn.commit()
+            with sqlite3.connect(source_db) as conn:
+                conn.execute(
+                    "INSERT INTO users(id, email, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                    (1001, "mapped@example.test", "2026-07-13T08:00:00+00:00", "2026-07-13T08:00:00+00:00"),
+                )
+                conn.execute(
+                    "INSERT INTO subscriptions(id, user_id, plan_code, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    (1001, 1001, "green_30d", "2026-07-13T08:00:00+00:00", "2026-07-13T10:00:00+00:00"),
+                )
+                conn.commit()
+            with sqlite3.connect(target_db) as conn:
+                conn.execute(
+                    "INSERT INTO users(id, email, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                    (1, "mapped@example.test", "2026-07-13T08:00:00+00:00", "2026-07-13T08:00:00+00:00"),
+                )
+                conn.execute(
+                    "INSERT INTO subscriptions(id, user_id, plan_code, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    (1, 1, "trial", "2026-07-13T08:00:00+00:00", "2026-07-13T09:00:00+00:00"),
+                )
+                conn.commit()
+
+            result = self.run_sync(
+                source_db,
+                target_db,
+                tables=["users", "subscriptions"],
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            with sqlite3.connect(target_db) as conn:
+                users = conn.execute("SELECT id, email FROM users").fetchall()
+                subscription = conn.execute(
+                    "SELECT user_id, plan_code FROM subscriptions"
+                ).fetchone()
+            self.assertEqual(users, [(1, "mapped@example.test")])
+            self.assertEqual(subscription, (1, "green_30d"))
+
+    def test_tombstone_user_id_is_remapped_when_local_ids_differ(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="greenvpn-tombstone-user-id-remap-",
+            ignore_cleanup_errors=True,
+        ) as root:
+            source_db = Path(root) / "source.sqlite"
+            target_db = Path(root) / "target.sqlite"
+            schema = """
+                CREATE TABLE users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT
+                );
+                CREATE TABLE subscriptions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL UNIQUE,
+                    plan_code TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                );
+                CREATE TABLE replication_tombstones (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    table_name TEXT NOT NULL,
+                    natural_key_json TEXT NOT NULL,
+                    deleted_at TEXT NOT NULL,
+                    origin_node TEXT NOT NULL,
+                    UNIQUE(table_name, natural_key_json)
+                );
+            """
+            for path in (source_db, target_db):
+                with sqlite3.connect(path) as conn:
+                    conn.executescript(schema)
+                    conn.commit()
+            with sqlite3.connect(source_db) as conn:
+                conn.execute(
+                    "INSERT INTO users(id, email, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                    (
+                        1001,
+                        "deleted-subscription@example.test",
+                        "2026-07-13T08:00:00+00:00",
+                        "2026-07-13T08:00:00+00:00",
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO replication_tombstones(
+                        table_name, natural_key_json, deleted_at, origin_node
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        "subscriptions",
+                        '{"user_id":1001}',
+                        "2026-07-13T10:00:00+00:00",
+                        "timeweb",
+                    ),
+                )
+                conn.commit()
+            with sqlite3.connect(target_db) as conn:
+                conn.execute(
+                    "INSERT INTO users(id, email, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                    (
+                        1,
+                        "deleted-subscription@example.test",
+                        "2026-07-13T08:00:00+00:00",
+                        "2026-07-13T08:00:00+00:00",
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO subscriptions(
+                        id, user_id, plan_code, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        1,
+                        1,
+                        "green_30d",
+                        "2026-07-13T08:00:00+00:00",
+                        "2026-07-13T09:00:00+00:00",
+                    ),
+                )
+                conn.commit()
+
+            result = self.run_sync(
+                source_db,
+                target_db,
+                tables=["users", "subscriptions", "replication_tombstones"],
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            with sqlite3.connect(target_db) as conn:
+                subscription_count = conn.execute(
+                    "SELECT COUNT(*) FROM subscriptions"
+                ).fetchone()[0]
+                tombstone_key = conn.execute(
+                    "SELECT natural_key_json FROM replication_tombstones"
+                ).fetchone()[0]
+            self.assertEqual(subscription_count, 0)
+            self.assertEqual(tombstone_key, '{"user_id":1}')
 
 
 if __name__ == "__main__":

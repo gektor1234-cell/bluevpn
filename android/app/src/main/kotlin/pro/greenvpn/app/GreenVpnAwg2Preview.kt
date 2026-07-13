@@ -131,8 +131,11 @@ object GreenVpnAwg2Preview {
         }.also { tunnel = it }
     }
 
-    private fun state(name: String): Any = Class.forName(STATE_CLASS).enumConstants.first {
-        enumName(it) == name
+    private fun state(name: String): Any {
+        val constants = requireNotNull(Class.forName(STATE_CLASS).enumConstants) {
+            "$STATE_CLASS is not an enum"
+        }
+        return constants.first { enumName(it) == name }
     }
 
     private fun runningTunnelNames(currentBackend: Any): List<String> {

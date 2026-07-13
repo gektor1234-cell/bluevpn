@@ -15,7 +15,7 @@ import sqlite3
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Mapping
 
 
 NATURAL_KEYS: dict[str, tuple[str, ...]] = {
@@ -36,7 +36,6 @@ NATURAL_KEYS: dict[str, tuple[str, ...]] = {
     "sms_outbox": ("phone", "body", "created_at"),
     "support_reports": ("report_code",),
     "support_report_comments": ("report_id", "author", "body", "created_at"),
-    "billing_orders": ("public_id",),
     "promo_codes": ("code",),
     "promo_redemptions": ("code", "user_id", "order_public_id"),
     "beta_invites": ("public_id",),
@@ -52,6 +51,7 @@ NATURAL_KEYS: dict[str, tuple[str, ...]] = {
     "monitoring_targets": ("target_id",),
     "server_catalog_entries": ("server_id",),
     "app_releases": ("platform", "channel", "version"),
+    "replication_tombstones": ("table_name", "natural_key_json"),
 }
 
 DEFAULT_TABLES: tuple[str, ...] = tuple(NATURAL_KEYS.keys())
@@ -63,7 +63,15 @@ NEVER_UPDATE_TABLES = {
     "admin_sessions",
     "beta_funnel_events",
 }
-CHANGE_COLUMNS = ("updated_at", "last_seen_at", "last_config_at", "consumed_at", "sent_at", "verified_at")
+CHANGE_COLUMNS = (
+    "updated_at",
+    "last_seen_at",
+    "last_config_at",
+    "consumed_at",
+    "sent_at",
+    "verified_at",
+    "deleted_at",
+)
 PRESERVE_ID_TABLES = {
     "users",
     "subscriptions",
@@ -72,6 +80,39 @@ PRESERVE_ID_TABLES = {
 UNIQUE_CONFLICT_KEYS: dict[str, tuple[str, ...]] = {
     "device_transport_assignments": ("transport_key", "assigned_ip"),
 }
+DELETE_TABLE_ORDER = (
+    "support_report_comments",
+    "promo_redemptions",
+    "billing_orders",
+    "subscriptions",
+    "device_traffic_usage",
+    "devices",
+    "sms_outbox",
+    "email_login_codes",
+    "phone_confirmations",
+    "email_confirmations",
+    "email_outbox",
+    "tokens",
+    "support_reports",
+    "users",
+)
+ACCOUNT_DELETE_TABLES = (
+    "admin_support_actions",
+    "subscription_expiry_reviews",
+    "promo_redemptions",
+    "billing_orders",
+    "subscriptions",
+    "device_traffic_usage",
+    "devices",
+    "sms_outbox",
+    "email_login_codes",
+    "phone_confirmations",
+    "email_confirmations",
+    "email_outbox",
+    "tokens",
+    "auth_events",
+    "support_reports",
+)
 
 
 @dataclass
@@ -80,6 +121,7 @@ class TableResult:
     source_rows: int = 0
     inserted: int = 0
     updated: int = 0
+    deleted: int = 0
     skipped: int = 0
     conflicts: int = 0
     error: str | None = None
@@ -118,8 +160,17 @@ def _where_clause(keys: tuple[str, ...]) -> str:
     return " AND ".join([f"{key} IS ?" for key in keys])
 
 
-def _row_key(row: sqlite3.Row, keys: tuple[str, ...]) -> tuple[Any, ...]:
+def _row_key(row: Mapping[str, Any], keys: tuple[str, ...]) -> tuple[Any, ...]:
     return tuple(row[key] for key in keys)
+
+
+def _natural_key_json(row: Mapping[str, Any], keys: tuple[str, ...]) -> str:
+    return json.dumps(
+        {key: row[key] for key in keys},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _parse_dt(value: Any) -> datetime | None:
@@ -146,6 +197,150 @@ def _is_source_newer(source: sqlite3.Row, target: sqlite3.Row, columns: list[str
         if src_dt and (dst_dt is None or src_dt > dst_dt):
             return True
     return False
+
+
+def _row_latest_timestamp(row: sqlite3.Row) -> datetime | None:
+    latest: datetime | None = None
+    for column in (*CHANGE_COLUMNS, "created_at", "paid_at", "activated_at"):
+        if column not in row.keys():
+            continue
+        value = _parse_dt(row[column])
+        if value is not None and (latest is None or value > latest):
+            latest = value
+    return latest
+
+
+def _build_user_id_map(
+    source_conn: sqlite3.Connection,
+    target_conn: sqlite3.Connection,
+) -> dict[int, int]:
+    if "users" not in _tables(source_conn) or "users" not in _tables(target_conn):
+        return {}
+    mapping: dict[int, int] = {}
+    for source_user in source_conn.execute("SELECT id, email FROM users").fetchall():
+        target_user = target_conn.execute(
+            "SELECT id FROM users WHERE email IS ? LIMIT 1",
+            (source_user["email"],),
+        ).fetchone()
+        if target_user is not None:
+            mapping[int(source_user["id"])] = int(target_user["id"])
+    return mapping
+
+
+def _remap_replication_tombstone(
+    row: Mapping[str, Any],
+    user_id_map: Mapping[int, int] | None,
+) -> Mapping[str, Any]:
+    if not user_id_map:
+        return row
+    row_values = dict(row)
+    referenced_table = str(row_values.get("table_name") or "")
+    referenced_keys = NATURAL_KEYS.get(referenced_table, ())
+    if "user_id" not in referenced_keys:
+        return row
+    try:
+        values = json.loads(str(row_values.get("natural_key_json") or ""))
+    except (TypeError, ValueError):
+        return row
+    if not isinstance(values, dict) or values.get("user_id") is None:
+        return row
+    try:
+        source_user_id = int(values["user_id"])
+    except (TypeError, ValueError):
+        return row
+    mapped_user_id = user_id_map.get(source_user_id)
+    if mapped_user_id is None or mapped_user_id == source_user_id:
+        return row
+    values["user_id"] = mapped_user_id
+    remapped = row_values
+    remapped["natural_key_json"] = json.dumps(
+        values,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return remapped
+
+
+def _delete_user_dependents(
+    conn: sqlite3.Connection,
+    user_id: int,
+) -> int:
+    available = _tables(conn)
+    deleted = 0
+    if "support_report_comments" in available and "support_reports" in available:
+        cursor = conn.execute(
+            """
+            DELETE FROM support_report_comments
+            WHERE report_id IN (SELECT id FROM support_reports WHERE user_id = ?)
+            """,
+            (user_id,),
+        )
+        deleted += max(0, int(cursor.rowcount or 0))
+    for table in ACCOUNT_DELETE_TABLES:
+        if table not in available or "user_id" not in _columns(conn, table):
+            continue
+        cursor = conn.execute(
+            f"DELETE FROM {table} WHERE user_id = ?",
+            (user_id,),
+        )
+        deleted += max(0, int(cursor.rowcount or 0))
+    return deleted
+
+
+def _tombstone_blocks_row(tombstone: sqlite3.Row, row: sqlite3.Row) -> bool:
+    deleted_at = _parse_dt(tombstone["deleted_at"])
+    row_timestamp = _row_latest_timestamp(row)
+    if deleted_at is None:
+        return True
+    return row_timestamp is None or row_timestamp <= deleted_at
+
+
+def _apply_tombstones(conn: sqlite3.Connection, apply: bool) -> TableResult:
+    result = TableResult(table="replication_deletes")
+    if "replication_tombstones" not in _tables(conn):
+        result.error = "missing table"
+        return result
+    tombstones = conn.execute(
+        "SELECT table_name, natural_key_json, deleted_at FROM replication_tombstones"
+    ).fetchall()
+    order = {table: index for index, table in enumerate(DELETE_TABLE_ORDER)}
+    tombstones = sorted(
+        tombstones,
+        key=lambda row: order.get(str(row["table_name"]), len(order)),
+    )
+    result.source_rows = len(tombstones)
+    available_tables = _tables(conn)
+    for tombstone in tombstones:
+        table = str(tombstone["table_name"] or "")
+        keys = NATURAL_KEYS.get(table)
+        if not keys or table == "replication_tombstones" or table not in available_tables:
+            result.skipped += 1
+            continue
+        try:
+            values = json.loads(str(tombstone["natural_key_json"] or ""))
+        except (TypeError, ValueError):
+            result.conflicts += 1
+            continue
+        if not isinstance(values, dict) or any(key not in values for key in keys):
+            result.conflicts += 1
+            continue
+        row = conn.execute(
+            f"SELECT * FROM {table} WHERE {_where_clause(keys)} LIMIT 1",
+            tuple(values[key] for key in keys),
+        ).fetchone()
+        if row is None or not _tombstone_blocks_row(tombstone, row):
+            result.skipped += 1
+            continue
+        result.deleted += 1
+        if apply:
+            if table == "users" and "id" in row.keys():
+                result.deleted += _delete_user_dependents(conn, int(row["id"]))
+            conn.execute(
+                f"DELETE FROM {table} WHERE {_where_clause(keys)}",
+                tuple(values[key] for key in keys),
+            )
+    return result
 
 
 def _has_pk_conflict(
@@ -223,11 +418,16 @@ def _sync_table(
     target_conn: sqlite3.Connection,
     table: str,
     apply: bool,
+    user_id_map: Mapping[int, int] | None = None,
 ) -> TableResult:
     result = TableResult(table=table)
     source_tables = _tables(source_conn)
     target_tables = _tables(target_conn)
-    if table not in source_tables or table not in target_tables:
+    source_has_table = table in source_tables
+    target_has_table = table in target_tables
+    if not source_has_table and not target_has_table:
+        return result
+    if not source_has_table or not target_has_table:
         result.error = "missing table"
         return result
 
@@ -243,10 +443,45 @@ def _sync_table(
     source_rows = source_conn.execute(f"SELECT {', '.join(columns)} FROM {table}").fetchall()
     result.source_rows = len(source_rows)
     lookup_sql = f"SELECT {', '.join(columns)} FROM {table} WHERE {_where_clause(keys)} LIMIT 1"
+    target_tombstones: dict[str, sqlite3.Row] = {}
+    if table != "replication_tombstones" and "replication_tombstones" in target_tables:
+        target_tombstones = {
+            str(row["natural_key_json"]): row
+            for row in target_conn.execute(
+                """
+                SELECT natural_key_json, deleted_at
+                FROM replication_tombstones
+                WHERE table_name = ?
+                """,
+                (table,),
+            ).fetchall()
+        }
 
-    for source_row in source_rows:
+    for raw_source_row in source_rows:
+        source_row: Mapping[str, Any] = raw_source_row
+        if table == "replication_tombstones":
+            source_row = _remap_replication_tombstone(
+                raw_source_row,
+                user_id_map,
+            )
+        elif (
+            table != "users"
+            and "user_id" in columns
+            and raw_source_row["user_id"] is not None
+            and user_id_map
+        ):
+            source_user_id = int(raw_source_row["user_id"])
+            mapped_user_id = user_id_map.get(source_user_id)
+            if mapped_user_id is not None and mapped_user_id != source_user_id:
+                mutable_source_row = dict(raw_source_row)
+                mutable_source_row["user_id"] = mapped_user_id
+                source_row = mutable_source_row
         key_values = _row_key(source_row, keys)
         target_row = target_conn.execute(lookup_sql, key_values).fetchone()
+        tombstone = target_tombstones.get(_natural_key_json(source_row, keys))
+        if tombstone is not None and _tombstone_blocks_row(tombstone, source_row):
+            result.skipped += 1
+            continue
         if target_row is None:
             if _has_unique_value_conflict(
                 target_conn,
@@ -333,10 +568,30 @@ def main() -> int:
     results: list[TableResult] = []
     try:
         target_conn.execute("BEGIN IMMEDIATE")
-        for table in args.tables:
+        ordered_tables = list(dict.fromkeys(args.tables))
+        if "replication_tombstones" in ordered_tables:
+            ordered_tables.remove("replication_tombstones")
+        tombstones_available = bool(
+            "replication_tombstones" in _tables(source_conn)
+            and "replication_tombstones" in _tables(target_conn)
+        )
+        if tombstones_available:
+            ordered_tables.insert(0, "replication_tombstones")
+        for table in ordered_tables:
             if table not in NATURAL_KEYS:
                 continue
-            results.append(_sync_table(source_conn, target_conn, table, apply=args.apply))
+            user_id_map = _build_user_id_map(source_conn, target_conn)
+            results.append(
+                _sync_table(
+                    source_conn,
+                    target_conn,
+                    table,
+                    apply=args.apply,
+                    user_id_map=user_id_map,
+                )
+            )
+            if table == "replication_tombstones" and tombstones_available:
+                results.append(_apply_tombstones(target_conn, apply=args.apply))
         if args.apply:
             _refresh_sequences(target_conn, [result.table for result in results])
             target_conn.commit()
@@ -360,6 +615,7 @@ def main() -> int:
         "totals": {
             "inserted": sum(result.inserted for result in results),
             "updated": sum(result.updated for result in results),
+            "deleted": sum(result.deleted for result in results),
             "skipped": sum(result.skipped for result in results),
             "conflicts": sum(result.conflicts for result in results),
             "errors": sum(1 for result in results if result.error),

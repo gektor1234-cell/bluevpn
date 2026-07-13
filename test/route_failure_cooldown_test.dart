@@ -1,4 +1,4 @@
-import 'package:bluevpn_ui/services/route_failure_cooldown.dart';
+import 'package:greenvpn/services/route_failure_cooldown.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

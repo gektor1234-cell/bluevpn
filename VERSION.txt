@@ -1,4 +1,7 @@
-BlueVPN 0.1.0-working-freeze
-Build date: 2026-03-12
-Platform: Windows
-Status: stable baseline
+Green VPN 0.2.44
+Build: 2026070504
+Platforms: Android, Windows
+Production backend: 0.9.105
+Status: stable public baseline
+Paid candidate backend: 0.9.116-active-active.3
+Paid candidate release: paid-beta-backend-active-active-20260713-r22

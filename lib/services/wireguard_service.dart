@@ -19,8 +19,9 @@ class WireGuardService {
     final out = ('${res.stdout}\n${res.stderr}').toString();
     if (out.contains('STATE') && out.contains('RUNNING')) return 'RUNNING';
     if (out.contains('STATE') && out.contains('STOPPED')) return 'STOPPED';
-    if (out.contains('1060') || out.toLowerCase().contains('не установлена'))
+    if (out.contains('1060') || out.toLowerCase().contains('не установлена')) {
       return 'MISSING';
+    }
     return 'UNKNOWN';
   }
 

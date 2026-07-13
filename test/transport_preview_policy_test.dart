@@ -1,4 +1,4 @@
-import 'package:bluevpn_ui/services/transport_preview_policy.dart';
+import 'package:greenvpn/services/transport_preview_policy.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

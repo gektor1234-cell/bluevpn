@@ -1275,6 +1275,8 @@ class MainActivity : FlutterActivity() {
         return nowElapsed - startedAtElapsed
     }
 
+    // activeNetwork misses non-default split-tunnel VPNs, so enumerate all networks here.
+    @Suppress("DEPRECATION")
     private fun isAnyVpnNetworkActive(): Boolean {
         return try {
             val connectivity = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -1287,6 +1289,7 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    @Suppress("DEPRECATION")
     private fun isOwnVpnNetworkActive(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
         return try {

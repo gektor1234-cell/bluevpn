@@ -71,6 +71,8 @@ rollback_checkpoint: <filled-after-preflight>
 
 - IP и SSH host key совпадают с паспортом;
 - Ubuntu release, архитектура, время/NTP, диск, RAM, CPU и kernel пригодны;
+- абсолютный UTC offset не превышает 5 секунд; источник времени и Leap status
+  зафиксированы;
 - egress равен ожидаемому IP;
 - firewall провайдера и ОС известны, разрешаются только заявленные порты;
 - нет конфликтующих listeners, failed units и незадокументированных NAT rules;
@@ -80,6 +82,12 @@ rollback_checkpoint: <filled-after-preflight>
 - публичные API и YouTube доступны с узла до изменения.
 
 Apply запрещён при неверном IP, неизвестном host key, расхождении stable fingerprint, нездоровом узле или отсутствии rollback-доступа.
+
+Большой clock skew сначала устраняется отдельно через
+`scripts/server/ensure_server_time_sync.sh`. Если нужен backward step, до него
+создаются online-backup всех SQLite DB и останавливаются backend, sync timers и
+VPN-службы. Для аудита DB на ещё неверных часах используется доверенный
+`--reference-now`, а не локальное время узла.
 
 ## Фаза 2. Стандарт canary-скриптов
 
@@ -134,6 +142,11 @@ if ($LASTEXITCODE -ne 0) { throw 'Remote apply failed' }
 6. Stable WireGuard остаётся самостоятельным проверенным путём и не модифицируется canary-работами.
 
 Новый узел не обязан сразу поддерживать все пять preview-транспортов. Каждый добавляется и принимается независимо. Следующий transport не скрывает провал предыдущего.
+
+Эталонные server-side проверки Hysteria2 и VLESS находятся в
+`scripts/server/check_hysteria2_canary_readiness.sh` и
+`scripts/server/check_vless_reality_canary_readiness.sh`. Они обязаны доказывать
+listener/config/service и реальный egress/целевой HTTPS без вывода credentials.
 
 Для каждого transport проверить:
 
@@ -219,18 +232,23 @@ Checkpoint должен содержать:
 - SHA-256 manifest самого checkpoint;
 - итог `ready`, `preview-only` или `rolled-back` с причиной.
 
-Private keys, access tokens, payment data, email/SMS codes и полные клиентские профили в checkpoint запрещены.
+Открытый change-report и его manifest не содержат private keys, access tokens,
+payment data, email/SMS codes или полные клиентские профили. Материал, без
+которого невозможен disaster restore, хранится отдельно только в AES-256
+restore vault с encrypted headers и закрытым ACL по правилам главного
+операционного регламента; его значения никогда не перечисляются в отчёте.
 
 ## Быстрый маршрут следующей интеграции
 
 1. Скопировать этот checklist в новый change directory и заполнить паспорт.
 2. Выбрать уже поддерживаемые transport и назначить уникальные server ID/listeners.
 3. Снять stable fingerprints и server backup.
-4. Адаптировать exact-host guarded bootstrap/readiness/rollback, не копируя секреты NL2.
-5. Dry-run, review diff, apply одного transport, readiness, rollback rehearsal.
-6. Добавить только preview contracts в оба control plane и выполнить `10/10`-подобный contract proof.
-7. Пройти физический data-plane/fail-closed/reconnect тест.
-8. Пройти release gate и stable isolation.
-9. Создать checkpoint и только затем решать вопрос о cohort/production.
+4. Проверить NTP/UTC и выполнить безопасный timestamp audit.
+5. Адаптировать exact-host guarded bootstrap/readiness/rollback, не копируя секреты NL2.
+6. Dry-run, review diff, apply одного transport, readiness, rollback rehearsal.
+7. Добавить только preview contracts в оба control plane и выполнить `10/10`-подобный contract proof.
+8. Пройти физический data-plane/fail-closed/reconnect тест.
+9. Пройти release gate и stable isolation.
+10. Создать checkpoint и только затем решать вопрос о cohort/production.
 
 Никакая часть этого быстрого маршрута не позволяет пропустить физический data-plane proof или изменить stable “на время теста”.

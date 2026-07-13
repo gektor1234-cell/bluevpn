@@ -1,0 +1,119 @@
+name: Green VPN CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: greenvpn-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check whitespace in the pushed or proposed change set
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git diff --check "${{ github.event.pull_request.base.sha }}...HEAD"
+          elif [[ "${{ github.event.before }}" =~ ^[0-9a-f]{40}$ ]] &&
+               [[ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]]; then
+            git diff --check "${{ github.event.before }}..HEAD"
+          else
+            git show --check --oneline --format=fuller HEAD
+          fi
+      - run: python -m py_compile scripts/security/scan_tracked_secrets.py
+      - run: python scripts/security/scan_tracked_secrets.py --history
+
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend_live/requirements.txt
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r backend_live/requirements.txt
+      - run: python -m py_compile backend_live/app/main.py
+      - run: python -m unittest discover -s backend_live/tests -p 'test_*.py'
+
+  backend-dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: backend_live/requirements.txt
+      - run: python -m pip install --upgrade pip pip-audit
+      - run: python -m pip_audit -r backend_live/requirements.txt
+
+  public-surface-probe-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m py_compile scripts/monitoring/public_surface_probe.py
+      - run: python scripts/monitoring/public_surface_probe.py --target production_api --attempts 2
+
+  flutter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.1'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings
+      - run: flutter test --no-pub
+
+  android-app-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.1'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - name: Run Android application unit tests
+        working-directory: android
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+  release-gate:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run static release gate
+        shell: powershell
+        run: ./scripts/windows/bluevpn_release_gate.ps1

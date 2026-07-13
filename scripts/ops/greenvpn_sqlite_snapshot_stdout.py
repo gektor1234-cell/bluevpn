@@ -12,6 +12,8 @@ import pathlib
 import sqlite3
 import sys
 import tempfile
+import gzip
+import shutil
 
 
 def _load_env(path: pathlib.Path) -> dict[str, str]:
@@ -41,7 +43,35 @@ def _db_path() -> pathlib.Path:
     return data / "bluevpn.db"
 
 
+def _compression() -> str:
+    value = os.getenv("GREENVPN_SNAPSHOT_COMPRESSION", "none").strip().lower()
+    if value not in {"none", "gzip"}:
+        raise ValueError(f"unsupported snapshot compression: {value}")
+    return value
+
+
+def _write_snapshot(path: pathlib.Path, compression: str) -> None:
+    with path.open("rb") as source:
+        if compression == "gzip":
+            with gzip.GzipFile(
+                fileobj=sys.stdout.buffer,
+                mode="wb",
+                compresslevel=1,
+                mtime=0,
+            ) as target:
+                shutil.copyfileobj(source, target, length=1024 * 1024)
+        else:
+            shutil.copyfileobj(source, sys.stdout.buffer, length=1024 * 1024)
+    sys.stdout.buffer.flush()
+
+
 def main() -> int:
+    try:
+        compression = _compression()
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
     source = _db_path()
     if not source.exists():
         print(f"source database not found: {source}", file=sys.stderr)
@@ -59,13 +89,7 @@ def main() -> int:
             dst.close()
             src.close()
 
-        with tmp_path.open("rb") as fh:
-            while True:
-                chunk = fh.read(1024 * 1024)
-                if not chunk:
-                    break
-                sys.stdout.buffer.write(chunk)
-        sys.stdout.buffer.flush()
+        _write_snapshot(tmp_path, compression)
         return 0
     finally:
         try:

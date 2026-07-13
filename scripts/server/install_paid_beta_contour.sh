@@ -410,6 +410,8 @@ download_base = (
 released_at = str(manifest.get("generatedAt") or "").strip()
 updates = {
     "GREENVPN_PAID_BETA_BILLING_PRIMARY": "1" if role == "timeweb" else "0",
+    "GREENVPN_REPLICATION_NODE_ID": role,
+    "GREENVPN_SQLITE_NODE_ID_BASE": "0" if role == "timeweb" else "1000000000",
     "GREENVPN_ANDROID_PAID_BETA_LATEST_VERSION": str(android["version"]).strip(),
     "GREENVPN_ANDROID_PAID_BETA_UPDATE_URL": f"{download_base}/GreenVPN_Android.apk",
     "GREENVPN_ANDROID_PAID_BETA_UPDATE_SHA256": str(android["sha256"]).strip().upper(),
@@ -489,10 +491,11 @@ PY
 chown root:root "${ENV_FILE}"
 chmod 600 "${ENV_FILE}"
 
-python3 - "${ENV_FILE}" "${BACKEND_VERSION}" <<'PY'
+python3 - "${ENV_FILE}" "${BACKEND_VERSION}" "${ROLE}" <<'PY'
 import pathlib, sys
 path = pathlib.Path(sys.argv[1])
 backend_version = sys.argv[2]
+role = sys.argv[3]
 values = {}
 for raw in path.read_text(encoding="utf-8").splitlines():
     line = raw.strip()
@@ -511,6 +514,8 @@ expected = {
     "GREENVPN_PAID_BETA_CLIENT_MARKER": "green-vpn-paid-beta-v1",
     "GREENVPN_PAID_BETA_RELEASE_CHANNEL": "paid-beta",
     "GREENVPN_BACKEND_VERSION": backend_version,
+    "GREENVPN_REPLICATION_NODE_ID": role,
+    "GREENVPN_SQLITE_NODE_ID_BASE": "0" if role == "timeweb" else "1000000000",
     "GREENVPN_PUBLIC_API_BASE_URL": "https://api.greenvpn.pro/paid-beta-api",
     "GREENVPN_PUBLIC_BASE_URL": "https://api.greenvpn.pro/paid-beta-api",
     "GREENVPN_FREE_AD_GATE_ENABLED": "0",
@@ -567,6 +572,7 @@ GREENVPN_DB_SYNC_SSH_KEY=${SYNC_SSH_KEY}
 GREENVPN_DB_SYNC_REMOTE_SNAPSHOT_ENV_FILE=${ENV_FILE}
 GREENVPN_DB_SYNC_REMOTE_SNAPSHOT_SCRIPT=${CURRENT_LINK}/ops/greenvpn_sqlite_snapshot_stdout.py
 GREENVPN_DB_SYNC_LOCAL_STATE_SYNC_SCRIPT=${CURRENT_LINK}/ops/greenvpn_sqlite_state_sync.py
+GREENVPN_DB_SYNC_SNAPSHOT_COMPRESSION=gzip
 EOF
 chmod 600 "${SYNC_ENV_FILE}"
 

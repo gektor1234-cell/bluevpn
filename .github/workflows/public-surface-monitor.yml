@@ -1,0 +1,35 @@
+name: Green VPN public surface monitor
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: greenvpn-public-surface-monitor
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Check public APIs, sites, legal pages and downloads
+        run: >-
+          python scripts/monitoring/public_surface_probe.py
+          --report public-surface-report.json
+      - name: Preserve the probe report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-surface-report
+          path: public-surface-report.json
+          retention-days: 14
+          if-no-files-found: error

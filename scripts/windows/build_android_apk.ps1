@@ -101,9 +101,9 @@ flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings | Out-Host
 flutter test --no-pub | Out-Host
 
 $builds = @()
-$releaseAppVersion = "0.2.23-trial-only-android-vpn-takeover"
-$releaseBuildName = "0.2.23"
-$releaseBuildNumber = "2026060801"
+$releaseAppVersion = "0.2.44"
+$releaseBuildName = "0.2.44"
+$releaseBuildNumber = "2026070504"
 if ($Mode -eq "debug" -or $Mode -eq "both") {
     $debugArgs = @('build', 'apk', '--debug', '--no-pub')
     if ($EnableAwg2Preview) {
@@ -183,13 +183,13 @@ if ($Mode -eq "release" -or $Mode -eq "both") {
     $releaseArgs += "--build-name=$releaseBuildName"
     $releaseArgs += "--build-number=$releaseBuildNumber"
     if ($EnableYandexRewardedAds -or $EnableAwg2Preview -or $EnableHysteria2Preview -or $EnableVlessRealityPreview -or $EnableNaiveHttpsPreview -or $EnableDnsttPreview -or $DeployPreview) {
-        $releaseAppVersion = "0.2.43-preview"
-        $releaseBuildName = "0.2.43"
-        $releaseBuildNumber = "2026070503"
+        $releaseAppVersion = $Awg2PreviewAppVersion
+        $releaseBuildName = $Awg2PreviewBuildName
+        $releaseBuildNumber = $Awg2PreviewBuildNumber
         $releaseArgs[4] = "--dart-define=GREENVPN_APP_VERSION=$releaseAppVersion"
         $releaseArgs[5] = "--build-name=$releaseBuildName"
         $releaseArgs[6] = "--build-number=$releaseBuildNumber"
-        $releaseArgs += "--dart-define=GREENVPN_YANDEX_REWARDED_ADS_ENABLED=true"
+        $releaseArgs += "--dart-define=GREENVPN_YANDEX_REWARDED_ADS_ENABLED=$($EnableYandexRewardedAds.ToString().ToLowerInvariant())"
         $releaseArgs += "--dart-define=GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=false"
         $releaseArgs += "--dart-define=BLUEVPN_API_BASE_URLS=https://176-113-81-35.sslip.io"
     }
@@ -252,6 +252,20 @@ if ($Mode -eq "release" -or $Mode -eq "both") {
 }
 
 $apksigner = Join-Path $androidSdk "build-tools\36.0.0\apksigner.bat"
+$expectedSignerPath = Join-Path $repo "android\release_signer_sha256.txt"
+$expectedReleaseSigner = if ($env:GREENVPN_EXPECTED_ANDROID_SIGNER_SHA256) {
+    $env:GREENVPN_EXPECTED_ANDROID_SIGNER_SHA256.Trim().ToLowerInvariant()
+} elseif (Test-Path -LiteralPath $expectedSignerPath -PathType Leaf) {
+    (Get-Content -LiteralPath $expectedSignerPath -Raw).Trim().ToLowerInvariant()
+} else {
+    ''
+}
+if (-not (Test-Path -LiteralPath $apksigner -PathType Leaf)) {
+    throw "apksigner is required but was not found: $apksigner"
+}
+if (($Mode -eq 'release' -or $Mode -eq 'both') -and $expectedReleaseSigner -notmatch '^[0-9a-f]{64}$') {
+    throw 'Expected Android release signer SHA-256 is missing or invalid.'
+}
 foreach ($apk in $builds) {
     $item = Get-Item $apk
     $hash = Get-FileHash -Algorithm SHA256 $item.FullName
@@ -259,8 +273,26 @@ foreach ($apk in $builds) {
     Write-Host "APK: $($item.FullName)"
     Write-Host "Size: $($item.Length) bytes"
     Write-Host "SHA256: $($hash.Hash)"
-    if (Test-Path $apksigner) {
-        & $apksigner verify --verbose $item.FullName | Out-Host
+    & $apksigner verify --verbose $item.FullName | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "APK signature verification failed: $($item.FullName)"
+    }
+    if ($item.Name -eq 'app-release.apk') {
+        $certificateOutput = & $apksigner verify --print-certs $item.FullName
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to inspect APK signer: $($item.FullName)"
+        }
+        $certificateLine = $certificateOutput |
+            Select-String -Pattern 'certificate SHA-256 digest:\s*([0-9a-fA-F]{64})' |
+            Select-Object -First 1
+        if (-not $certificateLine) {
+            throw "APK signer SHA-256 was not reported: $($item.FullName)"
+        }
+        $actualSigner = $certificateLine.Matches[0].Groups[1].Value.ToLowerInvariant()
+        if ($actualSigner -ne $expectedReleaseSigner) {
+            throw "Unexpected Android release signer for $($item.FullName)."
+        }
+        Write-Host "Signer SHA256: $actualSigner"
     }
 }
 

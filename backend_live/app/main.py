@@ -19,11 +19,12 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from email.message import EmailMessage
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -224,6 +225,28 @@ DNSTT_CANARY_SERVER_IDS = {
 DNSTT_CANARY_ZONE = os.getenv("GREENVPN_DNSTT_CANARY_ZONE", "").strip().lower()
 DNSTT_CANARY_IP = os.getenv("GREENVPN_DNSTT_CANARY_IP", "").strip()
 DB_PATH = DATA_DIR / "bluevpn.db"
+SQLITE_NODE_ID_BASE = max(
+    0,
+    int(os.getenv("GREENVPN_SQLITE_NODE_ID_BASE", "0") or "0"),
+)
+REPLICATION_NODE_ID = (
+    os.getenv("GREENVPN_REPLICATION_NODE_ID", "local").strip() or "local"
+)
+REPLICATION_DELETE_KEYS: dict[str, tuple[str, ...]] = {
+    "users": ("email",),
+    "tokens": ("token",),
+    "devices": ("device_uid",),
+    "subscriptions": ("user_id",),
+    "billing_orders": ("public_id",),
+    "device_traffic_usage": ("user_id", "device_uid", "server_id", "period_key"),
+    "email_confirmations": ("token_hash",),
+    "email_login_codes": ("email", "code_hash", "created_at"),
+    "phone_confirmations": ("phone", "code_hash", "created_at"),
+    "email_outbox": ("email", "subject", "created_at"),
+    "sms_outbox": ("phone", "body", "created_at"),
+    "support_reports": ("report_code",),
+    "promo_redemptions": ("code", "user_id", "order_public_id"),
+}
 DB_BUSY_TIMEOUT_SECONDS = env_float("BLUEVPN_DB_BUSY_TIMEOUT_SECONDS", 30.0, min_value=1.0)
 DB_BUSY_TIMEOUT_MS = int(DB_BUSY_TIMEOUT_SECONDS * 1000)
 SQLITE_ENABLE_WAL = os.getenv("BLUEVPN_SQLITE_ENABLE_WAL", "").strip().lower() in {
@@ -1973,11 +1996,19 @@ def configure_sqlite_connection(conn: sqlite3.Connection, apply_wal: bool = Fals
         conn.execute("PRAGMA synchronous = NORMAL")
 
 
-def db() -> sqlite3.Connection:
+@contextmanager
+def db() -> Iterator[sqlite3.Connection]:
     conn = sqlite3.connect(DB_PATH, timeout=DB_BUSY_TIMEOUT_SECONDS)
     conn.row_factory = sqlite3.Row
     configure_sqlite_connection(conn)
-    return conn
+    try:
+        yield conn
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
@@ -3288,6 +3319,24 @@ def init_db() -> None:
             ON beta_funnel_events(user_id, created_at)
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS replication_tombstones (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                table_name TEXT NOT NULL,
+                natural_key_json TEXT NOT NULL,
+                deleted_at TEXT NOT NULL,
+                origin_node TEXT NOT NULL,
+                UNIQUE(table_name, natural_key_json)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_replication_tombstones_deleted
+            ON replication_tombstones(deleted_at, table_name)
+            """
+        )
 
         conn.execute("UPDATE devices SET is_enabled = 1 WHERE is_enabled IS NULL")
 
@@ -3313,7 +3362,96 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_auth_events_created ON auth_events(created_at)"
         )
 
+        if SQLITE_NODE_ID_BASE > 0:
+            sequence_tables = conn.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table'
+                  AND sql LIKE '%AUTOINCREMENT%'
+                  AND name != 'sqlite_sequence'
+                """
+            ).fetchall()
+            for sequence_table in sequence_tables:
+                table_name = str(sequence_table["name"])
+                cursor = conn.execute(
+                    """
+                    UPDATE sqlite_sequence
+                    SET seq = CASE WHEN seq < ? THEN ? ELSE seq END
+                    WHERE name = ?
+                    """,
+                    (SQLITE_NODE_ID_BASE, SQLITE_NODE_ID_BASE, table_name),
+                )
+                if int(cursor.rowcount or 0) == 0:
+                    conn.execute(
+                        "INSERT INTO sqlite_sequence(name, seq) VALUES (?, ?)",
+                        (table_name, SQLITE_NODE_ID_BASE),
+                    )
+
         conn.commit()
+
+
+def record_replication_tombstone(
+    conn: sqlite3.Connection,
+    table: str,
+    row,
+    *,
+    deleted_at: Optional[str] = None,
+) -> None:
+    keys = REPLICATION_DELETE_KEYS.get(table)
+    if not keys:
+        return
+    values = {key: row[key] for key in keys}
+    natural_key_json = json.dumps(
+        values,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    deleted = deleted_at or utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO replication_tombstones(
+            table_name, natural_key_json, deleted_at, origin_node
+        )
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(table_name, natural_key_json) DO UPDATE SET
+            deleted_at = CASE
+                WHEN excluded.deleted_at > replication_tombstones.deleted_at
+                    THEN excluded.deleted_at
+                ELSE replication_tombstones.deleted_at
+            END,
+            origin_node = CASE
+                WHEN excluded.deleted_at >= replication_tombstones.deleted_at
+                    THEN excluded.origin_node
+                ELSE replication_tombstones.origin_node
+            END
+        """,
+        (table, natural_key_json, deleted, REPLICATION_NODE_ID),
+    )
+
+
+def record_replication_tombstones_for_delete(
+    conn: sqlite3.Connection,
+    table: str,
+    where_sql: str,
+    args: tuple,
+) -> None:
+    keys = REPLICATION_DELETE_KEYS.get(table)
+    if not keys:
+        return
+    rows = conn.execute(
+        f"SELECT {', '.join(keys)} FROM {table} WHERE {where_sql}",
+        args,
+    ).fetchall()
+    deleted_at = utc_now_iso()
+    for row in rows:
+        record_replication_tombstone(
+            conn,
+            table,
+            row,
+            deleted_at=deleted_at,
+        )
 
 
 def ensure_admin_token() -> str:
@@ -5194,10 +5332,10 @@ def build_public_product_tariff_catalog() -> dict:
 
 
 def build_tariff_catalog(paid_beta: bool = False) -> dict:
-    if paid_beta:
-        return build_paid_beta_tariff_catalog()
     if PUBLIC_PRODUCT_ENABLED:
         return build_public_product_tariff_catalog()
+    if paid_beta:
+        return build_paid_beta_tariff_catalog()
     return {
         "policyVersion": TARIFF_POLICY_VERSION,
         "pricingModel": "free_start_plus_configurable_paid_plan",
@@ -5898,24 +6036,6 @@ def _apps_price(codes: list[str]) -> int:
 
 
 def normalize_tariff_selection(payload: TariffSelectionIn) -> dict:
-    if paid_beta_request_allowed(payload.clientMarker, payload.releaseChannel):
-        return {
-            "policyMode": "paid_beta",
-            "policyVersion": PAID_BETA_POLICY_VERSION,
-            "planCode": PAID_BETA_PLAN_CODE,
-            "trafficPack": "paid_beta",
-            "trafficGb": 0,
-            "paidEffectiveGb": 0,
-            "devices": PAID_BETA_MAX_DEVICES,
-            "unlimitedApps": [],
-            "dedicatedIp": False,
-            "autoRenew": False,
-            "promoCode": "",
-            "clientMarker": PAID_BETA_CLIENT_MARKER,
-            "releaseChannel": PAID_BETA_RELEASE_CHANNEL,
-            "includedFeatures": ["vpn_access", "social_routing", "no_ads"],
-        }
-
     if PUBLIC_PRODUCT_ENABLED:
         plan_code = str(payload.billingPlanCode or PUBLIC_PRODUCT_PLAN_CODE).strip().lower()
         if plan_code not in PUBLIC_PRODUCT_PLANS:
@@ -5938,6 +6058,24 @@ def normalize_tariff_selection(payload: TariffSelectionIn) -> dict:
             "dedicatedIp": False,
             "autoRenew": bool(payload.autoRenew),
             "promoCode": "",
+            "includedFeatures": ["vpn_access", "social_routing", "no_ads"],
+        }
+
+    if paid_beta_request_allowed(payload.clientMarker, payload.releaseChannel):
+        return {
+            "policyMode": "paid_beta",
+            "policyVersion": PAID_BETA_POLICY_VERSION,
+            "planCode": PAID_BETA_PLAN_CODE,
+            "trafficPack": "paid_beta",
+            "trafficGb": 0,
+            "paidEffectiveGb": 0,
+            "devices": PAID_BETA_MAX_DEVICES,
+            "unlimitedApps": [],
+            "dedicatedIp": False,
+            "autoRenew": False,
+            "promoCode": "",
+            "clientMarker": PAID_BETA_CLIENT_MARKER,
+            "releaseChannel": PAID_BETA_RELEASE_CHANNEL,
             "includedFeatures": ["vpn_access", "social_routing", "no_ads"],
         }
 
@@ -17264,6 +17402,12 @@ def delete_admin_user_record(user_id: int, payload: AdminUserDeleteIn) -> dict:
         deleted: dict[str, int] = {}
 
         def delete_from(table: str, where_sql: str, args: tuple) -> None:
+            record_replication_tombstones_for_delete(
+                conn,
+                table,
+                where_sql,
+                args,
+            )
             cursor = conn.execute(f"DELETE FROM {table} WHERE {where_sql}", args)
             deleted[table] = max(0, int(cursor.rowcount or 0))
 
@@ -17291,6 +17435,7 @@ def delete_admin_user_record(user_id: int, payload: AdminUserDeleteIn) -> dict:
         ]:
             delete_from(table, "user_id = ?", (int(user_id),))
 
+        record_replication_tombstone(conn, "users", user_row)
         cursor = conn.execute("DELETE FROM users WHERE id = ?", (int(user_id),))
         deleted["users"] = max(0, int(cursor.rowcount or 0))
         conn.commit()
@@ -18109,7 +18254,7 @@ def paid_beta_site_readiness() -> dict:
 
 
 def public_site_readiness() -> dict:
-    if PAID_BETA_ENABLED:
+    if PAID_BETA_ENABLED and not PUBLIC_PRODUCT_ENABLED:
         return paid_beta_site_readiness()
     route_paths = {str(getattr(route, "path", "")) for route in app.routes}
     missing_routes = [
@@ -18980,6 +19125,30 @@ def billing_payment_smoke_order_snapshot(row: sqlite3.Row) -> dict:
     return order
 
 
+def billing_payment_smoke_candidate(order: dict) -> bool:
+    selection = order.get("selection") if isinstance(order.get("selection"), dict) else {}
+    quote = order.get("quote") if isinstance(order.get("quote"), dict) else {}
+    plan_code = str(
+        selection.get("planCode")
+        or selection.get("billingPlanCode")
+        or quote.get("planCode")
+        or ""
+    ).strip().lower()
+    expected_plan = PUBLIC_PRODUCT_PLANS.get(PUBLIC_PRODUCT_PLAN_CODE) or {}
+    expected_amount = int(expected_plan.get("priceRub") or 0)
+    return bool(
+        order.get("status") == "activated"
+        and order.get("providerPaymentIdSaved")
+        and order.get("providerPaymentMethodSaved")
+        and order.get("paymentUrlReady")
+        and order.get("paidAt")
+        and order.get("activatedAt")
+        and order.get("autoRenew")
+        and plan_code == PUBLIC_PRODUCT_PLAN_CODE
+        and int(order.get("amountRub") or 0) == expected_amount
+    )
+
+
 def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
     safe_limit = max(1, min(int(limit or 10), 50))
     payment = yookassa_payment_readiness()
@@ -19004,12 +19173,15 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
         )
 
     recent_orders = [billing_payment_smoke_order_snapshot(row) for row in rows]
-    successful_orders = [
+    activated_orders = [
         order
         for order in recent_orders
         if order.get("status") == "activated"
         and order.get("providerPaymentIdSaved")
         and order.get("paymentUrlReady")
+    ]
+    successful_orders = [
+        order for order in activated_orders if billing_payment_smoke_candidate(order)
     ]
     pending_orders_with_url = [
         order
@@ -19054,21 +19226,24 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
         {
             "code": "hosted_payment_url_observed",
             "title": "Платёжная ссылка получена",
-            "ok": bool(pending_orders_with_url or successful_orders),
+            "ok": bool(pending_orders_with_url or activated_orders),
             "message": (
                 "Хотя бы один заказ YooKassa получил hosted payment URL."
-                if pending_orders_with_url or successful_orders
+                if pending_orders_with_url or activated_orders
                 else "Создать минимальный заказ после настройки ключей YooKassa и подтверждения владельца."
             ),
         },
         {
             "code": "confirmed_payment_activation_observed",
-            "title": "Активация после подтверждения оплаты",
+            "title": "Актуальный рекуррентный payment-smoke",
             "ok": bool(successful_orders),
             "message": (
-                "Хотя бы один заказ YooKassa был активирован после подтверждения провайдера."
+                "Тариф 249 ₽ активирован провайдером с включённым автопродлением и сохранённым способом оплаты."
                 if successful_orders
-                else "Провести smoke-платёж и подтвердить, что тариф активируется только после подтверждения провайдера."
+                else (
+                    "Провести платёж 249 ₽, проверить provider confirmation, auto_renew=1 "
+                    "и сохранённый provider_payment_method_id."
+                )
             ),
         },
     ]
@@ -19120,7 +19295,7 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
             "code": "open_hosted_payment_url",
             "title": "Открыть hosted payment URL YooKassa",
             "actor": "owner",
-            "status": "done" if pending_orders_with_url or successful_orders else "pending",
+            "status": "done" if pending_orders_with_url or activated_orders else "pending",
             "details": (
                 "Заказ должен оставаться pending до подтверждения YooKassa; "
                 "Green VPN не должен активировать тариф только по локальному return."
@@ -19150,7 +19325,7 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
         "safeToRunSmoke": safe_to_run_smoke,
         "smokeCompleted": smoke_complete,
         "productionReady": safe_to_run_smoke and smoke_complete,
-        "requiresOwnerAction": not safe_to_run_smoke,
+        "requiresOwnerAction": not (safe_to_run_smoke and smoke_complete),
         "summary": {
             "state": (
                 "green"
@@ -19170,6 +19345,7 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
             "yookassaActivatedTotal": int(yookassa_activated_total),
             "recentYookassaOrders": len(recent_orders),
             "pendingWithPaymentUrl": len(pending_orders_with_url),
+            "activatedLegacyOrIncomplete": len(activated_orders) - len(successful_orders),
             "successfulSmokeCandidates": len(successful_orders),
             "canceledOrFailedRecent": len(canceled_orders),
         },
@@ -24175,6 +24351,12 @@ def perform_admin_support_action(
             )
 
         if action == "reset_user_sessions":
+            record_replication_tombstones_for_delete(
+                conn,
+                "tokens",
+                "user_id = ?",
+                (int(user_id),),
+            )
             cursor = conn.execute("DELETE FROM tokens WHERE user_id = ?", (int(user_id),))
             result = {
                 "sessionsRevoked": max(0, int(cursor.rowcount or 0)),

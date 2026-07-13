@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'dart:convert';
 
-import 'package:bluevpn_ui/main.dart';
+import 'package:greenvpn/main.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
