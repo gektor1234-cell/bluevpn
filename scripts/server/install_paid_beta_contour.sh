@@ -635,6 +635,22 @@ location /paid-beta-api/ {
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
 }
+
+# Green VPN YooKassa recurring-payment review
+location = /yookassa-review-20260711 {
+    return 302 /yookassa-review-20260711/;
+}
+
+location ^~ /yookassa-review-20260711/ {
+    root /var/www/paid-beta;
+    index index.html;
+    try_files $uri $uri/ =404;
+    autoindex off;
+    add_header Cache-Control "private, no-store" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
+}
 EOF
 
   cat > "${site_snippet}" <<'EOF'

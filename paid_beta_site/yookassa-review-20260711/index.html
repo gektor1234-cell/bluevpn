@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <title>Green VPN - управление автопродлением</title>
+  <style>
+    :root { color-scheme: light; font-family: Arial, sans-serif; color: #15201b; background: #f4f8f5; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    header { background: #10251c; color: #fff; padding: 34px 24px; }
+    header div, main { width: min(1080px, 100%); margin: 0 auto; }
+    h1 { margin: 0 0 10px; font-size: 32px; }
+    h2 { margin: 0 0 12px; font-size: 23px; }
+    p { margin: 0; line-height: 1.55; }
+    main { padding: 32px 24px 48px; }
+    .summary { border-left: 4px solid #14a875; padding: 4px 0 4px 18px; margin-bottom: 34px; }
+    .evidence { margin-bottom: 30px; }
+    .steps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+    figure { margin: 0; background: #fff; border: 1px solid #d9e3dd; border-radius: 8px; overflow: hidden; }
+    figure img { display: block; width: 100%; height: auto; }
+    figcaption { padding: 18px; }
+    .label { display: inline-block; margin-bottom: 8px; color: #087a55; font-weight: 700; }
+    .result { margin-top: 30px; padding: 24px; background: #e8f5ee; border: 1px solid #b6dcc8; border-radius: 8px; }
+    ul { margin: 12px 0 0; padding-left: 22px; line-height: 1.6; }
+    code { font-family: Consolas, monospace; font-size: 0.95em; }
+    footer { width: min(1080px, 100%); margin: 0 auto; padding: 0 24px 34px; color: #5e6b64; font-size: 14px; }
+    @media (max-width: 720px) { .steps { grid-template-columns: 1fr; } h1 { font-size: 27px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Green VPN: управление автопродлением</h1>
+      <p>Материалы для проверки сценария сохранения и самостоятельного отключения способа оплаты.</p>
+    </div>
+  </header>
+  <main>
+    <section class="summary">
+      <h2>Пользователь управляет автопродлением самостоятельно</h2>
+      <p>Переключатель расположен на экране тарифа Android-приложения. Пользователь может отключить автопродление без обращения в поддержку.</p>
+    </section>
+    <section class="evidence" aria-label="Полноэкранные материалы проверки">
+      <h2>Полноэкранные скриншоты с URL подключённого сайта</h2>
+      <ul>
+        <li><a href="evidence/autorenew-on-api.greenvpn.pro.png">Автопродление включено</a></li>
+        <li><a href="evidence/autorenew-off-api.greenvpn.pro.png">Автопродление отключено</a></li>
+      </ul>
+    </section>
+    <section class="steps" aria-label="Состояния автопродления">
+      <figure>
+        <img src="autorenew-on.png" alt="Экран тарифа Green VPN с включенным автопродлением">
+        <figcaption><span class="label">Автопродление включено</span><p>При первом платеже приложение запрашивает сохранение способа оплаты для последующих платежей.</p></figcaption>
+      </figure>
+      <figure>
+        <img src="autorenew-off.png" alt="Экран тарифа Green VPN с выключенным автопродлением">
+        <figcaption><span class="label">Автопродление выключено</span><p>Пользователь нажимает тот же переключатель и сразу прекращает будущие автоматические списания.</p></figcaption>
+      </figure>
+    </section>
+    <section class="result">
+      <h2>Что выполняет отключение</h2>
+      <ul>
+        <li>приложение отправляет авторизованный запрос <code>POST /api/v1/subscription/auto-renew/cancel</code>;</li>
+        <li>сервер устанавливает признак автопродления в выключенное состояние;</li>
+        <li>сервер удаляет привязку сохранённого способа оплаты из подписки;</li>
+        <li>уже оплаченный период продолжает действовать, новые автоматические списания не создаются.</li>
+      </ul>
+    </section>
+  </main>
+  <footer>Green VPN, версия продукта-кандидата от 11 июля 2026 года.</footer>
+</body>
+</html>

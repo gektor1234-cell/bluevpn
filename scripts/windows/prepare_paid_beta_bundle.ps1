@@ -85,6 +85,10 @@ $opsTarget = Join-Path $stage "ops"
 $monitoringTarget = Join-Path $stage "monitoring"
 $siteTarget = Join-Path $stage "site"
 $downloadsTarget = Join-Path $siteTarget "downloads"
+$yookassaReviewSource = Join-Path $siteSource "yookassa-review-20260711"
+$yookassaReviewTarget = Join-Path $siteTarget "yookassa-review-20260711"
+$yookassaEvidenceSource = Join-Path $yookassaReviewSource "evidence"
+$yookassaEvidenceTarget = Join-Path $yookassaReviewTarget "evidence"
 New-Item -ItemType Directory -Force -Path `
     (Join-Path $backendTarget "app"), `
     $opsTarget, `
@@ -92,6 +96,8 @@ New-Item -ItemType Directory -Force -Path `
     (Join-Path $siteTarget "assets"), `
     (Join-Path $siteTarget "terms"), `
     (Join-Path $siteTarget "privacy"), `
+    $yookassaReviewTarget, `
+    $yookassaEvidenceTarget, `
     $downloadsTarget | Out-Null
 
 Copy-Item `
@@ -130,6 +136,13 @@ Copy-Item -LiteralPath (Join-Path $siteSource "robots.txt") -Destination (Join-P
 Copy-Item -LiteralPath (Join-Path $siteSource "assets\app_icon.png") -Destination (Join-Path $siteTarget "assets\app_icon.png")
 Copy-Item -LiteralPath (Join-Path $siteSource "terms\index.html") -Destination (Join-Path $siteTarget "terms\index.html")
 Copy-Item -LiteralPath (Join-Path $siteSource "privacy\index.html") -Destination (Join-Path $siteTarget "privacy\index.html")
+Copy-Item -LiteralPath (Join-Path $yookassaReviewSource "index.html") -Destination (Join-Path $yookassaReviewTarget "index.html")
+Copy-Item -LiteralPath (Join-Path $yookassaReviewSource "autorenew-on.html") -Destination (Join-Path $yookassaReviewTarget "autorenew-on.html")
+Copy-Item -LiteralPath (Join-Path $yookassaReviewSource "autorenew-off.html") -Destination (Join-Path $yookassaReviewTarget "autorenew-off.html")
+Copy-Item -LiteralPath (Join-Path $yookassaReviewSource "autorenew-on.png") -Destination (Join-Path $yookassaReviewTarget "autorenew-on.png")
+Copy-Item -LiteralPath (Join-Path $yookassaReviewSource "autorenew-off.png") -Destination (Join-Path $yookassaReviewTarget "autorenew-off.png")
+Copy-Item -LiteralPath (Join-Path $yookassaEvidenceSource "autorenew-on-api.greenvpn.pro.png") -Destination (Join-Path $yookassaEvidenceTarget "autorenew-on-api.greenvpn.pro.png")
+Copy-Item -LiteralPath (Join-Path $yookassaEvidenceSource "autorenew-off-api.greenvpn.pro.png") -Destination (Join-Path $yookassaEvidenceTarget "autorenew-off-api.greenvpn.pro.png")
 
 $androidTarget = Join-Path $downloadsTarget "GreenVPN_Android.apk"
 $windowsTarget = Join-Path $downloadsTarget "GreenVPN_Setup.exe"
