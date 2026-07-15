@@ -4,6 +4,9 @@ param(
     [string]$ReleaseZip = "",
     [string]$InstallerName = "GreenVPN_Setup.exe",
     [string]$AppVersion = "0.2.39-windows-clean-server-ui",
+    [string]$WindowsBuildName = "",
+    [ValidateRange(0, 65535)]
+    [int]$WindowsBuildNumber = 0,
     [string]$ApiBaseUrl = "https://api.greenvpn.pro",
     [string]$ApiFallbackBaseUrls = "https://176-113-81-35.sslip.io",
     [bool]$TrialOnlyNoAdsBuild = $true,
@@ -17,6 +20,16 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrWhiteSpace($WindowsBuildName)) {
+    if ($AppVersion -notmatch '^(\d+)\.(\d+)\.(\d+)') {
+        throw "AppVersion must start with a numeric x.y.z version: $AppVersion"
+    }
+    $WindowsBuildName = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
+}
+if ($WindowsBuildName -notmatch '^\d+\.\d+\.\d+$') {
+    throw "WindowsBuildName must be a numeric x.y.z version: $WindowsBuildName"
+}
 
 function Write-Section {
     param([string]$Title)
@@ -300,6 +313,8 @@ if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
         Push-Location $ProjectRoot
         try {
             flutter build windows --release -t .\lib\main.dart `
+                --build-name="$WindowsBuildName" `
+                --build-number="$WindowsBuildNumber" `
                 --dart-define="GREENVPN_APP_VERSION=$AppVersion" `
                 --dart-define="GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=$trialOnlyDefine" `
                 --dart-define="GREENVPN_PAID_BETA_BUILD=$paidBetaDefine" `

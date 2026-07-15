@@ -43,6 +43,17 @@ class GreenVpnQuickTileCascadePolicyTest {
         assertEquals(1_800_000L, GreenVpnQuickTileCascadePolicy.cooldownDurationMs(99))
     }
 
+    @Test
+    fun routeProbeRetriesOnlyFastStartupFailures() {
+        assertEquals(750L, GreenVpnQuickTileCascadePolicy.routeProbeDelayMs(1))
+        assertEquals(900L, GreenVpnQuickTileCascadePolicy.routeProbeDelayMs(2))
+        assertEquals(1_400L, GreenVpnQuickTileCascadePolicy.routeProbeDelayMs(3))
+        assertEquals(true, GreenVpnQuickTileCascadePolicy.shouldRetryRouteProbe(1, 25L))
+        assertEquals(true, GreenVpnQuickTileCascadePolicy.shouldRetryRouteProbe(2, 3_999L))
+        assertEquals(false, GreenVpnQuickTileCascadePolicy.shouldRetryRouteProbe(2, 4_000L))
+        assertEquals(false, GreenVpnQuickTileCascadePolicy.shouldRetryRouteProbe(3, 25L))
+    }
+
     private fun candidate(
         id: String,
         protocol: String,

@@ -9,6 +9,8 @@ import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import hev.htproxy.TProxyService
+import pro.greenvpn.routing.Ipv4RouteExclusions
+import pro.greenvpn.runtime.PreviewVpnServiceRuntime
 import org.json.JSONObject
 import java.io.File
 import java.net.InetSocketAddress
@@ -51,12 +53,19 @@ class VlessRealityVpnService : VpnService() {
 
         @Synchronized
         fun snapshot(context: Context): Snapshot {
-            if (currentService != null || state != "down" || error.isNotEmpty()) {
+            if (currentService != null) {
                 return Snapshot(state, rxBytes, txBytes, "26.7.11", error)
             }
             val persisted = readPersistedSnapshot(context)
                 ?: return Snapshot(state, rxBytes, txBytes, "26.7.11", error)
-            if (persisted.state == "up" || persisted.state == "starting" || persisted.state == "stopping") {
+            if (persisted.state in setOf("up", "starting", "stopping") &&
+                !PreviewVpnServiceRuntime.isRunningOrStarting(
+                    context,
+                    VlessRealityVpnService::class.java,
+                    persisted.state,
+                    File(runtimeRoot(context), STATE_FILE),
+                )
+            ) {
                 val recovered = Snapshot(
                     "error",
                     0L,
@@ -138,6 +147,12 @@ class VlessRealityVpnService : VpnService() {
                     false
                 }
             }
+            if (PreviewVpnServiceRuntime.requestDisconnect(
+                    context,
+                    VlessRealityVpnService::class.java,
+                    ACTION_DISCONNECT,
+                )
+            ) return true
             val root = runtimeRoot(context)
             for (name in listOf("runtime.json", "hev.yaml", "base.json")) {
                 try { File(root, name).delete() } catch (_: Throwable) {}
@@ -153,6 +168,12 @@ class VlessRealityVpnService : VpnService() {
         internal fun debugKillEngineForTest(): Boolean {
             val process = currentService?.xrayProcess ?: return false
             process.destroyForcibly()
+            return true
+        }
+
+        internal fun debugStopTunForTest(): Boolean {
+            val service = currentService ?: return false
+            service.tproxy.TProxyStopService()
             return true
         }
     }
@@ -175,7 +196,7 @@ class VlessRealityVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIFICATION_ID, notification("Green VPN is starting"))
+        startForeground(NOTIFICATION_ID, notification("Green VPN запускается"))
         when (intent?.action) {
             ACTION_CONNECT -> {
                 val configPath = intent.getStringExtra(EXTRA_CONFIG_PATH).orEmpty()
@@ -256,10 +277,11 @@ class VlessRealityVpnService : VpnService() {
                 .setSession("Green VPN")
                 .setMtu(1400)
                 .addAddress("198.18.1.1", 32)
-                .addRoute("0.0.0.0", 0)
-                .addDnsServer("1.1.1.1")
-                .addDisallowedApplication(packageName)
+                .addDnsServer("198.18.1.2")
                 .apply { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) setMetered(false) }
+            Ipv4RouteExclusions.routesExcluding(VlessRealityConfig.routeExclusions()).forEach { route ->
+                builder.addRoute(route.address, route.prefixLength)
+            }
             val descriptor = builder.establish()
                 ?: throw IllegalStateException("Android did not establish the VPN interface")
             tunFd = descriptor.detachFd()
@@ -270,7 +292,7 @@ class VlessRealityVpnService : VpnService() {
             error = ""
             persistSnapshot(this, Snapshot(state, rxBytes, txBytes, "26.7.11", error))
             updateStats()
-            startForeground(NOTIFICATION_ID, notification("Green VPN is active"))
+            startForeground(NOTIFICATION_ID, notification("Green VPN подключён"))
             startMonitor()
         } catch (failure: Throwable) {
             cleanup("error", safeMessage(failure))
@@ -378,6 +400,12 @@ class VlessRealityVpnService : VpnService() {
           address: 127.0.0.1
           port: 1981
           udp: 'udp'
+        mapdns:
+          address: 198.18.1.2
+          port: 53
+          network: 100.64.0.0
+          netmask: 255.192.0.0
+          cache-size: 10000
         misc:
           task-stack-size: 86016
           connect-timeout: 10000

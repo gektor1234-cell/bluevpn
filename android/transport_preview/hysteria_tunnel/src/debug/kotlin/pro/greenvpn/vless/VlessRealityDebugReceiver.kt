@@ -25,6 +25,9 @@ class VlessRealityDebugReceiver : BroadcastReceiver() {
                     "kill_engine" -> require(VlessRealityVpnService.debugKillEngineForTest()) {
                         "Debug transport engine is not running"
                     }
+                    "stop_tun" -> require(VlessRealityVpnService.debugStopTunForTest()) {
+                        "Debug transport tunnel is not running"
+                    }
                     "status" -> Unit
                     else -> throw IllegalArgumentException("Unsupported debug command")
                 }

@@ -4,6 +4,7 @@
     <application>
         <service
             android:name="pro.greenvpn.hysteria.Hysteria2VpnService"
+            android:process=":greenvpn_hysteria"
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:exported="false"
             android:foregroundServiceType="specialUse">
@@ -16,6 +17,7 @@
         </service>
         <service
             android:name="pro.greenvpn.vless.VlessRealityVpnService"
+            android:process=":greenvpn_vless"
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:exported="false"
             android:foregroundServiceType="specialUse">
@@ -28,6 +30,7 @@
         </service>
         <service
             android:name="pro.greenvpn.naive.NaiveHttpsVpnService"
+            android:process=":greenvpn_naive"
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:exported="false"
             android:foregroundServiceType="specialUse">
@@ -40,6 +43,7 @@
         </service>
         <service
             android:name="pro.greenvpn.dnstt.DnsttVpnService"
+            android:process=":greenvpn_dnstt"
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:exported="false"
             android:foregroundServiceType="specialUse">

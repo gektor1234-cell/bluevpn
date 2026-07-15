@@ -12,7 +12,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:yandex_mobileads/mobile_ads.dart';
 
 import 'runtime_config.dart';
+import 'services/product_display_policy.dart';
 import 'services/route_failure_cooldown.dart';
+import 'services/server_location_policy.dart';
 import 'services/transport_preview_policy.dart';
 
 /*
@@ -44,6 +46,7 @@ const bool kPublicProductBuild = bool.fromEnvironment(
   'GREENVPN_PUBLIC_PRODUCT_BUILD',
   defaultValue: false,
 );
+const bool kPaidBetaCustomerUi = kPaidBetaBuild && !kPublicProductBuild;
 const String kPaidBetaClientMarker = String.fromEnvironment(
   'GREENVPN_PAID_BETA_CLIENT_MARKER',
   defaultValue: 'green-vpn-paid-beta-v1',
@@ -2869,7 +2872,7 @@ String authUserMessage(Object error, {String fallback = 'Не удалось в�
     text = text.replaceFirst('Ошибка входа:', '').trim();
   }
 
-  return text.isEmpty ? fallback : text;
+  return greenVpnPublicErrorMessage(rawError: text, fallback: fallback);
 }
 
 String normalizeProvisionedEndpoint(String rawConfig) {
@@ -3113,6 +3116,24 @@ class GreenVpnHttpStatusException implements Exception {
     if (uri == null) return text;
     return '$text, uri = $uri';
   }
+}
+
+String greenVpnApiUserMessage(
+  Object error, {
+  String fallback = 'Не удалось связаться с сервисом.',
+}) {
+  if (error is GreenVpnHttpStatusException) {
+    return greenVpnPublicErrorMessage(
+      rawError: error.toString(),
+      responseBody: error.body,
+      statusCode: error.statusCode,
+      fallback: fallback,
+    );
+  }
+  return greenVpnPublicErrorMessage(
+    rawError: error.toString(),
+    fallback: fallback,
+  );
 }
 
 class BlueVpnApi {
@@ -3803,7 +3824,7 @@ while True:
         return ApiResult.ok(p.isEmpty ? 'Base' : p);
       }
     } catch (e) {
-      return ApiResult.err('Ошибка сети: $e');
+      return ApiResult.err(greenVpnApiUserMessage(e));
     }
   }
 
@@ -4286,7 +4307,12 @@ while True:
         return ApiResult.ok(jsonMap);
       }
     } catch (e) {
-      return ApiResult.err('Ошибка bootstrap: $e');
+      return ApiResult.err(
+        greenVpnApiUserMessage(
+          e,
+          fallback: 'Не удалось подготовить приложение. Повторите попытку.',
+        ),
+      );
     }
   }
 
@@ -4351,7 +4377,12 @@ while True:
         return ApiResult.ok(config);
       }
     } catch (e) {
-      return ApiResult.err('Не удалось получить конфиг: $e');
+      return ApiResult.err(
+        greenVpnApiUserMessage(
+          e,
+          fallback: 'Не удалось подготовить VPN-подключение.',
+        ),
+      );
     }
   }
 
@@ -4589,7 +4620,7 @@ while True:
       return ApiResult.ok(jsonDecode(body));
     } catch (e) {
       await _authLog('API $method $path exception=$e');
-      return ApiResult.err('Ошибка сети: $e');
+      return ApiResult.err(greenVpnApiUserMessage(e));
     }
   }
 
@@ -5429,7 +5460,12 @@ class _AuthPageState extends State<AuthPage>
   }
 
   void _toast(String text) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    final visibleText = kPublicProductBuild
+        ? greenVpnPublicErrorMessage(rawError: text)
+        : text;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(visibleText)));
   }
 
   void _setAuthStatus(String? text) {
@@ -6079,6 +6115,15 @@ class ServerLocation {
       clientConfigReady &&
       kSupportedVpnProtocols.contains(protocolCode);
 
+  String get publicLocationId =>
+      greenVpnServerLocationId(serverId: id, country: country, city: city);
+
+  String get publicLocationTitle => greenVpnServerLocationTitle(
+    serverTitle: title,
+    country: country,
+    city: city,
+  );
+
   static ServerLocation fromCatalogJson(Map<String, dynamic> json) {
     final endpoint = json['endpoint'];
     final endpointMap = endpoint is Map
@@ -6103,7 +6148,7 @@ class ServerLocation {
     ].join(' • ');
     return ServerLocation(
       id: (json['id'] ?? '').toString(),
-      title: (json['title'] ?? json['name'] ?? 'VPN-узел Green VPN').toString(),
+      title: (json['title'] ?? json['name'] ?? 'Локация Green VPN').toString(),
       subtitle: (json['subtitle'] ?? defaultSubtitle).toString(),
       endpointHost: (endpointMap['host'] ?? json['endpointHost'] ?? '')
           .toString(),
@@ -6125,7 +6170,7 @@ class ServerLocation {
 
 String greenVpnPublicServerTitle(ServerLocation server) {
   if (server.isAuto) return server.title;
-  var text = server.title.trim();
+  var text = server.publicLocationTitle.trim();
   text = text
       .replaceAll(RegExp(r'\bRU\s*VDS\b', caseSensitive: false), '')
       .replaceAll(RegExp(r'\bRUVDS\b', caseSensitive: false), '')
@@ -6139,7 +6184,7 @@ String greenVpnPublicServerTitle(ServerLocation server) {
       .replaceAll(RegExp(r'\s+#'), ' #')
       .trim();
   text = text.replaceAll(RegExp(r'^[\s\-•]+|[\s\-•]+$'), '').trim();
-  if (text.isEmpty || text.toLowerCase() == 'green vpn') return 'Сервер';
+  if (text.isEmpty || text.toLowerCase() == 'green vpn') return 'Локация';
   return text;
 }
 
@@ -6149,11 +6194,9 @@ String greenVpnPublicServerSubtitle(
 }) {
   if (server.isAuto) return 'Автовыбор';
   if (includeUnavailable && !server.isCurrentClientReady) {
-    return 'Недоступен';
+    return '${greenVpnPublicLatencyLabel(server.pingMs)} • недоступен';
   }
-  final pingMs = server.pingMs;
-  if (pingMs == null) return '';
-  return '$pingMs ms';
+  return greenVpnPublicLatencyLabel(server.pingMs);
 }
 
 class ProvisionedConfigResult {
@@ -6311,7 +6354,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       const ServerLocation(
         id: 'auto',
         title: 'Авто',
-        subtitle: 'Самый здоровый VPN-узел из локального списка',
+        subtitle: 'Автовыбор локации',
         pingMs: null,
         isAuto: true,
         status: 'healthy',
@@ -6349,13 +6392,13 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         title: 'London #1',
         subtitle: 'United Kingdom',
         endpointHost: '88.218.250.86',
-        pingMs: 72,
+        pingMs: 0,
         country: 'GB',
         city: 'London',
-        status: 'healthy',
-        available: true,
-        healthScore: 100,
-        clientConfigReady: true,
+        status: 'maintenance',
+        available: false,
+        healthScore: 0,
+        clientConfigReady: false,
       ),
     ];
 
@@ -6388,7 +6431,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         const ServerLocation(
           id: 'auto',
           title: 'Авто',
-          subtitle: 'Самый здоровый VPN-узел из локального списка',
+          subtitle: 'Автовыбор локации',
           isAuto: true,
           status: 'healthy',
           available: true,
@@ -6422,11 +6465,20 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   ServerLocation selectedServer = const ServerLocation(
     id: 'auto',
     title: 'Авто',
-    subtitle: 'Самый здоровый VPN-узел из локального списка',
+    subtitle: 'Автовыбор локации',
     pingMs: null,
     isAuto: true,
   );
   String _persistedServerId = 'auto';
+
+  String _serverSelectionKey(ServerLocation server) =>
+      server.isAuto ? 'auto' : server.publicLocationId;
+
+  bool _serverMatchesSelection(ServerLocation server, String selection) {
+    final normalized = selection.trim();
+    if (normalized.isEmpty || normalized == 'auto') return server.isAuto;
+    return server.id == normalized || server.publicLocationId == normalized;
+  }
 
   // ===== TARIFF STATE =====
   final Set<TariffApp> selectedApps = {};
@@ -6462,7 +6514,6 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   String? _adaptiveRouteServerId;
   String? _adaptiveRouteProtocol;
   int? _adaptiveRouteScore;
-  String? _adaptiveRouteConfidence;
   bool _subscriptionActive = false;
   bool _subscriptionAutoRenew = false;
   bool _paymentMethodSaved = false;
@@ -6584,7 +6635,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   void _toast(BuildContext context, String text) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    final visibleText = kPublicProductBuild
+        ? greenVpnPublicErrorMessage(rawError: text)
+        : text;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(visibleText)));
   }
 
   String _safeSessionInvalidationReason(String? message) {
@@ -7044,7 +7100,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       _persistedServerId = p.serverId.trim().isEmpty
           ? 'auto'
           : p.serverId.trim();
-      final matchingServers = servers.where((s) => s.id == _persistedServerId);
+      final matchingServers = servers.where(
+        (s) => _serverMatchesSelection(s, _persistedServerId),
+      );
       if (matchingServers.isNotEmpty) {
         selectedServer = matchingServers.first;
       }
@@ -7168,13 +7226,13 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
   void _schedulePrefsSave() {
     if (kIsWeb) return;
-    _persistedServerId = selectedServer.id;
+    _persistedServerId = _serverSelectionKey(selectedServer);
     _prefsDebounce?.cancel();
     _prefsDebounce = Timer(const Duration(milliseconds: 350), () {
       unawaited(
         _prefsStore.patch({
           'language': sLanguage,
-          'serverId': selectedServer.id,
+          'serverId': _persistedServerId,
           'socialOnlyEnabled': socialOnlyEnabled,
           'socialOnlyApps': socialOnlyApps.map((e) => e.name).toList(),
           'socialOnlyCustomPackages': socialOnlyCustomPackages.toList()..sort(),
@@ -7221,7 +7279,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           .toString()
           .trim();
       if (kPublicProductBuild && nextBillingPlanCode.isNotEmpty) {
-        _publicBillingPlanCode = nextBillingPlanCode;
+        _publicBillingPlanCode = greenVpnNormalizePublicBillingPlanCode(
+          nextBillingPlanCode,
+        );
       }
       trafficPack = nextPack;
       trafficGb = nextGb.clamp(1.0, 800.0);
@@ -7403,7 +7463,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       final catalogRes = await _api.fetchTariffCatalog();
       final quoteRes = await _api.quoteTariff(
         accessToken: widget.session.accessToken,
-        billingPlanCode: kPublicProductBuild ? _publicBillingPlanCode : null,
+        billingPlanCode: kPublicProductBuild
+            ? greenVpnNormalizePublicBillingPlanCode(_publicBillingPlanCode)
+            : null,
         trafficPack: trafficPack.name,
         trafficGb: trafficGb.round(),
         unlimitedApps: _selectedTariffAppCodes(),
@@ -7560,7 +7622,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     try {
       final res = await _api.createBillingOrder(
         accessToken: widget.session.accessToken,
-        billingPlanCode: kPublicProductBuild ? _publicBillingPlanCode : null,
+        billingPlanCode: kPublicProductBuild
+            ? greenVpnNormalizePublicBillingPlanCode(_publicBillingPlanCode)
+            : null,
         trafficPack: trafficPack.name,
         trafficGb: trafficGb.round(),
         unlimitedApps: _selectedTariffAppCodes(),
@@ -9119,7 +9183,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       }
     }
 
-    if (kPaidBetaBuild && bootMap['canConnect'] != true) {
+    if (kPaidBetaCustomerUi && bootMap['canConnect'] != true) {
       final reason = (bootMap['reason'] ?? '').toString().trim();
       final message = switch (reason) {
         'beta_cohort_required' =>
@@ -9204,6 +9268,16 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       res.data!,
       fallback: effectiveServer,
     );
+    if (!effectiveServer.isAuto &&
+        provisionedServer.publicLocationId !=
+            effectiveServer.publicLocationId) {
+      await appendBlueVpnClientLog(
+        'manual location reassignment rejected requested=${effectiveServer.id} actual=${provisionedServer.id}',
+      );
+      return const ProvisionedConfigResult.err(
+        'Выбранная локация сейчас недоступна.',
+      );
+    }
     _scheduleFreeAdSessionFromAdGate(
       res.data!.adGate,
       source: 'interactive_config',
@@ -9231,7 +9305,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     return ServerLocation(
       id: actualId,
       title: title,
-      subtitle: 'Выдан backend как рабочий VPN-узел',
+      subtitle: 'Выбрана рабочая локация',
       isAuto: false,
       status: 'healthy',
       available: true,
@@ -9259,7 +9333,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     return const ServerLocation(
       id: 'auto',
       title: 'Авто-подбор',
-      subtitle: 'Backend выберет рабочий VPN-узел',
+      subtitle: 'Автовыбор локации',
       isAuto: true,
       status: 'healthy',
       available: true,
@@ -9306,6 +9380,89 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _routeFailureCooldown.recordSuccess(_routeCooldownKey(server));
   }
 
+  Future<void> _armAndroidRuntimeFailover(ServerLocation server) async {
+    if (!greenVpnShouldArmRuntimeFailover(
+      previewEnabled: kTransportPreviewFallbackEnabled,
+      isAndroid: !kIsWeb && defaultTargetPlatform == TargetPlatform.android,
+      serverIsAuto: server.isAuto,
+      socialOnlyEnabled: socialOnlyEnabled,
+    )) {
+      return;
+    }
+    try {
+      final raw = await kAndroidPlatformChannel
+          .invokeMapMethod<String, dynamic>('armRuntimeFailover', {
+            'serverId': server.id,
+            'protocol': server.protocolCode,
+          });
+      await appendBlueVpnClientLog(
+        'runtime failover armed ok=${raw?['ok'] == true} server=${server.id}',
+      );
+    } catch (error) {
+      await appendBlueVpnClientLog(
+        'runtime failover arm failed server=${server.id} error=$error',
+      );
+    }
+  }
+
+  int _compareServerConnectionCandidates(ServerLocation a, ServerLocation b) {
+    if (a.isCurrentClientReady != b.isCurrentClientReady) {
+      return a.isCurrentClientReady ? -1 : 1;
+    }
+    if (kTransportPreviewFallbackEnabled) {
+      final now = DateTime.now();
+      return greenVpnCompareTransportPreviewCandidates(
+        leftProtocol: a.protocolCode,
+        rightProtocol: b.protocolCode,
+        leftCooldownUntil: _routeFailureCooldown.coolingUntil(
+          _routeCooldownKey(a),
+          now: now,
+        ),
+        rightCooldownUntil: _routeFailureCooldown.coolingUntil(
+          _routeCooldownKey(b),
+          now: now,
+        ),
+        leftScore: _serverConnectScore(a),
+        rightScore: _serverConnectScore(b),
+        leftPingMs: a.pingMs,
+        rightPingMs: b.pingMs,
+        leftTitle: a.title,
+        rightTitle: b.title,
+      );
+    }
+    final byScore = _serverConnectScore(b).compareTo(_serverConnectScore(a));
+    if (byScore != 0) return byScore;
+    final ap = a.pingMs ?? 999999;
+    final bp = b.pingMs ?? 999999;
+    final byPing = ap.compareTo(bp);
+    if (byPing != 0) return byPing;
+    return a.title.compareTo(b.title);
+  }
+
+  List<ServerLocation> _serverPickerLocations() {
+    final auto = servers.where((server) => server.isAuto).firstOrNull;
+    final routes = servers.where((server) => !server.isAuto).toList()
+      ..sort(_compareServerConnectionCandidates);
+    return greenVpnVisibleLocationRepresentatives<ServerLocation>(
+      candidates: <ServerLocation>[
+        auto ??
+            const ServerLocation(
+              id: 'auto',
+              title: 'Авто',
+              subtitle: 'Автовыбор',
+              isAuto: true,
+              status: 'healthy',
+              available: true,
+              clientConfigReady: true,
+            ),
+        ...routes,
+      ],
+      isAutomatic: (server) => server.isAuto,
+      isReady: (server) => server.isCurrentClientReady,
+      locationIdOf: (server) => server.publicLocationId,
+    );
+  }
+
   List<ServerLocation> _connectCandidatesForCurrentSelection() {
     final usable =
         servers
@@ -9317,76 +9474,41 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                       greenVpnTransportRequiresFullTunnel(server.protocolCode)),
             )
             .toList()
-          ..sort((a, b) {
-            if (kTransportPreviewFallbackEnabled) {
-              final now = DateTime.now();
-              return greenVpnCompareTransportPreviewCandidates(
-                leftProtocol: a.protocolCode,
-                rightProtocol: b.protocolCode,
-                leftCooldownUntil: _routeFailureCooldown.coolingUntil(
-                  _routeCooldownKey(a),
-                  now: now,
-                ),
-                rightCooldownUntil: _routeFailureCooldown.coolingUntil(
-                  _routeCooldownKey(b),
-                  now: now,
-                ),
-                leftScore: _serverConnectScore(a),
-                rightScore: _serverConnectScore(b),
-                leftPingMs: a.pingMs,
-                rightPingMs: b.pingMs,
-                leftTitle: a.title,
-                rightTitle: b.title,
-              );
-            }
-            final byScore = _serverConnectScore(
-              b,
-            ).compareTo(_serverConnectScore(a));
-            if (byScore != 0) return byScore;
-            final ap = a.pingMs ?? 999999;
-            final bp = b.pingMs ?? 999999;
-            final byPing = ap.compareTo(bp);
-            if (byPing != 0) return byPing;
-            return a.title.compareTo(b.title);
-          });
-
-    List<ServerLocation> selectedThenFallbacks(ServerLocation first) {
-      final result = <ServerLocation>[first];
-      for (final server in usable) {
-        if (server.id != first.id) result.add(server);
-      }
-      return result;
-    }
+          ..sort(_compareServerConnectionCandidates);
 
     if (selectedServer.isAuto) {
       return usable.isNotEmpty ? usable : [_backendAutoCandidate()];
     }
 
-    if (selectedServer.isCurrentClientReady) {
-      return selectedThenFallbacks(selectedServer);
+    final selectedLocationCandidates = greenVpnInternalCandidatesForLocation(
+      candidates: usable,
+      automatic: false,
+      selectedLocationId: selectedServer.publicLocationId,
+      selectedRouteId: selectedServer.id,
+      locationIdOf: (server) => server.publicLocationId,
+      routeIdOf: (server) => server.id,
+    );
+    if (selectedLocationCandidates.isNotEmpty) {
+      return selectedLocationCandidates;
     }
-
-    final selectedFromCatalog = usable.where((s) => s.id == selectedServer.id);
-    if (selectedFromCatalog.isNotEmpty) {
-      return selectedThenFallbacks(selectedFromCatalog.first);
-    }
-
-    return usable;
+    return selectedServer.isCurrentClientReady
+        ? <ServerLocation>[selectedServer]
+        : const <ServerLocation>[];
   }
 
   String _serverUnsupportedReason(ServerLocation server) {
-    if (!server.available) return 'сервер сейчас выключен или недоступен';
+    if (!server.available) return 'локация сейчас недоступна';
     if (!server.clientConfigReady) {
-      return 'для него ещё не готов безопасный клиентский конфиг';
+      return 'подключение к этой локации ещё не готово';
     }
     if (!kSupportedVpnProtocols.contains(server.protocolCode)) {
-      return 'этот протокол уже есть в плане, но текущий клиент его пока не запускает';
+      return 'этот способ подключения пока недоступен в текущей версии';
     }
     if (socialOnlyEnabled &&
         greenVpnTransportRequiresFullTunnel(server.protocolCode)) {
       return 'этот резервный режим доступен только для полного подключения';
     }
-    return 'сервер пока нельзя использовать текущим клиентом';
+    return 'локацию пока нельзя использовать в текущей версии';
   }
 
   Future<void> _reportRouteEvent(
@@ -9440,6 +9562,49 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   Future<PostConnectProbeResult> _probeConnectedTunnelRoute(
     ServerLocation server,
   ) async {
+    if (Platform.isAndroid) {
+      var attempt = 1;
+      while (true) {
+        await Future<void>.delayed(greenVpnStartupRouteProbeDelay(attempt));
+        PostConnectProbeResult result;
+        try {
+          final raw = await kAndroidPlatformChannel
+              .invokeMethod<Object?>('probeConnectedRoute', {
+                'protocol': server.protocolCode,
+              })
+              .timeout(const Duration(seconds: 22));
+          final response = raw is Map
+              ? raw.map((key, value) => MapEntry('$key', value))
+              : const <String, dynamic>{};
+          result = PostConnectProbeResult(
+            ok: response['ok'] == true,
+            target: (response['target'] ?? '').toString(),
+            statusCode: (response['statusCode'] as num?)?.toInt(),
+            latencyMs: (response['latencyMs'] as num?)?.toInt() ?? 0,
+            error: (response['error'] ?? '').toString(),
+          );
+        } catch (e) {
+          result = PostConnectProbeResult(
+            ok: false,
+            target: 'android_native_route_probe',
+            latencyMs: 0,
+            error: e.toString(),
+          );
+        }
+        await appendBlueVpnClientLog(
+          'post connect Android probe server=${server.id} protocol=${server.protocolCode} attempt=$attempt target=${result.target} status=${result.statusCode} ok=${result.ok} ms=${result.latencyMs} error=${result.error ?? ''}',
+        );
+        if (result.ok ||
+            !greenVpnShouldRetryStartupRouteProbe(
+              attempt: attempt,
+              latencyMs: result.latencyMs,
+            )) {
+          return result;
+        }
+        attempt += 1;
+      }
+    }
+
     final targets = <Uri>[
       Uri.parse('https://www.youtube.com/generate_204'),
       Uri.parse('https://i.ytimg.com/generate_204'),
@@ -9575,7 +9740,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         final candidates = _connectCandidatesForCurrentSelection();
         if (candidates.isEmpty) {
           final reason = _serverUnsupportedReason(selectedServer);
-          _toast(context, 'Этот VPN-узел пока нельзя подключить: $reason.');
+          _toast(context, 'Эту локацию пока нельзя подключить: $reason.');
           return;
         }
 
@@ -9627,7 +9792,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           );
           if (!ok) {
             _recordRouteFailure(candidate, 'config_fetch');
-            lastError = 'не удалось получить конфиг для ${candidate.title}';
+            lastError =
+                'не удалось получить конфиг для ${greenVpnPublicServerTitle(candidate)}';
             if (canTryNext) continue;
             _toast(context, 'Не удалось получить VPN-конфиг.');
             return;
@@ -9670,14 +9836,15 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           if (!res.ok) {
             _recordRouteFailure(candidate, 'connect');
             lastError =
-                res.message ?? 'не удалось подключить ${candidate.title}';
+                res.message ??
+                'не удалось подключить ${greenVpnPublicServerTitle(candidate)}';
             await _syncVpnStatus();
             if (!mounted) return;
             if (canTryNext) {
               _setVpnBusyUi(
                 stage: 'Пробуем запасной узел...',
                 hint:
-                    '${candidate.title} не ответил. Green VPN автоматически пробует следующий доступный вариант.',
+                    '${greenVpnPublicServerTitle(candidate)} не отвечает. Green VPN автоматически пробует следующий доступный вариант.',
               );
               continue;
             }
@@ -9764,7 +9931,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                 _setVpnBusyUi(
                   stage: 'Пробуем запасной узел...',
                   hint:
-                      '${candidate.title} поднялся, но не даёт YouTube. Пробуем следующий сервер.',
+                      '${greenVpnPublicServerTitle(candidate)} не открывает YouTube. Пробуем следующий доступный вариант.',
                 );
                 continue;
               }
@@ -9781,6 +9948,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           );
           if (!mounted) return;
           _recordRouteSuccess(candidate);
+          await _armAndroidRuntimeFailover(candidate);
+          if (!mounted) return;
           if (kPaidBetaBuild) {
             unawaited(_recordPaidBetaEvent('vpn_connected'));
           }
@@ -9800,8 +9969,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         _toast(
           context,
           lastError == null
-              ? 'Не удалось подобрать рабочий VPN-узел.'
-              : 'Не удалось подобрать рабочий VPN-узел: $lastError.',
+              ? 'Не удалось подобрать рабочую локацию.'
+              : 'Не удалось подобрать рабочую локацию: $lastError.',
         );
       } else {
         await appendBlueVpnClientLog('toggle disconnect branch start');
@@ -9855,7 +10024,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     if (mounted) {
       setState(() {
         _serverCatalogBusy = true;
-        if (showToast) _serverCatalogStatus = 'Обновляем список серверов...';
+        if (showToast) _serverCatalogStatus = 'Обновляем список локаций...';
       });
     }
     try {
@@ -9876,22 +10045,25 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             ? selectedServer.id
             : _persistedServerId;
         final stillSelected = fallbackServers.any(
-          (s) => s.id == desiredServerId,
+          (s) => _serverMatchesSelection(s, desiredServerId),
         );
         setState(() {
           servers = fallbackServers;
-          selectedServer = stillSelected
+          final fallbackSelected = stillSelected
               ? fallbackServers.firstWhere(
-                  (s) => s.id == desiredServerId,
+                  (s) => _serverMatchesSelection(s, desiredServerId),
                   orElse: () => fallbackServers.first,
                 )
+              : fallbackServers.first;
+          selectedServer =
+              fallbackSelected.isAuto || fallbackSelected.isCurrentClientReady
+              ? fallbackSelected
               : fallbackServers.first;
           _adaptiveRouteServerId = null;
           _adaptiveRouteProtocol = null;
           _adaptiveRouteScore = null;
-          _adaptiveRouteConfidence = null;
           _serverCatalogStatus =
-              '${res.message ?? 'Не удалось загрузить список серверов.'} Использую локальный резервный список.';
+              'Не удалось обновить список локаций. Используется сохранённый список.';
         });
         if (showToast) _toast(context, _serverCatalogStatus!);
         return;
@@ -9917,14 +10089,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           .toString()
           .trim();
       final selectedRouteScoreRaw = selectedRouteMap['score'];
-      final selectedRouteConfidence = (selectedRouteMap['confidence'] ?? '')
-          .toString()
-          .trim();
       final nextServers = <ServerLocation>[
         const ServerLocation(
           id: 'auto',
           title: 'Авто',
-          subtitle: 'Самый здоровый VPN-узел из каталога',
+          subtitle: 'Автовыбор локации',
           pingMs: null,
           isAuto: true,
           status: 'healthy',
@@ -9958,7 +10127,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       final desiredServerId = _persistedServerId.trim().isEmpty
           ? selectedServer.id
           : _persistedServerId;
-      final stillSelected = nextServers.any((s) => s.id == desiredServerId);
+      final stillSelected = nextServers.any(
+        (s) => _serverMatchesSelection(s, desiredServerId),
+      );
       setState(() {
         servers = nextServers;
         _adaptiveRouteServerId = selectedRouteServerId.isEmpty
@@ -9970,12 +10141,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         _adaptiveRouteScore = selectedRouteScoreRaw is num
             ? selectedRouteScoreRaw.toInt()
             : null;
-        _adaptiveRouteConfidence = selectedRouteConfidence.isEmpty
-            ? null
-            : selectedRouteConfidence;
         final nextSelected = stillSelected
             ? nextServers.firstWhere(
-                (s) => s.id == desiredServerId,
+                (s) => _serverMatchesSelection(s, desiredServerId),
                 orElse: () => nextServers.first,
               )
             : nextServers.first;
@@ -9983,11 +10151,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             nextSelected.isAuto || nextSelected.isCurrentClientReady
             ? nextSelected
             : nextServers.first;
-        final routeHint = _adaptiveRouteServerId == null
-            ? ''
-            : ' Авто-маршрут: $_adaptiveRouteServerId${_adaptiveRouteConfidence == null ? '' : ' (${_adaptiveRouteConfidence!})'}.';
-        _serverCatalogStatus =
-            'Каталог серверов обновлён: VPN-узлов ${nextServers.length - 1}.$routeHint';
+        _serverCatalogStatus = 'Список локаций обновлён.';
       });
       if (showToast) _toast(context, _serverCatalogStatus!);
     } finally {
@@ -9999,6 +10163,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     await _prepareAndroidControlPlaneAccess('server_picker');
     await _refreshServerCatalog(showToast: false);
     if (!context.mounted) return;
+    final pickerServers = _serverPickerLocations();
+    final automaticLatencyMs = _backendAutoCandidate().pingMs;
     final picked = await showDialog<ServerLocation>(
       context: context,
       builder: (ctx) {
@@ -10009,12 +10175,15 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             child: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
-                children: servers.map((s) {
-                  final selected = s.id == selectedServer.id;
+                children: pickerServers.map((s) {
+                  final selected = s.isAuto
+                      ? selectedServer.isAuto
+                      : !selectedServer.isAuto &&
+                            s.publicLocationId ==
+                                selectedServer.publicLocationId;
                   final title = greenVpnPublicServerTitle(s);
-                  final subtitle = greenVpnPublicServerSubtitle(
-                    s,
-                    includeUnavailable: true,
+                  final subtitle = greenVpnPublicLatencyLabel(
+                    s.isAuto ? automaticLatencyMs : s.pingMs,
                   );
                   return ListTile(
                     contentPadding: EdgeInsets.zero,
@@ -10032,17 +10201,15 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                       title,
                       style: const TextStyle(fontWeight: FontWeight.w900),
                     ),
-                    subtitle: subtitle.isEmpty ? null : Text(subtitle),
-                    enabled: s.isAuto || s.isCurrentClientReady,
+                    subtitle: Text(subtitle),
+                    enabled: true,
                     trailing: selected
                         ? const Icon(
                             Icons.check_circle_rounded,
                             color: kBrandPrimary,
                           )
                         : const Icon(Icons.chevron_right_rounded),
-                    onTap: (s.isAuto || s.isCurrentClientReady)
-                        ? () => Navigator.of(ctx).pop(s)
-                        : null,
+                    onTap: () => Navigator.of(ctx).pop(s),
                   );
                 }).toList(),
               ),
@@ -10072,7 +10239,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       return;
     }
 
-    _persistedServerId = picked.id;
+    _persistedServerId = _serverSelectionKey(picked);
     setState(() => selectedServer = picked);
     _schedulePrefsSave();
 
@@ -10163,7 +10330,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           ),
         );
         if (!provisioned.ok) {
-          lastError = 'не удалось получить конфиг для ${candidate.title}';
+          lastError =
+              'не удалось получить конфиг для ${greenVpnPublicServerTitle(candidate)}';
           await _syncVpnStatus();
           if (!mounted) return;
           if (canTryNext) continue;
@@ -10264,6 +10432,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           }
         }
 
+        _recordRouteSuccess(effectiveServer);
+        await _armAndroidRuntimeFailover(effectiveServer);
+        if (!mounted) return;
+
         _startVpnTapCooldown(
           hint:
               'VPN только что переключился. Кнопка разблокируется через секунду.',
@@ -10279,8 +10451,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       _toast(
         context,
         lastError == null
-            ? 'Не удалось переключить VPN-узел.'
-            : 'Не удалось переключить VPN-узел: $lastError.',
+            ? 'Не удалось переключить локацию.'
+            : 'Не удалось переключить локацию: $lastError.',
       );
     } catch (e, st) {
       await appendBlueVpnClientLog('server switch exception=$e stack=$st');
@@ -10712,6 +10884,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               : manifest.platform == 'windows'
               ? 'Windows'
               : manifest.platform.toUpperCase();
+          final displayedVersion = kPublicProductBuild
+              ? greenVpnPublicVersionTitle(manifest.latestVersion)
+              : manifest.latestVersion;
+          final displayedChangelog = kPublicProductBuild
+              ? greenVpnPublicChangelog(manifest.changelog)
+              : manifest.changelog;
           return Dialog(
             insetPadding: const EdgeInsets.symmetric(
               horizontal: 18,
@@ -10760,7 +10938,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                                   ),
                                   const SizedBox(height: 2),
                                   Text(
-                                    '$platformTitle · ${manifest.latestVersion}',
+                                    '$platformTitle · $displayedVersion',
                                     maxLines: 2,
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
@@ -10785,9 +10963,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                             height: 1.28,
                           ),
                         ),
-                        if (manifest.changelog.isNotEmpty) ...[
+                        if (displayedChangelog.isNotEmpty) ...[
                           const SizedBox(height: 12),
-                          for (final item in manifest.changelog.take(3))
+                          for (final item in displayedChangelog.take(3))
                             Padding(
                               padding: const EdgeInsets.only(bottom: 6),
                               child: Row(
@@ -11089,7 +11267,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.star_rounded),
-            label: kPaidBetaBuild
+            label: kPaidBetaCustomerUi
                 ? 'Beta'
                 : (kTrialOnlyNoAdsBuild ? 'Trial' : 'Тариф'),
           ),
@@ -11259,6 +11437,9 @@ class VpnPage extends StatelessWidget {
     final appsText = selectedAppTitles.isEmpty
         ? 'Не выбрано'
         : selectedAppTitles.join(', ');
+    final displayedPlanName = kPublicProductBuild
+        ? greenVpnPublicPlanTitle(planName)
+        : planName;
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -11285,7 +11466,7 @@ class VpnPage extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'Текущий: $planName • открыть тариф',
+                      'Текущий: $displayedPlanName • открыть тариф',
                       style: const TextStyle(fontSize: 12),
                     ),
                   ],
@@ -11438,9 +11619,10 @@ class VpnPage extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                socialOnlyAllowed
-                    ? 'Функция активна. Выбранные приложения пойдут через VPN, остальной трафик останется обычным.'
-                    : 'Функция временно недоступна для текущего режима.',
+                greenVpnSocialOnlyStatusText(
+                  allowed: socialOnlyAllowed,
+                  enabled: socialOnlyEnabled,
+                ),
                 style: TextStyle(
                   color: mutedColor,
                   fontSize: 12,
@@ -11798,16 +11980,19 @@ class TariffPage extends StatelessWidget {
   }
 
   String _currentPlanText() {
+    final displayedPlanName = kPublicProductBuild
+        ? greenVpnPublicPlanTitle(planName)
+        : planName;
     if (_hasPaidPlan) {
       final price = subscriptionMonthlyPriceRub;
       final priceText = price == null ? '' : ' • $price ₽/мес';
       final expiresText = subscriptionExpiresAt == null
           ? ''
           : ' • до ${_formatCompactDate(subscriptionExpiresAt!)}';
-      return '$planName$priceText$expiresText';
+      return '$displayedPlanName$priceText$expiresText';
     }
     if (_hadPaidPlanBefore) {
-      return '$planName закончился. Можно продлить или выбрать другой набор.';
+      return '$displayedPlanName закончился. Можно продлить или выбрать другой набор.';
     }
     return 'Активного платного тарифа пока нет.';
   }
@@ -12035,8 +12220,12 @@ class TariffPage extends StatelessWidget {
       ]);
     }
 
+    final effectiveSelectedPlanCode = greenVpnNormalizePublicBillingPlanCode(
+      publicBillingPlanCode,
+      availableCodes: plans.map((plan) => (plan['code'] ?? '').toString()),
+    );
     final selectedPlan = plans.firstWhere(
-      (plan) => plan['code'] == publicBillingPlanCode,
+      (plan) => plan['code'] == effectiveSelectedPlanCode,
       orElse: () => plans.first,
     );
     final selectedPrice = (selectedPlan['priceRub'] as num?)?.toInt() ?? 249;
@@ -12065,7 +12254,7 @@ class TariffPage extends StatelessWidget {
       final price = (plan['priceRub'] as num?)?.toInt() ?? 0;
       final monthly = (plan['effectiveMonthlyRub'] as num?)?.toInt() ?? price;
       final discount = (plan['discountPercent'] as num?)?.toInt() ?? 0;
-      final selected = code == publicBillingPlanCode;
+      final selected = code == effectiveSelectedPlanCode;
       return InkWell(
         onTap: tariffBusy || hasPendingOrder
             ? null
@@ -12941,7 +13130,7 @@ class TariffPage extends StatelessWidget {
     final textColor = theme.colorScheme.onSurface;
     final mutedColor = textColor.withValues(alpha: isDark ? 0.72 : 0.62);
 
-    if (kPaidBetaBuild) {
+    if (kPaidBetaCustomerUi) {
       return _buildPaidBeta(context);
     }
 
@@ -13750,6 +13939,9 @@ class SettingsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = themeMode == ThemeMode.dark;
+    final displayedVersion = kPublicProductBuild
+        ? greenVpnPublicVersionTitle(kAppVersion)
+        : kAppVersion;
 
     return Padding(
       padding: const EdgeInsets.all(16),
@@ -13787,7 +13979,7 @@ class SettingsPage extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          if (kPaidBetaBuild) ...[
+          if (kPaidBetaCustomerUi) ...[
             _Card(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -13940,7 +14132,7 @@ class SettingsPage extends StatelessWidget {
                 const Divider(height: 18),
                 _SettingsActionRow(
                   title: 'Поддержка',
-                  subtitle: 'Отправить закодированный отчёт в поддержку',
+                  subtitle: 'Отправить диагностический отчёт в поддержку',
                   icon: Icons.health_and_safety_rounded,
                   onTap: onOpenDiagnostics,
                 ),
@@ -13948,7 +14140,7 @@ class SettingsPage extends StatelessWidget {
                 _SettingsActionRow(
                   title: 'О Green VPN',
                   subtitle:
-                      'Версия $kAppVersion, ${greenVpnClientPlatform().toUpperCase()}',
+                      'Версия $displayedVersion, ${greenVpnClientPlatform().toUpperCase()}',
                   icon: Icons.info_outline_rounded,
                   onTap: () => _showAbout(context),
                 ),
@@ -13962,6 +14154,9 @@ class SettingsPage extends StatelessWidget {
   }
 
   void _showAbout(BuildContext context) {
+    final displayedVersion = kPublicProductBuild
+        ? greenVpnPublicVersionTitle(kAppVersion)
+        : kAppVersion;
     showDialog(
       context: context,
       builder: (_) {
@@ -13969,9 +14164,8 @@ class SettingsPage extends StatelessWidget {
           title: const Text(kProductName),
           content: Text(
             'Green VPN для Windows и Android.\n\n'
-            'Версия: $kAppVersion\n'
-            'На Windows системный компонент управляет VPN-действиями. На Android приложение использует системное разрешение VPN.\n\n'
-            'Если что-то не работает, раздел “Поддержка” отправит закодированный отчёт без паролей, токенов и приватных ключей.',
+            'Версия: $displayedVersion\n\n'
+            'Если что-то не работает, раздел “Поддержка” отправит диагностический отчёт без паролей, токенов и приватных ключей.',
           ),
           actions: [
             TextButton(
@@ -14087,7 +14281,7 @@ class _UpdatesPageState extends State<UpdatesPage> {
 
   String get _installHint {
     if (!kIsWeb && Platform.isAndroid) {
-      return 'APK скачается внутри Green VPN, затем Android откроет системную установку.';
+      return 'Обновление скачается внутри Green VPN, затем Android откроет системную установку.';
     }
     if (!kIsWeb && Platform.isWindows) {
       return 'Установщик скачается внутри Green VPN и запустится автоматически.';
@@ -14252,8 +14446,7 @@ class _UpdatesPageState extends State<UpdatesPage> {
     if (await _downloadedFileMatchesManifest(file, manifest)) {
       if (mounted) {
         setState(
-          () => _downloadStatus =
-              'Update file is already downloaded. Starting installer...',
+          () => _downloadStatus = 'Файл уже скачан. Запускаю установку...',
         );
       }
       return file;
@@ -14311,7 +14504,7 @@ class _UpdatesPageState extends State<UpdatesPage> {
           .toUpperCase();
       if (actualSha != expectedSha) {
         await temp.delete();
-        throw Exception('SHA256 обновления не совпал. Установка остановлена.');
+        throw Exception('Проверка файла не пройдена. Установка остановлена.');
       }
     }
 
@@ -14370,7 +14563,7 @@ class _UpdatesPageState extends State<UpdatesPage> {
       if (!mounted) return;
       setState(() {
         _downloadStatus = !kIsWeb && Platform.isAndroid
-            ? 'Открыта системная установка APK.'
+            ? 'Открыта системная установка.'
             : 'Установщик запущен.';
       });
     } catch (error) {
@@ -14394,6 +14587,19 @@ class _UpdatesPageState extends State<UpdatesPage> {
   @override
   Widget build(BuildContext context) {
     final manifest = _manifest;
+    final displayedCurrentVersion = kPublicProductBuild
+        ? greenVpnPublicVersionTitle(kAppVersion)
+        : kAppVersion;
+    final displayedChangelog = manifest == null
+        ? const <String>[]
+        : kPublicProductBuild
+        ? greenVpnPublicChangelog(manifest.changelog)
+        : manifest.changelog;
+    final displayedServerVersion = manifest == null
+        ? ''
+        : kPublicProductBuild
+        ? greenVpnPublicVersionTitle(manifest.latestVersion)
+        : manifest.latestVersion;
     final hasUpdate = manifest?.hasUpdate ?? false;
     final heldByRollout = manifest?.heldByRollout ?? false;
     final requiredUpdate = manifest?.required ?? false;
@@ -14452,7 +14658,7 @@ class _UpdatesPageState extends State<UpdatesPage> {
                           _SupportStatusLine(
                             title: 'Текущая версия',
                             ok: true,
-                            value: kAppVersion,
+                            value: displayedCurrentVersion,
                           ),
                           const SizedBox(height: 10),
                           _SupportStatusLine(
@@ -14466,20 +14672,20 @@ class _UpdatesPageState extends State<UpdatesPage> {
                             ok: !hasUpdate,
                             value: manifest.latestVersion.isEmpty
                                 ? 'не задана'
-                                : manifest.latestVersion,
+                                : displayedServerVersion,
                           ),
                           if (manifest.sha256.trim().isNotEmpty) ...[
                             const SizedBox(height: 10),
                             _SupportStatusLine(
                               title: 'Проверка файла',
                               ok: true,
-                              value: 'SHA256 получен',
+                              value: 'Включена',
                             ),
                           ],
                         ],
                       ),
                     ),
-                    if (manifest.changelog.isNotEmpty) ...[
+                    if (displayedChangelog.isNotEmpty) ...[
                       const SizedBox(height: 12),
                       _Card(
                         child: Column(
@@ -14490,7 +14696,7 @@ class _UpdatesPageState extends State<UpdatesPage> {
                               style: TextStyle(fontWeight: FontWeight.w900),
                             ),
                             const SizedBox(height: 8),
-                            for (final item in manifest.changelog)
+                            for (final item in displayedChangelog)
                               Padding(
                                 padding: const EdgeInsets.only(bottom: 6),
                                 child: Row(
@@ -18265,7 +18471,7 @@ if ($null -eq $svc) { exit 0 }
         return VpnBackendResult(
           ok: false,
           message:
-              'Другой VPN уже активен: ${preflight.competingTunnelsLabel}. Green VPN не будет включаться поверх него, чтобы не сломать сеть. Отключи Amnezia/WARP/другой VPN и попробуй снова.',
+              'Другой VPN уже активен. Green VPN не будет включаться поверх него, чтобы не сломать сеть. Отключи другой VPN и попробуй снова.',
         );
       }
 
@@ -18336,7 +18542,7 @@ if ($null -eq $svc) { exit 0 }
             return const VpnBackendResult(
               ok: false,
               message:
-                  'Другой VPN уже активен. Green VPN не будет включаться поверх него, чтобы не сломать сеть. Отключи Amnezia/WARP/другой VPN и попробуй снова.',
+                  'Другой VPN уже активен. Green VPN не будет включаться поверх него, чтобы не сломать сеть. Отключи другой VPN и попробуй снова.',
             );
           }
         }

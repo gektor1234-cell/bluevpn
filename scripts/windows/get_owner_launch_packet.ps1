@@ -53,10 +53,6 @@ function Invoke-OwnerPacketWithServerToken {
     [string]$Base
   )
 
-  if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
-    throw "wsl.exe not found. Provide -AdminTokenFile to fetch from local Windows instead."
-  }
-
   $baseJson = Convert-ToJsonLiteral $Base
   $remoteScript = @"
 import json
@@ -64,7 +60,11 @@ import urllib.request
 from pathlib import Path
 
 base = $baseJson
-token_path = Path("/opt/bluevpn/backend/data/admin_token.txt")
+token_path = Path(
+    "/opt/bluevpn-paid-beta/data/admin_token.txt"
+    if "/paid-beta-api" in base
+    else "/opt/bluevpn/backend/data/admin_token.txt"
+)
 token = token_path.read_text(encoding="utf-8").strip()
 req = urllib.request.Request(
     base.rstrip("/") + "/api/v1/admin/launch/owner-packet",
@@ -73,7 +73,19 @@ req = urllib.request.Request(
 with urllib.request.urlopen(req, timeout=20) as response:
     print(response.read().decode("utf-8"))
 "@
-  $raw = $remoteScript | wsl ssh "root@$HostName" python3 -
+  if (Get-Command ssh.exe -ErrorAction SilentlyContinue) {
+    $raw = $remoteScript | & ssh.exe -o BatchMode=yes -o ConnectTimeout=10 "root@$HostName" python3 -
+    if ($LASTEXITCODE -ne 0) {
+      throw "Windows OpenSSH owner packet request failed."
+    }
+  } elseif (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
+    $raw = $remoteScript | wsl ssh "root@$HostName" python3 -
+    if ($LASTEXITCODE -ne 0) {
+      throw "WSL SSH owner packet request failed."
+    }
+  } else {
+    throw "No SSH client found. Provide -AdminTokenFile to fetch from local Windows instead."
+  }
   if ([string]::IsNullOrWhiteSpace($raw)) {
     throw "Owner packet request returned empty response."
   }

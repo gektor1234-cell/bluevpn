@@ -55,18 +55,50 @@ class TransportContractDebugService : Service() {
                 when (val command = intent?.getStringExtra("command").orEmpty()) {
                     "probe" -> runContractProbe(result)
                     "snapshot" -> writeTransportSnapshot(result)
+                    "probe_route" -> {
+                        val protocol = intent?.getStringExtra("protocol").orEmpty()
+                        val probe = GreenVpnRouteProbe.probe(this, protocol)
+                        result
+                            .put("ok", probe.ok)
+                            .put("target", probe.target)
+                            .put("statusCode", probe.statusCode)
+                            .put("latencyMs", probe.latencyMs)
+                            .put("probeError", probe.error)
+                            .put("success", true)
+                    }
                     "set_tile_cooldown" -> setTileCooldown(result, requireNotNull(intent))
                     "clear_tile_cooldown" -> {
                         getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE)
                             .edit().remove(ROUTE_COOLDOWN_KEY).commit()
                         result.put("success", true)
                     }
+                    "fail_active_engine" -> {
+                        val protocol = intent?.getStringExtra("protocol").orEmpty()
+                            .trim().lowercase()
+                        val disconnected = when (protocol) {
+                            "amneziawg", "wireguard_udp" ->
+                                GreenVpnAwg2Preview.disconnect(this)
+                            "hysteria2" -> GreenVpnHysteria2Preview.disconnect(this)
+                            "vless_reality" -> GreenVpnVlessRealityPreview.disconnect(this)
+                            "naive_https" -> GreenVpnNaiveHttpsPreview.disconnect(this)
+                            "dnstt" -> GreenVpnDnsttPreview.disconnect(this)
+                            else -> error("unsupported_protocol")
+                        }
+                        check(disconnected) { "engine_disconnect_failed" }
+                        writeTransportSnapshot(result)
+                        result.put("injectedProtocol", protocol)
+                    }
                     "disconnect_all" -> {
+                        GreenVpnRuntimeFailoverService.disarm(this)
+                        GreenVpnConnectionOperationGate.awaitIdle()
                         GreenVpnDnsttPreview.disconnect(this)
                         GreenVpnNaiveHttpsPreview.disconnect(this)
                         GreenVpnVlessRealityPreview.disconnect(this)
                         GreenVpnHysteria2Preview.disconnect(this)
                         GreenVpnAwg2Preview.disconnect(this)
+                        if (GreenVpnNetworkTransition.waitForInactive(this, 2_500L)) {
+                            GreenVpnNetworkTransition.markInactive(this)
+                        }
                         getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE)
                             .edit().remove(LAST_ROUTE_SUCCESS_KEY).commit()
                         writeTransportSnapshot(result)
@@ -150,7 +182,14 @@ class TransportContractDebugService : Service() {
             engines.put(protocol, JSONObject().put("connected", connected).put("state", state))
             if (connected) active.put(protocol)
         }
-        result.put("engines", engines).put("activeProtocols", active).put("success", true)
+        result
+            .put("engines", engines)
+            .put("activeProtocols", active)
+            .put(
+                "runtimeFailover",
+                JSONObject(GreenVpnRuntimeFailoverService.snapshot(this)),
+            )
+            .put("success", true)
         val lastRoute = try {
             JSONObject(readSecureString(this, LAST_ROUTE_SUCCESS_KEY))
         } catch (_: Exception) {

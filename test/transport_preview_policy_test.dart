@@ -44,6 +44,58 @@ void main() {
     expect(greenVpnTransportRequiresFullTunnel('wireguard_udp'), isFalse);
   });
 
+  test('runtime failover never widens selective app routing', () {
+    expect(
+      greenVpnShouldArmRuntimeFailover(
+        previewEnabled: true,
+        isAndroid: true,
+        serverIsAuto: false,
+        socialOnlyEnabled: false,
+      ),
+      isTrue,
+    );
+    expect(
+      greenVpnShouldArmRuntimeFailover(
+        previewEnabled: true,
+        isAndroid: true,
+        serverIsAuto: false,
+        socialOnlyEnabled: true,
+      ),
+      isFalse,
+    );
+  });
+
+  test('startup route probe retries only fast failures', () {
+    expect(
+      greenVpnStartupRouteProbeDelay(1),
+      const Duration(milliseconds: 750),
+    );
+    expect(
+      greenVpnStartupRouteProbeDelay(2),
+      const Duration(milliseconds: 900),
+    );
+    expect(
+      greenVpnStartupRouteProbeDelay(3),
+      const Duration(milliseconds: 1400),
+    );
+    expect(
+      greenVpnShouldRetryStartupRouteProbe(attempt: 1, latencyMs: 25),
+      isTrue,
+    );
+    expect(
+      greenVpnShouldRetryStartupRouteProbe(attempt: 2, latencyMs: 3999),
+      isTrue,
+    );
+    expect(
+      greenVpnShouldRetryStartupRouteProbe(attempt: 2, latencyMs: 4000),
+      isFalse,
+    );
+    expect(
+      greenVpnShouldRetryStartupRouteProbe(attempt: 3, latencyMs: 25),
+      isFalse,
+    );
+  });
+
   test('cooldown demotes a failed route without changing cascade order', () {
     final now = DateTime.utc(2026, 7, 12, 12);
     final candidates =

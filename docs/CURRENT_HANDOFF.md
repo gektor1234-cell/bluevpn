@@ -1,6 +1,6 @@
 # Green VPN Current Handoff
 
-Updated: 2026-07-13.
+Updated: 2026-07-15.
 
 This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
@@ -38,6 +38,34 @@ This is the current operational entry point. Read it together with
 - Generated binaries belong in `C:\BlueVPN_Builds`, encrypted restore points in
   `C:\Users\gekto\GreenVPN_Checkpoints`, and secrets outside Git.
 
+## Final product candidate checkpoint, 2026-07-15
+
+- The customer server picker exposes logical locations only: `Авто`,
+  `Нидерланды`, and `Англия` when a healthy published England route exists.
+  Physical nodes and transports stay internal. Every picker row, including
+  `Авто`, has a numeric latency label; an unavailable measurement is displayed
+  as `0 мс`.
+- Android candidate `0.3.0+2026071511`:
+  `C:\BlueVPN_Builds\public_product_final_candidate_20260715\GreenVPN_Android_0.3.0_final_candidate_2026071511_debug.apk`.
+  SHA-256:
+  `AFB39779B9F341F90ADB50FA8AF195B7B72C585D4DD3E1B0F005F0CA23D35B4F`.
+  It is a side-by-side debug-signed candidate package
+  `pro.greenvpn.app.finalcandidate`, not the production APK to publish.
+- Windows cascade candidate:
+  `C:\BlueVPN_Builds\public_product_final_candidate_20260715\windows\GreenVPN_Windows_0.3.0_final_candidate.zip`.
+  SHA-256:
+  `A9F1BD9766F345B786B37879BE3E9DAD42C5025F691BD35BEF93FBE8B8BCA206`.
+  Its product/file version is `0.3.0+1511`; all 45 manifest hashes pass.
+  The Green VPN executables are still unsigned, so this ZIP is an internal
+  candidate and must not be a mandatory public update.
+- Android UI was checked on physical Android 9 and Android 16/API 36. The
+  physical phone was left with no active VPN agent. Full data-plane transport
+  proofs remain the physical Android 9 evidence described in the transport
+  diagnostic.
+- `flutter analyze`, 27 Flutter tests, 84 backend tests, Android native unit
+  tasks, both APK verifiers, public-surface probes, dependency audit, secret
+  scan, standard release gate and strict payment gate are green.
+
 ## Live topology
 
 | Role | Host | Current state |
@@ -45,7 +73,7 @@ This is the current operational entry point. Read it together with
 | Primary RU control plane | Timeweb Moscow `72.56.32.197` | production API, paid candidate API, site, SMTP, billing writer, DB sync |
 | Fallback RU control plane | RUVDS Moscow `176.113.81.35` | production/paid failover, site mirror, SMTP, DB sync, billing read-only |
 | Stable VPN NL1 | `37.220.85.211` | stable UDP tunnel active; obsolete Certbot/API TLS retired |
-| Stable VPN London | `88.218.250.86` | stable tunnel and WARP egress active; backend/nginx active |
+| Stable VPN London | `88.218.250.86` | provider state `notpaid`; unreachable and intentionally unpublished from the client catalog |
 | Stable VPN + preview NL2 | `5.129.216.42` | stable UDP tunnel plus five isolated hidden preview transports |
 | Excluded host | `5.129.237.163` | not managed by this project; do not modify |
 
@@ -148,8 +176,8 @@ material. KZ is not in DNS, catalogs or assignment state.
 - Backend tests: 84 passed.
 - `pip-audit`: no known vulnerabilities.
 - `flutter analyze`: no issues.
-- Flutter tests: 11 passed.
-- Android `:app:testDebugUnitTest`: successful.
+- Flutter tests: 27 passed.
+- Android debug/profile/release unit-test tasks: successful.
 - Release gate: 0 warnings, 0 errors.
 - Secret scan: tracked, untracked and complete Git history passed.
 - Remaining build warnings are in third-party Pub packages (`file_picker` and
@@ -179,15 +207,19 @@ material. KZ is not in DNS, catalogs or assignment state.
 
 ## Remaining owner/external launch gates
 
-1. YooKassa enables recurring bank-card payments for shop `1350868`.
-2. One real 249 RUB first-payment smoke proves `payment_method.saved=true`.
-3. App-side auto-renew cancellation removes the saved method on both control
+1. One real 249 RUB first-payment smoke proves `payment_method.saved=true`.
+   YooKassa has already approved bank-card binding; the smoke itself remains an
+   owner action and must not be performed by automation.
+2. App-side auto-renew cancellation removes the saved method on both control
    planes while preserving the paid period.
-4. Obtain an Authenticode code-signing certificate and sign the Windows
+3. Obtain an Authenticode code-signing certificate and sign the Windows
    installer before mandatory public distribution.
-5. After those gates, run final Android/Windows physical smoke, publish the
+4. If England must return to the picker, top up the London RUVDS server by at
+   least the current shortfall (last observed about 326 RUB; use at least
+   400 RUB buffer), then reactivate, test and publish it server-side.
+5. After those gates, build production-signed Android and Windows artifacts,
+   run final physical smoke, publish the
    candidate and only then enable forced update.
 
-Do not create another YooKassa ticket while the current review is pending. Do
-not perform a real payment, enter SMS/bank codes or accept legal terms on behalf
-of the owner.
+Do not perform a real payment, enter SMS/bank codes or accept legal terms on
+behalf of the owner.

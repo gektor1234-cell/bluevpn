@@ -6,6 +6,10 @@ param(
     [string]$NaiveRoot = 'C:\Users\gekto\GreenVPN_Checkpoints\naiveproxy_v150.0.7871.63-1\win-extract\naiveproxy-v150.0.7871.63-1-win-x64',
     [string]$OutDir = 'C:\BlueVPN_Builds\windows_transport_preview_20260712_naive',
     [string]$AppVersion = '0.3.0-transport-preview.3',
+    [string]$WindowsBuildName = '0.3.0',
+    [ValidateRange(0, 65535)]
+    [int]$WindowsBuildNumber = 1511,
+    [switch]$PublicProductCandidate,
     [switch]$SkipChecks
 )
 
@@ -13,6 +17,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+if ($WindowsBuildName -notmatch '^\d+\.\d+\.\d+$') {
+    throw "WindowsBuildName must be a numeric x.y.z version: $WindowsBuildName"
+}
 $licensePath = Join-Path $repo 'docs\licenses\AMNEZIAWG_WINDOWS_CLIENT_MIT.txt'
 $hysteriaLicensePath = Join-Path $repo 'docs\licenses\HYSTERIA_APP_MIT.txt'
 $hevLicensePath = Join-Path $repo 'docs\licenses\HEV_SOCKS5_TUNNEL_MIT.txt'
@@ -118,6 +125,10 @@ if (-not $SkipChecks) {
     if ($LASTEXITCODE -ne 0) { throw 'flutter test failed' }
 }
 
+$customerProductName = if ($PublicProductCandidate) { 'Green VPN' } else { 'Green VPN Transport Preview' }
+$paidBetaBuild = if ($PublicProductCandidate) { 'false' } else { 'true' }
+$publicProductBuild = if ($PublicProductCandidate) { 'true' } else { 'false' }
+
 $runtime = [ordered]@{
     GREENVPN_WINDOWS_RUNTIME_SCOPE = 'transport-preview'
     GREENVPN_WINDOWS_TUNNEL_NAME = 'GreenVPNTransportPreview'
@@ -127,7 +138,7 @@ $runtime = [ordered]@{
     GREENVPN_WINDOWS_LOCAL_SERVICE_PORT = '48739'
     GREENVPN_WINDOWS_INSTANCE_ID = 'GreenVPNTransportPreview'
     GREENVPN_WINDOWS_EXECUTABLE_NAME = 'greenvpn_transport_preview.exe'
-    GREENVPN_PRODUCT_NAME = 'Green VPN Transport Preview'
+    GREENVPN_PRODUCT_NAME = $customerProductName
 }
 $previous = @{}
 foreach ($name in $runtime.Keys) {
@@ -144,9 +155,12 @@ if (Test-Path -LiteralPath $windowsBuildRoot) {
 
 try {
     flutter build windows --release -t .\lib\main.dart `
+        --build-name="$WindowsBuildName" `
+        --build-number="$WindowsBuildNumber" `
         --dart-define="GREENVPN_APP_VERSION=$AppVersion" `
         --dart-define="GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=false" `
-        --dart-define="GREENVPN_PAID_BETA_BUILD=true" `
+        --dart-define="GREENVPN_PAID_BETA_BUILD=$paidBetaBuild" `
+        --dart-define="GREENVPN_PUBLIC_PRODUCT_BUILD=$publicProductBuild" `
         --dart-define="GREENVPN_PAID_BETA_CLIENT_MARKER=green-vpn-paid-beta-v1" `
         --dart-define="GREENVPN_AWG2_PREVIEW_ENABLED=true" `
         --dart-define="GREENVPN_HYSTERIA2_PREVIEW_ENABLED=true" `
@@ -221,6 +235,10 @@ $artifactRows = Get-ChildItem -LiteralPath $OutDir -Recurse -File | ForEach-Obje
 }
 $manifest = [ordered]@{
     appVersion = $AppVersion
+    windowsBuildName = $WindowsBuildName
+    windowsBuildNumber = $WindowsBuildNumber
+    publicProductCandidate = [bool]$PublicProductCandidate
+    customerProductName = $customerProductName
     runtimeScope = 'transport-preview'
     tunnelName = 'GreenVPNTransportPreview'
     serviceName = 'GreenVPNTransportPreviewService'
@@ -235,7 +253,12 @@ $manifest = [ordered]@{
 }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $OutDir 'manifest.json') -Encoding UTF8
 
-$zip = Join-Path $OutDir 'GreenVPN_Windows_Transport_Preview_0.3.0-preview3.zip'
+$zipName = if ($PublicProductCandidate) {
+    'GreenVPN_Windows_0.3.0_final_candidate.zip'
+} else {
+    'GreenVPN_Windows_Transport_Preview_0.3.0-preview3.zip'
+}
+$zip = Join-Path $OutDir $zipName
 if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
 $packagePaths = @(
     (Join-Path $OutDir 'app'),

@@ -10,6 +10,11 @@ $ErrorActionPreference = 'Stop'
 $resultFile = 'files/greenvpn-transport-contract-debug-result.json'
 
 if (-not (Test-Path -LiteralPath $Adb -PathType Leaf)) { throw "adb is missing: $Adb" }
+& $Adb -s $Serial shell am set-inactive $Package false | Out-Null
+& $Adb -s $Serial shell am set-standby-bucket $Package active | Out-Null
+& $Adb -s $Serial shell cmd deviceidle whitelist "+$Package" | Out-Null
+& $Adb -s $Serial shell am start -n "$Package/pro.greenvpn.app.MainActivity" | Out-Null
+Start-Sleep -Seconds 2
 & $Adb -s $Serial shell run-as $Package rm -f $resultFile | Out-Null
 & $Adb -s $Serial shell am startservice `
     -n "$Package/pro.greenvpn.app.TransportContractDebugService" `

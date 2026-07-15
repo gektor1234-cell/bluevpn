@@ -33,6 +33,7 @@ object Hysteria2Controller {
             "Hysteria2 config permissions were not restricted"
         }
         config.setWritable(true, true)
+        Hysteria2VpnService.prepareForConnect(context)
         val intent = Intent(context, Hysteria2VpnService::class.java)
             .setAction(Hysteria2VpnService.ACTION_CONNECT)
             .putExtra(Hysteria2VpnService.EXTRA_CONFIG_PATH, config.canonicalPath)
@@ -41,19 +42,19 @@ object Hysteria2Controller {
         } else {
             context.startService(intent)
         }
-        return waitForState("up", 25_000L)
+        return waitForState(context, "up", 25_000L)
     }
 
     @JvmStatic
     fun disconnect(context: Context): Boolean {
         if (!isAvailable(context)) return true
         if (!Hysteria2VpnService.requestDisconnect(context)) return false
-        return waitForState("down", 12_000L)
+        return waitForState(context, "down", 12_000L)
     }
 
     @JvmStatic
     fun snapshot(context: Context): Map<String, Any> {
-        val current = Hysteria2VpnService.snapshot()
+        val current = Hysteria2VpnService.snapshot(context)
         return linkedMapOf(
             "available" to isAvailable(context),
             "connected" to (current.state == "up"),
@@ -65,14 +66,14 @@ object Hysteria2Controller {
         )
     }
 
-    private fun waitForState(expected: String, timeoutMs: Long): Boolean {
+    private fun waitForState(context: Context, expected: String, timeoutMs: Long): Boolean {
         val deadline = SystemClock.elapsedRealtime() + timeoutMs
         do {
-            val state = Hysteria2VpnService.snapshot().state
+            val state = Hysteria2VpnService.snapshot(context).state
             if (state == expected) return true
             if (state == "error" && expected != "down") return false
             Thread.sleep(100L)
         } while (SystemClock.elapsedRealtime() < deadline)
-        return Hysteria2VpnService.snapshot().state == expected
+        return Hysteria2VpnService.snapshot(context).state == expected
     }
 }

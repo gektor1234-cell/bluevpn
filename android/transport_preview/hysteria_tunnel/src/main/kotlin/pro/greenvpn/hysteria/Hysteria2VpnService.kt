@@ -9,6 +9,8 @@ import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import hev.htproxy.TProxyService
+import org.json.JSONObject
+import pro.greenvpn.runtime.PreviewVpnServiceRuntime
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -33,6 +35,7 @@ class Hysteria2VpnService : VpnService() {
         private const val NOTIFICATION_ID = 48742
         private const val HYSTERIA_LIBRARY = "hysteria"
         private const val BRIDGE_LIBRARY = "greenvpn-hysteria-bridge"
+        private const val STATE_FILE = "state.json"
 
         @Volatile private var state = "down"
         @Volatile private var error = ""
@@ -57,7 +60,86 @@ class Hysteria2VpnService : VpnService() {
             return binary
         }
 
-        fun snapshot(): Snapshot = Snapshot(state, rxBytes, txBytes, "2.9.3", error)
+        @Synchronized
+        fun snapshot(context: Context): Snapshot {
+            if (currentService != null) return Snapshot(state, rxBytes, txBytes, "2.9.3", error)
+            val persisted = readPersistedSnapshot(context)
+                ?: return Snapshot("down", 0L, 0L, "2.9.3", "")
+            if (persisted.state in setOf("up", "starting", "stopping") &&
+                !PreviewVpnServiceRuntime.isRunningOrStarting(
+                    context,
+                    Hysteria2VpnService::class.java,
+                    persisted.state,
+                    File(runtimeRoot(context), STATE_FILE),
+                )
+            ) {
+                val recovered = Snapshot(
+                    "error",
+                    0L,
+                    0L,
+                    "2.9.3",
+                    "VPN service stopped unexpectedly",
+                )
+                persistSnapshot(context, recovered)
+                return recovered
+            }
+            return persisted
+        }
+
+        private fun readPersistedSnapshot(context: Context): Snapshot? = try {
+            val file = File(runtimeRoot(context), STATE_FILE)
+            if (!file.isFile || file.length() !in 2..4_096) null else {
+                val root = JSONObject(file.readText(Charsets.UTF_8))
+                val persistedState = root.optString("state", "down")
+                if (persistedState !in setOf("down", "starting", "up", "stopping", "error")) {
+                    null
+                } else {
+                    Snapshot(
+                        persistedState,
+                        0L,
+                        0L,
+                        "2.9.3",
+                        root.optString("error", "").replace(Regex("[\\r\\n]+"), " ").take(240),
+                    )
+                }
+            }
+        } catch (_: Throwable) {
+            null
+        }
+
+        @Synchronized
+        private fun persistSnapshot(context: Context, snapshot: Snapshot) {
+            try {
+                val root = runtimeRoot(context)
+                if (!root.exists() && !root.mkdirs()) return
+                val target = File(root, STATE_FILE)
+                val temporary = File(root, "$STATE_FILE.tmp")
+                temporary.writeText(
+                    JSONObject()
+                        .put("state", snapshot.state)
+                        .put("error", snapshot.error)
+                        .put("version", snapshot.version)
+                        .toString() + "\n",
+                    Charsets.UTF_8,
+                )
+                temporary.setReadable(false, false)
+                temporary.setReadable(true, true)
+                temporary.setWritable(true, true)
+                if (!temporary.renameTo(target)) {
+                    target.delete()
+                    temporary.renameTo(target)
+                }
+            } catch (_: Throwable) {}
+        }
+
+        @Synchronized
+        fun prepareForConnect(context: Context) {
+            rxBytes = 0L
+            txBytes = 0L
+            state = "starting"
+            error = ""
+            persistSnapshot(context, Snapshot(state, rxBytes, txBytes, "2.9.3", error))
+        }
 
         @Synchronized
         fun requestDisconnect(context: Context): Boolean {
@@ -73,6 +155,12 @@ class Hysteria2VpnService : VpnService() {
                     false
                 }
             }
+            if (PreviewVpnServiceRuntime.requestDisconnect(
+                    context,
+                    Hysteria2VpnService::class.java,
+                    ACTION_DISCONNECT,
+                )
+            ) return true
             val root = runtimeRoot(context)
             for (name in listOf("fd.sock", "runtime.yaml", "hev.yaml", "base.yaml")) {
                 try { File(root, name).delete() } catch (_: Throwable) {}
@@ -81,6 +169,7 @@ class Hysteria2VpnService : VpnService() {
             txBytes = 0L
             state = "down"
             error = ""
+            persistSnapshot(context, Snapshot(state, rxBytes, txBytes, "2.9.3", error))
             return true
         }
 
@@ -135,7 +224,7 @@ class Hysteria2VpnService : VpnService() {
     fun protectSocket(fd: Int): Boolean = protect(fd)
 
     override fun onRevoke() {
-        val preserveFailure = cleanupStarted.get() || state == "error"
+        val preserveFailure = shouldPreserveFailure()
         val revokedState = if (preserveFailure) "error" else "down"
         val revokedError = if (preserveFailure) error.ifEmpty { "VPN permission revoked during cleanup" } else ""
         worker.execute {
@@ -146,8 +235,9 @@ class Hysteria2VpnService : VpnService() {
     }
 
     override fun onDestroy() {
-        val finalState = if (state == "error") "error" else "down"
-        val finalError = if (finalState == "error") error else ""
+        val preserveFailure = shouldPreserveFailure()
+        val finalState = if (preserveFailure) "error" else "down"
+        val finalError = if (preserveFailure) error.ifEmpty { "Hysteria2 stopped unexpectedly" } else ""
         cleanup(finalState, finalError)
         if (currentService === this) currentService = null
         worker.shutdownNow()
@@ -205,13 +295,12 @@ class Hysteria2VpnService : VpnService() {
 
             val descriptor = Builder()
                 .setSession("Green VPN")
-                .setMtu(1500)
+                .setMtu(1400)
                 .addAddress("198.18.0.1", 32)
                 .addAddress("fc00::1", 128)
                 .addRoute("0.0.0.0", 0)
                 .addRoute("::", 0)
-                .addDnsServer("1.1.1.1")
-                .addDnsServer("2606:4700:4700::1111")
+                .addDnsServer("198.18.0.2")
                 .apply { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) setMetered(false) }
                 .establish() ?: throw IllegalStateException("Android did not establish the VPN interface")
             tunFd = descriptor.detachFd()
@@ -220,6 +309,7 @@ class Hysteria2VpnService : VpnService() {
             require(isProcessAlive(hysteriaProcess)) { "Hysteria2 exited during startup" }
             state = "up"
             error = ""
+            persistSnapshot(this, Snapshot(state, rxBytes, txBytes, "2.9.3", error))
             updateStats()
             startForeground(NOTIFICATION_ID, notification("Green VPN подключён"))
             startMonitor()
@@ -276,8 +366,12 @@ class Hysteria2VpnService : VpnService() {
             }
         }
         try { nativeStopFdControl() } catch (_: Throwable) {}
-        fdControlThread?.interrupt()
+        val fdThread = fdControlThread
         fdControlThread = null
+        fdThread?.interrupt()
+        if (fdThread != null && fdThread !== Thread.currentThread()) {
+            try { fdThread.join(2_000L) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+        }
         monitorThread?.interrupt()
         monitorThread = null
         if (::root.isInitialized) {
@@ -291,8 +385,15 @@ class Hysteria2VpnService : VpnService() {
         txBytes = 0L
         state = finalState
         error = finalError
-        if (finalState == "down") stopForeground(STOP_FOREGROUND_REMOVE)
+        persistSnapshot(this, Snapshot(state, rxBytes, txBytes, "2.9.3", error))
+        if (finalState == "down") {
+            cleanupStarted.set(false)
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        }
     }
+
+    private fun shouldPreserveFailure(): Boolean =
+        cleanupStarted.get() || state == "error" || error.isNotEmpty()
 
     private fun updateStats() {
         try {
@@ -342,13 +443,19 @@ class Hysteria2VpnService : VpnService() {
 
     private fun hevConfigText(): String = """
         tunnel:
-          mtu: 1500
+          mtu: 1400
           ipv4: 198.18.0.1
           ipv6: 'fc00::1'
         socks5:
           address: 127.0.0.1
           port: 1980
           udp: 'udp'
+        mapdns:
+          address: 198.18.0.2
+          port: 53
+          network: 100.64.0.0
+          netmask: 255.192.0.0
+          cache-size: 10000
         misc:
           task-stack-size: 86016
           connect-timeout: 10000

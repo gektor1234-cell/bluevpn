@@ -17,6 +17,8 @@ internal object NaiveHttpsConfig {
         return configText.trim() + "\n"
     }
 
+    fun routeExclusions(): Set<String> = setOf(CANARY_IP)
+
     fun renderRuntime(configText: String): String {
         val root = loadAndValidate(configText)
         root.addProperty("host-resolver-rules", "MAP $CANARY_HOST $CANARY_IP")

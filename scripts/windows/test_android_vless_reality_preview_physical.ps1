@@ -62,10 +62,10 @@ function Get-EngineProcessCount {
 function Invoke-ExternalProbe {
     param([int]$TimeoutSeconds = 45)
     $result = [ordered]@{}
-    foreach ($target in @('egress','productionApi','paidBetaPrimary','paidBetaFallback','youtube')) {
+    foreach ($target in @('egressAlternate','productionApi','paidBetaPrimary','paidBetaFallback','youtube')) {
         Invoke-Adb -Arguments @('shell', 'run-as', $ProbePackage, 'rm', '-f', 'files/transport-probe-result.json') | Out-Null
         Invoke-Adb -Arguments @(
-            'shell', 'am', 'broadcast', '--receiver-foreground', '--include-stopped-packages',
+            'shell', 'am', 'broadcast', '--include-stopped-packages',
             '-a', 'pro.greenvpn.transportprobe.RUN',
             '-n', "$ProbePackage/pro.greenvpn.transportprobe.TransportProbeReceiver",
             '--es', 'target', $target
@@ -85,11 +85,11 @@ function Invoke-ExternalProbe {
             Start-Sleep -Milliseconds 200
         } while ((Get-Date) -lt $deadline)
         if ($null -eq $probe) { throw "Timed out waiting for Android transport probe: $target" }
-        $result[$target + 'Status'] = [int]$probe.status
-        $result[$target + 'Error'] = [string]$probe.error
-        if ($target -eq 'egress') {
-            $ipMatch = [regex]::Match([string]$probe.body, '(?m)^ip=([^\r\n]+)')
-            $result.egress = if ($ipMatch.Success) { $ipMatch.Groups[1].Value.Trim() } else { '' }
+        $resultKey = if ($target -eq 'egressAlternate') { 'egress' } else { $target }
+        $result[$resultKey + 'Status'] = [int]$probe.status
+        $result[$resultKey + 'Error'] = [string]$probe.error
+        if ($target -eq 'egressAlternate') {
+            $result.egress = ([string]$probe.body).Trim()
         }
     }
     return [pscustomobject]$result
@@ -167,14 +167,29 @@ try {
         throw "Separate-UID transport probe is not installed: $ProbePackage"
     }
     Invoke-Adb -Arguments @(
-        'shell', 'am', 'start', '-W',
+        'shell', 'run-as', $Package, 'rm', '-f', 'files/greenvpn-vless-permission-result.txt'
+    ) | Out-Null
+    Invoke-Adb -Arguments @(
+        'shell', 'am', 'start',
         '-n', "$Package/pro.greenvpn.vless.VlessRealityPermissionDebugActivity"
     ) | Out-Null
-    $permissionResult = ((Invoke-Adb -Arguments @(
-        'shell', 'run-as', $Package, 'cat', 'files/greenvpn-vless-permission-result.txt'
-    )) -join '').Trim()
-    $preparedVpn = (Invoke-Adb -Arguments @('shell', 'dumpsys', 'vpn_management')) -join "`n"
-    if ($permissionResult -ne 'granted' -or $preparedVpn -notmatch [regex]::Escape($Package)) {
+    $permissionResult = ''
+    $permissionDeadline = (Get-Date).AddSeconds(10)
+    do {
+        $previousPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            $permissionResult = (@(
+                & $Adb -s $Serial shell run-as $Package cat files/greenvpn-vless-permission-result.txt 2>$null
+            ) -join '').Trim()
+            $permissionReadExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousPreference
+        }
+        if ($permissionReadExitCode -eq 0 -and $permissionResult) { break }
+        Start-Sleep -Milliseconds 200
+    } while ((Get-Date) -lt $permissionDeadline)
+    if ($permissionResult -ne 'granted') {
         throw "Android VPN permission is not prepared for the VLESS preview package."
     }
     Invoke-Adb -Arguments @('shell', 'am', 'force-stop', $Package) | Out-Null
@@ -194,6 +209,7 @@ try {
     Invoke-Adb -Arguments @('shell', 'rm', '-f', '/data/local/tmp/greenvpn-vless-debug.json') | Out-Null
 
     $connected = Invoke-DebugCommand -Command connect
+    Start-Sleep -Seconds 2
     $external = Invoke-ExternalProbe
     $report.connected = [bool]$connected.connected
     $report.canaryEgress = [string]$external.egress
@@ -240,6 +256,7 @@ try {
     }
 
     $reconnected = Invoke-DebugCommand -Command connect
+    Start-Sleep -Seconds 2
     $reconnectedExternal = Invoke-ExternalProbe
     $report.reconnectState = [string]$reconnected.state
     $report.reconnectEgress = [string]$reconnectedExternal.egress

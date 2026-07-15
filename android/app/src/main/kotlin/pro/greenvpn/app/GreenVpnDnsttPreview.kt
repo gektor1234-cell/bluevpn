@@ -3,6 +3,8 @@ package pro.greenvpn.app
 import android.content.Context
 
 object GreenVpnDnsttPreview {
+    data class ProxyCredentials(val username: String, val password: String)
+
     data class Snapshot(
         val available: Boolean,
         val connected: Boolean,
@@ -38,6 +40,22 @@ object GreenVpnDnsttPreview {
     fun disconnect(context: Context): Boolean {
         if (!isAvailable(context)) return true
         return invoke("disconnect", arrayOf(Context::class.java), context.applicationContext) as? Boolean == true
+    }
+
+    fun routeProbeCredentials(context: Context): ProxyCredentials? {
+        if (!isAvailable(context)) return null
+        return try {
+            val raw = invoke(
+                "routeProbeCredentials",
+                arrayOf(Context::class.java),
+                context.applicationContext,
+            ) as? Map<*, *> ?: return null
+            val username = raw["username"]?.toString().orEmpty()
+            val password = raw["password"]?.toString().orEmpty()
+            if (username.isEmpty() || password.isEmpty()) null else ProxyCredentials(username, password)
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     fun snapshot(context: Context): Snapshot {

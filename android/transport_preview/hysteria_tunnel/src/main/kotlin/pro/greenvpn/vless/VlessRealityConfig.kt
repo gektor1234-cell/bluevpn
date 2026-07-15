@@ -12,6 +12,7 @@ import java.util.UUID
 internal object VlessRealityConfig {
     const val SOCKS_PORT = 1981
     private const val CANARY_HOST = "5.129.216.42"
+    private const val DNS_UPSTREAM = "1.1.1.1"
     private const val CANARY_SNI = "www.amazon.com"
     private val shortIdPattern = Regex("^(?:[0-9a-fA-F]{2}){1,8}$")
 
@@ -19,6 +20,8 @@ internal object VlessRealityConfig {
         loadAndValidate(configText)
         return configText.trim() + "\n"
     }
+
+    fun routeExclusions(): Set<String> = setOf(CANARY_HOST, DNS_UPSTREAM)
 
     fun renderRuntime(configText: String): String {
         val root = loadAndValidate(configText)

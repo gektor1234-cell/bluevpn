@@ -204,14 +204,20 @@ function Add-ServerSelfCheck {
     return
   }
 
-  if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
-    $Results.Add((New-Result "Server self-check API HTTPS" "yellow" "wsl.exe not found; skipped remote server-side HTTPS check." $null))
+  $windowsSsh = Get-Command ssh.exe -ErrorAction SilentlyContinue
+  $wslSsh = Get-Command wsl.exe -ErrorAction SilentlyContinue
+  if (-not $windowsSsh -and -not $wslSsh) {
+    $Results.Add((New-Result "Server self-check API HTTPS" "yellow" "No SSH client found; skipped remote server-side HTTPS check." $null))
     return
   }
 
   $url = "$($ServerSelfCheckApiBase.TrimEnd('/'))/healthz"
   try {
-    $output = & wsl.exe ssh -T -o BatchMode=yes -o ConnectTimeout=12 "root@$ServerHost" "curl -fsS --max-time 15 '$url'" 2>&1
+    if ($windowsSsh) {
+      $output = & ssh.exe -T -o BatchMode=yes -o ConnectTimeout=12 "root@$ServerHost" "curl -fsS --max-time 15 '$url'" 2>&1
+    } else {
+      $output = & wsl.exe ssh -T -o BatchMode=yes -o ConnectTimeout=12 "root@$ServerHost" "curl -fsS --max-time 15 '$url'" 2>&1
+    }
     $exitCode = $LASTEXITCODE
     $text = ($output | Out-String).Trim()
     if ($exitCode -ne 0) {
@@ -244,8 +250,10 @@ function Add-ServerAdminSelfCheck {
     return
   }
 
-  if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
-    $Results.Add((New-Result "Server admin self-check" "yellow" "wsl.exe not found; skipped protected server-side admin checks." $null))
+  $windowsSsh = Get-Command ssh.exe -ErrorAction SilentlyContinue
+  $wslSsh = Get-Command wsl.exe -ErrorAction SilentlyContinue
+  if (-not $windowsSsh -and -not $wslSsh) {
+    $Results.Add((New-Result "Server admin self-check" "yellow" "No SSH client found; skipped protected server-side admin checks." $null))
     return
   }
 
@@ -834,8 +842,22 @@ except Exception as exc:
 print(json.dumps(summary, ensure_ascii=False))
 '@
 
+  $adminBaseLiteral = ($ApiBase.TrimEnd('/') | ConvertTo-Json -Compress)
+  $adminTokenPath = if ($ApiBase -match '/paid-beta-api(?:/|$)') {
+    '/opt/bluevpn-paid-beta/data/admin_token.txt'
+  } else {
+    '/opt/bluevpn/backend/data/admin_token.txt'
+  }
+  $adminTokenPathLiteral = ($adminTokenPath | ConvertTo-Json -Compress)
+  $pythonSource = $pythonSource.Replace('base = "https://api.greenvpn.pro"', "base = $adminBaseLiteral")
+  $pythonSource = $pythonSource.Replace('token_path = Path("/opt/bluevpn/backend/data/admin_token.txt")', "token_path = Path($adminTokenPathLiteral)")
+
   try {
-    $output = $pythonSource | & wsl.exe ssh -T -o BatchMode=yes -o ConnectTimeout=12 "root@$ServerHost" "python3 -" 2>&1
+    if ($windowsSsh) {
+      $output = $pythonSource | & ssh.exe -T -o BatchMode=yes -o ConnectTimeout=12 "root@$ServerHost" "python3 -" 2>&1
+    } else {
+      $output = $pythonSource | & wsl.exe ssh -T -o BatchMode=yes -o ConnectTimeout=12 "root@$ServerHost" "python3 -" 2>&1
+    }
     $exitCode = $LASTEXITCODE
     $text = ($output | Out-String).Trim()
     if ($exitCode -ne 0) {
@@ -943,7 +965,7 @@ if ($AdminToken) {
       $results.Add((New-Result "Admin $path" "red" $_.Exception.Message $null))
     }
   }
-} else {
+} elseif (-not $ServerAdminSelfCheck) {
   $results.Add((New-Result "Admin readiness" "yellow" "Admin token not provided; skipped protected readiness endpoints." $null))
 }
 

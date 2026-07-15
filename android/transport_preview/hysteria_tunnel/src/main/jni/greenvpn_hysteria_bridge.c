@@ -157,16 +157,21 @@ Java_pro_greenvpn_hysteria_Hysteria2VpnService_nativeRunFdControl(
         close(client_fd);
     }
 
-cleanup:
+cleanup: {
+    int owns_server = 0;
     pthread_mutex_lock(&fd_control_mutex);
     if (fd_control_server == server_fd) {
         fd_control_server = -1;
         close(server_fd);
+        fd_control_path[0] = '\0';
+        owns_server = 1;
     }
-    fd_control_path[0] = '\0';
     pthread_mutex_unlock(&fd_control_mutex);
-    unlink(path);
+    if (owns_server) {
+        unlink(path);
+    }
     return result;
+}
 }
 
 JNIEXPORT void JNICALL
@@ -183,6 +188,7 @@ Java_pro_greenvpn_hysteria_Hysteria2VpnService_nativeStopFdControl(
     server_fd = fd_control_server;
     fd_control_server = -1;
     memcpy(path, fd_control_path, sizeof(path));
+    fd_control_path[0] = '\0';
     pthread_mutex_unlock(&fd_control_mutex);
     if (server_fd >= 0) {
         shutdown(server_fd, SHUT_RDWR);

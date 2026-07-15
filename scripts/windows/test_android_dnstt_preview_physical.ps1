@@ -65,14 +65,14 @@ function Get-ServiceRecordCount {
 function Invoke-ExternalProbe {
     param([int]$TimeoutSeconds = 120)
     $result = [ordered]@{}
-    foreach ($target in @('egress','productionApi','paidBetaPrimary','paidBetaFallback','youtube')) {
+    foreach ($target in @('egressAlternate','productionApi','paidBetaPrimary','paidBetaFallback','youtube')) {
         $probe = $null
         $attemptUsed = 0
         for ($attempt = 1; $attempt -le $ProbeAttempts; $attempt++) {
             $attemptUsed = $attempt
             Invoke-Adb -Arguments @('shell', 'run-as', $ProbePackage, 'rm', '-f', 'files/transport-probe-result.json') | Out-Null
             Invoke-Adb -Arguments @(
-                'shell', 'am', 'broadcast', '--receiver-foreground', '--include-stopped-packages',
+                'shell', 'am', 'broadcast', '--include-stopped-packages',
                 '-a', 'pro.greenvpn.transportprobe.RUN',
                 '-n', "$ProbePackage/pro.greenvpn.transportprobe.TransportProbeReceiver",
                 '--es', 'target', $target,
@@ -93,12 +93,12 @@ function Invoke-ExternalProbe {
             if ($attempt -lt $ProbeAttempts) { Start-Sleep -Milliseconds 750 }
         }
         if ($null -eq $probe) { throw "Timed out waiting for Android transport probe: $target" }
-        $result[$target + 'Status'] = [int]$probe.status
-        $result[$target + 'Error'] = [string]$probe.error
-        $result[$target + 'Attempts'] = $attemptUsed
-        if ($target -eq 'egress') {
-            $ipMatch = [regex]::Match([string]$probe.body, '(?m)^ip=([^\r\n]+)')
-            $result.egress = if ($ipMatch.Success) { $ipMatch.Groups[1].Value.Trim() } else { '' }
+        $resultKey = if ($target -eq 'egressAlternate') { 'egress' } else { $target }
+        $result[$resultKey + 'Status'] = [int]$probe.status
+        $result[$resultKey + 'Error'] = [string]$probe.error
+        $result[$resultKey + 'Attempts'] = $attemptUsed
+        if ($target -eq 'egressAlternate') {
+            $result.egress = ([string]$probe.body).Trim()
         }
     }
     return [pscustomobject]$result
@@ -144,10 +144,25 @@ try {
     if ($null -eq ($probeDump | Select-String -Pattern 'userId=' | Select-Object -First 1)) {
         throw "Separate-UID transport probe is not installed: $ProbePackage"
     }
-    Invoke-Adb -Arguments @('shell', 'am', 'start', '-W', '-n', "$Package/pro.greenvpn.dnstt.DnsttPermissionDebugActivity") | Out-Null
-    $permissionResult = ((Invoke-Adb -Arguments @('shell', 'run-as', $Package, 'cat', 'files/greenvpn-dnstt-permission-result.txt')) -join '').Trim()
-    $preparedVpn = (Invoke-Adb -Arguments @('shell', 'dumpsys', 'vpn_management')) -join "`n"
-    if ($permissionResult -ne 'granted' -or $preparedVpn -notmatch [regex]::Escape($Package)) {
+    Invoke-Adb -Arguments @('shell', 'run-as', $Package, 'rm', '-f', 'files/greenvpn-dnstt-permission-result.txt') | Out-Null
+    Invoke-Adb -Arguments @('shell', 'am', 'start', '-n', "$Package/pro.greenvpn.dnstt.DnsttPermissionDebugActivity") | Out-Null
+    $permissionResult = ''
+    $permissionDeadline = (Get-Date).AddSeconds(10)
+    do {
+        $previousPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            $permissionResult = (@(
+                & $Adb -s $Serial shell run-as $Package cat files/greenvpn-dnstt-permission-result.txt 2>$null
+            ) -join '').Trim()
+            $permissionReadExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousPreference
+        }
+        if ($permissionReadExitCode -eq 0 -and $permissionResult) { break }
+        Start-Sleep -Milliseconds 200
+    } while ((Get-Date) -lt $permissionDeadline)
+    if ($permissionResult -ne 'granted') {
         throw 'Android VPN permission is not prepared for the dnstt preview package.'
     }
     Invoke-Adb -Arguments @('shell', 'am', 'force-stop', $Package) | Out-Null
@@ -167,7 +182,7 @@ try {
     Invoke-Adb -Arguments @('shell', 'rm', '-f', '/data/local/tmp/greenvpn-dnstt-debug.json') | Out-Null
 
     $connected = Invoke-DebugCommand -Command connect
-    Start-Sleep -Seconds 1
+    Start-Sleep -Seconds 2
     $external = Invoke-ExternalProbe
     $report.connected = [bool]$connected.connected; $report.canaryEgress = [string]$external.egress
     foreach ($name in @('egressStatus','egressError','productionApiStatus','productionApiError','paidBetaPrimaryStatus','paidBetaPrimaryError','paidBetaFallbackStatus','paidBetaFallbackError','youtubeStatus','youtubeError','egressAttempts','productionApiAttempts','paidBetaPrimaryAttempts','paidBetaFallbackAttempts','youtubeAttempts')) {
@@ -195,6 +210,7 @@ try {
     }
 
     $reconnected = Invoke-DebugCommand -Command connect
+    Start-Sleep -Seconds 2
     $reconnectedExternal = Invoke-ExternalProbe
     $report.reconnectState = [string]$reconnected.state; $report.reconnectEgress = [string]$reconnectedExternal.egress
     if (-not $reconnected.connected -or $report.reconnectState -ne 'up' -or $report.reconnectEgress -ne $ExpectedEgress) {

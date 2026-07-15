@@ -13,6 +13,28 @@ const Set<String> greenVpnFullTunnelOnlyPreviewProtocols = <String>{
   'dnstt',
 };
 
+const List<Duration> greenVpnStartupRouteProbeDelays = <Duration>[
+  Duration(milliseconds: 750),
+  Duration(milliseconds: 900),
+  Duration(milliseconds: 1400),
+];
+
+Duration greenVpnStartupRouteProbeDelay(int attempt) {
+  final index = (attempt - 1).clamp(
+    0,
+    greenVpnStartupRouteProbeDelays.length - 1,
+  );
+  return greenVpnStartupRouteProbeDelays[index];
+}
+
+bool greenVpnShouldRetryStartupRouteProbe({
+  required int attempt,
+  required int latencyMs,
+}) =>
+    attempt < greenVpnStartupRouteProbeDelays.length &&
+    latencyMs >= 0 &&
+    latencyMs < 4000;
+
 int greenVpnTransportPreviewRank(String protocol) {
   final normalized = protocol.trim().toLowerCase();
   final previewRank = greenVpnTransportPreviewCascade.indexOf(normalized);
@@ -27,6 +49,13 @@ bool greenVpnTransportRequiresFullTunnel(String protocol) =>
     greenVpnFullTunnelOnlyPreviewProtocols.contains(
       protocol.trim().toLowerCase(),
     );
+
+bool greenVpnShouldArmRuntimeFailover({
+  required bool previewEnabled,
+  required bool isAndroid,
+  required bool serverIsAuto,
+  required bool socialOnlyEnabled,
+}) => previewEnabled && isAndroid && !serverIsAuto && !socialOnlyEnabled;
 
 int greenVpnCompareTransportPreviewCandidates({
   required String leftProtocol,

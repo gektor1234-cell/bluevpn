@@ -21,9 +21,9 @@ foreach ($tool in @($aapt2, $zipalign, $apksigner, $apkanalyzer)) {
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $expectedHysteria = [ordered]@{
-    'lib/arm64-v8a/libhysteria.so' = '623B12826D13F8BB67F581396CF22C6639ABCBB6B1F22A42BF80350FFDAF50A3'
-    'lib/armeabi-v7a/libhysteria.so' = 'CD226A6EEBA011E809295082CA11C0B57560F070192372994E8DD968205595CC'
-    'lib/x86_64/libhysteria.so' = '89D6C7CD9AAD1356196F8E7240A01368536091F1B1FA1E3EA5DE691F81B908D1'
+    'lib/arm64-v8a/libhysteria.so' = '0A019366C970C5298835E155A2923E35A42E7C72505EFC93F9D3F21D2D8C9454'
+    'lib/armeabi-v7a/libhysteria.so' = 'F900A64CAF83916228E17D61CFB8937A3E2D49228B955DDBB9D508AEC44D761A'
+    'lib/x86_64/libhysteria.so' = '0CB45CBBF3E1D5CC0B2B9F54750D8D491CEDB4B11C203A944C3BE587C554A353'
 }
 $requiredAssets = @(
     'assets/HYSTERIA_APP_MIT.txt',

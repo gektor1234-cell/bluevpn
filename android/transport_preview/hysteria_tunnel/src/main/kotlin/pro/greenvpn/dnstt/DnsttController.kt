@@ -43,6 +43,14 @@ object DnsttController {
     }
 
     @JvmStatic
+    fun routeProbeCredentials(context: Context): Map<String, String> {
+        val runtime = File(DnsttVpnService.runtimeRoot(context), "runtime.json")
+        require(runtime.isFile && runtime.length() in 180..16_384) { "dnstt runtime config is unavailable" }
+        val profile = DnsttConfig.profile(runtime.readText(Charsets.UTF_8))
+        return mapOf("username" to profile.username, "password" to profile.password)
+    }
+
+    @JvmStatic
     fun snapshot(context: Context): Map<String, Any> {
         val current = DnsttVpnService.snapshot(context)
         return linkedMapOf(

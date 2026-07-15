@@ -9,6 +9,8 @@ import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import hev.htproxy.TProxyService
+import pro.greenvpn.routing.Ipv4RouteExclusions
+import pro.greenvpn.runtime.PreviewVpnServiceRuntime
 import org.json.JSONObject
 import java.io.File
 import java.net.InetSocketAddress
@@ -46,11 +48,18 @@ class NaiveHttpsVpnService : VpnService() {
 
         @Synchronized
         fun snapshot(context: Context): Snapshot {
-            if (currentService != null || state != "down" || error.isNotEmpty()) {
+            if (currentService != null) {
                 return Snapshot(state, rxBytes, txBytes, VERSION, error)
             }
             val persisted = readPersistedSnapshot(context) ?: return Snapshot("down", 0L, 0L, VERSION, "")
-            if (persisted.state in setOf("up", "starting", "stopping")) {
+            if (persisted.state in setOf("up", "starting", "stopping") &&
+                !PreviewVpnServiceRuntime.isRunningOrStarting(
+                    context,
+                    NaiveHttpsVpnService::class.java,
+                    persisted.state,
+                    File(runtimeRoot(context), STATE_FILE),
+                )
+            ) {
                 val recovered = Snapshot("error", 0L, 0L, VERSION, "VPN service stopped unexpectedly")
                 persistSnapshot(context, recovered)
                 return recovered
@@ -112,6 +121,12 @@ class NaiveHttpsVpnService : VpnService() {
                     true
                 } catch (_: Throwable) { false }
             }
+            if (PreviewVpnServiceRuntime.requestDisconnect(
+                    context,
+                    NaiveHttpsVpnService::class.java,
+                    ACTION_DISCONNECT,
+                )
+            ) return true
             val root = runtimeRoot(context)
             listOf("runtime.json", "hev.yaml", "base.json").forEach { name ->
                 try { File(root, name).delete() } catch (_: Throwable) {}
@@ -149,7 +164,7 @@ class NaiveHttpsVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIFICATION_ID, notification("Green VPN is starting"))
+        startForeground(NOTIFICATION_ID, notification("Green VPN запускается"))
         when (intent?.action) {
             ACTION_CONNECT -> worker.execute { startTunnel(intent.getStringExtra(EXTRA_CONFIG_PATH).orEmpty()) }
             ACTION_DISCONNECT -> worker.execute { cleanup("down", ""); stopSelf() }
@@ -210,10 +225,13 @@ class NaiveHttpsVpnService : VpnService() {
                 .setSession("Green VPN")
                 .setMtu(1400)
                 .addAddress("198.18.2.1", 32)
-                .addRoute("0.0.0.0", 0)
                 .addDnsServer("198.18.2.2")
-                .addDisallowedApplication(packageName)
                 .apply { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) setMetered(false) }
+                .also { builder ->
+                    Ipv4RouteExclusions.routesExcluding(NaiveHttpsConfig.routeExclusions()).forEach { route ->
+                        builder.addRoute(route.address, route.prefixLength)
+                    }
+                }
                 .establish() ?: throw IllegalStateException("Android did not establish the VPN interface")
             tunFd = descriptor.detachFd()
             tproxy.TProxyStartService(hevConfig.canonicalPath, tunFd)
@@ -223,7 +241,7 @@ class NaiveHttpsVpnService : VpnService() {
             error = ""
             persistSnapshot(this, Snapshot(state, 0L, 0L, VERSION, ""))
             updateStats()
-            startForeground(NOTIFICATION_ID, notification("Green VPN is active"))
+            startForeground(NOTIFICATION_ID, notification("Green VPN подключён"))
             startMonitor()
         } catch (failure: Throwable) {
             cleanup("error", safeMessage(failure))

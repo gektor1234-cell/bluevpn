@@ -12,6 +12,7 @@ import android.security.keystore.KeyProperties
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import android.util.Base64
+import android.util.Log
 import android.widget.Toast
 import com.wireguard.android.backend.GoBackend
 import com.wireguard.android.backend.Tunnel
@@ -24,7 +25,6 @@ import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
-import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -61,6 +61,8 @@ class GreenVpnQuickTileService : TileService() {
             if (BuildConfig.GREENVPN_DNSTT_PREVIEW_ENABLED) add("dnstt")
         }
         val TRANSPORT_PREVIEW_ENABLED = SUPPORTED_PROTOCOLS.size > 1
+        val TILE_EXECUTOR = Executors.newSingleThreadExecutor()
+        const val DEBUG_TAG = "GreenVpnQuickTile"
     }
 
     private data class FetchedConfig(
@@ -78,7 +80,6 @@ class GreenVpnQuickTileService : TileService() {
     )
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val executor: ExecutorService = Executors.newSingleThreadExecutor()
     private var backend: GoBackend? = null
     private val tunnel = GreenVpnTileTunnel("GreenVPN")
 
@@ -95,8 +96,10 @@ class GreenVpnQuickTileService : TileService() {
     override fun onClick() {
         super.onClick()
         setTile(Tile.STATE_UNAVAILABLE, "Проверяем...")
-        executor.execute {
+        TILE_EXECUTOR.execute {
             try {
+                GreenVpnRuntimeFailoverService.disarm(applicationContext)
+                GreenVpnConnectionOperationGate.awaitIdle()
                 if (isVpnConnected()) {
                     disconnectVpn()
                     if (TRANSPORT_PREVIEW_ENABLED) {
@@ -158,6 +161,7 @@ class GreenVpnQuickTileService : TileService() {
                 }
                 var connectedConfig: FetchedConfig? = null
                 for (candidate in candidates) {
+                    debugLog("candidate_start protocol=${candidate.protocol}")
                     val fetched = try {
                         fetchFreshConfig(
                             accessToken = accessToken,
@@ -165,7 +169,11 @@ class GreenVpnQuickTileService : TileService() {
                             preferredBaseUrl = sessionApiBaseUrl,
                             serverId = candidate.serverId,
                         )
-                    } catch (_: Exception) {
+                    } catch (failure: Exception) {
+                        debugLog(
+                            "candidate_fetch_failed protocol=${candidate.protocol} " +
+                                "error=${safeError(failure)}"
+                        )
                         null
                     }
                     if (fetched == null) {
@@ -175,10 +183,19 @@ class GreenVpnQuickTileService : TileService() {
 
                     val connected = try {
                         connectVpn(fetched.config, fetched.protocol)
-                    } catch (_: Exception) {
+                    } catch (failure: Exception) {
+                        debugLog(
+                            "candidate_connect_exception protocol=${fetched.protocol} " +
+                                "error=${safeError(failure)}"
+                        )
                         false
                     }
-                    if (!connected || (TRANSPORT_PREVIEW_ENABLED && !probeConnectedRoute())) {
+                    if (connected) GreenVpnNetworkTransition.markActive(applicationContext)
+                    if (!connected || (TRANSPORT_PREVIEW_ENABLED && !probeConnectedRoute(fetched.protocol))) {
+                        debugLog(
+                            "candidate_rejected protocol=${fetched.protocol} connected=$connected " +
+                                transportFailureSummary(fetched.protocol)
+                        )
                         try { disconnectVpn() } catch (_: Exception) {}
                         recordRouteFailure(candidate)
                         continue
@@ -197,6 +214,7 @@ class GreenVpnQuickTileService : TileService() {
                                 .toString(),
                         )
                     }
+                    debugLog("candidate_success protocol=${fetched.protocol}")
                     connectedConfig = fetched
                     break
                 }
@@ -207,8 +225,12 @@ class GreenVpnQuickTileService : TileService() {
                         ?.trim()?.lowercase() ?: "wireguard_udp"
                     if (!cachedConfig.isNullOrBlank()) {
                         val cachedConnected = try {
-                            connectVpn(cachedConfig, cachedProtocol) &&
-                                (!TRANSPORT_PREVIEW_ENABLED || probeConnectedRoute())
+                            val engineConnected = connectVpn(cachedConfig, cachedProtocol)
+                            if (engineConnected) {
+                                GreenVpnNetworkTransition.markActive(applicationContext)
+                            }
+                            engineConnected &&
+                                (!TRANSPORT_PREVIEW_ENABLED || probeConnectedRoute(cachedProtocol))
                         } catch (_: Exception) {
                             false
                         }
@@ -221,6 +243,12 @@ class GreenVpnQuickTileService : TileService() {
                 }
 
                 if (connectedConfig != null) {
+                    val failoverArmed = GreenVpnRuntimeFailoverService.arm(
+                        applicationContext,
+                        connectedConfig.serverId,
+                        connectedConfig.protocol,
+                    )
+                    debugLog("runtime_failover_armed=$failoverArmed")
                     showToast("Green VPN включен.")
                     setTile(Tile.STATE_ACTIVE, "Включено")
                 } else {
@@ -234,13 +262,8 @@ class GreenVpnQuickTileService : TileService() {
         }
     }
 
-    override fun onDestroy() {
-        executor.shutdown()
-        super.onDestroy()
-    }
-
     private fun refreshTileState() {
-        executor.execute {
+        TILE_EXECUTOR.execute {
             try {
                 if (isVpnConnected()) {
                     setTile(Tile.STATE_ACTIVE, "Включено")
@@ -289,6 +312,7 @@ class GreenVpnQuickTileService : TileService() {
                 currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
                 Thread.sleep(250)
             }
+            requirePreviousVpnNetworkInactive()
             return GreenVpnDnsttPreview.connect(
                 applicationContext,
                 GreenVpnDnsttPreview.validateConfig(configText)
@@ -310,6 +334,7 @@ class GreenVpnQuickTileService : TileService() {
                 currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
                 Thread.sleep(250)
             }
+            requirePreviousVpnNetworkInactive()
             return GreenVpnNaiveHttpsPreview.connect(
                 applicationContext,
                 GreenVpnNaiveHttpsPreview.validateConfig(configText)
@@ -327,6 +352,7 @@ class GreenVpnQuickTileService : TileService() {
                 currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
                 Thread.sleep(250)
             }
+            requirePreviousVpnNetworkInactive()
             val validated = GreenVpnVlessRealityPreview.validateConfig(configText)
             return GreenVpnVlessRealityPreview.connect(applicationContext, validated)
         }
@@ -342,6 +368,7 @@ class GreenVpnQuickTileService : TileService() {
                 currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
                 Thread.sleep(250)
             }
+            requirePreviousVpnNetworkInactive()
             val validated = GreenVpnHysteria2Preview.validateConfig(configText)
             return GreenVpnHysteria2Preview.connect(applicationContext, validated)
         }
@@ -366,6 +393,7 @@ class GreenVpnQuickTileService : TileService() {
                     currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
                 }
             }
+            requirePreviousVpnNetworkInactive()
             val parsed = GreenVpnAwg2Preview.parseConfig(configText)
             return GreenVpnAwg2Preview.connect(applicationContext, parsed)
         }
@@ -375,6 +403,7 @@ class GreenVpnQuickTileService : TileService() {
             currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
             Thread.sleep(250)
         }
+        requirePreviousVpnNetworkInactive()
         val parsed = Config.parse(ByteArrayInputStream(configText.toByteArray(StandardCharsets.UTF_8)))
         return currentBackend.setState(tunnel, Tunnel.State.UP, parsed) == Tunnel.State.UP
     }
@@ -382,28 +411,43 @@ class GreenVpnQuickTileService : TileService() {
     private fun disconnectVpn(): Boolean {
         val dnstt = GreenVpnDnsttPreview.snapshot(applicationContext)
         if (dnstt.connected || dnstt.state == "starting" || dnstt.state == "error") {
-            return GreenVpnDnsttPreview.disconnect(applicationContext)
+            return finishDisconnect(GreenVpnDnsttPreview.disconnect(applicationContext))
         }
         val naive = GreenVpnNaiveHttpsPreview.snapshot(applicationContext)
         if (naive.connected || naive.state == "starting" || naive.state == "error") {
-            return GreenVpnNaiveHttpsPreview.disconnect(applicationContext)
+            return finishDisconnect(GreenVpnNaiveHttpsPreview.disconnect(applicationContext))
         }
         val vless = GreenVpnVlessRealityPreview.snapshot(applicationContext)
         if (vless.connected || vless.state == "starting" || vless.state == "error") {
-            return GreenVpnVlessRealityPreview.disconnect(applicationContext)
+            return finishDisconnect(GreenVpnVlessRealityPreview.disconnect(applicationContext))
         }
         val hysteria = GreenVpnHysteria2Preview.snapshot(applicationContext)
         if (hysteria.connected || hysteria.state == "starting" || hysteria.state == "error") {
-            return GreenVpnHysteria2Preview.disconnect(applicationContext)
+            return finishDisconnect(GreenVpnHysteria2Preview.disconnect(applicationContext))
         }
         if (BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
-            return GreenVpnAwg2Preview.disconnect(applicationContext)
+            return finishDisconnect(GreenVpnAwg2Preview.disconnect(applicationContext))
         }
         val currentBackend = backend()
         val state = currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
         val awgDisconnected = GreenVpnAwg2Preview.disconnect(applicationContext)
-        return state == Tunnel.State.DOWN && awgDisconnected &&
-            !currentBackend.getRunningTunnelNames().contains(tunnel.getName())
+        return finishDisconnect(
+            state == Tunnel.State.DOWN && awgDisconnected &&
+                !currentBackend.getRunningTunnelNames().contains(tunnel.getName())
+        )
+    }
+
+    private fun finishDisconnect(disconnected: Boolean): Boolean {
+        if (!disconnected) return false
+        val inactive = GreenVpnNetworkTransition.waitForInactive(applicationContext, 2_500L)
+        if (inactive) GreenVpnNetworkTransition.markInactive(applicationContext)
+        return inactive
+    }
+
+    private fun requirePreviousVpnNetworkInactive() {
+        check(GreenVpnNetworkTransition.waitForInactive(applicationContext, 2_500L)) {
+            "Android did not finish the previous VPN connection"
+        }
     }
 
     private fun fetchFreshConfig(
@@ -539,21 +583,45 @@ class GreenVpnQuickTileService : TileService() {
         } catch (_: Exception) {}
     }
 
-    private fun probeConnectedRoute(): Boolean {
-        val connection = (URL("https://www.youtube.com/generate_204")
-            .openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 6000
-            readTimeout = 8000
-            setRequestProperty("User-Agent", "GreenVPN/$APP_VERSION tile-route-check")
+    private fun probeConnectedRoute(protocol: String): Boolean {
+        var attempt = 1
+        while (true) {
+            Thread.sleep(GreenVpnQuickTileCascadePolicy.routeProbeDelayMs(attempt))
+            val result = GreenVpnRouteProbe.probe(applicationContext, protocol)
+            debugLog(
+                "route_probe protocol=$protocol attempt=$attempt ok=${result.ok} " +
+                    "status=${result.statusCode ?: -1} latencyMs=${result.latencyMs} error=${result.error}"
+            )
+            if (result.ok) return true
+            if (!GreenVpnQuickTileCascadePolicy.shouldRetryRouteProbe(attempt, result.latencyMs)) {
+                return false
+            }
+            attempt += 1
         }
-        return try {
-            connection.responseCode in 200..399
-        } catch (_: Exception) {
-            false
-        } finally {
-            connection.disconnect()
+    }
+
+    private fun transportFailureSummary(protocol: String): String {
+        val snapshot = when (protocol) {
+            "hysteria2" -> GreenVpnHysteria2Preview.snapshot(applicationContext)
+            "vless_reality" -> GreenVpnVlessRealityPreview.snapshot(applicationContext)
+            "naive_https" -> GreenVpnNaiveHttpsPreview.snapshot(applicationContext)
+            "dnstt" -> GreenVpnDnsttPreview.snapshot(applicationContext)
+            "amneziawg", "wireguard_udp" -> GreenVpnAwg2Preview.snapshot(applicationContext)
+            else -> return "state=unknown"
         }
+        val state = when (snapshot) {
+            is GreenVpnHysteria2Preview.Snapshot -> snapshot.state to snapshot.error
+            is GreenVpnVlessRealityPreview.Snapshot -> snapshot.state to snapshot.error
+            is GreenVpnNaiveHttpsPreview.Snapshot -> snapshot.state to snapshot.error
+            is GreenVpnDnsttPreview.Snapshot -> snapshot.state to snapshot.error
+            is GreenVpnAwg2Preview.Snapshot -> snapshot.state to snapshot.error
+            else -> "unknown" to ""
+        }
+        return "state=${state.first} error=${safeError(IllegalStateException(state.second))}"
+    }
+
+    private fun debugLog(message: String) {
+        if (BuildConfig.DEBUG) Log.i(DEBUG_TAG, message)
     }
 
     private fun canConnectFromTile(subscription: JSONObject?): Boolean {

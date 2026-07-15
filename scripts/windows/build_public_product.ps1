@@ -3,6 +3,8 @@ param(
     [string]$Mode = "both",
     [string]$AppVersion = "0.3.0",
     [string]$WindowsAppVersion = "0.3.0",
+    [ValidateRange(0, 65535)]
+    [int]$WindowsBuildNumber = 0,
     [string]$AndroidBuildNumber = "2026071101",
     [string]$AndroidApplicationId = "pro.greenvpn.app",
     [string]$AndroidAppLabel = "Green VPN",
@@ -131,6 +133,7 @@ if ($Mode -in @("windows", "both")) {
         -ProjectRoot $repo -OutBase $OutDir `
         -InstallerName (Split-Path $windowsPath -Leaf) `
         -AppVersion $WindowsAppVersion `
+        -WindowsBuildNumber $WindowsBuildNumber `
         -ApiBaseUrl $ApiBaseUrl `
         -ApiFallbackBaseUrls $ApiFallbackBaseUrls `
         -TrialOnlyNoAdsBuild $false `
@@ -141,7 +144,7 @@ if ($Mode -in @("windows", "both")) {
     $item = Get-Item -LiteralPath $windowsPath
     $signature = Get-AuthenticodeSignature -LiteralPath $item.FullName
     $artifacts.Add([pscustomobject]@{
-        platform = "windows"; version = $WindowsAppVersion; buildNumber = ""
+        platform = "windows"; version = $WindowsAppVersion; buildNumber = $WindowsBuildNumber
         path = $item.FullName; sizeBytes = $item.Length
         sha256 = (Get-FileHash $item.FullName -Algorithm SHA256).Hash
         signed = $signature.Status -eq "Valid"; signatureStatus = $signature.Status.ToString()

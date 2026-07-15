@@ -1,5 +1,5 @@
 param(
-    [string]$HysteriaRoot = 'C:\Users\gekto\GreenVPN_Checkpoints\third_party\hysteria-app-v2.9.3-android',
+    [string]$HysteriaRoot = 'C:\Users\gekto\GreenVPN_Checkpoints\third_party\hysteria-app-v2.9.3-android-api24',
     [string]$HevRoot = 'C:\Users\gekto\GreenVPN_Checkpoints\third_party\hev-socks5-tunnel-2.14.4'
 )
 
@@ -22,13 +22,11 @@ foreach ($required in @('build.gradle.kts', 'src\main\jni\Android.mk', 'src\main
 }
 
 $expectedHysteriaHashes = [ordered]@{
-    '386' = '1120809703BE02C5836EF4989CC445CD1CCBCEB6E7B67860FEBC290BF73FCA8F'
-    'amd64' = '89D6C7CD9AAD1356196F8E7240A01368536091F1B1FA1E3EA5DE691F81B908D1'
-    'arm64' = '623B12826D13F8BB67F581396CF22C6639ABCBB6B1F22A42BF80350FFDAF50A3'
-    'armv7' = 'CD226A6EEBA011E809295082CA11C0B57560F070192372994E8DD968205595CC'
+    'amd64' = '0CB45CBBF3E1D5CC0B2B9F54750D8D491CEDB4B11C203A944C3BE587C554A353'
+    'arm64' = '0A019366C970C5298835E155A2923E35A42E7C72505EFC93F9D3F21D2D8C9454'
+    'armv7' = 'F900A64CAF83916228E17D61CFB8937A3E2D49228B955DDBB9D508AEC44D761A'
 }
 $abiMap = [ordered]@{
-    '386' = 'x86'
     'amd64' = 'x86_64'
     'arm64' = 'arm64-v8a'
     'armv7' = 'armeabi-v7a'
@@ -41,23 +39,29 @@ $expectedHevCommits = [ordered]@{
     'third-part/yaml' = 'efa36117a8646d26d12b58e05bac472d7854a70d'
 }
 
-if (-not (Test-Path -LiteralPath (Join-Path $HysteriaRoot 'hashes.txt'))) {
-    New-Item -ItemType Directory -Force -Path $HysteriaRoot | Out-Null
-    Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/apernet/hysteria/releases/download/app%2Fv2.9.3/hashes.txt' -OutFile (Join-Path $HysteriaRoot 'hashes.txt')
+$manifestPath = Join-Path $HysteriaRoot 'build-manifest.json'
+if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+    throw "Pinned API24 build manifest is missing. Run build_android_hysteria2_api24.ps1 first: $manifestPath"
 }
-$officialHashes = Get-Content -LiteralPath (Join-Path $HysteriaRoot 'hashes.txt') -Raw
+$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+if ($manifest.hysteriaVersion -ne 'app/v2.9.3' -or
+    $manifest.sourceCommit -ne '2d973f9513ef661d1922d6d14acb37945caef47d' -or
+    [int]$manifest.minAndroidApi -ne 24 -or
+    $manifest.goArchiveSha256 -ne '4A974DE310E7EE1D523D2FCEDB114BA5FA75408C98EB3652023E55CCF3FA7CAB' -or
+    $manifest.ndkRevision -ne '28.2.13676358') {
+    throw 'Pinned Hysteria2 API24 build provenance mismatch.'
+}
 foreach ($asset in $expectedHysteriaHashes.Keys) {
     $name = "hysteria-android-$asset"
     $expected = $expectedHysteriaHashes[$asset]
-    if (-not $officialHashes.Contains($expected.ToLowerInvariant() + '  build/' + $name)) {
-        throw "Official Hysteria2 hashes.txt does not pin $name"
-    }
     $path = Join-Path $HysteriaRoot $name
-    if (-not (Test-Path -LiteralPath $path)) {
-        Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/apernet/hysteria/releases/download/app%2Fv2.9.3/$name" -OutFile $path
-    }
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Hysteria2 API24 binary is missing: $path" }
     $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash
-    if ($actual -ne $expected) { throw "Hysteria2 Android hash mismatch: $name" }
+    if ($actual -ne $expected) { throw "Hysteria2 Android API24 hash mismatch: $name" }
+    $manifestFile = @($manifest.files | Where-Object file -eq $name)
+    if ($manifestFile.Count -ne 1 -or $manifestFile[0].sha256 -ne $expected) {
+        throw "Hysteria2 API24 manifest does not pin $name"
+    }
 }
 
 if (-not (Test-Path -LiteralPath (Join-Path $HevRoot '.git'))) {
@@ -121,6 +125,6 @@ foreach ($asset in $expectedHysteriaHashes.Keys) {
 }
 
 Write-Host "Prepared Android Hysteria2 preview module: $moduleRoot"
-Write-Host 'Hysteria2 app/v2.9.3: four official Android ABIs verified'
+Write-Host 'Hysteria2 app/v2.9.3: three reproducible Android API24 ABIs verified'
 Write-Host 'HEV 2.14.4: root and four submodule revisions verified'
 Write-Host 'Hysteria built-in TUN: excluded'

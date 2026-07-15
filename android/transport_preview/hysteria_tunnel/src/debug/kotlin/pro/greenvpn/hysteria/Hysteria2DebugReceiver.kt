@@ -30,23 +30,29 @@ class Hysteria2DebugReceiver : BroadcastReceiver() {
                     "status" -> Unit
                     else -> throw IllegalArgumentException("Unsupported debug command")
                 }
-                writeResult(context, command, "")
+                writeResult(context, command, "", includeNetworkProbes = false)
             } catch (failure: Throwable) {
-                writeResult(context, "error", safeMessage(failure))
+                writeResult(context, "error", safeMessage(failure), includeNetworkProbes = false)
             } finally {
                 pending.finish()
             }
         }, "GreenVPN-H2-Debug-Control").start()
     }
 
-    private fun writeResult(context: Context, command: String, commandError: String) {
+    private fun writeResult(
+        context: Context,
+        command: String,
+        commandError: String,
+        includeNetworkProbes: Boolean,
+    ) {
         val snapshot = Hysteria2Controller.snapshot(context)
         val connected = snapshot["connected"] == true
-        val egress = if (connected) probe("https://api.ipify.org") else Probe()
-        val production = if (connected) probe("https://api.greenvpn.pro/healthz") else Probe()
-        val paidPrimary = if (connected) probe("https://api.greenvpn.pro/paid-beta-api/healthz") else Probe()
-        val paidFallback = if (connected) probe("https://176-113-81-35.sslip.io/paid-beta-api/healthz") else Probe()
-        val youtube = if (connected) probe("https://www.youtube.com/") else Probe()
+        val shouldProbe = connected && includeNetworkProbes
+        val egress = if (shouldProbe) probe("https://api.ipify.org") else Probe()
+        val production = if (shouldProbe) probe("https://api.greenvpn.pro/healthz") else Probe()
+        val paidPrimary = if (shouldProbe) probe("https://api.greenvpn.pro/paid-beta-api/healthz") else Probe()
+        val paidFallback = if (shouldProbe) probe("https://176-113-81-35.sslip.io/paid-beta-api/healthz") else Probe()
+        val youtube = if (shouldProbe) probe("https://www.youtube.com/") else Probe()
         val result = JSONObject()
             .put("command", command)
             .put("available", snapshot["available"])

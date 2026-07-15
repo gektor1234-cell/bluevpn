@@ -4,6 +4,8 @@ import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import java.net.URI
+import java.net.Inet4Address
+import java.net.InetAddress
 
 internal object DnsttConfig {
     const val SOCKS_PORT = 1983
@@ -48,6 +50,20 @@ internal object DnsttConfig {
         )
     }
 
+    fun routeExclusions(profile: Profile): Set<String> {
+        val resolver = profile.resolvers.first()
+        val host = if (resolver.mode == "doh") {
+            URI(resolver.endpoint).host
+        } else {
+            resolver.endpoint.substringBeforeLast(':')
+        }
+        val address = InetAddress.getByName(host)
+        require(address is Inet4Address && host == address.hostAddress) {
+            "dnstt resolver must use a canonical IPv4 endpoint"
+        }
+        return setOf(host)
+    }
+
     private fun loadAndValidate(configText: String): JsonObject {
         require(configText.toByteArray(Charsets.UTF_8).size in 180..16_384) { "dnstt config size is invalid" }
         val parsed = JsonParser.parseString(configText)
@@ -66,7 +82,7 @@ internal object DnsttConfig {
         }
         require(socks.string("listen") == LISTEN) { "dnstt listener must be loopback-only" }
         require(socks.string("username").matches(Regex("^[A-Za-z0-9_.-]{3,128}$")) &&
-            socks.string("password").matches(Regex("^[A-Za-z0-9+/=]{16,256}$"))) {
+            socks.string("password").matches(Regex("^[A-Za-z0-9+/=]{16,255}$"))) {
             "dnstt SOCKS credentials are incomplete"
         }
 

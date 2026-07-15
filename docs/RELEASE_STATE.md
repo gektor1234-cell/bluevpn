@@ -1,6 +1,6 @@
 # Green VPN Release State
 
-Updated: 2026-07-13.
+Updated: 2026-07-15.
 
 ## Stable Public
 
@@ -26,13 +26,30 @@ Stable remains the rollback baseline until the candidate launch gates pass.
 | Windows | `0.3.0-paid-beta.11`, unsigned |
 | Windows SHA-256 | `ECA801FBCFED9A08CD5470E6BDC9F2FC327019D6C3DE61D50F7AECC69668FE32` |
 | Plans | trial 3 days; 249/649/1099 RUB for 30/90/180 days |
-| Auto-renew | implemented opt-out; provider approval pending |
+| Auto-renew | recurring card binding approved; opt-out implemented; real save/unlink smoke pending |
 | Billing writer | Timeweb only |
 | DB replication | active-active state merge with tombstones |
 
 The candidate is isolated at `/paid-beta` and `/paid-beta-api`. It is not a
 closed-first-20 product anymore, but those paths remain the safe staging contour
 until public promotion.
+
+## Final Product Candidate, Local Only
+
+| Component | Version/state |
+| --- | --- |
+| Customer location model | one row per country; `Авто / Нидерланды / Англия`; physical routes hidden |
+| Latency model | every picker row, including `Авто`, shows `N мс`; missing measurement becomes `0 мс` |
+| Android | `0.3.0+2026071511`, package `pro.greenvpn.app.finalcandidate`, debug signed |
+| Android SHA-256 | `AFB39779B9F341F90ADB50FA8AF195B7B72C585D4DD3E1B0F005F0CA23D35B4F` |
+| Windows ZIP | `0.3.0+1511`, four protected fallback engines plus stable tunnel, unsigned |
+| Windows ZIP SHA-256 | `A9F1BD9766F345B786B37879BE3E9DAD42C5025F691BD35BEF93FBE8B8BCA206` |
+| YooKassa | recurring card binding approved; one real owner payment/unlink smoke pending |
+| London | provider state `notpaid`; England deliberately absent from the customer picker |
+
+This checkpoint is a verified release candidate, not a published production
+release. The public site and forced-update manifests still point to the older
+stable artifacts.
 
 ## Verified
 
@@ -53,11 +70,12 @@ until public promotion.
 
 ## Not Yet Launchable
 
-1. YooKassa recurring bank-card access is still under external review.
-2. A real 249 RUB save-method and unlink smoke must pass after approval.
-3. The Windows installer requires Authenticode signing before mandatory rollout.
+1. A real 249 RUB save-method and unlink smoke must pass.
+2. The Windows installer requires Authenticode signing before mandatory rollout.
+3. London must be funded and revalidated if England is required at launch.
 
-No code or server defect currently blocks those three external gates.
+No confirmed code or RU control-plane defect currently blocks those owner and
+provider gates.
 
 ## Rollback
 

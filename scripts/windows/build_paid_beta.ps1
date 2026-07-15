@@ -3,6 +3,8 @@ param(
     [string]$Mode = "both",
     [string]$AppVersion = "0.3.0-paid-beta.5",
     [string]$WindowsAppVersion = "0.3.0-paid-beta.10",
+    [ValidateRange(0, 65535)]
+    [int]$WindowsBuildNumber = 0,
     [string]$AndroidBuildName = "0.3.0",
     [string]$AndroidBuildNumber = "2026071005",
     [string]$AndroidApplicationId = "pro.greenvpn.app.beta",
@@ -164,6 +166,7 @@ if ($Mode -in @("windows", "both")) {
         -OutBase $OutDir `
         -InstallerName $windowsName `
         -AppVersion $WindowsAppVersion `
+        -WindowsBuildNumber $WindowsBuildNumber `
         -ApiBaseUrl $ApiBaseUrl `
         -ApiFallbackBaseUrls $ApiFallbackBaseUrls `
         -TrialOnlyNoAdsBuild $false `
@@ -177,7 +180,7 @@ if ($Mode -in @("windows", "both")) {
     $artifacts.Add([pscustomobject]@{
         platform = "windows"
         version = $WindowsAppVersion
-        buildNumber = ""
+        buildNumber = $WindowsBuildNumber
         path = $item.FullName
         fileName = $item.Name
         sizeBytes = $item.Length

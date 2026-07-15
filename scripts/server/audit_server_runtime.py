@@ -25,12 +25,15 @@ KNOWN_SERVICES = (
     "greenvpn-service-probe.service",
     "greenvpn-paid-beta-service-probe.service",
     "wg-quick@wg0.service",
-    "greenvpn-awg2-canary.service",
+    "greenvpn-amneziawg-canary.service",
     "greenvpn-hysteria2-canary.service",
     "greenvpn-vless-reality-canary.service",
-    "greenvpn-naive-canary.service",
+    "greenvpn-naive-https-canary.service",
     "greenvpn-dnstt-canary.service",
-    "greenvpn-dnstt-dnsdist.service",
+    "greenvpn-dnstt-socks-canary.service",
+    "greenvpn-dnstt-dns-front.service",
+    "greenvpn-yandex-smtp-relay.service",
+    "greenvpn-vpn-capacity-report.service",
 )
 
 KNOWN_TIMERS = (
@@ -40,6 +43,7 @@ KNOWN_TIMERS = (
     "greenvpn-paid-beta-service-probe.timer",
     "greenvpn-subscription-expiry.timer",
     "greenvpn-billing-renewals.timer",
+    "greenvpn-vpn-capacity-report.timer",
 )
 
 ENV_PATHS = (

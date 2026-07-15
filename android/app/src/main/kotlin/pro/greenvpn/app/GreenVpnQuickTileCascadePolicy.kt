@@ -18,6 +18,7 @@ internal object GreenVpnQuickTileCascadePolicy {
         "wireguard_udp",
     )
     private val cooldownScheduleMs = longArrayOf(60_000L, 180_000L, 600_000L, 1_800_000L)
+    private val routeProbeDelaysMs = longArrayOf(750L, 900L, 1_400L)
 
     fun sort(
         candidates: List<GreenVpnTileRouteCandidate>,
@@ -46,6 +47,12 @@ internal object GreenVpnQuickTileCascadePolicy {
 
     fun cooldownDurationMs(failureCount: Int): Long =
         cooldownScheduleMs[(failureCount.coerceAtLeast(1) - 1).coerceAtMost(cooldownScheduleMs.lastIndex)]
+
+    fun routeProbeDelayMs(attempt: Int): Long =
+        routeProbeDelaysMs[(attempt.coerceAtLeast(1) - 1).coerceAtMost(routeProbeDelaysMs.lastIndex)]
+
+    fun shouldRetryRouteProbe(attempt: Int, latencyMs: Long): Boolean =
+        attempt < routeProbeDelaysMs.size && latencyMs in 0L..3_999L
 
     private fun rank(protocol: String): Int {
         val index = transportOrder.indexOf(protocol.trim().lowercase())

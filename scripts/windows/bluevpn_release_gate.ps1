@@ -82,6 +82,8 @@ $androidTransportContractProbePath = Join-Path $ProjectRoot "scripts\windows\tes
 $androidQuickTilePhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_android_quick_tile_cascade_physical.ps1"
 $androidMainActivityPath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\MainActivity.kt"
 $androidQuickTilePath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\GreenVpnQuickTileService.kt"
+$androidRouteProbePath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\GreenVpnRouteProbe.kt"
+$androidRouteProbeTestPath = Join-Path $ProjectRoot "android\app\src\test\kotlin\pro\greenvpn\app\GreenVpnRouteProbeTest.kt"
 $androidQuickTilePolicyPath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\GreenVpnQuickTileCascadePolicy.kt"
 $androidQuickTilePolicyTestPath = Join-Path $ProjectRoot "android\app\src\test\kotlin\pro\greenvpn\app\GreenVpnQuickTileCascadePolicyTest.kt"
 $androidHysteriaBuildPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\build.gradle.kts"
@@ -179,6 +181,8 @@ $androidTransportContractProbe = Read-Text $androidTransportContractProbePath
 $androidQuickTilePhysicalTest = Read-Text $androidQuickTilePhysicalTestPath
 $androidMainActivity = Read-Text $androidMainActivityPath
 $androidQuickTile = Read-Text $androidQuickTilePath
+$androidRouteProbe = Read-Text $androidRouteProbePath
+$androidRouteProbeTest = Read-Text $androidRouteProbeTestPath
 $androidQuickTilePolicy = Read-Text $androidQuickTilePolicyPath
 $androidQuickTilePolicyTest = Read-Text $androidQuickTilePolicyTestPath
 $androidHysteriaBuild = Read-Text $androidHysteriaBuildPath
@@ -1417,11 +1421,12 @@ $androidHysteriaSourceChecks = [ordered]@{
     'Android Hysteria2 protected VPN service manifest' = @($androidHysteriaManifest, 'android.permission.FOREGROUND_SERVICE_SPECIAL_USE', 'android.permission.BIND_VPN_SERVICE', 'android:exported="false"', 'android:foregroundServiceType="specialUse"')
     'Android Hysteria2 debug-only receiver permission' = @($androidHysteriaDebugManifest, 'Hysteria2DebugReceiver', 'android.permission.DUMP')
     'Android Hysteria2 structured config validator' = @($androidHysteriaConfig, 'SafeConstructor(loaderOptions)', 'maxAliasesForCollections = 0', 'nestingDepthLimit = 24', 'Hysteria2 insecure TLS is forbidden', 'Hysteria2 Salamander obfuscation is required')
-    'Android Hysteria2 managed lifecycle' = @($androidHysteriaService, 'context.noBackupFilesDir', 'source.delete()', 'nativeRunFdControl(fdSocket.canonicalPath)', 'addRoute("0.0.0.0", 0)', 'addRoute("::", 0)', 'process.destroyForcibly()', 'failClosed("Hysteria2 process stopped")', 'fun requestDisconnect(context: Context)', 'val preserveFailure = cleanupStarted.get() || state == "error"')
+    'Android Hysteria2 managed lifecycle' = @($androidHysteriaService, 'context.noBackupFilesDir', 'source.delete()', 'nativeRunFdControl(fdSocket.canonicalPath)', 'addRoute("0.0.0.0", 0)', 'addRoute("::", 0)', 'process.destroyForcibly()', 'failClosed("Hysteria2 process stopped")', 'fun requestDisconnect(context: Context)', 'val preserveFailure = shouldPreserveFailure()')
+    'Android Hysteria2 reconnect state reset' = @($androidHysteriaController, 'Hysteria2VpnService.prepareForConnect(context)', 'waitForState(context, "up", 25_000L)', 'state == "error" && expected != "down"')
     'Android Hysteria2 clean down wait' = @($androidHysteriaController, 'Hysteria2VpnService.requestDisconnect(context)', 'state == "error" && expected != "down"')
     'Android Hysteria2 FD protection bridge' = @($androidHysteriaBridge, 'SCM_RIGHTS', 'FD_CLOEXEC', 'chmod(path, 0600)', 'protectSocket')
     'Android Hysteria2 config unit tests' = @($androidHysteriaConfigTest, 'base config cannot define any local listener', 'insecure TLS is rejected', 'yaml aliases are rejected')
-    'Android Hysteria2 audited dependency preparation' = @($androidHysteriaPrepareScript, 'app%2Fv2.9.3/hashes.txt', '623B12826D13F8BB67F581396CF22C6639ABCBB6B1F22A42BF80350FFDAF50A3', '4d6c334dbfb68a79d1970c2744e62d09f71df12f')
+    'Android Hysteria2 audited dependency preparation' = @($androidHysteriaPrepareScript, 'build-manifest.json', '2d973f9513ef661d1922d6d14acb37945caef47d', '4A974DE310E7EE1D523D2FCEDB114BA5FA75408C98EB3652023E55CCF3FA7CAB', '0A019366C970C5298835E155A2923E35A42E7C72505EFC93F9D3F21D2D8C9454', '4d6c334dbfb68a79d1970c2744e62d09f71df12f')
     'Android Hysteria2 isolated build flag' = @($androidBuildScript, 'EnableHysteria2Preview', 'GREENVPN_ANDROID_HYSTERIA2_PREVIEW_ENABLED', 'GREENVPN_HYSTERIA2_PREVIEW_ENABLED=true')
     'Android Hysteria2 physical watchdog smoke' = @($androidHysteriaPhysicalTestScript, "ExpectedEgress = '5.129.216.42'", 'watchdogState', 'finalState', 'plaintextConfigRemoved')
     'Android Hysteria2 APK verifier' = @($androidHysteriaApkVerifyScript, 'lib/arm64-v8a/libhysteria.so', 'GREENVPN_HYSTERIA2_PREVIEW_ENABLED:Z = true', 'zipalign', 'apksigner')
@@ -1507,7 +1512,7 @@ foreach ($scriptPath in @($androidVlessPreparePath, $androidVlessPhysicalTestPat
 Write-Section "ANDROID NAIVE HTTPS PREVIEW CHECKS"
 $androidNaiveSourceChecks = [ordered]@{
     'Android Naive guarded config' = @($androidNaiveConfig, 'CANARY_HOST = "nl2.vpn.greenvpn.pro"', 'CANARY_IP = "5.129.216.42"', 'CANARY_PORT = 8443', 'host-resolver-rules', 'allowedKeys')
-    'Android Naive mapdns full tunnel' = @($androidNaiveService, '.addDnsServer("198.18.2.2")', 'mapdns:', "udp: 'tcp'", 'addDisallowedApplication(packageName)')
+    'Android Naive mapdns full tunnel' = @($androidNaiveService, '.addDnsServer("198.18.2.2")', 'mapdns:', "udp: 'tcp'", 'Ipv4RouteExclusions.routesExcluding(NaiveHttpsConfig.routeExclusions())', 'builder.addRoute(route.address, route.prefixLength)')
     'Android Naive persistent fail-closed state' = @($androidNaiveService, 'context.noBackupFilesDir', 'STATE_FILE = "state.json"', 'fun prepareForConnect(context: Context)', 'process.destroyForcibly()', 'cleanup("down", "")')
     'Android Naive reconnect state reset' = @($androidNaiveController, 'NaiveHttpsVpnService.prepareForConnect(context)', 'waitForState(context, "up", 30_000L)', 'state == "error" && expected != "down"')
     'Android Naive config tests' = @($androidNaiveConfigTest, 'rejectsWrongEndpoint', 'rejectsPlainHttp', 'rejectsMissingCredentials', 'rejectsLoggingFields')
@@ -1536,7 +1541,7 @@ foreach ($scriptPath in @($androidNaivePreparePath, $androidNaivePhysicalTestPat
 Write-Section "ANDROID DNSTT LAST-RESORT PREVIEW CHECKS"
 $androidDnsttSourceChecks = [ordered]@{
     'Android dnstt guarded profile' = @($androidDnsttConfig, 'ZONE = "t.greenvpn.pro"', 'EXPECTED_EGRESS = "5.129.216.42"', 'https://1.1.1.1/dns-query', 'https://8.8.8.8/dns-query', 'LISTEN = "127.0.0.1:$SOCKS_PORT"')
-    'Android dnstt mapdns full tunnel' = @($androidDnsttService, '.addDnsServer("198.18.3.2")', 'mapdns:', "udp: 'tcp'", 'addDisallowedApplication(packageName)')
+    'Android dnstt mapdns full tunnel' = @($androidDnsttService, '.addDnsServer("198.18.3.2")', 'mapdns:', "udp: 'tcp'", 'Ipv4RouteExclusions.routesExcluding(DnsttConfig.routeExclusions(profile))', 'builder.addRoute(route.address, route.prefixLength)')
     'Android dnstt persistent fail-closed state' = @($androidDnsttService, 'context.noBackupFilesDir', 'STATE_FILE = "state.json"', 'process.destroyForcibly()', 'failClosed("Transport engine stopped")', 'cleanup("down", "")')
     'Android dnstt reconnect state reset' = @($androidDnsttController, 'DnsttVpnService.prepareForConnect(context)', 'waitForState(context, "up", 30_000L)', 'state == "error" && expected != "down"')
     'Android dnstt config tests' = @($androidDnsttConfigTest, 'rejectsWrongZone', 'rejectsInvalidPublicKey', 'rejectsNonLoopbackListener', 'rejectsUnapprovedResolver', 'rejectsLoggingOrUnknownFields')
@@ -1556,10 +1561,14 @@ $androidDnsttSourceChecks = [ordered]@{
     'Dart selector advertises and orders dnstt' = @($main, 'kDnsttPreviewEnabled', "if (kDnsttPreviewEnabled) 'dnstt'", 'greenVpnCompareTransportPreviewCandidates(', 'greenVpnTransportRequiresFullTunnel(')
     'Android app lifecycle integrates dnstt' = @($androidMainActivity, 'protocol == "dnstt"', 'GreenVpnDnsttPreview.validateConfig', 'GreenVpnDnsttPreview.connect', 'GreenVpnDnsttPreview.disconnect', 'BuildConfig.GREENVPN_DNSTT_PREVIEW_ENABLED')
     'Android quick tile integrates dnstt' = @($androidQuickTile, 'BuildConfig.GREENVPN_DNSTT_PREVIEW_ENABLED', 'GreenVpnDnsttPreview.validateConfig', 'GreenVpnDnsttPreview.connect', 'GreenVpnDnsttPreview.disconnect')
-    'Android quick tile uses the dynamic guarded cascade' = @($androidQuickTile, 'BuildConfig.GREENVPN_RELEASE_CHANNEL', 'BuildConfig.GREENVPN_CLIENT_MARKER', '/api/v1/catalog/servers?channel=', 'fetchCatalogCandidates(', 'GreenVpnQuickTileCascadePolicy.sort(', 'recordRouteFailure(', 'clearRouteFailure(', 'probeConnectedRoute()')
+    'Android quick tile uses the dynamic guarded cascade' = @($androidQuickTile, 'BuildConfig.GREENVPN_RELEASE_CHANNEL', 'BuildConfig.GREENVPN_CLIENT_MARKER', '/api/v1/catalog/servers?channel=', 'fetchCatalogCandidates(', 'GreenVpnQuickTileCascadePolicy.sort(', 'recordRouteFailure(', 'clearRouteFailure(', 'probeConnectedRoute(fetched.protocol)')
+    'Android quick tile executor survives service rebinds' = @($androidQuickTile, 'val TILE_EXECUTOR = Executors.newSingleThreadExecutor()', 'TILE_EXECUTOR.execute {')
+    'Android proxy route probe follows local SOCKS data plane' = @($androidRouteProbe, '"hysteria2" -> 1980', '"vless_reality" -> 1981', '"naive_https" -> 1982', '"dnstt" -> 1983', 'probeHttpsViaSocks(', 'endpointIdentificationAlgorithm = "HTTPS"')
+    'Android proxy route probe has protocol mapping tests' = @($androidRouteProbeTest, 'proxyTransportsRequireTheirDedicatedLoopbackSocksPortsAfterSystemRoute', 'tunnelProtocolsUseTheSystemVpnRoute')
+    'Flutter Android post-connect probe uses native route' = @($main, "invokeMethod<Object?>('probeConnectedRoute'", "'protocol': server.protocolCode")
     'Android quick tile cascade policy is strict and bounded' = @($androidQuickTilePolicy, '"amneziawg"', '"hysteria2"', '"vless_reality"', '"naive_https"', '"dnstt"', '"wireguard_udp"', '60_000L', '1_800_000L')
     'Android quick tile cascade tests cover order and cooldown' = @($androidQuickTilePolicyTest, 'strictTransportOrderIsPreserved', 'coolingCandidateIsDemotedWithoutChangingBaseOrder', 'cooldownScheduleIsBounded')
-    'Android quick tile physical proof is reversible' = @($androidQuickTilePhysicalTest, "Wait-Route -ExpectedProtocol 'amneziawg'", "Wait-Route -ExpectedProtocol 'hysteria2'", 'youtubeProbeRequiredBeforeSuccessMarker', 'Set-TileList -Value $originalTiles', "Invoke-DebugCommand -Command 'disconnect_all'", "Invoke-DebugCommand -Command 'clear_tile_cooldown'")
+    'Android quick tile physical proof is reversible' = @($androidQuickTilePhysicalTest, "'amneziawg', 'hysteria2', 'vless_reality', 'naive_https', 'dnstt', 'wireguard_udp'", "Wait-Route -ExpectedProtocol 'amneziawg'", 'Invoke-ExternalProbe', 'youtubeProbeRequiredBeforeSuccessMarker', 'Set-TileList -Value $originalTiles', "Invoke-DebugCommand -Command 'disconnect_all'", "Invoke-DebugCommand -Command 'clear_tile_cooldown'")
     'Android quick tile debug controls stay sanitized' = @($androidTransportContractService, '"set_tile_cooldown"', '"clear_tile_cooldown"', '"disconnect_all"', 'lastRouteSuccess', 'activeProtocols')
     'Android preview build binds native paid-beta identity' = @($androidAppBuild, 'GREENVPN_ANDROID_RELEASE_CHANNEL', 'GREENVPN_ANDROID_CLIENT_MARKER', 'GREENVPN_RELEASE_CHANNEL', 'GREENVPN_CLIENT_MARKER')
     'Android preview build script sets paid-beta identity' = @($androidBuildScript, "GREENVPN_ANDROID_RELEASE_CHANNEL = 'paid-beta'", "GREENVPN_ANDROID_CLIENT_MARKER = 'green-vpn-paid-beta-v1'")

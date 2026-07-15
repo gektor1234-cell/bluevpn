@@ -80,6 +80,11 @@ class MainActivity : FlutterActivity() {
                 "status" -> handleStatusV2(call, result)
                 "connect" -> handleConnect(call, result)
                 "disconnect" -> handleDisconnect(result)
+                "probeConnectedRoute" -> handleProbeConnectedRoute(call, result)
+                "armRuntimeFailover" -> handleArmRuntimeFailover(call, result)
+                "runtimeFailoverStatus" -> result.success(
+                    GreenVpnRuntimeFailoverService.snapshot(applicationContext)
+                )
                 "secureRead" -> handleSecureRead(call, result)
                 "secureWrite" -> handleSecureWrite(call, result)
                 "secureDelete" -> handleSecureDelete(call, result)
@@ -267,9 +272,44 @@ class MainActivity : FlutterActivity() {
         connectWithConfig(protocol, parsed, result)
     }
 
+    private fun handleProbeConnectedRoute(call: MethodCall, result: MethodChannel.Result) {
+        val protocol = call.argument<String>("protocol").orEmpty().trim().lowercase()
+        executor.execute {
+            val probe = GreenVpnRouteProbe.probe(applicationContext, protocol)
+            runOnUiThread {
+                result.success(
+                    mapOf(
+                        "ok" to probe.ok,
+                        "target" to probe.target,
+                        "statusCode" to probe.statusCode,
+                        "latencyMs" to probe.latencyMs,
+                        "error" to probe.error,
+                    )
+                )
+            }
+        }
+    }
+
+    private fun handleArmRuntimeFailover(call: MethodCall, result: MethodChannel.Result) {
+        val serverId = call.argument<String>("serverId").orEmpty().trim()
+        val protocol = call.argument<String>("protocol").orEmpty().trim().lowercase()
+        val armed = GreenVpnRuntimeFailoverService.arm(
+            applicationContext,
+            serverId,
+            protocol,
+        )
+        result.success(
+            LinkedHashMap<String, Any>(
+                GreenVpnRuntimeFailoverService.snapshot(applicationContext)
+            ).apply { put("ok", armed) }
+        )
+    }
+
     private fun connectWithConfig(protocol: String, config: Any, result: MethodChannel.Result) {
+        GreenVpnRuntimeFailoverService.disarm(applicationContext)
         executor.execute {
             try {
+                GreenVpnConnectionOperationGate.awaitIdle()
                 if (protocol != "dnstt") {
                     val dnstt = GreenVpnDnsttPreview.snapshot(applicationContext)
                     if (dnstt.connected || dnstt.state == "starting" || dnstt.state == "error") {
@@ -441,8 +481,10 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun handleDisconnect(result: MethodChannel.Result) {
+        GreenVpnRuntimeFailoverService.disarm(applicationContext)
         executor.execute {
             try {
+                GreenVpnConnectionOperationGate.awaitIdle()
                 val dnstt = GreenVpnDnsttPreview.snapshot(applicationContext)
                 if (dnstt.connected || dnstt.state == "starting" || dnstt.state == "error") {
                     val disconnected = GreenVpnDnsttPreview.disconnect(applicationContext)
@@ -555,11 +597,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun waitForOwnVpnNetworkInactive(timeoutMs: Long): Boolean {
-        val deadline = SystemClock.elapsedRealtime() + timeoutMs
-        while (isOwnVpnNetworkActive() && SystemClock.elapsedRealtime() < deadline) {
-            Thread.sleep(50L)
-        }
-        return !isOwnVpnNetworkActive()
+        return GreenVpnNetworkTransition.waitForInactive(applicationContext, timeoutMs)
     }
 
     private fun handleStatus(call: MethodCall, result: MethodChannel.Result) {
@@ -1233,19 +1271,12 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun markOwnVpnActive() {
-        securePrefs.edit()
-            .putBoolean(OWN_VPN_ACTIVE_KEY, true)
-            .putLong(OWN_VPN_ACTIVE_WALL_AT_KEY, System.currentTimeMillis())
-            .putLong(OWN_VPN_ACTIVE_ELAPSED_AT_KEY, SystemClock.elapsedRealtime())
-            .apply()
+        GreenVpnNetworkTransition.markActive(applicationContext)
     }
 
     private fun markOwnVpnInactive() {
-        securePrefs.edit()
-            .remove(OWN_VPN_ACTIVE_KEY)
-            .remove(OWN_VPN_ACTIVE_WALL_AT_KEY)
-            .remove(OWN_VPN_ACTIVE_ELAPSED_AT_KEY)
-            .apply()
+        GreenVpnNetworkTransition.waitForInactive(applicationContext, 2_500L)
+        GreenVpnNetworkTransition.markInactive(applicationContext)
     }
 
     private fun hasOwnVpnActiveMarker(systemVpnActive: Boolean): Boolean {
@@ -1253,18 +1284,7 @@ class MainActivity : FlutterActivity() {
             markOwnVpnInactive()
             return false
         }
-        if (!securePrefs.getBoolean(OWN_VPN_ACTIVE_KEY, false)) return false
-        val startedAtElapsed = securePrefs.getLong(OWN_VPN_ACTIVE_ELAPSED_AT_KEY, -1L)
-        val nowElapsed = SystemClock.elapsedRealtime()
-        if (startedAtElapsed <= 0L || startedAtElapsed > nowElapsed) {
-            markOwnVpnInactive()
-            return false
-        }
-        if (nowElapsed - startedAtElapsed > OWN_VPN_MARKER_MAX_AGE_MS) {
-            markOwnVpnInactive()
-            return false
-        }
-        return true
+        return GreenVpnNetworkTransition.hasRecentActiveMarker(applicationContext)
     }
 
     private fun ownVpnMarkerAgeMs(): Long {
@@ -1291,18 +1311,7 @@ class MainActivity : FlutterActivity() {
 
     @Suppress("DEPRECATION")
     private fun isOwnVpnNetworkActive(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return false
-        return try {
-            val connectivity = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-            connectivity.allNetworks.any { network ->
-                val capabilities = connectivity.getNetworkCapabilities(network)
-                    ?: return@any false
-                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
-                    capabilities.ownerUid == applicationInfo.uid
-            }
-        } catch (_: Exception) {
-            false
-        }
+        return GreenVpnNetworkTransition.isActive(applicationContext)
     }
 
     private fun safeError(error: Throwable): String {

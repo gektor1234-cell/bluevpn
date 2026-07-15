@@ -15,6 +15,7 @@ class TransportProbeReceiver : BroadcastReceiver() {
             try {
                 val targets = mapOf(
                     "egress" to "https://1.1.1.1/cdn-cgi/trace",
+                    "egressAlternate" to "https://api.ipify.org",
                     "productionApi" to "https://api.greenvpn.pro/healthz",
                     "paidBetaPrimary" to "https://api.greenvpn.pro/paid-beta-api/healthz",
                     "paidBetaFallback" to "https://176-113-81-35.sslip.io/paid-beta-api/healthz",
