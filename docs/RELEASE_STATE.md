@@ -1,6 +1,6 @@
 # Green VPN Release State
 
-Updated: 2026-07-15.
+Updated: 2026-07-16.
 
 ## Stable Public
 
@@ -40,10 +40,11 @@ until public promotion.
 | --- | --- |
 | Customer location model | one row per country; `Авто / Нидерланды / Англия`; physical routes hidden |
 | Latency model | every picker row, including `Авто`, shows `N мс`; missing measurement becomes `0 мс` |
-| Android | `0.3.0+2026071511`, package `pro.greenvpn.app.finalcandidate`, debug signed |
-| Android SHA-256 | `AFB39779B9F341F90ADB50FA8AF195B7B72C585D4DD3E1B0F005F0CA23D35B4F` |
-| Windows ZIP | `0.3.0+1511`, four protected fallback engines plus stable tunnel, unsigned |
-| Windows ZIP SHA-256 | `A9F1BD9766F345B786B37879BE3E9DAD42C5025F691BD35BEF93FBE8B8BCA206` |
+| Source checkpoint | `8bf3e37fd39a2062e7f514348475da26c3850c8f`, clean reproducible build |
+| Android | `0.3.0+2026071601`, package `pro.greenvpn.app.finalcandidate`, debug signed |
+| Android SHA-256 | `59123FF5205BADD125C514302F07949952527ECEE507392543F90E264B5C3B21` |
+| Windows ZIP | `0.3.0+1601`, four protected fallback engines plus stable tunnel, unsigned |
+| Windows ZIP SHA-256 | `5161EC83165FEEA5C242A4D71CE1427BE4913FC8FA08ED4344C13801E052DF1D` |
 | YooKassa | recurring card binding approved; one real owner payment/unlink smoke pending |
 | London | provider state `notpaid`; England deliberately absent from the customer picker |
 
@@ -65,6 +66,10 @@ stable artifacts.
   competing-VPN restoration, uninstall recovery and clean reinstall were proven.
 - Android/Flutter/backend/native tests, analyzer, dependency audit, release gate
   and full Git-history secret scan are green.
+- The final Android picker was physically rechecked on Samsung Android 9:
+  `Авто` and `Нидерланды` were the only rows, both displayed live numeric
+  latency, selecting a location persisted it, and the phone was restored to
+  `Авто` with no active VPN agent.
 - Stable catalog exposes only stable transports. Five anti-blocking previews are
   hidden and isolated to NL2.
 
@@ -79,6 +84,9 @@ provider gates.
 
 ## Rollback
 
+- Final-candidate source commit:
+  `8bf3e37fd39a2062e7f514348475da26c3850c8f`.
+- Final-candidate tag: `greenvpn-final-candidate-20260716`.
 - Technical-final handoff tag: `greenvpn-technical-final-20260713`.
 - Verified encrypted technical-final checkpoint:
   `C:\Users\gekto\GreenVPN_Checkpoints\full_project_technical_final_green_ci_20260713_185901`.

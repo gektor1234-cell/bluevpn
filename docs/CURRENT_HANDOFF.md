@@ -1,6 +1,6 @@
 # Green VPN Current Handoff
 
-Updated: 2026-07-15.
+Updated: 2026-07-16.
 
 This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
@@ -30,7 +30,11 @@ This is the current operational entry point. Read it together with
 
 - Root: `C:\Users\gekto\projects\bluevpn`.
 - Active branch: `green-vpn-transport-canary-20260711`.
-- Technical-final code checkpoint: `1048312b75d05bf7b5a553927160a367cec6eece`.
+- Final-candidate source checkpoint:
+  `8bf3e37fd39a2062e7f514348475da26c3850c8f`.
+- Final-candidate tag: `greenvpn-final-candidate-20260716`.
+- Earlier technical-final code checkpoint:
+  `1048312b75d05bf7b5a553927160a367cec6eece`.
 - Final handoff tag: `greenvpn-technical-final-20260713`.
 - Multiprotocol preview base: `d31c6d78337ce9d212d497e7e112085efd407f26`
   (`greenvpn-multiprotocol-preview-complete-20260713`).
@@ -38,30 +42,38 @@ This is the current operational entry point. Read it together with
 - Generated binaries belong in `C:\BlueVPN_Builds`, encrypted restore points in
   `C:\Users\gekto\GreenVPN_Checkpoints`, and secrets outside Git.
 
-## Final product candidate checkpoint, 2026-07-15
+## Final product candidate checkpoint, 2026-07-16
 
 - The customer server picker exposes logical locations only: `Авто`,
   `Нидерланды`, and `Англия` when a healthy published England route exists.
   Physical nodes and transports stay internal. Every picker row, including
   `Авто`, has a numeric latency label; an unavailable measurement is displayed
   as `0 мс`.
-- Android candidate `0.3.0+2026071511`:
-  `C:\BlueVPN_Builds\public_product_final_candidate_20260715\GreenVPN_Android_0.3.0_final_candidate_2026071511_debug.apk`.
+- Android candidate `0.3.0+2026071601`:
+  `C:\BlueVPN_Builds\public_product_final_candidate_20260716\GreenVPN_Android_0.3.0_final_candidate_2026071601_debug.apk`.
   SHA-256:
-  `AFB39779B9F341F90ADB50FA8AF195B7B72C585D4DD3E1B0F005F0CA23D35B4F`.
+  `59123FF5205BADD125C514302F07949952527ECEE507392543F90E264B5C3B21`.
   It is a side-by-side debug-signed candidate package
   `pro.greenvpn.app.finalcandidate`, not the production APK to publish.
 - Windows cascade candidate:
-  `C:\BlueVPN_Builds\public_product_final_candidate_20260715\windows\GreenVPN_Windows_0.3.0_final_candidate.zip`.
+  `C:\BlueVPN_Builds\public_product_final_candidate_20260716\windows\GreenVPN_Windows_0.3.0_final_candidate.zip`.
   SHA-256:
-  `A9F1BD9766F345B786B37879BE3E9DAD42C5025F691BD35BEF93FBE8B8BCA206`.
-  Its product/file version is `0.3.0+1511`; all 45 manifest hashes pass.
+  `5161EC83165FEEA5C242A4D71CE1427BE4913FC8FA08ED4344C13801E052DF1D`.
+  Its product/file version is `0.3.0+1601`; artifact verification passes.
   The Green VPN executables are still unsigned, so this ZIP is an internal
   candidate and must not be a mandatory public update.
-- Android UI was checked on physical Android 9 and Android 16/API 36. The
-  physical phone was left with no active VPN agent. Full data-plane transport
-  proofs remain the physical Android 9 evidence described in the transport
-  diagnostic.
+- Android UI was checked on physical Android 9 and Android 16/API 36. On the
+  physical phone the picker contained exactly one `Авто` row and one
+  `Нидерланды` row; both always carried a numeric latency. The measured values
+  changed from `16 мс` to `143 мс` on refresh, which also proves that the label
+  is live rather than hard-coded. The screenshot is
+  `C:\BlueVPN_Builds\public_product_final_candidate_20260716\evidence\android9-server-picker.png`.
+  The phone was restored to `Авто`, the candidate was stopped, and no active
+  VPN agent remained. Full data-plane transport proofs remain the physical
+  Android 9 evidence described in the transport diagnostic.
+- Reproducible build manifest:
+  `C:\BlueVPN_Builds\public_product_final_candidate_20260716\final-candidate-manifest.json`.
+  It records the clean source commit above and both artifact hashes.
 - `flutter analyze`, 27 Flutter tests, 84 backend tests, Android native unit
   tasks, both APK verifiers, public-surface probes, dependency audit, secret
   scan, standard release gate and strict payment gate are green.

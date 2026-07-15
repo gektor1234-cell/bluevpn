@@ -110,24 +110,30 @@ Quick Tile прошёл строгую цепочку с принудитель�
 ## Дополнение: финальная продуктовая оболочка
 
 После transport-диагностики собран отдельный публично выглядящий кандидат без
-beta/preview-интерфейса:
+beta/preview-интерфейса. Финальная пересборка от 16.07.2026:
 
 - APK:
-  `C:\BlueVPN_Builds\public_product_final_candidate_20260715\GreenVPN_Android_0.3.0_final_candidate_2026071511_debug.apk`;
+  `C:\BlueVPN_Builds\public_product_final_candidate_20260716\GreenVPN_Android_0.3.0_final_candidate_2026071601_debug.apk`;
 - package `pro.greenvpn.app.finalcandidate`, versionName `0.3.0`, versionCode
-  `2026071511`;
+  `2026071601`;
 - SHA-256
-  `AFB39779B9F341F90ADB50FA8AF195B7B72C585D4DD3E1B0F005F0CA23D35B4F`;
+  `59123FF5205BADD125C514302F07949952527ECEE507392543F90E264B5C3B21`;
 - Hysteria2 и dnstt APK verifiers: PASS;
 - `flutter analyze`: PASS; Flutter tests: 27/27 PASS;
 - физический Samsung Android 9: login/session/main/picker PASS;
 - Android 16/API 36 emulator: чистый login, main и picker PASS.
 
-В picker подтверждены только `Авто / 0 мс` и одна строка
-`Нидерланды / 0 мс`. Физические NL1/NL2 routes и пять способов обхода не
+В picker подтверждены только `Авто` и одна строка `Нидерланды`. Обе строки
+однотипны и всегда показывают число: при первой проверке `16 мс`, при повторном
+обновлении `143 мс`; если измерения нет, политика отображения выдаёт `0 мс`.
+Выбор `Нидерланды` сохранился на главной странице, затем состояние было
+возвращено на `Авто`. Физические NL1/NL2 routes и пять способов обхода не
 размножают пользовательский список. `Англия` отсутствует закономерно: London
 не оплачен у провайдера и не опубликован. В проверенных UI-деревьях нет
 `Beta`, `WireGuard`, `RUVDS`, `TimeWeb` и других внутренних marker'ов.
+
+Визуальное доказательство финального picker:
+`C:\BlueVPN_Builds\public_product_final_candidate_20260716\evidence\android9-server-picker.png`.
 
 Проверка API 36 закрывает современную совместимость интерфейса и запуска, но не
 заменяет физический data-plane proof: полный транспортный каскад по-прежнему
