@@ -197,6 +197,20 @@ material. KZ is not in DNS, catalogs or assignment state.
 
 ## Restore points
 
+- Verified encrypted final-candidate checkpoint:
+  `C:\Users\gekto\GreenVPN_Checkpoints\full_project_final_candidate_20260716_010736`.
+- Final-candidate `server_state.7z` SHA-256:
+  `B376020D3E28663C798CE65ED337D439A4E00CA7DFBB7B429AE722EA15197FEE`.
+- Final-candidate `local_state.7z` SHA-256:
+  `2D77820204CAE220610ABE7C8027AB14B3BA3D1479C2239E99125D6329AC9699`.
+- The local archive records repository head
+  `19d114cb616d2dc0eeb7e42afa13bab14d7aad44` with zero untracked files.
+  The server archive contains Timeweb Moscow, RUVDS Moscow, NL1 and NL2.
+  London was deliberately omitted because the provider state is `notpaid` and
+  the host is unreachable; its earlier recovery material remains preserved.
+- Both archives use encrypted headers, pass `7z t`, reject a wrong password,
+  have restricted ACLs and leave no plaintext staging or remote temporary
+  files.
 - Verified encrypted technical-final checkpoint:
   `C:\Users\gekto\GreenVPN_Checkpoints\full_project_technical_final_green_ci_20260713_185901`.
 - Technical-final `server_state.7z` SHA-256:

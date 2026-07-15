@@ -87,6 +87,11 @@ provider gates.
 - Final-candidate source commit:
   `8bf3e37fd39a2062e7f514348475da26c3850c8f`.
 - Final-candidate tag: `greenvpn-final-candidate-20260716`.
+- Verified encrypted final-candidate checkpoint:
+  `C:\Users\gekto\GreenVPN_Checkpoints\full_project_final_candidate_20260716_010736`.
+- Final-candidate server/local SHA-256:
+  `B376020D3E28663C798CE65ED337D439A4E00CA7DFBB7B429AE722EA15197FEE` /
+  `2D77820204CAE220610ABE7C8027AB14B3BA3D1479C2239E99125D6329AC9699`.
 - Technical-final handoff tag: `greenvpn-technical-final-20260713`.
 - Verified encrypted technical-final checkpoint:
   `C:\Users\gekto\GreenVPN_Checkpoints\full_project_technical_final_green_ci_20260713_185901`.
