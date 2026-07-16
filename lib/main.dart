@@ -7415,11 +7415,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _paymentMethodSaved = paymentMethodRaw == true;
   }
 
-  Future<void> _cancelAutoRenew() async {
-    if (kIsWeb) return;
+  Future<bool> _cancelAutoRenew() async {
+    if (kIsWeb) return false;
     if (widget.session.accessToken == 'dev-token') {
       _toast(context, 'DEV-вход: отключение автопродления недоступно.');
-      return;
+      return false;
     }
 
     if (mounted) setState(() => _tariffBusy = true);
@@ -7427,12 +7427,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       final res = await _api.cancelAutoRenew(
         accessToken: widget.session.accessToken,
       );
-      if (!mounted) return;
+      if (!mounted) return false;
       if (!res.ok || res.data == null) {
         final text = res.message ?? 'Не удалось отключить автопродление.';
         setState(() => _tariffStatus = text);
         _toast(context, text);
-        return;
+        return false;
       }
 
       final rawSub = res.data!['subscription'];
@@ -7451,6 +7451,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       });
       _schedulePrefsSave();
       _toast(context, 'Автопродление отключено.');
+      return true;
     } finally {
       if (mounted) setState(() => _tariffBusy = false);
     }
@@ -11148,8 +11149,6 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         tariffStatus: _tariffStatus,
         pendingBillingOrder: _pendingBillingOrder,
         subscriptionActive: _subscriptionActive,
-        subscriptionAutoRenew: _subscriptionAutoRenew,
-        paymentMethodSaved: _paymentMethodSaved,
         subscriptionExpiresAt: _subscriptionExpiresAt,
         subscriptionMonthlyPriceRub: _subscriptionMonthlyPriceRub,
         publicBillingPlanCode: _publicBillingPlanCode,
@@ -11158,7 +11157,6 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         onApplyTariff: _createTariffOrderOnServer,
         onCheckPendingBillingOrder: () =>
             _checkPendingBillingOrder(showToast: true),
-        onCancelAutoRenew: _cancelAutoRenew,
         onOpenPaymentUrl: _openPaymentUrl,
         onPublicBillingPlanChanged: (code) {
           setState(() => _publicBillingPlanCode = code);
@@ -11239,8 +11237,6 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         subscriptionActive: _subscriptionActive,
         subscriptionAutoRenew: _subscriptionAutoRenew,
         paymentMethodSaved: _paymentMethodSaved,
-        subscriptionExpiresAt: _subscriptionExpiresAt,
-        subscriptionMonthlyPriceRub: _subscriptionMonthlyPriceRub,
         onOpenTariff: () => setState(() => _index = 1),
         onCancelAutoRenew: _cancelAutoRenew,
         onLogout: widget.onLogout,
@@ -11835,8 +11831,6 @@ class TariffPage extends StatelessWidget {
   final String? tariffStatus;
   final Map<String, dynamic>? pendingBillingOrder;
   final bool subscriptionActive;
-  final bool subscriptionAutoRenew;
-  final bool paymentMethodSaved;
   final String? subscriptionExpiresAt;
   final int? subscriptionMonthlyPriceRub;
   final String publicBillingPlanCode;
@@ -11854,7 +11848,6 @@ class TariffPage extends StatelessWidget {
   final Future<void> Function() onApplyTariff;
   final Future<void> Function() onClaimPaidBetaInvite;
   final Future<void> Function() onCheckPendingBillingOrder;
-  final Future<void> Function() onCancelAutoRenew;
   final void Function(String url) onOpenPaymentUrl;
   final ValueChanged<String> onPublicBillingPlanChanged;
 
@@ -11874,8 +11867,6 @@ class TariffPage extends StatelessWidget {
     required this.tariffStatus,
     required this.pendingBillingOrder,
     required this.subscriptionActive,
-    required this.subscriptionAutoRenew,
-    required this.paymentMethodSaved,
     required this.subscriptionExpiresAt,
     required this.subscriptionMonthlyPriceRub,
     required this.publicBillingPlanCode,
@@ -11891,7 +11882,6 @@ class TariffPage extends StatelessWidget {
     required this.onOptAutoRenew,
     required this.onApplyTariff,
     required this.onCheckPendingBillingOrder,
-    required this.onCancelAutoRenew,
     required this.onOpenPaymentUrl,
     required this.onPublicBillingPlanChanged,
   });
@@ -12367,17 +12357,6 @@ class TariffPage extends StatelessWidget {
                   style: TextStyle(
                     color: mutedColor,
                     fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-              if (_hasPaidPlan && subscriptionAutoRenew) ...[
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: tariffBusy ? null : () => onCancelAutoRenew(),
-                    icon: const Icon(Icons.event_busy_rounded),
-                    label: const Text('Отключить автопродление'),
                   ),
                 ),
               ],
@@ -13681,66 +13660,6 @@ class TariffPage extends StatelessWidget {
                   fontSize: 12,
                 ),
               ),
-              if (_hasPaidPlan && subscriptionAutoRenew) ...[
-                const SizedBox(height: 12),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: isDark ? kBrandDarkSurface : Colors.white,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: kBrandPrimary.withValues(
-                        alpha: isDark ? 0.28 : 0.18,
-                      ),
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          const Icon(
-                            Icons.autorenew_rounded,
-                            color: kBrandPrimary,
-                            size: 20,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'Автопродление включено',
-                              style: TextStyle(
-                                color: textColor,
-                                fontWeight: FontWeight.w900,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        paymentMethodSaved
-                            ? 'Способ оплаты сохранён у платёжного провайдера. Можно отключить автопродление, текущий период останется активным.'
-                            : 'Автопродление отмечено в подписке. Сохранение способа оплаты подтвердит платёжный провайдер после production-подключения.',
-                        style: TextStyle(
-                          color: mutedColor,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 12,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton.icon(
-                          onPressed: tariffBusy ? null : onCancelAutoRenew,
-                          icon: const Icon(Icons.pause_circle_outline_rounded),
-                          label: const Text('Отключить автопродление'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
               if (pendingBillingOrder != null) ...[
                 const SizedBox(height: 12),
                 Builder(
@@ -13908,10 +13827,8 @@ class SettingsPage extends StatelessWidget {
   final bool subscriptionActive;
   final bool subscriptionAutoRenew;
   final bool paymentMethodSaved;
-  final String? subscriptionExpiresAt;
-  final int? subscriptionMonthlyPriceRub;
   final VoidCallback onOpenTariff;
-  final Future<void> Function() onCancelAutoRenew;
+  final Future<bool> Function() onCancelAutoRenew;
   final Future<void> Function() onLogout;
   final VoidCallback onOpenUpdates;
   final VoidCallback onOpenDiagnostics;
@@ -13938,14 +13855,24 @@ class SettingsPage extends StatelessWidget {
     required this.subscriptionActive,
     required this.subscriptionAutoRenew,
     required this.paymentMethodSaved,
-    required this.subscriptionExpiresAt,
-    required this.subscriptionMonthlyPriceRub,
     required this.onOpenTariff,
     required this.onCancelAutoRenew,
     required this.onLogout,
     required this.onOpenUpdates,
     required this.onOpenDiagnostics,
   });
+
+  void _openAutoRenewSettings(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => AutoRenewSettingsPage(
+          autoRenewEnabled: subscriptionAutoRenew,
+          paymentMethodSaved: paymentMethodSaved,
+          onCancelAutoRenew: onCancelAutoRenew,
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -14022,73 +13949,11 @@ class SettingsPage extends StatelessWidget {
             const SizedBox(height: 12),
           ] else if (!kTrialOnlyNoAdsBuild) ...[
             _Card(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const _SectionTitle('Оплата и автопродление'),
-                  const SizedBox(height: 8),
-                  _SettingsNavRow(
-                    title: 'Основная карта для подписки',
-                    subtitle: paymentMethodSaved
-                        ? 'Способ оплаты сохранён в ЮKassa'
-                        : 'Карта не добавлена',
-                    icon: Icons.credit_card_rounded,
-                    onTap: onOpenTariff,
-                  ),
-                  const Divider(height: 18),
-                  _SettingsNavRow(
-                    title: 'Автопродление',
-                    subtitle: subscriptionAutoRenew
-                        ? 'Включено${subscriptionExpiresAt?.isNotEmpty == true ? '. Следующий период: $subscriptionExpiresAt' : ''}'
-                        : 'Отключено',
-                    icon: Icons.autorenew_rounded,
-                    onTap: onOpenTariff,
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    paymentMethodSaved
-                        ? 'Полные данные карты хранит ЮKassa. Green VPN видит только статус подписки и основной способ оплаты. Добавить или сменить карту можно через оплату тарифа.'
-                        : 'Карта добавляется во время оплаты тарифа. После этого подписка сможет продлеваться автоматически без ручного продления каждый месяц.',
-                    style: TextStyle(
-                      color: Theme.of(
-                        context,
-                      ).colorScheme.onSurface.withValues(alpha: 0.62),
-                      fontWeight: FontWeight.w700,
-                      fontSize: 12,
-                    ),
-                  ),
-                  if (subscriptionMonthlyPriceRub != null) ...[
-                    const SizedBox(height: 10),
-                    Text(
-                      'Текущая сумма: $subscriptionMonthlyPriceRub ₽ в месяц',
-                      style: const TextStyle(fontWeight: FontWeight.w900),
-                    ),
-                  ],
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 10,
-                    children: [
-                      ElevatedButton.icon(
-                        onPressed: onOpenTariff,
-                        icon: const Icon(Icons.add_card_rounded),
-                        label: Text(
-                          paymentMethodSaved
-                              ? 'Сменить карту'
-                              : 'Добавить карту',
-                        ),
-                      ),
-                      if (subscriptionAutoRenew)
-                        OutlinedButton.icon(
-                          onPressed: () {
-                            unawaited(onCancelAutoRenew());
-                          },
-                          icon: const Icon(Icons.pause_circle_outline_rounded),
-                          label: const Text('Отключить автопродление'),
-                        ),
-                    ],
-                  ),
-                ],
+              child: _SettingsNavRow(
+                title: 'Автопродление',
+                subtitle: subscriptionAutoRenew ? 'Включено' : 'Отключено',
+                icon: Icons.autorenew_rounded,
+                onTap: () => _openAutoRenewSettings(context),
               ),
             ),
             const SizedBox(height: 12),
@@ -14186,6 +14051,204 @@ class SettingsPage extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+}
+
+class AutoRenewSettingsPage extends StatefulWidget {
+  final bool autoRenewEnabled;
+  final bool paymentMethodSaved;
+  final Future<bool> Function() onCancelAutoRenew;
+
+  const AutoRenewSettingsPage({
+    super.key,
+    required this.autoRenewEnabled,
+    required this.paymentMethodSaved,
+    required this.onCancelAutoRenew,
+  });
+
+  @override
+  State<AutoRenewSettingsPage> createState() => _AutoRenewSettingsPageState();
+}
+
+class _AutoRenewSettingsPageState extends State<AutoRenewSettingsPage> {
+  late bool _autoRenewEnabled;
+  late bool _paymentMethodSaved;
+  bool _busy = false;
+  String? _status;
+
+  @override
+  void initState() {
+    super.initState();
+    _autoRenewEnabled = widget.autoRenewEnabled;
+    _paymentMethodSaved = widget.paymentMethodSaved;
+  }
+
+  Future<void> _cancelAutoRenew() async {
+    if (_busy || !_autoRenewEnabled) return;
+    setState(() {
+      _busy = true;
+      _status = null;
+    });
+
+    var cancelled = false;
+    try {
+      cancelled = await widget.onCancelAutoRenew();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Не удалось отключить автопродление.')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          if (cancelled) {
+            _autoRenewEnabled = false;
+            _paymentMethodSaved = false;
+            _status = 'Автопродление отключено.';
+          }
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final textColor = theme.colorScheme.onSurface;
+    final mutedColor = textColor.withValues(alpha: isDark ? 0.72 : 0.62);
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Автопродление')),
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 720),
+            child: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                _Card(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: _autoRenewEnabled
+                              ? kBrandPrimary.withValues(alpha: 0.12)
+                              : textColor.withValues(alpha: 0.06),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(
+                          Icons.autorenew_rounded,
+                          color: _autoRenewEnabled ? kBrandPrimary : mutedColor,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _autoRenewEnabled ? 'Включено' : 'Отключено',
+                              style: TextStyle(
+                                color: textColor,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              _autoRenewEnabled
+                                  ? 'Подписка продлевается автоматически.'
+                                  : 'Автоматических списаний не будет.',
+                              style: TextStyle(
+                                color: mutedColor,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _Card(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const _SectionTitle('Способ оплаты'),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.credit_card_rounded,
+                            color: _paymentMethodSaved
+                                ? kBrandPrimary
+                                : mutedColor,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              _paymentMethodSaved
+                                  ? 'Карта привязана'
+                                  : 'Карта не привязана',
+                              style: TextStyle(
+                                color: textColor,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (_autoRenewEnabled) ...[
+                        const SizedBox(height: 16),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: kBrandDanger,
+                              side: BorderSide(
+                                color: kBrandDanger.withValues(alpha: 0.55),
+                              ),
+                            ),
+                            onPressed: _busy ? null : _cancelAutoRenew,
+                            icon: _busy
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.link_off_rounded),
+                            label: const Text('Отключить автопродление'),
+                          ),
+                        ),
+                      ],
+                      if (_status != null) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          _status!,
+                          style: const TextStyle(
+                            color: kBrandPrimary,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

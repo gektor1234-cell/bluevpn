@@ -123,7 +123,7 @@ $manifest = [ordered]@{
         adsEnabled = $false
         forcedDisconnectTimerEnabled = $false
         plansRub = @(249, 649, 1099)
-        realPaymentSmokeCompleted = $false
+        realPaymentSmokeCompleted = $true
     }
     api = [ordered]@{
         primary = $apiBaseUrl
