@@ -15,7 +15,7 @@ This is the current operational entry point. Read it together with
    client profiles.
 3. Never touch Friendly Linnet `5.129.237.163` without a new explicit owner
    instruction.
-4. Android 0.3.2 is already public and mandatory. Do not republish or roll it
+4. Android 0.3.3 is already public and mandatory. Do not republish or roll it
    back without a verified artifact, alternate-node health and an atomic backup.
 5. AWG2, Hysteria2, VLESS REALITY/XHTTP, Naive HTTPS and dnstt remain isolated
    to NL2 `5.129.216.42`. The rollout runbook is documentation, not permission
@@ -30,9 +30,9 @@ This is the current operational entry point. Read it together with
 
 - Root: `C:\Users\gekto\projects\bluevpn`.
 - Active branch: `green-vpn-transport-canary-20260711`.
-- Android 0.3.2 release commit:
-  `107140700e9c95189da1442a05ca82430085d261`.
-- Android 0.3.2 release tag: `greenvpn-android-0.3.2-2026071607`.
+- Android 0.3.3 runtime-fix commit:
+  `11b5f546795d8c07bd1a68066aa94a7aa085975a`.
+- Android 0.3.3 release tag: `greenvpn-android-0.3.3-2026071608`.
 - Current final-candidate source checkpoint:
   `ceec7aad27ab0399d3ec93f096bbae83c5187ee6`.
 - Current final-candidate tag:
@@ -54,14 +54,14 @@ This is the current operational entry point. Read it together with
   Physical nodes and transports stay internal. Every picker row, including
   `Авто`, has a numeric latency label; an unavailable measurement is displayed
   as `0 мс`.
-- Production Android `0.3.2+2026071607`, package `pro.greenvpn.app`:
-  `C:\BlueVPN_Builds\public_product_release_20260716_r3\GreenVPN_Android_0.3.2_2026071607.apk`.
+- Production Android `0.3.3+2026071608`, package `pro.greenvpn.app`:
+  `C:\BlueVPN_Builds\public_product_release_20260716_r6\GreenVPN_Android_0.3.3_2026071608.apk`.
   SHA-256:
-  `6C881410C2B8001BD3BCDA954526B86F8BE77400EE452B11D38A77362E9E936A`.
-- Test Android `0.3.2+2026071607`, package `pro.greenvpn.app.beta`:
-  `C:\BlueVPN_Builds\public_product_release_20260716_r3\GreenVPN_Android_test_0.3.2_2026071607.apk`.
+  `EEC96C8E29DED9151E5A8E8679A41D946BAC76FB41483A5A6DB8609F6C6141B0`.
+- Test Android `0.3.3+2026071608`, package `pro.greenvpn.app.beta`:
+  `C:\BlueVPN_Builds\public_product_release_20260716_r6_test\GreenVPN_Android_0.3.3_2026071608.apk`.
   SHA-256:
-  `7313A781EC7B1CF834E0C5150FDF055FE5E7DE4B97891ACE419F5056109A0042`.
+  `77A81ED9C3A5195E4E2F73C036725E3C501BC6C28C671CC355265CCC1F4985F2`.
 - Both APKs are release signed, passed artifact verification and were published
   atomically on Timeweb and RUVDS Moscow. Stable and paid-beta Android manifests
   are mandatory and point to the matching hashes.
@@ -77,10 +77,10 @@ This is the current operational entry point. Read it together with
   one `Нидерланды` and one `Англия` row; all carry numeric latency while the
   physical routes remain hidden. The earlier pre-London screenshot is
   `C:\BlueVPN_Builds\public_product_final_candidate_20260716\evidence\android9-server-picker.png`.
-  Production 0.3.2 then connected specifically to `Англия`, reached Android
+  Production 0.3.3 then connected specifically to `Англия`, reached Android
   `CONNECTED` and `VALIDATED`, and played YouTube to completion. Removing its
   activity stack left the foreground VPN service and `tun0` active; reopening
-  restored the live England state. Test 0.3.2 independently connected to the
+  restored the live England state. Test 0.3.3 independently connected to the
   same location through the paid-beta catalog. Both packages disconnected
   cleanly and were returned to `Автовыбор`.
 - Auto-renew management now has one compact entry in Settings and a dedicated
@@ -91,12 +91,25 @@ This is the current operational entry point. Read it together with
   `C:\BlueVPN_Builds\public_product_final_candidate_20260716_r3\evidence\android9-auto-renew-off.png`.
   SHA-256:
   `0A711DD99C1BA67E1AD07A267DB9FC762C89C5488AA53094EFFBC0B79EC4BAAB`.
-- Build manifests:
-  `C:\BlueVPN_Builds\public_product_release_20260716_r3\public-product-artifacts.json`
-  and
-  `C:\BlueVPN_Builds\public_product_release_20260716_r3_test\paid-beta-artifacts.json`.
+- Build manifests are stored beside the production and test artifacts in
+  `C:\BlueVPN_Builds\public_product_release_20260716_r6` and
+  `C:\BlueVPN_Builds\public_product_release_20260716_r6_test`.
   They record package IDs, versions, build numbers, sizes, signing state and
   exact artifact hashes.
+- The exact website APK was downloaded from both Russian public nodes; both
+  files are byte-identical to the production artifact. After removing the old
+  package, clean installs on Samsung Android 9 and Android 16 completed login,
+  delayed idle, all primary taps, server selection and a real Netherlands VPN
+  connection without a crash. Production API, both paid API ingresses and
+  YouTube passed through the tunnel. Android 9 retained the tunnel after Home
+  and removal from recent tasks, restored live state on reopen, and disconnected
+  cleanly.
+- Root cause of the superseded 0.3.2 Android 16 crash: standard WireGuard and
+  AWG2 loaded separate Go shared runtimes into the same application process.
+  The release removes the unsafe diagnostic version call, isolates AWG2 in
+  `:greenvpn_awg2`, shares one standard-tunnel runtime between UI, watchdog and
+  quick tile, and runs native commands off the main thread. Automatic recovery
+  from an injected AWG2 stop to Hysteria2 was physically proven.
 - `flutter analyze`, Flutter tests, backend tests, Android native unit
   tasks, both APK verifiers, public-surface probes, dependency audit, secret
   scan, standard release gate and strict payment gate are green.
@@ -144,9 +157,9 @@ material. KZ is not in DNS, catalogs or assignment state.
 ## Stable public contour
 
 - Site/API: `https://greenvpn.pro`, `https://api.greenvpn.pro`.
-- Backend: `0.9.118-public.1` on both RU control planes.
-- Android: `0.3.2`, build `2026071607`, package `pro.greenvpn.app`, SHA-256
-  `6C881410C2B8001BD3BCDA954526B86F8BE77400EE452B11D38A77362E9E936A`.
+- Backend: `0.9.119-public.1` on both RU control planes.
+- Android: `0.3.3`, build `2026071608`, package `pro.greenvpn.app`, SHA-256
+  `EEC96C8E29DED9151E5A8E8679A41D946BAC76FB41483A5A6DB8609F6C6141B0`.
 - Android update is mandatory on Timeweb and RUVDS Moscow; both manifests report
   `required=true` and `fileReady=true`.
 - Windows SHA-256:
@@ -161,14 +174,14 @@ material. KZ is not in DNS, catalogs or assignment state.
 ## Paid public candidate
 
 - Paths remain isolated at `/paid-beta` and `/paid-beta-api` until promotion.
-- Both control planes currently report backend `0.9.118-public.1`.
+- Both control planes currently report backend `0.9.119-public.1`.
 - Both SQLite databases pass `PRAGMA quick_check`.
 - The public-product client marker permits the final public candidate to create
   a 249 RUB order for accounts previously enrolled in the paid-beta cohort;
   unmarked legacy clients remain rejected.
-- Android test release: `0.3.2+2026071607`, package
+- Android test release: `0.3.3+2026071608`, package
   `pro.greenvpn.app.beta`, side-by-side with stable, SHA-256
-  `7313A781EC7B1CF834E0C5150FDF055FE5E7DE4B97891ACE419F5056109A0042`.
+  `77A81ED9C3A5195E4E2F73C036725E3C501BC6C28C671CC355265CCC1F4985F2`.
 - Windows candidate: `0.3.0-paid-beta.11`, SHA-256
   `ECA801FBCFED9A08CD5470E6BDC9F2FC327019D6C3DE61D50F7AECC69668FE32`.
   It is technically tested but unsigned and must not become mandatory.
@@ -240,13 +253,12 @@ material. KZ is not in DNS, catalogs or assignment state.
 
 ## Verified gates
 
-- Public surface probe: 31/31 targets green after Android 0.3.2 publication.
-- Backend tests: 87 passed.
+- Public surface probe: 31/31 targets green after Android 0.3.3 publication.
+- Backend tests: 91 passed.
 - `pip-audit`: no known vulnerabilities.
 - `flutter analyze`: no issues.
-- Flutter tests: 29 passed in the public-product configuration; the ordinary
-  suite remains green with public-only tests skipped by design.
-- Android debug/profile/release unit-test tasks: successful.
+- Flutter tests: 27 passed and 2 public-only tests skipped by design.
+- Android debug/profile/release unit-test tasks: 343 tasks successful.
 - Release gate: 0 warnings, 0 errors.
 - Secret scan: tracked, untracked and complete Git history passed.
 - Remaining build warnings are in third-party Pub packages (`file_picker` and
@@ -254,11 +266,17 @@ material. KZ is not in DNS, catalogs or assignment state.
 
 ## Restore points
 
-- Android 0.3.2 online rollback directories:
-  - Timeweb: `/root/greenvpn-apk-release-backups/20260716T084402Z-timeweb-0.3.2-2026071607`;
-  - RUVDS Moscow: `/root/greenvpn-apk-release-backups/20260716T084727Z-ruvds-0.3.2-2026071607`.
+- Android 0.3.3 online rollback directories:
+  - Timeweb: `/root/greenvpn-apk-release-backups/20260716T184718Z-timeweb-0.3.3-2026071608`;
+  - RUVDS Moscow: `/root/greenvpn-apk-release-backups/20260716T184757Z-ruvds-0.3.3-2026071608`.
   They retain the previous APK aliases and environment files with root-only
   permissions.
+- Backend 0.9.119 production rollback directories:
+  - Timeweb: `/root/greenvpn-public-product-backups/20260716T175852Z-timeweb-0.9.119-public.1`;
+  - RUVDS Moscow: `/root/greenvpn-public-product-backups/20260716T175914Z-ruvds-0.9.119-public.1`.
+- Backend 0.9.119 paid-candidate rollback directories:
+  - Timeweb: `/root/greenvpn-paid-beta-backend-backups/20260716T175858Z-paid-beta-backend-fallback-peer-20260716-r23`;
+  - RUVDS Moscow: `/root/greenvpn-paid-beta-backend-backups/20260716T175919Z-paid-beta-backend-fallback-peer-20260716-r23`.
 - London runtime backup before the 2026-07-16 repair:
   `/root/greenvpn-london-recovery-backups/20260716T100956Z`.
 - London catalog online DB backups, all `PRAGMA quick_check=ok`:

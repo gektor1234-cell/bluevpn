@@ -7,14 +7,14 @@ Updated: 2026-07-16.
 | Component | Version/state |
 | --- | --- |
 | Main site | `https://greenvpn.pro/`, healthy |
-| Primary API | `https://api.greenvpn.pro/`, backend `0.9.118-public.1` |
-| Fallback API | RUVDS Moscow, backend `0.9.118-public.1` |
-| Android | `0.3.2+2026071607`, package `pro.greenvpn.app`, mandatory |
-| Android SHA-256 | `6C881410C2B8001BD3BCDA954526B86F8BE77400EE452B11D38A77362E9E936A` |
+| Primary API | `https://api.greenvpn.pro/`, backend `0.9.119-public.1` |
+| Fallback API | RUVDS Moscow, backend `0.9.119-public.1` |
+| Android | `0.3.3+2026071608`, package `pro.greenvpn.app`, mandatory |
+| Android SHA-256 | `EEC96C8E29DED9151E5A8E8679A41D946BAC76FB41483A5A6DB8609F6C6141B0` |
 | Windows SHA-256 | `0B2FEAA2232582207CFB998902B04107067C8DDE1C4243A003FF979C2F2B5F15` |
 | Ads/session timer | disabled |
 
-Android 0.3.2 is published on Timeweb and RUVDS Moscow. Both stable manifests
+Android 0.3.3 is published on Timeweb and RUVDS Moscow. Both stable manifests
 have `required=true` and `fileReady=true`; the previous APK is retained in the
 root-only deployment backups listed under Rollback.
 
@@ -22,9 +22,9 @@ root-only deployment backups listed under Rollback.
 
 | Component | Version/state |
 | --- | --- |
-| Primary/fallback backend | `0.9.118-public.1` |
-| Android | `0.3.2+2026071607`, package `pro.greenvpn.app.beta`, mandatory |
-| Android SHA-256 | `7313A781EC7B1CF834E0C5150FDF055FE5E7DE4B97891ACE419F5056109A0042` |
+| Primary/fallback backend | `0.9.119-public.1` |
+| Android | `0.3.3+2026071608`, package `pro.greenvpn.app.beta`, mandatory |
+| Android SHA-256 | `77A81ED9C3A5195E4E2F73C036725E3C501BC6C28C671CC355265CCC1F4985F2` |
 | Windows | `0.3.0-paid-beta.11`, unsigned |
 | Windows SHA-256 | `ECA801FBCFED9A08CD5470E6BDC9F2FC327019D6C3DE61D50F7AECC69668FE32` |
 | Plans | trial 3 days; 249/649/1099 RUB for 30/90/180 days |
@@ -42,23 +42,23 @@ until public promotion.
 | --- | --- |
 | Customer location model | one row per country; `Авто / Нидерланды / Англия`; physical routes hidden |
 | Latency model | every picker row, including `Авто`, shows `N мс`; missing measurement becomes `0 мс` |
-| Source base | `7b5d192`, release changes recorded in the current branch |
-| Android production | `0.3.2+2026071607`, package `pro.greenvpn.app`, release signed |
-| Android production SHA-256 | `6C881410C2B8001BD3BCDA954526B86F8BE77400EE452B11D38A77362E9E936A` |
-| Android test | `0.3.2+2026071607`, package `pro.greenvpn.app.beta`, release signed |
-| Android test SHA-256 | `7313A781EC7B1CF834E0C5150FDF055FE5E7DE4B97891ACE419F5056109A0042` |
+| Source base | `11b5f54`, Android native-runtime and fallback-config fix |
+| Android production | `0.3.3+2026071608`, package `pro.greenvpn.app`, release signed |
+| Android production SHA-256 | `EEC96C8E29DED9151E5A8E8679A41D946BAC76FB41483A5A6DB8609F6C6141B0` |
+| Android test | `0.3.3+2026071608`, package `pro.greenvpn.app.beta`, release signed |
+| Android test SHA-256 | `77A81ED9C3A5195E4E2F73C036725E3C501BC6C28C671CC355265CCC1F4985F2` |
 | Windows ZIP | `0.3.0+1603`, four protected fallback engines plus stable tunnel, unsigned |
 | Windows ZIP SHA-256 | `04D2AB4AD84F9B63641590BDFEE2600C702E79DEC29224B1B4E84A9B17F1FF37` |
 | YooKassa | real 249 RUB payment, saved-method verification and unlink smoke complete |
 | London | existing VPS `2584554` restored in place; production and paid-beta catalogs publish one logical `Англия` location |
 
 Production and test APKs are published on both Russian control planes. The
-customer-facing stable and paid-beta update manifests force 0.3.2 and all four
+customer-facing stable and paid-beta update manifests force 0.3.3 and all four
 public APK aliases are ready.
 
 ## Verified
 
-- Both RU control planes run backend `0.9.118-public.1` and pass health,
+- Both RU control planes run backend `0.9.119-public.1` and pass health,
   schema and SQLite quick-check.
 - Production and candidate sync timers are active. Latest explicit production
   cycles on both nodes: zero inserts/updates, zero conflicts/errors.
@@ -89,10 +89,21 @@ public APK aliases are ready.
   to `Автовыбор` with no active VPN.
 - Stable catalog exposes only stable transports. Five anti-blocking previews are
   hidden and isolated to NL2.
-- Production and test 0.3.2 were installed side-by-side on Samsung Android 9.
+- Production and test 0.3.3 were installed side-by-side on Samsung Android 9.
   Both completed a real VPN connect with an Android `CONNECTED` and `VALIDATED`
   network, loaded YouTube, stayed connected after their task was swiped from
   recent apps, restored the live state when reopened, and disconnected cleanly.
+- The exact production APK downloaded from `https://greenvpn.pro/downloads/GreenVPN_Android.apk`
+  was clean-installed after removing the old package on Samsung Android 9 and
+  Android 16. Login, delayed idle, every primary screen, server selection,
+  connection, API/YouTube traffic, background, recent-task removal, reopen and
+  disconnect completed with empty crash buffers. Primary and fallback APKs are
+  byte-identical and match the production hash above.
+- The Android 16 crash was a native-process collision between the standard
+  tunnel Go runtime and the AWG2 Go runtime. Version diagnostics were removed,
+  AWG2 now runs in the isolated `:greenvpn_awg2` process, and all standard
+  tunnel owners share one runtime instance. Automatic AWG2-to-Hysteria2
+  failover was physically proven after an injected engine stop.
 - Release optimization keeps the reflected optional tunnel API intact, while
   `wireguard_udp` is always routed through the standard backend and
   `amneziawg` alone uses the optional backend.
@@ -106,11 +117,17 @@ London or Russian control-plane defect remains.
 
 ## Rollback
 
-- Android 0.3.2 deployment backups:
-  - Timeweb: `/root/greenvpn-apk-release-backups/20260716T084402Z-timeweb-0.3.2-2026071607`;
-  - RUVDS Moscow: `/root/greenvpn-apk-release-backups/20260716T084727Z-ruvds-0.3.2-2026071607`.
+- Android 0.3.3 deployment backups:
+  - Timeweb: `/root/greenvpn-apk-release-backups/20260716T184718Z-timeweb-0.3.3-2026071608`;
+  - RUVDS Moscow: `/root/greenvpn-apk-release-backups/20260716T184757Z-ruvds-0.3.3-2026071608`.
   They retain the previous APK aliases and environment files with root-only
   permissions.
+- Backend 0.9.119 production backups:
+  - Timeweb: `/root/greenvpn-public-product-backups/20260716T175852Z-timeweb-0.9.119-public.1`;
+  - RUVDS Moscow: `/root/greenvpn-public-product-backups/20260716T175914Z-ruvds-0.9.119-public.1`.
+- Backend 0.9.119 paid-candidate backups:
+  - Timeweb: `/root/greenvpn-paid-beta-backend-backups/20260716T175858Z-paid-beta-backend-fallback-peer-20260716-r23`;
+  - RUVDS Moscow: `/root/greenvpn-paid-beta-backend-backups/20260716T175919Z-paid-beta-backend-fallback-peer-20260716-r23`.
 - London preserved-state recovery backup:
   `/root/greenvpn-london-recovery-backups/20260716T100956Z`.
 - Production catalog DB backups before London publication:
