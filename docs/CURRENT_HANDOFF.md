@@ -30,9 +30,11 @@ This is the current operational entry point. Read it together with
 
 - Root: `C:\Users\gekto\projects\bluevpn`.
 - Active branch: `green-vpn-transport-canary-20260711`.
-- Final-candidate source checkpoint:
-  `8bf3e37fd39a2062e7f514348475da26c3850c8f`.
-- Final-candidate tag: `greenvpn-final-candidate-20260716`.
+- Current final-candidate source checkpoint:
+  `ceec7aad27ab0399d3ec93f096bbae83c5187ee6`.
+- Current final-candidate tag:
+  `greenvpn-final-candidate-autorenew-20260716`.
+- Previous final-candidate tag: `greenvpn-final-candidate-20260716`.
 - Earlier technical-final code checkpoint:
   `1048312b75d05bf7b5a553927160a367cec6eece`.
 - Final handoff tag: `greenvpn-technical-final-20260713`.
@@ -49,17 +51,17 @@ This is the current operational entry point. Read it together with
   Physical nodes and transports stay internal. Every picker row, including
   `Авто`, has a numeric latency label; an unavailable measurement is displayed
   as `0 мс`.
-- Android candidate `0.3.0+2026071602`:
-  `C:\BlueVPN_Builds\public_product_final_candidate_20260716_r2\GreenVPN_Android_0.3.0_final_candidate_2026071602_debug.apk`.
+- Android candidate `0.3.0+2026071603`:
+  `C:\BlueVPN_Builds\public_product_final_candidate_20260716_r3\GreenVPN_Android_0.3.0_final_candidate_2026071603_debug.apk`.
   SHA-256:
-  `AA3155DCF14A3B3E6B619F53C415D7C8A8CAF5E8439A469DCBB3FFD485CCA58A`.
+  `BA6BD7CD79A211853FCC0377E904174BF81FD8ECBB9472785FA8DB5F8FDE22D7`.
   It is a side-by-side debug-signed candidate package
   `pro.greenvpn.app.finalcandidate`, not the production APK to publish.
 - Windows cascade candidate:
-  `C:\BlueVPN_Builds\public_product_final_candidate_20260716_r2\windows\GreenVPN_Windows_0.3.0_final_candidate.zip`.
+  `C:\BlueVPN_Builds\public_product_final_candidate_20260716_r3\windows\GreenVPN_Windows_0.3.0_final_candidate.zip`.
   SHA-256:
-  `5F46D20FB622A53E85E94D009823B70DD6C40E35C0DE04AE43178B6E07E9635D`.
-  Its product/file version is `0.3.0+1602`; artifact verification passes.
+  `04D2AB4AD84F9B63641590BDFEE2600C702E79DEC29224B1B4E84A9B17F1FF37`.
+  Its product/file version is `0.3.0+1603`; artifact verification passes.
   The Green VPN executables are still unsigned, so this ZIP is an internal
   candidate and must not be a mandatory public update.
 - Android UI was checked on physical Android 9 and Android 16/API 36. On the
@@ -71,10 +73,18 @@ This is the current operational entry point. Read it together with
   The phone was restored to `Авто`, the candidate was stopped, and no active
   VPN agent remained. Full data-plane transport proofs remain the physical
   Android 9 evidence described in the transport diagnostic.
+- Auto-renew management now has one compact entry in Settings and a dedicated
+  page for card-binding status and cancellation. The tariff page keeps only the
+  purchase-time auto-renew switch and has no active-subscription cancellation
+  action. Physical Android 9 QA confirmed the disabled/unlinked state without
+  layout overlap. Evidence:
+  `C:\BlueVPN_Builds\public_product_final_candidate_20260716_r3\evidence\android9-auto-renew-off.png`.
+  SHA-256:
+  `0A711DD99C1BA67E1AD07A267DB9FC762C89C5488AA53094EFFBC0B79EC4BAAB`.
 - Reproducible build manifest:
-  `C:\BlueVPN_Builds\public_product_final_candidate_20260716_r2\final-candidate-manifest.json`.
+  `C:\BlueVPN_Builds\public_product_final_candidate_20260716_r3\final-candidate-manifest.json`.
   It records the clean source commit above and both artifact hashes.
-- `flutter analyze`, 27 Flutter tests, 87 backend tests, Android native unit
+- `flutter analyze`, 29 public-product Flutter tests, 87 backend tests, Android native unit
   tasks, both APK verifiers, public-surface probes, dependency audit, secret
   scan, standard release gate and strict payment gate are green.
 
@@ -85,7 +95,7 @@ This is the current operational entry point. Read it together with
 | Primary RU control plane | Timeweb Moscow `72.56.32.197` | production API, paid candidate API, site, SMTP, billing writer, DB sync |
 | Fallback RU control plane | RUVDS Moscow `176.113.81.35` | production/paid failover, site mirror, SMTP, DB sync, billing read-only |
 | Stable VPN NL1 | `37.220.85.211` | stable UDP tunnel active; obsolete Certbot/API TLS retired |
-| Stable VPN London | `88.218.250.86` | provider state `notpaid`; unreachable and intentionally unpublished from the client catalog |
+| Stable VPN London | `88.218.250.86` | paid; provider stuck at `initializing 100%`, SSH unavailable, ticket `2026071628000081`; intentionally unpublished |
 | Stable VPN + preview NL2 | `5.129.216.42` | stable UDP tunnel plus five isolated hidden preview transports |
 | Excluded host | `5.129.237.163` | not managed by this project; do not modify |
 
@@ -128,6 +138,10 @@ material. KZ is not in DNS, catalogs or assignment state.
   It is technically tested but unsigned and must not become mandatory.
 - Product model: trial 3 days; 249/649/1099 RUB for 30/90/180 days; no ads or
   disconnect timer; auto-renew is opt-out after YooKassa approval.
+- The real 249 RUB provider-backed payment smoke and the subsequent unlink
+  smoke are complete. The paid period remains active through 2026-09-09;
+  `auto_renew=0` and the saved payment method is absent on both synchronized
+  control planes. No automatic charge candidate is due.
 
 ## Database and control-plane behavior
 
@@ -188,10 +202,11 @@ material. KZ is not in DNS, catalogs or assignment state.
 ## Verified gates
 
 - Public surface probe: 31/31 targets green after server maintenance.
-- Backend tests: 84 passed.
+- Backend tests: 87 passed.
 - `pip-audit`: no known vulnerabilities.
 - `flutter analyze`: no issues.
-- Flutter tests: 27 passed.
+- Flutter tests: 29 passed in the public-product configuration; the ordinary
+  suite remains green with public-only tests skipped by design.
 - Android debug/profile/release unit-test tasks: successful.
 - Release gate: 0 warnings, 0 errors.
 - Secret scan: tracked, untracked and complete Git history passed.
@@ -209,8 +224,8 @@ material. KZ is not in DNS, catalogs or assignment state.
 - The local archive records repository head
   `19d114cb616d2dc0eeb7e42afa13bab14d7aad44` with zero untracked files.
   The server archive contains Timeweb Moscow, RUVDS Moscow, NL1 and NL2.
-  London was deliberately omitted because the provider state is `notpaid` and
-  the host is unreachable; its earlier recovery material remains preserved.
+  London was deliberately omitted because its provider state was `notpaid` at
+  checkpoint time; its earlier recovery material remains preserved.
 - Both archives use encrypted headers, pass `7z t`, reject a wrong password,
   have restricted ACLs and leave no plaintext staging or remote temporary
   files.
@@ -236,17 +251,12 @@ material. KZ is not in DNS, catalogs or assignment state.
 
 ## Remaining owner/external launch gates
 
-1. One real 249 RUB first-payment smoke proves `payment_method.saved=true`.
-   YooKassa has already approved bank-card binding; the smoke itself remains an
-   owner action and must not be performed by automation.
-2. App-side auto-renew cancellation removes the saved method on both control
-   planes while preserving the paid period.
-3. Obtain an Authenticode code-signing certificate and sign the Windows
+1. Obtain an Authenticode code-signing certificate and sign the Windows
    installer before mandatory public distribution.
-4. If England must return to the picker, top up the London RUVDS server by at
-   least the current shortfall (last observed about 326 RUB; use at least
-   400 RUB buffer), then reactivate, test and publish it server-side.
-5. After those gates, build production-signed Android and Windows artifacts,
+2. RUVDS must finish unlocking the already-paid London VPS. Then preserve its
+   disk/configs, run the documented recovery and data-plane smoke, and publish
+   it server-side as the single logical location `Англия`.
+3. After those gates, build production-signed Android and Windows artifacts,
    run final physical smoke, publish the
    candidate and only then enable forced update.
 

@@ -26,7 +26,7 @@ Stable remains the rollback baseline until the candidate launch gates pass.
 | Windows | `0.3.0-paid-beta.11`, unsigned |
 | Windows SHA-256 | `ECA801FBCFED9A08CD5470E6BDC9F2FC327019D6C3DE61D50F7AECC69668FE32` |
 | Plans | trial 3 days; 249/649/1099 RUB for 30/90/180 days |
-| Auto-renew | recurring card binding approved; opt-out implemented; real save/unlink smoke pending |
+| Auto-renew | recurring card binding approved; real save-method and unlink smoke passed on both control planes |
 | Billing writer | Timeweb only |
 | DB replication | active-active state merge with tombstones |
 
@@ -40,12 +40,12 @@ until public promotion.
 | --- | --- |
 | Customer location model | one row per country; `Авто / Нидерланды / Англия`; physical routes hidden |
 | Latency model | every picker row, including `Авто`, shows `N мс`; missing measurement becomes `0 мс` |
-| Source checkpoint | `255b778`, clean reproducible build |
-| Android | `0.3.0+2026071602`, package `pro.greenvpn.app.finalcandidate`, debug signed |
-| Android SHA-256 | `AA3155DCF14A3B3E6B619F53C415D7C8A8CAF5E8439A469DCBB3FFD485CCA58A` |
-| Windows ZIP | `0.3.0+1602`, four protected fallback engines plus stable tunnel, unsigned |
-| Windows ZIP SHA-256 | `5F46D20FB622A53E85E94D009823B70DD6C40E35C0DE04AE43178B6E07E9635D` |
-| YooKassa | recurring card binding approved; one real owner payment/unlink smoke pending |
+| Source checkpoint | `ceec7aa`, clean reproducible build |
+| Android | `0.3.0+2026071603`, package `pro.greenvpn.app.finalcandidate`, debug signed |
+| Android SHA-256 | `BA6BD7CD79A211853FCC0377E904174BF81FD8ECBB9472785FA8DB5F8FDE22D7` |
+| Windows ZIP | `0.3.0+1603`, four protected fallback engines plus stable tunnel, unsigned |
+| Windows ZIP SHA-256 | `04D2AB4AD84F9B63641590BDFEE2600C702E79DEC29224B1B4E84A9B17F1FF37` |
+| YooKassa | real 249 RUB payment, saved-method verification and unlink smoke complete |
 | London | renewal paid; provider restore is pending after an overdue `initializing` state; England stays absent until smoke tests pass |
 
 This checkpoint is a verified release candidate, not a published production
@@ -66,6 +66,9 @@ stable artifacts.
   competing-VPN restoration, uninstall recovery and clean reinstall were proven.
 - Android/Flutter/backend/native tests, analyzer, dependency audit, release gate
   and full Git-history secret scan are green.
+- Public-product auto-renew UI has 29 passing Flutter tests. Physical Android 9
+  QA confirms one Settings entry, a dedicated card/auto-renew page, no cancel
+  action in Tariff, and no layout overlap.
 - The final Android picker was physically rechecked on Samsung Android 9:
   `Авто` and `Нидерланды` were the only rows, both displayed live numeric
   latency, selecting a location persisted it, and the phone was restored to
@@ -75,17 +78,19 @@ stable artifacts.
 
 ## Not Yet Launchable
 
-1. A real 249 RUB save-method and unlink smoke must pass.
-2. The Windows installer requires Authenticode signing before mandatory rollout.
-3. London must be funded and revalidated if England is required at launch.
+1. The Windows installer requires Authenticode signing before mandatory rollout.
+2. RUVDS must unlock the already-paid London VPS; it then needs preserved-state
+   recovery, data-plane validation and publication as the single `Англия` row.
 
 No confirmed code or RU control-plane defect currently blocks those owner and
 provider gates.
 
 ## Rollback
 
-- Final-candidate source commit:
-  `8bf3e37fd39a2062e7f514348475da26c3850c8f`.
+- Current final-candidate source commit:
+  `ceec7aad27ab0399d3ec93f096bbae83c5187ee6`.
+- Current final-candidate tag:
+  `greenvpn-final-candidate-autorenew-20260716`.
 - Final-candidate tag: `greenvpn-final-candidate-20260716`.
 - Verified encrypted final-candidate checkpoint:
   `C:\Users\gekto\GreenVPN_Checkpoints\full_project_final_candidate_20260716_010736`.
