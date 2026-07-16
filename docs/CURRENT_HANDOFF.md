@@ -15,8 +15,8 @@ This is the current operational entry point. Read it together with
    client profiles.
 3. Never touch Friendly Linnet `5.129.237.163` without a new explicit owner
    instruction.
-4. Stable production and public downloads are not promoted until the remaining
-   launch gates pass.
+4. Android 0.3.2 is already public and mandatory. Do not republish or roll it
+   back without a verified artifact, alternate-node health and an atomic backup.
 5. AWG2, Hysteria2, VLESS REALITY/XHTTP, Naive HTTPS and dnstt remain isolated
    to NL2 `5.129.216.42`. The rollout runbook is documentation, not permission
    to deploy them elsewhere.
@@ -44,19 +44,24 @@ This is the current operational entry point. Read it together with
 - Generated binaries belong in `C:\BlueVPN_Builds`, encrypted restore points in
   `C:\Users\gekto\GreenVPN_Checkpoints`, and secrets outside Git.
 
-## Final product candidate checkpoint, 2026-07-16
+## Published Android release, 2026-07-16
 
 - The customer server picker exposes logical locations only: `Авто`,
   `Нидерланды`, and `Англия` when a healthy published England route exists.
   Physical nodes and transports stay internal. Every picker row, including
   `Авто`, has a numeric latency label; an unavailable measurement is displayed
   as `0 мс`.
-- Android candidate `0.3.0+2026071603`:
-  `C:\BlueVPN_Builds\public_product_final_candidate_20260716_r3\GreenVPN_Android_0.3.0_final_candidate_2026071603_debug.apk`.
+- Production Android `0.3.2+2026071607`, package `pro.greenvpn.app`:
+  `C:\BlueVPN_Builds\public_product_release_20260716_r3\GreenVPN_Android_0.3.2_2026071607.apk`.
   SHA-256:
-  `BA6BD7CD79A211853FCC0377E904174BF81FD8ECBB9472785FA8DB5F8FDE22D7`.
-  It is a side-by-side debug-signed candidate package
-  `pro.greenvpn.app.finalcandidate`, not the production APK to publish.
+  `6C881410C2B8001BD3BCDA954526B86F8BE77400EE452B11D38A77362E9E936A`.
+- Test Android `0.3.2+2026071607`, package `pro.greenvpn.app.beta`:
+  `C:\BlueVPN_Builds\public_product_release_20260716_r3\GreenVPN_Android_test_0.3.2_2026071607.apk`.
+  SHA-256:
+  `7313A781EC7B1CF834E0C5150FDF055FE5E7DE4B97891ACE419F5056109A0042`.
+- Both APKs are release signed, passed artifact verification and were published
+  atomically on Timeweb and RUVDS Moscow. Stable and paid-beta Android manifests
+  are mandatory and point to the matching hashes.
 - Windows cascade candidate:
   `C:\BlueVPN_Builds\public_product_final_candidate_20260716_r3\windows\GreenVPN_Windows_0.3.0_final_candidate.zip`.
   SHA-256:
@@ -70,9 +75,10 @@ This is the current operational entry point. Read it together with
   changed from `16 мс` to `143 мс` on refresh, which also proves that the label
   is live rather than hard-coded. The screenshot is
   `C:\BlueVPN_Builds\public_product_final_candidate_20260716\evidence\android9-server-picker.png`.
-  The phone was restored to `Авто`, the candidate was stopped, and no active
-  VPN agent remained. Full data-plane transport proofs remain the physical
-  Android 9 evidence described in the transport diagnostic.
+  Production and test 0.3.2 then completed the full physical data-plane flow:
+  VPN network `CONNECTED` and `VALIDATED`, YouTube loaded, the tunnel survived
+  swiping the app task from recent apps, reopening restored the live state and
+  disconnect removed `tun0`.
 - Auto-renew management now has one compact entry in Settings and a dedicated
   page for card-binding status and cancellation. The tariff page keeps only the
   purchase-time auto-renew switch and has no active-subscription cancellation
@@ -81,10 +87,13 @@ This is the current operational entry point. Read it together with
   `C:\BlueVPN_Builds\public_product_final_candidate_20260716_r3\evidence\android9-auto-renew-off.png`.
   SHA-256:
   `0A711DD99C1BA67E1AD07A267DB9FC762C89C5488AA53094EFFBC0B79EC4BAAB`.
-- Reproducible build manifest:
-  `C:\BlueVPN_Builds\public_product_final_candidate_20260716_r3\final-candidate-manifest.json`.
-  It records the clean source commit above and both artifact hashes.
-- `flutter analyze`, 29 public-product Flutter tests, 87 backend tests, Android native unit
+- Build manifests:
+  `C:\BlueVPN_Builds\public_product_release_20260716_r3\public-product-artifacts.json`
+  and
+  `C:\BlueVPN_Builds\public_product_release_20260716_r3_test\paid-beta-artifacts.json`.
+  They record package IDs, versions, build numbers, sizes, signing state and
+  exact artifact hashes.
+- `flutter analyze`, Flutter tests, backend tests, Android native unit
   tasks, both APK verifiers, public-surface probes, dependency audit, secret
   scan, standard release gate and strict payment gate are green.
 
@@ -95,9 +104,18 @@ This is the current operational entry point. Read it together with
 | Primary RU control plane | Timeweb Moscow `72.56.32.197` | production API, paid candidate API, site, SMTP, billing writer, DB sync |
 | Fallback RU control plane | RUVDS Moscow `176.113.81.35` | production/paid failover, site mirror, SMTP, DB sync, billing read-only |
 | Stable VPN NL1 | `37.220.85.211` | stable UDP tunnel active; obsolete Certbot/API TLS retired |
-| Stable VPN London | `88.218.250.86` | paid; provider stuck at `initializing 100%`, SSH unavailable, ticket `2026071628000081`; intentionally unpublished |
+| Stable VPN London | `88.218.250.86` | API still reports ID `2584554` as `initializing 100%`; SSH unavailable; tickets `2026071628000081` and `2026071628000134`; intentionally unpublished |
 | Stable VPN + preview NL2 | `5.129.216.42` | stable UDP tunnel plus five isolated hidden preview transports |
 | Excluded host | `5.129.237.163` | not managed by this project; do not modify |
+
+At the last check, the RUVDS API still returned London ID `2584554` with
+`status=initializing`, `create_progress=100`, no network object, and SSH port 22
+closed. Support first stated that the server did not exist. The same ticket was
+escalated with the contradictory API evidence and a request to inspect the
+backend, hypervisor, storage and provider backups. No new reply has arrived.
+Do not create a replacement automatically. If RUVDS confirms that the disk is
+physically gone and no backup exists, obtain the written reason and refund of
+the 1042 RUB charge before the owner chooses a replacement path.
 
 The former Timeweb KZ VPS `8360589` / `94.198.221.206` was proven inactive and
 retired. Provider recovery image
@@ -108,9 +126,11 @@ material. KZ is not in DNS, catalogs or assignment state.
 ## Stable public contour
 
 - Site/API: `https://greenvpn.pro`, `https://api.greenvpn.pro`.
-- Backend: `0.9.105` on both RU control planes.
-- Android: `0.2.44`, build `2026070504`, SHA-256
-  `308320429991A3278E3BA903155482D6613425D46681F180338ECB8C0929248F`.
+- Backend: `0.9.118-public.1` on both RU control planes.
+- Android: `0.3.2`, build `2026071607`, package `pro.greenvpn.app`, SHA-256
+  `6C881410C2B8001BD3BCDA954526B86F8BE77400EE452B11D38A77362E9E936A`.
+- Android update is mandatory on Timeweb and RUVDS Moscow; both manifests report
+  `required=true` and `fileReady=true`.
 - Windows SHA-256:
   `0B2FEAA2232582207CFB998902B04107067C8DDE1C4243A003FF979C2F2B5F15`.
 - Public catalog contains only stable client-compatible endpoints. Server/provider
@@ -121,18 +141,14 @@ material. KZ is not in DNS, catalogs or assignment state.
 ## Paid public candidate
 
 - Paths remain isolated at `/paid-beta` and `/paid-beta-api` until promotion.
-- Both control planes run release
-  `paid-beta-backend-public-client-20260716-r23`, backend
-  `0.9.117-public-client.1`.
-- The same immutable backend bundle and installer SHA-256 were applied to both
-  nodes. Bundle SHA-256 is
-  `158F938A8657BF6729380004B791B1095D9337EDD4DAA2C945B075DABF8DDE43`.
-  Both SQLite databases pass `PRAGMA quick_check`.
+- Both control planes currently report backend `0.9.118-public.1`.
+- Both SQLite databases pass `PRAGMA quick_check`.
 - The public-product client marker permits the final public candidate to create
   a 249 RUB order for accounts previously enrolled in the paid-beta cohort;
   unmarked legacy clients remain rejected.
-- Android candidate: `0.3.0-paid-beta.6`, package
-  `pro.greenvpn.app.beta`, side-by-side with stable.
+- Android test release: `0.3.2+2026071607`, package
+  `pro.greenvpn.app.beta`, side-by-side with stable, SHA-256
+  `7313A781EC7B1CF834E0C5150FDF055FE5E7DE4B97891ACE419F5056109A0042`.
 - Windows candidate: `0.3.0-paid-beta.11`, SHA-256
   `ECA801FBCFED9A08CD5470E6BDC9F2FC327019D6C3DE61D50F7AECC69668FE32`.
   It is technically tested but unsigned and must not become mandatory.
@@ -201,7 +217,7 @@ material. KZ is not in DNS, catalogs or assignment state.
 
 ## Verified gates
 
-- Public surface probe: 31/31 targets green after server maintenance.
+- Public surface probe: 31/31 targets green after Android 0.3.2 publication.
 - Backend tests: 87 passed.
 - `pip-audit`: no known vulnerabilities.
 - `flutter analyze`: no issues.
@@ -215,6 +231,11 @@ material. KZ is not in DNS, catalogs or assignment state.
 
 ## Restore points
 
+- Android 0.3.2 online rollback directories:
+  - Timeweb: `/root/greenvpn-apk-release-backups/20260716T084402Z-timeweb-0.3.2-2026071607`;
+  - RUVDS Moscow: `/root/greenvpn-apk-release-backups/20260716T084727Z-ruvds-0.3.2-2026071607`.
+  They retain the previous APK aliases and environment files with root-only
+  permissions.
 - Verified encrypted final-candidate checkpoint:
   `C:\Users\gekto\GreenVPN_Checkpoints\full_project_final_candidate_20260716_010736`.
 - Final-candidate `server_state.7z` SHA-256:
@@ -256,9 +277,8 @@ material. KZ is not in DNS, catalogs or assignment state.
 2. RUVDS must finish unlocking the already-paid London VPS. Then preserve its
    disk/configs, run the documented recovery and data-plane smoke, and publish
    it server-side as the single logical location `Англия`.
-3. After those gates, build production-signed Android and Windows artifacts,
-   run final physical smoke, publish the
-   candidate and only then enable forced update.
+3. Android is complete and already mandatory. After the remaining gates, sign
+   and publish the Windows installer and run its final owner-visible smoke.
 
 Do not perform a real payment, enter SMS/bank codes or accept legal terms on
 behalf of the owner.

@@ -88,9 +88,7 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
         "vless_reality" -> GreenVpnVlessRealityPreview.snapshot(appContext).connected
         "hysteria2" -> GreenVpnHysteria2Preview.snapshot(appContext).connected
         "amneziawg" -> GreenVpnAwg2Preview.snapshot(appContext).connected
-        "wireguard_udp" -> if (BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
-            GreenVpnAwg2Preview.snapshot(appContext).connected
-        } else {
+        "wireguard_udp" -> {
             val currentBackend = backend()
             currentBackend.getState(tunnel) == Tunnel.State.UP ||
                 currentBackend.getRunningTunnelNames().contains(tunnel.getName())
@@ -227,9 +225,10 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
                 appContext,
                 GreenVpnHysteria2Preview.validateConfig(configText),
             )
-            "amneziawg", "wireguard_udp" -> if (BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
+            "amneziawg" -> {
                 GreenVpnAwg2Preview.connect(appContext, GreenVpnAwg2Preview.parseConfig(configText))
-            } else {
+            }
+            "wireguard_udp" -> {
                 val parsed = Config.parse(
                     ByteArrayInputStream(configText.toByteArray(StandardCharsets.UTF_8)),
                 )

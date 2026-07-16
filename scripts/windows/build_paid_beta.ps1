@@ -13,6 +13,7 @@ param(
     [string]$ApiFallbackBaseUrls = "https://176-113-81-35.sslip.io/paid-beta-api",
     [string]$ClientMarker = "green-vpn-paid-beta-v1",
     [string]$OutDir = "C:\BlueVPN_Builds\paid_beta_20260710",
+    [bool]$EnableTransportCascade = $true,
     [switch]$SkipChecks
 )
 
@@ -79,6 +80,13 @@ if ($Mode -in @("android", "both")) {
         GREENVPN_ANDROID_APP_LABEL = $AndroidAppLabel
         GREENVPN_ANDROID_API_BASE_URL = $ApiBaseUrl
         GREENVPN_ANDROID_API_FALLBACK_BASE_URLS = $ApiFallbackBaseUrls
+        GREENVPN_ANDROID_RELEASE_CHANNEL = "paid-beta"
+        GREENVPN_ANDROID_CLIENT_MARKER = $ClientMarker
+        GREENVPN_ANDROID_AWG2_PREVIEW_ENABLED = $EnableTransportCascade.ToString().ToLowerInvariant()
+        GREENVPN_ANDROID_HYSTERIA2_PREVIEW_ENABLED = $EnableTransportCascade.ToString().ToLowerInvariant()
+        GREENVPN_ANDROID_VLESS_REALITY_PREVIEW_ENABLED = $EnableTransportCascade.ToString().ToLowerInvariant()
+        GREENVPN_ANDROID_NAIVE_HTTPS_PREVIEW_ENABLED = $EnableTransportCascade.ToString().ToLowerInvariant()
+        GREENVPN_ANDROID_DNSTT_PREVIEW_ENABLED = $EnableTransportCascade.ToString().ToLowerInvariant()
     }
     $oldAndroidBuildEnvironment = @{}
     try {
@@ -94,6 +102,14 @@ if ($Mode -in @("android", "both")) {
             Set-Item -LiteralPath "Env:$name" -Value $androidBuildEnvironment[$name]
         }
 
+        if ($EnableTransportCascade) {
+            & (Join-Path $PSScriptRoot "prepare_android_awg2_preview.ps1")
+            & (Join-Path $PSScriptRoot "prepare_android_hysteria2_preview.ps1")
+            & (Join-Path $PSScriptRoot "prepare_android_vless_reality_preview.ps1")
+            & (Join-Path $PSScriptRoot "prepare_android_naive_https_preview.ps1")
+            & (Join-Path $PSScriptRoot "prepare_android_dnstt_preview.ps1")
+        }
+
         flutter build apk --release --no-pub `
             --build-name $AndroidBuildName `
             --build-number $AndroidBuildNumber `
@@ -102,6 +118,11 @@ if ($Mode -in @("android", "both")) {
             --dart-define="GREENVPN_PAID_BETA_BUILD=true" `
             --dart-define="GREENVPN_PAID_BETA_CLIENT_MARKER=$ClientMarker" `
             --dart-define="GREENVPN_YANDEX_REWARDED_ADS_ENABLED=false" `
+            --dart-define="GREENVPN_AWG2_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" `
+            --dart-define="GREENVPN_HYSTERIA2_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" `
+            --dart-define="GREENVPN_VLESS_REALITY_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" `
+            --dart-define="GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" `
+            --dart-define="GREENVPN_DNSTT_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" `
             --dart-define="BLUEVPN_API_BASE_URL=$ApiBaseUrl" `
             --dart-define="BLUEVPN_API_BASE_URLS=$ApiFallbackBaseUrls" | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "Android paid beta build failed" }
@@ -142,6 +163,18 @@ if ($Mode -in @("android", "both")) {
     }
     if ($badging -notmatch "application-label:'$([regex]::Escape($AndroidAppLabel))'") {
         throw "Android paid beta launcher label does not match $AndroidAppLabel."
+    }
+    if ($EnableTransportCascade) {
+        & (Join-Path $PSScriptRoot "verify_android_hysteria2_preview_apk.ps1") `
+            -ApkPath $androidPath `
+            -ExpectedPackage $AndroidApplicationId `
+            -ExpectedVersionCode $AndroidBuildNumber
+        if ($LASTEXITCODE -ne 0) { throw "Android Hysteria2 verifier failed" }
+        & (Join-Path $PSScriptRoot "verify_android_dnstt_preview_apk.ps1") `
+            -ApkPath $androidPath `
+            -ExpectedPackage $AndroidApplicationId `
+            -ExpectedVersionCode $AndroidBuildNumber
+        if ($LASTEXITCODE -ne 0) { throw "Android dnstt verifier failed" }
     }
 
     $item = Get-Item -LiteralPath $androidPath
@@ -204,6 +237,7 @@ $manifest = [pscustomobject]@{
     trialOnlyNoAdsBuild = $false
     paidBetaBuild = $true
     rewardedAdsEnabled = $false
+    transportCascade = $EnableTransportCascade
     generatedAt = (Get-Date).ToUniversalTime().ToString("o")
     artifacts = @($artifacts | ForEach-Object { $_ })
 }

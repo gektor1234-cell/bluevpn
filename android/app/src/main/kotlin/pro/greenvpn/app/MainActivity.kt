@@ -242,8 +242,7 @@ class MainActivity : FlutterActivity() {
                 protocol == "vless_reality" -> GreenVpnVlessRealityPreview.validateConfig(effectiveConfigText)
                 protocol == "naive_https" -> GreenVpnNaiveHttpsPreview.validateConfig(effectiveConfigText)
                 protocol == "dnstt" -> GreenVpnDnsttPreview.validateConfig(effectiveConfigText)
-                protocol == "amneziawg" ||
-                    (protocol == "wireguard_udp" && BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) ->
+                GreenVpnTunnelBackendPolicy.usesAmneziaBackend(protocol) ->
                     GreenVpnAwg2Preview.parseConfig(effectiveConfigText)
                 else -> Config.parse(
                     ByteArrayInputStream(effectiveConfigText.toByteArray(StandardCharsets.UTF_8))
@@ -400,10 +399,7 @@ class MainActivity : FlutterActivity() {
                         throw IllegalStateException("Android не завершил предыдущее VPN-подключение")
                     }
                     GreenVpnHysteria2Preview.connect(applicationContext, config as String)
-                } else if (
-                    protocol == "amneziawg" ||
-                    (protocol == "wireguard_udp" && BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED)
-                ) {
+                } else if (GreenVpnTunnelBackendPolicy.usesAmneziaBackend(protocol)) {
                     val naive = GreenVpnNaiveHttpsPreview.snapshot(applicationContext)
                     if (naive.connected || naive.state == "starting") {
                         GreenVpnNaiveHttpsPreview.disconnect(applicationContext)
@@ -416,11 +412,12 @@ class MainActivity : FlutterActivity() {
                     if (hysteria.connected || hysteria.state == "starting") {
                         GreenVpnHysteria2Preview.disconnect(applicationContext)
                     }
-                    if (!BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
-                        val currentBackend = backend()
-                        if (currentBackend.getRunningTunnelNames().contains(tunnel.getName())) {
-                            currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
-                        }
+                    val currentBackend = backend()
+                    if (currentBackend.getRunningTunnelNames().contains(tunnel.getName())) {
+                        currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
+                    }
+                    if (!waitForOwnVpnNetworkInactive(2_500L)) {
+                        throw IllegalStateException("Android did not stop the previous VPN connection")
                     }
                     GreenVpnAwg2Preview.connect(applicationContext, config)
                 } else {
@@ -545,15 +542,17 @@ class MainActivity : FlutterActivity() {
                     }
                     return@execute
                 }
-                if (BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
+                val awg = GreenVpnAwg2Preview.snapshot(applicationContext)
+                if (GreenVpnTunnelBackendPolicy.previewSnapshotNeedsCleanup(awg.connected, awg.state)) {
                     val disconnected = GreenVpnAwg2Preview.disconnect(applicationContext)
-                    if (disconnected) markOwnVpnInactive()
+                    val inactive = disconnected && waitForOwnVpnNetworkInactive(2_500L)
+                    if (inactive) markOwnVpnInactive()
                     runOnUiThread {
                         result.success(
                             response(
-                                ok = disconnected,
-                                connected = !disconnected,
-                                message = if (disconnected) "VPN выключен." else "VPN ещё активен."
+                                ok = inactive,
+                                connected = !inactive,
+                                message = if (inactive) "VPN выключен." else "VPN ещё активен."
                             )
                         )
                     }
@@ -798,39 +797,41 @@ class MainActivity : FlutterActivity() {
             }
             if (BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
                 val awg = GreenVpnAwg2Preview.snapshot(applicationContext)
-                val markerOwnRunning = !systemOwnVpnActive &&
-                    systemVpnActive &&
-                    hasOwnVpnActiveMarker(systemVpnActive)
-                val ownRunning = awg.connected || systemOwnVpnActive || markerOwnRunning
-                runOnUiThread {
-                    result.success(
-                        mapOf(
-                            "ok" to awg.available,
-                            "connected" to ownRunning,
-                            "ownTunnelRunning" to ownRunning,
-                            "state" to if (ownRunning) "up" else awg.state,
-                            "rxBytes" to awg.rxBytes,
-                            "txBytes" to awg.txBytes,
-                            "version" to awg.version,
-                            "runningTunnels" to awg.runningTunnels,
-                            "systemVpnActive" to systemVpnActive,
-                            "systemVpnActiveWithoutOwnTunnel" to (systemVpnActive && !ownRunning),
-                            "externalVpnActive" to (systemVpnActive && !ownRunning),
-                            "lastGreenVpnActive" to (systemOwnVpnActive || markerOwnRunning),
-                            "lastGreenVpnActiveAgeMs" to ownVpnMarkerAgeMs(),
-                            "ownTunnelSource" to when {
-                                awg.connected -> "backend"
-                                systemOwnVpnActive -> "system_owner"
-                                markerOwnRunning -> "marker"
-                                else -> "none"
-                            },
-                            "nativeTunnelName" to "GreenVPN",
-                            "requestedTunnelName" to requestedName,
-                            "statusError" to awg.error
+                if (GreenVpnTunnelBackendPolicy.previewSnapshotIsActive(awg.connected, awg.state)) {
+                    val markerOwnRunning = !systemOwnVpnActive &&
+                        systemVpnActive &&
+                        hasOwnVpnActiveMarker(systemVpnActive)
+                    val ownRunning = awg.connected || systemOwnVpnActive || markerOwnRunning
+                    runOnUiThread {
+                        result.success(
+                            mapOf(
+                                "ok" to awg.available,
+                                "connected" to ownRunning,
+                                "ownTunnelRunning" to ownRunning,
+                                "state" to if (ownRunning) "up" else awg.state,
+                                "rxBytes" to awg.rxBytes,
+                                "txBytes" to awg.txBytes,
+                                "version" to awg.version,
+                                "runningTunnels" to awg.runningTunnels,
+                                "systemVpnActive" to systemVpnActive,
+                                "systemVpnActiveWithoutOwnTunnel" to (systemVpnActive && !ownRunning),
+                                "externalVpnActive" to (systemVpnActive && !ownRunning),
+                                "lastGreenVpnActive" to (systemOwnVpnActive || markerOwnRunning),
+                                "lastGreenVpnActiveAgeMs" to ownVpnMarkerAgeMs(),
+                                "ownTunnelSource" to when {
+                                    awg.connected -> "backend"
+                                    systemOwnVpnActive -> "system_owner"
+                                    markerOwnRunning -> "marker"
+                                    else -> "none"
+                                },
+                                "nativeTunnelName" to "GreenVPN",
+                                "requestedTunnelName" to requestedName,
+                                "statusError" to awg.error
+                            )
                         )
-                    )
+                    }
+                    return@execute
                 }
-                return@execute
             }
             val statusErrors = mutableListOf<String>()
             val currentBackend = try {

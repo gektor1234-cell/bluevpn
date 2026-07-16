@@ -289,9 +289,6 @@ class GreenVpnQuickTileService : TileService() {
         if (GreenVpnNaiveHttpsPreview.snapshot(applicationContext).connected) return true
         if (GreenVpnVlessRealityPreview.snapshot(applicationContext).connected) return true
         if (GreenVpnHysteria2Preview.snapshot(applicationContext).connected) return true
-        if (BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
-            return GreenVpnAwg2Preview.snapshot(applicationContext).connected
-        }
         if (GreenVpnAwg2Preview.snapshot(applicationContext).connected) return true
         val currentBackend = backend()
         return currentBackend.getState(tunnel) == Tunnel.State.UP ||
@@ -384,14 +381,10 @@ class GreenVpnQuickTileService : TileService() {
         if (hysteria.connected || hysteria.state == "starting") {
             GreenVpnHysteria2Preview.disconnect(applicationContext)
         }
-        if (protocol == "amneziawg" ||
-            (protocol == "wireguard_udp" && BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED)
-        ) {
-            if (!BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
-                val currentBackend = backend()
-                if (currentBackend.getRunningTunnelNames().contains(tunnel.getName())) {
-                    currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
-                }
+        if (GreenVpnTunnelBackendPolicy.usesAmneziaBackend(protocol)) {
+            val currentBackend = backend()
+            if (currentBackend.getRunningTunnelNames().contains(tunnel.getName())) {
+                currentBackend.setState(tunnel, Tunnel.State.DOWN, null)
             }
             requirePreviousVpnNetworkInactive()
             val parsed = GreenVpnAwg2Preview.parseConfig(configText)
@@ -425,7 +418,8 @@ class GreenVpnQuickTileService : TileService() {
         if (hysteria.connected || hysteria.state == "starting" || hysteria.state == "error") {
             return finishDisconnect(GreenVpnHysteria2Preview.disconnect(applicationContext))
         }
-        if (BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
+        val awg = GreenVpnAwg2Preview.snapshot(applicationContext)
+        if (GreenVpnTunnelBackendPolicy.previewSnapshotNeedsCleanup(awg.connected, awg.state)) {
             return finishDisconnect(GreenVpnAwg2Preview.disconnect(applicationContext))
         }
         val currentBackend = backend()
@@ -606,7 +600,14 @@ class GreenVpnQuickTileService : TileService() {
             "vless_reality" -> GreenVpnVlessRealityPreview.snapshot(applicationContext)
             "naive_https" -> GreenVpnNaiveHttpsPreview.snapshot(applicationContext)
             "dnstt" -> GreenVpnDnsttPreview.snapshot(applicationContext)
-            "amneziawg", "wireguard_udp" -> GreenVpnAwg2Preview.snapshot(applicationContext)
+            "amneziawg" -> GreenVpnAwg2Preview.snapshot(applicationContext)
+            "wireguard_udp" -> return try {
+                val currentBackend = backend()
+                val state = currentBackend.getState(tunnel).name.lowercase()
+                "state=$state error="
+            } catch (failure: Throwable) {
+                "state=error error=${safeError(failure)}"
+            }
             else -> return "state=unknown"
         }
         val state = when (snapshot) {

@@ -8,3 +8,8 @@
 
 # Release verification reads these compile-time transport flags from DEX.
 -keep class pro.greenvpn.app.BuildConfig { *; }
+
+# The optional Android tunnel engine is loaded through reflection so its API
+# names must stay stable in optimized release builds.
+-keep class org.amnezia.awg.backend.** { *; }
+-keep class org.amnezia.awg.config.** { *; }
