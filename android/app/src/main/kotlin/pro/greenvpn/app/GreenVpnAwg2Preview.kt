@@ -1,9 +1,13 @@
 package pro.greenvpn.app
 
 import android.content.Context
+import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import org.json.JSONObject
 import java.io.ByteArrayInputStream
-import java.lang.reflect.Proxy
 import java.nio.charset.StandardCharsets
+import java.util.UUID
 
 object GreenVpnAwg2Preview {
     data class Snapshot(
@@ -17,24 +21,25 @@ object GreenVpnAwg2Preview {
         val error: String = ""
     )
 
-    private const val BACKEND_CLASS = "org.amnezia.awg.backend.GoBackend"
-    private const val TUNNEL_CLASS = "org.amnezia.awg.backend.Tunnel"
-    private const val STATE_CLASS = "org.amnezia.awg.backend.Tunnel\$State"
+    private data class StoredState(
+        val operationId: String,
+        val snapshot: Snapshot,
+    )
+
     private const val CONFIG_CLASS = "org.amnezia.awg.config.Config"
-    private const val TUNNEL_NAME = "GreenVPN"
+    private const val SERVICE_CLASS = "pro.greenvpn.awg2.GreenVpnAwg2VpnService"
+    private const val ACTION_CONNECT = "pro.greenvpn.awg2.action.CONNECT"
+    private const val ACTION_DISCONNECT = "pro.greenvpn.awg2.action.DISCONNECT"
+    private const val EXTRA_OPERATION_ID = "operationId"
+    private const val EXTRA_CONFIG = "config"
+    private const val STATE_FILE = "greenvpn_awg2_state.json"
+    private const val COMMAND_TIMEOUT_MS = 20_000L
     private val lock = Any()
-
-    @Volatile
-    private var backend: Any? = null
-
-    @Volatile
-    private var tunnel: Any? = null
 
     fun isAvailable(): Boolean {
         if (!BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) return false
         return try {
-            Class.forName(BACKEND_CLASS)
-            Class.forName(CONFIG_CLASS)
+            Class.forName(CONFIG_CLASS, false, GreenVpnAwg2Preview::class.java.classLoader)
             true
         } catch (_: Throwable) {
             false
@@ -45,109 +50,100 @@ object GreenVpnAwg2Preview {
         ensureAvailable()
         val configClass = Class.forName(CONFIG_CLASS)
         val parse = configClass.getMethod("parse", java.io.InputStream::class.java)
-        return parse.invoke(
+        parse.invoke(
             null,
             ByteArrayInputStream(configText.toByteArray(StandardCharsets.UTF_8))
         ) ?: throw IllegalStateException("AWG2 parser returned no config")
+        return configText
     }
 
     fun connect(context: Context, parsedConfig: Any): Boolean = synchronized(lock) {
         ensureAvailable()
-        val currentBackend = backend(context)
-        val currentTunnel = tunnel()
-        val setState = currentBackend.javaClass.methods.first {
-            it.name == "setState" && it.parameterTypes.size == 3
-        }
-        if (runningTunnelNames(currentBackend).contains(TUNNEL_NAME)) {
-            setState.invoke(currentBackend, currentTunnel, state("DOWN"), null)
-        }
-        val result = setState.invoke(currentBackend, currentTunnel, state("UP"), parsedConfig)
-        enumName(result) == "UP"
+        val configText = parsedConfig as? String
+            ?: throw IllegalArgumentException("AWG2 config must be validated before connect")
+        val result = execute(context, ACTION_CONNECT, configText)
+        result.connected && result.state == "up"
     }
 
     fun disconnect(context: Context): Boolean = synchronized(lock) {
         if (!isAvailable()) return@synchronized true
-        val currentBackend = backend(context)
-        val currentTunnel = tunnel()
-        val setState = currentBackend.javaClass.methods.first {
-            it.name == "setState" && it.parameterTypes.size == 3
+        val current = snapshot(context)
+        if (!current.connected && current.state !in setOf("starting", "error")) {
+            return@synchronized true
         }
-        val result = setState.invoke(currentBackend, currentTunnel, state("DOWN"), null)
-        enumName(result) == "DOWN" && !runningTunnelNames(currentBackend).contains(TUNNEL_NAME)
+        val result = execute(context, ACTION_DISCONNECT)
+        !result.connected && result.state == "down"
     }
 
-    fun snapshot(context: Context): Snapshot = synchronized(lock) {
-        if (!isAvailable()) return@synchronized Snapshot(false, false, "unavailable")
+    fun snapshot(context: Context): Snapshot {
+        if (!isAvailable()) return Snapshot(false, false, "unavailable")
+        val stored = readState(context)?.snapshot ?: Snapshot(true, false, "down")
+        if (stored.connected && !isAnyVpnNetworkActive(context)) {
+            return stored.copy(connected = false, state = "down", runningTunnels = emptyList())
+        }
+        return stored
+    }
+
+    private fun execute(context: Context, action: String, configText: String = ""): Snapshot {
+        val appContext = context.applicationContext
+        val operationId = UUID.randomUUID().toString()
+        val intent = Intent(action)
+            .setClassName(appContext.packageName, SERVICE_CLASS)
+            .putExtra(EXTRA_OPERATION_ID, operationId)
+        if (configText.isNotEmpty()) intent.putExtra(EXTRA_CONFIG, configText)
+
         try {
-            val currentBackend = backend(context)
-            val currentTunnel = tunnel()
-            val running = runningTunnelNames(currentBackend)
-            val getState = currentBackend.javaClass.methods.first {
-                it.name == "getState" && it.parameterTypes.size == 1
-            }
-            val state = enumName(getState.invoke(currentBackend, currentTunnel)).lowercase()
-            val connected = state == "up" || running.contains(TUNNEL_NAME)
-            var rx = 0L
-            var tx = 0L
-            if (connected) {
-                val getStatistics = currentBackend.javaClass.methods.firstOrNull {
-                    it.name == "getStatistics" && it.parameterTypes.size == 1
-                }
-                val stats = getStatistics?.invoke(currentBackend, currentTunnel)
-                rx = invokeLong(stats, "totalRx")
-                tx = invokeLong(stats, "totalTx")
-            }
-            val version = currentBackend.javaClass.getMethod("getVersion").invoke(currentBackend)
-                ?.toString().orEmpty()
-            Snapshot(true, connected, state, running, rx, tx, version)
+            appContext.startService(intent)
         } catch (error: Throwable) {
-            Snapshot(true, false, "error", error = rootMessage(error))
+            return Snapshot(true, false, "error", error = rootMessage(error))
         }
-    }
 
-    private fun backend(context: Context): Any {
-        backend?.let { return it }
-        return Class.forName(BACKEND_CLASS)
-            .getConstructor(Context::class.java)
-            .newInstance(context.applicationContext)
-            .also { backend = it }
-    }
-
-    private fun tunnel(): Any {
-        tunnel?.let { return it }
-        val tunnelClass = Class.forName(TUNNEL_CLASS)
-        return Proxy.newProxyInstance(
-            tunnelClass.classLoader,
-            arrayOf(tunnelClass)
-        ) { proxy, method, args ->
-            when (method.name) {
-                "getName" -> TUNNEL_NAME
-                "onStateChange" -> null
-                "hashCode" -> System.identityHashCode(proxy)
-                "equals" -> proxy === args?.firstOrNull()
-                "toString" -> "GreenVpnAwg2Tunnel($TUNNEL_NAME)"
-                else -> null
+        val deadline = System.nanoTime() + COMMAND_TIMEOUT_MS * 1_000_000L
+        while (System.nanoTime() < deadline) {
+            val stored = readState(appContext)
+            if (stored?.operationId == operationId && stored.snapshot.state != "starting") {
+                return stored.snapshot
             }
-        }.also { tunnel = it }
-    }
-
-    private fun state(name: String): Any {
-        val constants = requireNotNull(Class.forName(STATE_CLASS).enumConstants) {
-            "$STATE_CLASS is not an enum"
+            Thread.sleep(50L)
         }
-        return constants.first { enumName(it) == name }
+        return Snapshot(true, false, "error", error = "AWG2 service command timed out")
     }
 
-    private fun runningTunnelNames(currentBackend: Any): List<String> {
-        val raw = currentBackend.javaClass.getMethod("getRunningTunnelNames").invoke(currentBackend)
-        return (raw as? Iterable<*>)?.map { it.toString() } ?: emptyList()
+    private fun readState(context: Context): StoredState? {
+        val file = context.noBackupFilesDir.resolve(STATE_FILE)
+        if (!file.isFile) return null
+        return try {
+            val json = JSONObject(file.readText(StandardCharsets.UTF_8))
+            val running = json.optJSONArray("runningTunnels")
+            val runningTunnels = buildList {
+                if (running != null) {
+                    for (index in 0 until running.length()) {
+                        running.optString(index).trim().takeIf { it.isNotEmpty() }?.let(::add)
+                    }
+                }
+            }
+            StoredState(
+                operationId = json.optString("operationId"),
+                snapshot = Snapshot(
+                    available = true,
+                    connected = json.optBoolean("connected"),
+                    state = json.optString("state", "down"),
+                    runningTunnels = runningTunnels,
+                    rxBytes = json.optLong("rxBytes"),
+                    txBytes = json.optLong("txBytes"),
+                    error = json.optString("error"),
+                ),
+            )
+        } catch (_: Throwable) {
+            null
+        }
     }
 
-    private fun enumName(value: Any?): String = (value as? Enum<*>)?.name.orEmpty()
-
-    private fun invokeLong(target: Any?, method: String): Long {
-        if (target == null) return 0L
-        return (target.javaClass.getMethod(method).invoke(target) as? Number)?.toLong() ?: 0L
+    private fun isAnyVpnNetworkActive(context: Context): Boolean {
+        val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        return manager.allNetworks.any { network ->
+            manager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+        }
     }
 
     private fun ensureAvailable() {
@@ -158,9 +154,7 @@ object GreenVpnAwg2Preview {
 
     private fun rootMessage(error: Throwable): String {
         var current = error
-        while (current.cause != null && current.cause !== current) {
-            current = current.cause!!
-        }
+        while (current.cause != null && current.cause !== current) current = current.cause!!
         return current.message?.trim().takeUnless { it.isNullOrEmpty() }
             ?: current.javaClass.simpleName
     }

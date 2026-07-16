@@ -45,23 +45,11 @@ class MainActivity : FlutterActivity() {
         const val OWN_VPN_ACTIVE_WALL_AT_KEY = "greenvpn_android_own_vpn_active_wall_at_v1"
         const val OWN_VPN_ACTIVE_ELAPSED_AT_KEY = "greenvpn_android_own_vpn_active_elapsed_at_v1"
         const val OWN_VPN_MARKER_MAX_AGE_MS = 7L * 24L * 60L * 60L * 1000L
-        val BACKEND_LOCK = Any()
-
-        @Volatile
-        var sharedBackend: GoBackend? = null
-
-        @Volatile
-        var sharedTunnel: GreenVpnTunnel? = null
     }
 
     private val executor: ExecutorService = Executors.newSingleThreadExecutor()
-    private val tunnel: GreenVpnTunnel
-        get() {
-            sharedTunnel?.let { return it }
-            return synchronized(BACKEND_LOCK) {
-                sharedTunnel ?: GreenVpnTunnel("GreenVPN").also { sharedTunnel = it }
-            }
-        }
+    private val tunnel: Tunnel
+        get() = GreenVpnWireGuardRuntime.tunnel
     private var pendingConnectResult: MethodChannel.Result? = null
     private var pendingConfig: Any? = null
     private var pendingProtocol: String = "wireguard_udp"
@@ -134,12 +122,7 @@ class MainActivity : FlutterActivity() {
         connectWithConfig(protocol, config, result)
     }
 
-    private fun backend(): GoBackend {
-        sharedBackend?.let { return it }
-        return synchronized(BACKEND_LOCK) {
-            sharedBackend ?: GoBackend(applicationContext).also { sharedBackend = it }
-        }
-    }
+    private fun backend(): GoBackend = GreenVpnWireGuardRuntime.backend(applicationContext)
 
     private fun handleConnect(call: MethodCall, result: MethodChannel.Result) {
         if (pendingConnectResult != null) {
@@ -615,7 +598,9 @@ class MainActivity : FlutterActivity() {
                             "state" to state.name.lowercase(),
                             "rxBytes" to (stats?.totalRx() ?: 0L),
                             "txBytes" to (stats?.totalTx() ?: 0L),
-                            "version" to currentBackend.getVersion(),
+                            // The native version probe is not required for state reporting and
+                            // can abort inside wireguard-go on newer Android runtimes.
+                            "version" to "",
                             "runningTunnels" to runningNames,
                             "systemVpnActive" to isAnyVpnNetworkActive()
                         )
@@ -869,12 +854,7 @@ class MainActivity : FlutterActivity() {
                 null
             }
 
-            val version = try {
-                currentBackend?.getVersion().orEmpty()
-            } catch (e: Exception) {
-                statusErrors.add("version=${safeError(e)}")
-                ""
-            }
+            val version = ""
 
             runOnUiThread {
                 result.success(

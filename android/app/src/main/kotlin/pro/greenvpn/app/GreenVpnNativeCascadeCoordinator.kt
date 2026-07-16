@@ -79,8 +79,8 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
     )
 
     private val appContext = context.applicationContext
-    private val tunnel = GreenVpnCascadeTunnel("GreenVPN")
-    private var backend: GoBackend? = null
+    private val tunnel: Tunnel
+        get() = GreenVpnWireGuardRuntime.tunnel
 
     fun isProtocolConnected(protocol: String): Boolean = when (protocol.trim().lowercase()) {
         "dnstt" -> GreenVpnDnsttPreview.snapshot(appContext).connected
@@ -200,11 +200,7 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
         return GreenVpnNativeCascadeResult(false, error = lastError)
     }
 
-    private fun backend(): GoBackend {
-        val current = backend
-        if (current != null) return current
-        return GoBackend(appContext).also { backend = it }
-    }
+    private fun backend(): GoBackend = GreenVpnWireGuardRuntime.backend(appContext)
 
     private fun connectVpn(configText: String, protocol: String): Boolean {
         disconnectAll()

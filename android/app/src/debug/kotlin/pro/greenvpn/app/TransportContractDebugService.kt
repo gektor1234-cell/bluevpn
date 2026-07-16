@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.IBinder
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import com.wireguard.android.backend.Tunnel
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -66,6 +67,7 @@ class TransportContractDebugService : Service() {
                             .put("probeError", probe.error)
                             .put("success", true)
                     }
+                    "connect_candidate" -> connectCandidate(result, requireNotNull(intent))
                     "set_tile_cooldown" -> setTileCooldown(result, requireNotNull(intent))
                     "clear_tile_cooldown" -> {
                         getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE)
@@ -76,8 +78,8 @@ class TransportContractDebugService : Service() {
                         val protocol = intent?.getStringExtra("protocol").orEmpty()
                             .trim().lowercase()
                         val disconnected = when (protocol) {
-                            "amneziawg", "wireguard_udp" ->
-                                GreenVpnAwg2Preview.disconnect(this)
+                            "amneziawg" -> GreenVpnAwg2Preview.disconnect(this)
+                            "wireguard_udp" -> disconnectStandardTunnel()
                             "hysteria2" -> GreenVpnHysteria2Preview.disconnect(this)
                             "vless_reality" -> GreenVpnVlessRealityPreview.disconnect(this)
                             "naive_https" -> GreenVpnNaiveHttpsPreview.disconnect(this)
@@ -91,6 +93,7 @@ class TransportContractDebugService : Service() {
                     "disconnect_all" -> {
                         GreenVpnRuntimeFailoverService.disarm(this)
                         GreenVpnConnectionOperationGate.awaitIdle()
+                        disconnectStandardTunnel()
                         GreenVpnDnsttPreview.disconnect(this)
                         GreenVpnNaiveHttpsPreview.disconnect(this)
                         GreenVpnVlessRealityPreview.disconnect(this)
@@ -216,6 +219,102 @@ class TransportContractDebugService : Service() {
         )
         writeSecureString(this, ROUTE_COOLDOWN_KEY, document.toString())
         result.put("success", true).put("serverId", serverId).put("protocol", protocol)
+    }
+
+    private fun disconnectStandardTunnel(): Boolean {
+        val backend = GreenVpnWireGuardRuntime.backend(this)
+        return backend.setState(
+            GreenVpnWireGuardRuntime.tunnel,
+            Tunnel.State.DOWN,
+            null,
+        ) == Tunnel.State.DOWN
+    }
+
+    private fun connectCandidate(result: JSONObject, intent: Intent) {
+        val serverId = intent.getStringExtra("serverId").orEmpty().trim()
+        val expectedProtocol = CANDIDATES[serverId] ?: error("unsupported_candidate")
+        val session = JSONObject(readSecureString(this, SESSION_KEY))
+        val accessToken = session.optString("accessToken").trim()
+        val deviceId = readSecureString(this, DEVICE_ID_KEY).trim()
+        require(accessToken.isNotEmpty()) { "session_missing" }
+        require(deviceId.length >= 8) { "device_missing" }
+
+        val bases = listOf(BuildConfig.GREENVPN_API_BASE_URL) +
+            BuildConfig.GREENVPN_API_FALLBACK_BASE_URLS.split(',')
+        var response: JSONObject? = null
+        var lastError: Throwable? = null
+        for (rawBaseUrl in bases) {
+            val baseUrl = rawBaseUrl.trim().trimEnd('/')
+            if (baseUrl.isEmpty()) continue
+            try {
+                response = fetchConfig(baseUrl, accessToken, deviceId, serverId)
+                break
+            } catch (error: Throwable) {
+                lastError = error
+            }
+        }
+        val config = response ?: throw lastError ?: error("config_unavailable")
+        val protocol = config.optString("protocol").trim().lowercase()
+        val returnedServerId = config.optString("serverId").trim()
+        val configText = config.optString("configText")
+        require(protocol == expectedProtocol) { "protocol_mismatch" }
+        require(returnedServerId == serverId) { "server_mismatch" }
+        require(configText.length in 16..1_048_576) { "config_missing" }
+
+        GreenVpnDnsttPreview.disconnect(this)
+        GreenVpnNaiveHttpsPreview.disconnect(this)
+        GreenVpnVlessRealityPreview.disconnect(this)
+        GreenVpnHysteria2Preview.disconnect(this)
+        GreenVpnAwg2Preview.disconnect(this)
+        val connected = when (protocol) {
+            "amneziawg" -> GreenVpnAwg2Preview.connect(
+                this,
+                GreenVpnAwg2Preview.parseConfig(configText),
+            )
+            else -> error("unsupported_debug_connect_protocol")
+        }
+        check(connected) { "engine_connect_failed" }
+        check(GreenVpnRuntimeFailoverService.arm(this, returnedServerId, protocol)) {
+            "runtime_failover_arm_failed"
+        }
+        writeTransportSnapshot(result)
+        result.put("serverId", serverId).put("protocol", protocol)
+    }
+
+    private fun fetchConfig(
+        baseUrl: String,
+        accessToken: String,
+        deviceId: String,
+        serverId: String,
+    ): JSONObject {
+        val payload = JSONObject()
+            .put("deviceUid", deviceId)
+            .put("mode", "full")
+            .put("serverId", serverId)
+            .put("releaseChannel", "paid-beta")
+            .put("clientMarker", "green-vpn-paid-beta-v1")
+            .put("supportedProtocols", JSONArray(SUPPORTED_PROTOCOLS))
+        val connection = (URL("$baseUrl/api/v1/client/config").openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 5000
+            readTimeout = 15000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("Authorization", "Bearer $accessToken")
+        }
+        return try {
+            connection.outputStream.use {
+                it.write(payload.toString().toByteArray(StandardCharsets.UTF_8))
+            }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val body = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
+            check(code in 200..299) { "config_http_$code" }
+            JSONObject(body)
+        } finally {
+            connection.disconnect()
+        }
     }
 
     private fun probeConfig(

@@ -48,7 +48,6 @@ try {
     $jniTarget = Join-Path $moduleRoot 'src\main\jniLibs'
     New-Item -ItemType Directory -Force -Path $javaTarget, $jniTarget | Out-Null
     Copy-Item -LiteralPath (Join-Path $sourceRoot 'tunnel\src\main\java\org') -Destination $javaTarget -Recurse
-    Copy-Item -LiteralPath (Join-Path $sourceRoot 'tunnel\src\main\AndroidManifest.xml') -Destination (Join-Path $moduleRoot 'src\main\AndroidManifest.xml')
     $goBackendPath = Join-Path $javaTarget 'org\amnezia\awg\backend\GoBackend.java'
     $goBackendSource = Get-Content -Raw -LiteralPath $goBackendPath
     $goBackendSource = $goBackendSource.Replace('loadSharedLibrary(context, "wg-go")', 'loadSharedLibrary(context, "awg2-go")')
@@ -60,6 +59,31 @@ try {
         $goBackendSource,
         [Text.UTF8Encoding]::new($false)
     )
+
+    $serviceTemplate = Join-Path $repo 'android\vendor\awg2\GreenVpnAwg2VpnService.java'
+    if (-not (Test-Path -LiteralPath $serviceTemplate -PathType Leaf)) {
+        throw "Missing isolated AWG2 service template: $serviceTemplate"
+    }
+    $serviceTarget = Join-Path $javaTarget 'pro\greenvpn\awg2'
+    New-Item -ItemType Directory -Force -Path $serviceTarget | Out-Null
+    Copy-Item -LiteralPath $serviceTemplate -Destination (Join-Path $serviceTarget 'GreenVpnAwg2VpnService.java')
+
+    @'
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <service
+            android:name="pro.greenvpn.awg2.GreenVpnAwg2VpnService"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:exported="false"
+            android:process=":greenvpn_awg2"
+            android:stopWithTask="false">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>
+'@ | Set-Content -LiteralPath (Join-Path $moduleRoot 'src\main\AndroidManifest.xml') -Encoding UTF8
 
     foreach ($abiDir in Get-ChildItem -LiteralPath (Join-Path $extractRoot 'lib') -Directory) {
         $sourceLibrary = Join-Path $abiDir.FullName 'libwg-go.so'
@@ -100,6 +124,7 @@ sourceCommit=$SourceCommit
 officialApkSha256=$apkSha256
 packagedNativeLibrary=libawg2-go.so (renamed from the official libwg-go.so)
 excludedNativeLibraries=libwg.so,libwg-quick.so
+engineProcess=:greenvpn_awg2
 "@ | Set-Content -LiteralPath (Join-Path $moduleRoot 'SOURCE-MANIFEST.txt') -Encoding ASCII
 
     Write-Host "Prepared AWG2 Android preview module: $moduleRoot"

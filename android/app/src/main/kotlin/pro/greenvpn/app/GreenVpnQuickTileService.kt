@@ -80,8 +80,8 @@ class GreenVpnQuickTileService : TileService() {
     )
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var backend: GoBackend? = null
-    private val tunnel = GreenVpnTileTunnel("GreenVPN")
+    private val tunnel: Tunnel
+        get() = GreenVpnWireGuardRuntime.tunnel
 
     override fun onStartListening() {
         super.onStartListening()
@@ -276,13 +276,7 @@ class GreenVpnQuickTileService : TileService() {
         }
     }
 
-    private fun backend(): GoBackend {
-        val current = backend
-        if (current != null) return current
-        val created = GoBackend(applicationContext)
-        backend = created
-        return created
-    }
+    private fun backend(): GoBackend = GreenVpnWireGuardRuntime.backend(applicationContext)
 
     private fun isVpnConnected(): Boolean {
         if (GreenVpnDnsttPreview.snapshot(applicationContext).connected) return true

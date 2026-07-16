@@ -176,7 +176,9 @@ flutter {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
-    implementation("com.wireguard.android:tunnel:1.0.20260102")
+    // Official 1.0.20260102 with diagnostic wgVersion() calls disabled. The
+    // native version probe can abort on affected Android 16 runtimes.
+    implementation(files("libs/wireguard-tunnel-1.0.20260102-greenvpn.aar"))
     testImplementation("junit:junit:4.13.2")
     if (greenVpnAwg2PreviewEnabled) {
         implementation(project(":awg_tunnel_preview"))

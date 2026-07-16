@@ -21402,18 +21402,17 @@ def provision_wireguard_peer_for_selected_server(
         apply_peer_live(public_key=public_key, psk=psk, ip=ip)
         if old_public_key and old_public_key != public_key:
             best_effort_remove_peer_live(old_public_key)
-        if previous_server_id and not same_wireguard_target_server_id(previous_server_id, server_id):
+        if (
+            previous_server_id
+            and not same_wireguard_target_server_id(previous_server_id, server_id)
+            and old_public_key
+            and old_public_key != public_key
+        ):
             best_effort_remove_peer_from_server(
                 previous_server_id,
                 device_uid=device_uid,
-                public_key=public_key,
+                public_key=old_public_key,
             )
-            if old_public_key and old_public_key != public_key:
-                best_effort_remove_peer_from_server(
-                    previous_server_id,
-                    device_uid=device_uid,
-                    public_key=old_public_key,
-                )
         return {
             "serverPublicKey": get_server_public_key(),
             "profile": "builtin_wg0",
@@ -21438,18 +21437,17 @@ def provision_wireguard_peer_for_selected_server(
         apply_peer_live(public_key=public_key, psk=psk, ip=ip)
         if old_public_key and old_public_key != public_key:
             best_effort_remove_peer_live(old_public_key)
-        if previous_server_id and not same_wireguard_target_server_id(previous_server_id, server_id):
+        if (
+            previous_server_id
+            and not same_wireguard_target_server_id(previous_server_id, server_id)
+            and old_public_key
+            and old_public_key != public_key
+        ):
             best_effort_remove_peer_from_server(
                 previous_server_id,
                 device_uid=device_uid,
-                public_key=public_key,
+                public_key=old_public_key,
             )
-            if old_public_key and old_public_key != public_key:
-                best_effort_remove_peer_from_server(
-                    previous_server_id,
-                    device_uid=device_uid,
-                    public_key=old_public_key,
-                )
         return {
             "serverPublicKey": get_server_public_key(),
             "profile": profile,
@@ -21469,18 +21467,17 @@ def provision_wireguard_peer_for_selected_server(
         )
         if old_public_key and old_public_key != public_key:
             best_effort_remove_remote_peer_live(remote_config, device_uid, old_public_key)
-        if previous_server_id and not same_wireguard_target_server_id(previous_server_id, server_id):
+        if (
+            previous_server_id
+            and not same_wireguard_target_server_id(previous_server_id, server_id)
+            and old_public_key
+            and old_public_key != public_key
+        ):
             best_effort_remove_peer_from_server(
                 previous_server_id,
                 device_uid=device_uid,
-                public_key=public_key,
+                public_key=old_public_key,
             )
-            if old_public_key and old_public_key != public_key:
-                best_effort_remove_peer_from_server(
-                    previous_server_id,
-                    device_uid=device_uid,
-                    public_key=old_public_key,
-                )
         return {
             "serverPublicKey": remote_config["wgPublicKey"],
             "profile": profile,

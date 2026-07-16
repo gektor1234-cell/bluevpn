@@ -795,6 +795,105 @@ class PaidBetaPolicyTests(unittest.TestCase):
         local_remove.assert_called_once_with("legacy-current-public-key")
         local_config_remove.assert_called_once_with("legacy-current-device")
 
+    def test_fallback_provision_keeps_current_key_on_previous_server(self) -> None:
+        selected_server = {
+            "id": "fallback-node",
+            "endpoint": {"host": "203.0.113.42", "port": 443},
+        }
+        remote_config = {
+            "serverId": "fallback-node",
+            "wgPublicKey": "fallback-server-public-key",
+            "clientMtu": 1280,
+            "interface": "wg0",
+            "wgConfig": "/etc/wireguard/wg0.conf",
+        }
+        with (
+            patch.object(
+                main,
+                "get_managed_server_catalog_row_by_server_id",
+                return_value=object(),
+            ),
+            patch.object(
+                main,
+                "server_client_config_readiness",
+                return_value={"profile": "remote_ssh_wg0", "ready": True},
+            ),
+            patch.object(
+                main,
+                "load_remote_vpn_node_config",
+                return_value=remote_config,
+            ),
+            patch.object(main, "apply_remote_peer_live") as apply_remote,
+            patch.object(main, "best_effort_remove_remote_peer_live") as remove_selected,
+            patch.object(main, "best_effort_remove_peer_from_server") as remove_previous,
+        ):
+            result = main.provision_wireguard_peer_for_selected_server(
+                selected_server,
+                device_uid="fallback-device",
+                public_key="current-client-public-key",
+                psk="current-client-psk",
+                ip="10.20.0.8",
+                previous_server_id="current_wg0",
+            )
+
+        self.assertEqual(result["profile"], "remote_ssh_wg0")
+        apply_remote.assert_called_once()
+        remove_selected.assert_not_called()
+        remove_previous.assert_not_called()
+
+    def test_key_rotation_removes_only_old_key_from_previous_server(self) -> None:
+        selected_server = {
+            "id": "fallback-node",
+            "endpoint": {"host": "203.0.113.42", "port": 443},
+        }
+        remote_config = {
+            "serverId": "fallback-node",
+            "wgPublicKey": "fallback-server-public-key",
+            "clientMtu": 1280,
+            "interface": "wg0",
+            "wgConfig": "/etc/wireguard/wg0.conf",
+        }
+        with (
+            patch.object(
+                main,
+                "get_managed_server_catalog_row_by_server_id",
+                return_value=object(),
+            ),
+            patch.object(
+                main,
+                "server_client_config_readiness",
+                return_value={"profile": "remote_ssh_wg0", "ready": True},
+            ),
+            patch.object(
+                main,
+                "load_remote_vpn_node_config",
+                return_value=remote_config,
+            ),
+            patch.object(main, "apply_remote_peer_live"),
+            patch.object(main, "best_effort_remove_remote_peer_live") as remove_selected,
+            patch.object(main, "best_effort_remove_peer_from_server") as remove_previous,
+        ):
+            main.provision_wireguard_peer_for_selected_server(
+                selected_server,
+                device_uid="fallback-device",
+                public_key="new-client-public-key",
+                psk="new-client-psk",
+                ip="10.20.0.8",
+                old_public_key="old-client-public-key",
+                previous_server_id="current_wg0",
+            )
+
+        remove_selected.assert_called_once_with(
+            remote_config,
+            "fallback-device",
+            "old-client-public-key",
+        )
+        remove_previous.assert_called_once_with(
+            "current_wg0",
+            device_uid="fallback-device",
+            public_key="old-client-public-key",
+        )
+
     def public_product_payload(self, *, plan_code: str = "green_30d", **overrides):
         values = {
             "trafficPack": "custom",
