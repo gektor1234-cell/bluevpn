@@ -50,7 +50,7 @@ until public promotion.
 | Windows ZIP | `0.3.0+1603`, four protected fallback engines plus stable tunnel, unsigned |
 | Windows ZIP SHA-256 | `04D2AB4AD84F9B63641590BDFEE2600C702E79DEC29224B1B4E84A9B17F1FF37` |
 | YooKassa | real 249 RUB payment, saved-method verification and unlink smoke complete |
-| London | renewal paid; provider restore is pending after an overdue `initializing` state; England stays absent until smoke tests pass |
+| London | existing VPS `2584554` restored in place; production and paid-beta catalogs publish one logical `Англия` location |
 
 Production and test APKs are published on both Russian control planes. The
 customer-facing stable and paid-beta update manifests force 0.3.2 and all four
@@ -73,10 +73,20 @@ public APK aliases are ready.
 - Public-product auto-renew UI has passing Flutter tests. Physical Android 9
   QA confirms one Settings entry, a dedicated card/auto-renew page, no cancel
   action in Tariff, and no layout overlap.
-- The final Android picker was physically rechecked on Samsung Android 9:
-  `Авто` and `Нидерланды` were the only rows, both displayed live numeric
-  latency, selecting a location persisted it, and the phone was restored to
-  `Авто` with no active VPN agent.
+- The final Android picker was physically rechecked on Samsung Android 9 in
+  production and test: `Авто`, `Нидерланды` and `Англия` are the only logical
+  rows and every row displays numeric latency. Two physical Netherlands nodes
+  remain grouped behind one customer location.
+- The restored London VPS passed isolated WireGuard data-plane smoke from both
+  Russian control planes: handshake, positive RX/TX, matching London egress and
+  3/3 production API, Google and YouTube checks. Temporary peers, namespaces,
+  firewall rules, forwarding changes and key files were all removed.
+- Production Android connected to `Англия`, exposed a `CONNECTED` and
+  `VALIDATED` VPN network and played a YouTube video to completion. Removing
+  the Green VPN activity stack left the foreground service and tunnel running;
+  reopening restored the live state. Test Android independently connected to
+  the same location through the paid-beta catalog. Both packages were returned
+  to `Автовыбор` with no active VPN.
 - Stable catalog exposes only stable transports. Five anti-blocking previews are
   hidden and isolated to NL2.
 - Production and test 0.3.2 were installed side-by-side on Samsung Android 9.
@@ -90,19 +100,25 @@ public APK aliases are ready.
 ## Remaining Launch Gates
 
 1. The Windows installer requires Authenticode signing before mandatory rollout.
-2. RUVDS must restore the already-paid London VPS; it then needs preserved-state
-   recovery, data-plane validation and publication as the single `Англия` row.
 
-Android is published. No confirmed Android or RU control-plane defect remains;
-the outstanding gates are Windows signing and the provider-side London restore.
+Android and the server-side location pool are published. No confirmed Android,
+London or Russian control-plane defect remains.
 
 ## Rollback
 
 - Android 0.3.2 deployment backups:
   - Timeweb: `/root/greenvpn-apk-release-backups/20260716T084402Z-timeweb-0.3.2-2026071607`;
   - RUVDS Moscow: `/root/greenvpn-apk-release-backups/20260716T084727Z-ruvds-0.3.2-2026071607`.
-- Each directory contains the previous production/test APK aliases, previous
-  environment files and APK checksums with root-only permissions.
+  They retain the previous APK aliases and environment files with root-only
+  permissions.
+- London preserved-state recovery backup:
+  `/root/greenvpn-london-recovery-backups/20260716T100956Z`.
+- Production catalog DB backups before London publication:
+  - Timeweb: `/root/greenvpn-london-catalog-backups/20260716T103621Z-timeweb`;
+  - RUVDS Moscow: `/root/greenvpn-london-catalog-backups/20260716T103621Z-ruvds-moscow`.
+- Paid-beta catalog DB backups before London publication:
+  - Timeweb: `/root/greenvpn-london-catalog-backups/20260716T104858Z-timeweb-paid-beta`;
+  - RUVDS Moscow: `/root/greenvpn-london-catalog-backups/20260716T104858Z-ruvds-moscow-paid-beta`.
 - Current final-candidate source commit:
   `ceec7aad27ab0399d3ec93f096bbae83c5187ee6`.
 - Current final-candidate tag:

@@ -30,6 +30,9 @@ This is the current operational entry point. Read it together with
 
 - Root: `C:\Users\gekto\projects\bluevpn`.
 - Active branch: `green-vpn-transport-canary-20260711`.
+- Android 0.3.2 release commit:
+  `107140700e9c95189da1442a05ca82430085d261`.
+- Android 0.3.2 release tag: `greenvpn-android-0.3.2-2026071607`.
 - Current final-candidate source checkpoint:
   `ceec7aad27ab0399d3ec93f096bbae83c5187ee6`.
 - Current final-candidate tag:
@@ -70,15 +73,16 @@ This is the current operational entry point. Read it together with
   The Green VPN executables are still unsigned, so this ZIP is an internal
   candidate and must not be a mandatory public update.
 - Android UI was checked on physical Android 9 and Android 16/API 36. On the
-  physical phone the picker contained exactly one `Авто` row and one
-  `Нидерланды` row; both always carried a numeric latency. The measured values
-  changed from `16 мс` to `143 мс` on refresh, which also proves that the label
-  is live rather than hard-coded. The screenshot is
+  physical phone the production and test pickers contain exactly one `Авто`,
+  one `Нидерланды` and one `Англия` row; all carry numeric latency while the
+  physical routes remain hidden. The earlier pre-London screenshot is
   `C:\BlueVPN_Builds\public_product_final_candidate_20260716\evidence\android9-server-picker.png`.
-  Production and test 0.3.2 then completed the full physical data-plane flow:
-  VPN network `CONNECTED` and `VALIDATED`, YouTube loaded, the tunnel survived
-  swiping the app task from recent apps, reopening restored the live state and
-  disconnect removed `tun0`.
+  Production 0.3.2 then connected specifically to `Англия`, reached Android
+  `CONNECTED` and `VALIDATED`, and played YouTube to completion. Removing its
+  activity stack left the foreground VPN service and `tun0` active; reopening
+  restored the live England state. Test 0.3.2 independently connected to the
+  same location through the paid-beta catalog. Both packages disconnected
+  cleanly and were returned to `Автовыбор`.
 - Auto-renew management now has one compact entry in Settings and a dedicated
   page for card-binding status and cancellation. The tariff page keeps only the
   purchase-time auto-renew switch and has no active-subscription cancellation
@@ -104,18 +108,32 @@ This is the current operational entry point. Read it together with
 | Primary RU control plane | Timeweb Moscow `72.56.32.197` | production API, paid candidate API, site, SMTP, billing writer, DB sync |
 | Fallback RU control plane | RUVDS Moscow `176.113.81.35` | production/paid failover, site mirror, SMTP, DB sync, billing read-only |
 | Stable VPN NL1 | `37.220.85.211` | stable UDP tunnel active; obsolete Certbot/API TLS retired |
-| Stable VPN London | `88.218.250.86` | API still reports ID `2584554` as `initializing 100%`; SSH unavailable; tickets `2026071628000081` and `2026071628000134`; intentionally unpublished |
+| Stable VPN London | `88.218.250.86` | existing VPS `2584554` active; preserved disk/config restored; production and paid-beta publish one logical `Англия` |
 | Stable VPN + preview NL2 | `5.129.216.42` | stable UDP tunnel plus five isolated hidden preview transports |
 | Excluded host | `5.129.237.163` | not managed by this project; do not modify |
 
-At the last check, the RUVDS API still returned London ID `2584554` with
-`status=initializing`, `create_progress=100`, no network object, and SSH port 22
-closed. Support first stated that the server did not exist. The same ticket was
-escalated with the contradictory API evidence and a request to inspect the
-backend, hypervisor, storage and provider backups. No new reply has arrived.
-Do not create a replacement automatically. If RUVDS confirms that the disk is
-physically gone and no backup exists, obtain the written reason and refund of
-the 1042 RUB charge before the owner chooses a replacement path.
+RUVDS support restored the existing London VM in place and confirmed it in
+ticket `2026071628000134` on 2026-07-16 at 12:28 MSK. The provider API returned
+`active`, SSH reopened and the original disk, IP and configuration were
+preserved. No replacement VPS or second payment was created. At 14:09 MSK the
+same ticket received our verified completion reply and request to close it.
+
+Before repair, the root-only backup
+`/root/greenvpn-london-recovery-backups/20260716T100956Z` captured WireGuard,
+BlueVPN, nginx, routing/WARP scripts, systemd and firewall state and passed
+archive/SHA-256 verification. The only confirmed missing runtime object was
+`greenvpn-london-app-subnet-restore.service`; it was restored from the tracked
+unit, enabled and proven idempotent. `wg0`, `wgcf`, nginx and backend are active,
+both `10.10.0.0/24` and `10.66.66.0/24` routes/NAT are present, and there are no
+failed units. The existing capacity reporter passed a manual apply and its
+one-minute timer is enabled again.
+
+Both Russian control planes passed remote provisioning, temporary peer and
+client-config smoke against London in production and paid-beta. A separate
+isolated network-namespace smoke from each control plane proved real handshake,
+positive RX/TX, matching London egress and 3/3 API, Google and YouTube checks,
+with complete cleanup. Publication gates were green on both databases before
+the node was opened as the single logical location `Англия`.
 
 The former Timeweb KZ VPS `8360589` / `94.198.221.206` was proven inactive and
 retired. Provider recovery image
@@ -135,6 +153,8 @@ material. KZ is not in DNS, catalogs or assignment state.
   `0B2FEAA2232582207CFB998902B04107067C8DDE1C4243A003FF979C2F2B5F15`.
 - Public catalog contains only stable client-compatible endpoints. Server/provider
   implementation details are not shown in the client.
+- Both production control planes publish the same three physical stable routes;
+  Android groups them into `Нидерланды` and `Англия` plus `Авто`.
 - Login, bootstrap, catalog, downloads, legal routes and update manifests are
   available through primary and fallback Russian ingress.
 
@@ -189,6 +209,9 @@ material. KZ is not in DNS, catalogs or assignment state.
   controlled service stop/clock step corrected the former +3 hour skew. DB
   backup `/root/greenvpn-clock-fix-backups/20260713T143111Z` passed quick-check;
   tunnel, WARP, backend and nginx were restored and verified; disk is 46%.
+  The 2026-07-16 provider recovery preserved that state. The missing app-subnet
+  restore unit was reinstalled, the capacity timer was re-enabled, and complete
+  control-plane plus physical Android smoke passed before publication.
 - NL1: obsolete Certbot/API TLS retired; missing WireGuard `[Interface]` state
   was repaired from guarded data with the expected public-key fingerprint. A
   stale May one-time admin credential file was removed by the guarded ACL tool;
@@ -236,6 +259,13 @@ material. KZ is not in DNS, catalogs or assignment state.
   - RUVDS Moscow: `/root/greenvpn-apk-release-backups/20260716T084727Z-ruvds-0.3.2-2026071607`.
   They retain the previous APK aliases and environment files with root-only
   permissions.
+- London runtime backup before the 2026-07-16 repair:
+  `/root/greenvpn-london-recovery-backups/20260716T100956Z`.
+- London catalog online DB backups, all `PRAGMA quick_check=ok`:
+  - production Timeweb: `/root/greenvpn-london-catalog-backups/20260716T103621Z-timeweb`;
+  - production RUVDS: `/root/greenvpn-london-catalog-backups/20260716T103621Z-ruvds-moscow`;
+  - paid-beta Timeweb: `/root/greenvpn-london-catalog-backups/20260716T104858Z-timeweb-paid-beta`;
+  - paid-beta RUVDS: `/root/greenvpn-london-catalog-backups/20260716T104858Z-ruvds-moscow-paid-beta`.
 - Verified encrypted final-candidate checkpoint:
   `C:\Users\gekto\GreenVPN_Checkpoints\full_project_final_candidate_20260716_010736`.
 - Final-candidate `server_state.7z` SHA-256:
@@ -274,11 +304,9 @@ material. KZ is not in DNS, catalogs or assignment state.
 
 1. Obtain an Authenticode code-signing certificate and sign the Windows
    installer before mandatory public distribution.
-2. RUVDS must finish unlocking the already-paid London VPS. Then preserve its
-   disk/configs, run the documented recovery and data-plane smoke, and publish
-   it server-side as the single logical location `Англия`.
-3. Android is complete and already mandatory. After the remaining gates, sign
-   and publish the Windows installer and run its final owner-visible smoke.
+2. Android, London and the Russian production/test server contours are complete.
+   After code signing, publish the Windows installer and run its final
+   owner-visible smoke.
 
 Do not perform a real payment, enter SMS/bank codes or accept legal terms on
 behalf of the owner.

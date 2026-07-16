@@ -24,14 +24,17 @@
 
 ## Текущее безопасное состояние
 
-- Managed catalog entry создана и проверена.
+- Существующий VPS восстановлен провайдером 2026-07-16 без переустановки ОС,
+  пересоздания диска или смены IP.
+- Managed catalog entry создана, восстановлена и проверена.
 - `status=healthy`.
 - `clientConfigProfile=remote_ssh_wg0`.
 - `clientConfigReady=true`.
-- `isActive=false`.
-- `isPublic=false`.
-- Узел не попадает в публичный клиентский catalog.
-- Основной сайт и публичная выдача не менялись.
+- `isActive=true`.
+- `isPublic=true`.
+- Production и paid-beta каталоги обоих российских control-plane публикуют
+  узел как одну логическую локацию `Англия` без провайдера, номера узла и
+  протокола в пользовательском интерфейсе.
 
 ## Проверки
 
@@ -45,13 +48,26 @@
 - Protected admin `client-config-smoke`: форма клиентского конфига собрана, временный peer удалён.
 - External service probe видит `ruvds-2584554-ld8` как `healthy`.
 - Publication gate dry-run: `canPublish=true`.
-- Публичный `/api/v1/catalog/servers` не содержит `ruvds-2584554-ld8`.
+- Публичные production и paid-beta каталоги содержат
+  `ruvds-2584554-ld8`, а Android группирует его по стране `GB`.
+- Изолированный data-plane smoke с Timeweb и RUVDS Moscow: handshake, RX/TX,
+  London egress, production API, Google и YouTube по `3/3`; cleanup полный.
+- Physical Android 9 production/test: `Англия` видна одной строкой, tunnel
+  `CONNECTED+VALIDATED`; production YouTube проигран до конца; foreground VPN
+  пережил удаление activity stack и восстановил состояние после relaunch.
+- `greenvpn-london-app-subnet-restore.service` восстановлен и активен.
+- `greenvpn-vpn-capacity-report.timer` снова enabled/active, ручной apply
+  завершился `Result=success`.
 
 ## Важно
 
 - WireGuard private key не выводился и не записывался в repo.
 - Admin/API tokens не выводились и не записывались в repo.
 - SSH private keys не выводились и не записывались в repo.
-- Публикацию узла клиентам делать только отдельным явным решением владельца.
-- До публикации можно использовать ноду как hidden canary/test endpoint через admin smoke.
-
+- Rollback runtime:
+  `/root/greenvpn-london-recovery-backups/20260716T100956Z`.
+- Перед публикацией созданы отдельные root-only online-backup production и
+  paid-beta SQLite на обоих control-plane; точные пути записаны в
+  `CURRENT_HANDOFF.md`.
+- При деградации сначала выполнить штатный `unpublish`, затем разбирать узел по
+  сохранённому backup; APK для server-side скрытия/возврата не обновляется.
