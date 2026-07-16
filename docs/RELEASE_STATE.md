@@ -40,13 +40,13 @@ until public promotion.
 | --- | --- |
 | Customer location model | one row per country; `Авто / Нидерланды / Англия`; physical routes hidden |
 | Latency model | every picker row, including `Авто`, shows `N мс`; missing measurement becomes `0 мс` |
-| Source checkpoint | `8bf3e37fd39a2062e7f514348475da26c3850c8f`, clean reproducible build |
-| Android | `0.3.0+2026071601`, package `pro.greenvpn.app.finalcandidate`, debug signed |
-| Android SHA-256 | `59123FF5205BADD125C514302F07949952527ECEE507392543F90E264B5C3B21` |
-| Windows ZIP | `0.3.0+1601`, four protected fallback engines plus stable tunnel, unsigned |
-| Windows ZIP SHA-256 | `5161EC83165FEEA5C242A4D71CE1427BE4913FC8FA08ED4344C13801E052DF1D` |
+| Source checkpoint | `255b778`, clean reproducible build |
+| Android | `0.3.0+2026071602`, package `pro.greenvpn.app.finalcandidate`, debug signed |
+| Android SHA-256 | `AA3155DCF14A3B3E6B619F53C415D7C8A8CAF5E8439A469DCBB3FFD485CCA58A` |
+| Windows ZIP | `0.3.0+1602`, four protected fallback engines plus stable tunnel, unsigned |
+| Windows ZIP SHA-256 | `5F46D20FB622A53E85E94D009823B70DD6C40E35C0DE04AE43178B6E07E9635D` |
 | YooKassa | recurring card binding approved; one real owner payment/unlink smoke pending |
-| London | provider state `notpaid`; England deliberately absent from the customer picker |
+| London | renewal paid; provider restore is pending after an overdue `initializing` state; England stays absent until smoke tests pass |
 
 This checkpoint is a verified release candidate, not a published production
 release. The public site and forced-update manifests still point to the older

@@ -49,17 +49,17 @@ This is the current operational entry point. Read it together with
   Physical nodes and transports stay internal. Every picker row, including
   `Авто`, has a numeric latency label; an unavailable measurement is displayed
   as `0 мс`.
-- Android candidate `0.3.0+2026071601`:
-  `C:\BlueVPN_Builds\public_product_final_candidate_20260716\GreenVPN_Android_0.3.0_final_candidate_2026071601_debug.apk`.
+- Android candidate `0.3.0+2026071602`:
+  `C:\BlueVPN_Builds\public_product_final_candidate_20260716_r2\GreenVPN_Android_0.3.0_final_candidate_2026071602_debug.apk`.
   SHA-256:
-  `59123FF5205BADD125C514302F07949952527ECEE507392543F90E264B5C3B21`.
+  `AA3155DCF14A3B3E6B619F53C415D7C8A8CAF5E8439A469DCBB3FFD485CCA58A`.
   It is a side-by-side debug-signed candidate package
   `pro.greenvpn.app.finalcandidate`, not the production APK to publish.
 - Windows cascade candidate:
-  `C:\BlueVPN_Builds\public_product_final_candidate_20260716\windows\GreenVPN_Windows_0.3.0_final_candidate.zip`.
+  `C:\BlueVPN_Builds\public_product_final_candidate_20260716_r2\windows\GreenVPN_Windows_0.3.0_final_candidate.zip`.
   SHA-256:
-  `5161EC83165FEEA5C242A4D71CE1427BE4913FC8FA08ED4344C13801E052DF1D`.
-  Its product/file version is `0.3.0+1601`; artifact verification passes.
+  `5F46D20FB622A53E85E94D009823B70DD6C40E35C0DE04AE43178B6E07E9635D`.
+  Its product/file version is `0.3.0+1602`; artifact verification passes.
   The Green VPN executables are still unsigned, so this ZIP is an internal
   candidate and must not be a mandatory public update.
 - Android UI was checked on physical Android 9 and Android 16/API 36. On the
@@ -72,9 +72,9 @@ This is the current operational entry point. Read it together with
   VPN agent remained. Full data-plane transport proofs remain the physical
   Android 9 evidence described in the transport diagnostic.
 - Reproducible build manifest:
-  `C:\BlueVPN_Builds\public_product_final_candidate_20260716\final-candidate-manifest.json`.
+  `C:\BlueVPN_Builds\public_product_final_candidate_20260716_r2\final-candidate-manifest.json`.
   It records the clean source commit above and both artifact hashes.
-- `flutter analyze`, 27 Flutter tests, 84 backend tests, Android native unit
+- `flutter analyze`, 27 Flutter tests, 87 backend tests, Android native unit
   tasks, both APK verifiers, public-surface probes, dependency audit, secret
   scan, standard release gate and strict payment gate are green.
 
