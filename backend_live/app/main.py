@@ -301,6 +301,19 @@ PUBLIC_PRODUCT_ENABLED = (
     os.getenv("GREENVPN_PUBLIC_PRODUCT_ENABLED", "").strip().lower()
     in {"1", "true", "yes", "on"}
 )
+PUBLIC_PRODUCT_CLIENT_MARKER = (
+    os.getenv(
+        "GREENVPN_PUBLIC_PRODUCT_CLIENT_MARKER",
+        "green-vpn-public-product-v1",
+    )
+    .strip()
+    .lower()
+)
+PUBLIC_PRODUCT_RELEASE_CHANNEL = (
+    os.getenv("GREENVPN_PUBLIC_PRODUCT_RELEASE_CHANNEL", "public-product")
+    .strip()
+    .lower()
+)
 PUBLIC_PRODUCT_BILLING_PRIMARY = (
     os.getenv("GREENVPN_PUBLIC_PRODUCT_BILLING_PRIMARY", "1").strip().lower()
     in {"1", "true", "yes", "on"}
@@ -4474,6 +4487,22 @@ def paid_beta_request_allowed(
         and PAID_BETA_RELEASE_CHANNEL
         and hmac.compare_digest(marker, PAID_BETA_CLIENT_MARKER)
         and hmac.compare_digest(channel, PAID_BETA_RELEASE_CHANNEL)
+    )
+
+
+def public_product_request_allowed(
+    client_marker: Optional[str],
+    release_channel: Optional[str],
+) -> bool:
+    if not PUBLIC_PRODUCT_ENABLED:
+        return False
+    marker = str(client_marker or "").strip().lower()
+    channel = str(release_channel or "").strip().lower()
+    return bool(
+        PUBLIC_PRODUCT_CLIENT_MARKER
+        and PUBLIC_PRODUCT_RELEASE_CHANNEL
+        and hmac.compare_digest(marker, PUBLIC_PRODUCT_CLIENT_MARKER)
+        and hmac.compare_digest(channel, PUBLIC_PRODUCT_RELEASE_CHANNEL)
     )
 
 
@@ -18584,6 +18613,10 @@ def create_billing_order_for_user(user_id: int, payload: TariffSelectionIn) -> d
         payload.clientMarker,
         payload.releaseChannel,
     )
+    public_product_client = public_product_request_allowed(
+        payload.clientMarker,
+        payload.releaseChannel,
+    )
     public_product_request = PUBLIC_PRODUCT_ENABLED and not beta_request
     beta_user = user_is_paid_beta_cohort(user_access)
     if beta_request and not beta_user:
@@ -18594,7 +18627,7 @@ def create_billing_order_for_user(user_id: int, payload: TariffSelectionIn) -> d
                 "message": "Для оплаты beta нужен персональный инвайт.",
             },
         )
-    if beta_user and not beta_request:
+    if beta_user and not beta_request and not public_product_client:
         raise HTTPException(
             status_code=409,
             detail={

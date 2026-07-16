@@ -81,6 +81,7 @@ String greenVpnPublicErrorMessage({
   String fallback = 'Не удалось выполнить действие. Повторите попытку.',
 }) {
   String? responseMessage;
+  String? responseCode;
   final body = responseBody?.trim() ?? '';
   if (body.isNotEmpty) {
     try {
@@ -88,6 +89,7 @@ String greenVpnPublicErrorMessage({
       if (decoded is Map) {
         final detail = decoded['detail'];
         if (detail is Map) {
+          responseCode = (detail['code'] ?? '').toString().trim();
           responseMessage = (detail['message'] ?? '').toString().trim();
         } else if (detail is String) {
           responseMessage = detail.trim();
@@ -95,6 +97,10 @@ String greenVpnPublicErrorMessage({
         responseMessage ??= (decoded['message'] ?? '').toString().trim();
       }
     } catch (_) {}
+  }
+
+  if (responseCode == 'paid_beta_client_required') {
+    return 'Эта версия приложения устарела. Установите последнее обновление и повторите оплату.';
   }
 
   if (statusCode == 401) return 'Сессия истекла. Войдите снова.';

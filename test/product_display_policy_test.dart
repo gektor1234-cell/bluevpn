@@ -81,6 +81,15 @@ void main() {
     );
     expect(
       greenVpnPublicErrorMessage(
+        rawError: 'Ошибка сервера (409)',
+        responseBody:
+            '{"detail":{"code":"paid_beta_client_required","message":"Открой оплату в beta-версии Green VPN."}}',
+        statusCode: 409,
+      ),
+      'Эта версия приложения устарела. Установите последнее обновление и повторите оплату.',
+    );
+    expect(
+      greenVpnPublicErrorMessage(
         rawError:
             'SocketException: failed host lookup, uri = https://api.greenvpn.pro/api/v1/test',
       ),

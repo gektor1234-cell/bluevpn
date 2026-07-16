@@ -20,8 +20,8 @@ Stable remains the rollback baseline until the candidate launch gates pass.
 
 | Component | Version/state |
 | --- | --- |
-| Primary/fallback backend | `0.9.116-active-active.3` |
-| Server release | `paid-beta-backend-active-active-20260713-r22` |
+| Primary/fallback backend | `0.9.117-public-client.1` |
+| Server release | `paid-beta-backend-public-client-20260716-r23` |
 | Android | `0.3.0-paid-beta.6`, package `pro.greenvpn.app.beta` |
 | Windows | `0.3.0-paid-beta.11`, unsigned |
 | Windows SHA-256 | `ECA801FBCFED9A08CD5470E6BDC9F2FC327019D6C3DE61D50F7AECC69668FE32` |

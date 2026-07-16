@@ -52,6 +52,11 @@ const String kPaidBetaClientMarker = String.fromEnvironment(
   defaultValue: 'green-vpn-paid-beta-v1',
 );
 const String kPaidBetaReleaseChannel = 'paid-beta';
+const String kPublicProductClientMarker = String.fromEnvironment(
+  'GREENVPN_PUBLIC_PRODUCT_CLIENT_MARKER',
+  defaultValue: 'green-vpn-public-product-v1',
+);
+const String kPublicProductReleaseChannel = 'public-product';
 const bool kAwg2PreviewEnabled = bool.fromEnvironment(
   'GREENVPN_AWG2_PREVIEW_ENABLED',
   defaultValue: false,
@@ -3955,8 +3960,10 @@ while True:
 
   Future<ApiResult<Map<String, dynamic>>> fetchTariffCatalog() async {
     final query = <String, String>{
-      if (kPaidBetaBuild) 'clientMarker': kPaidBetaClientMarker,
-      if (kPaidBetaBuild) 'releaseChannel': kPaidBetaReleaseChannel,
+      if (kPublicProductBuild) 'clientMarker': kPublicProductClientMarker,
+      if (kPublicProductBuild) 'releaseChannel': kPublicProductReleaseChannel,
+      if (kPaidBetaCustomerUi) 'clientMarker': kPaidBetaClientMarker,
+      if (kPaidBetaCustomerUi) 'releaseChannel': kPaidBetaReleaseChannel,
     };
     final path = Uri(
       path: '/api/v1/catalog/tariffs',
@@ -4067,8 +4074,10 @@ while True:
         'devices': devices,
         'dedicatedIp': dedicatedIp,
         'billingPlanCode': ?billingPlanCode,
-        if (kPaidBetaBuild) 'clientMarker': kPaidBetaClientMarker,
-        if (kPaidBetaBuild) 'releaseChannel': kPaidBetaReleaseChannel,
+        if (kPublicProductBuild) 'clientMarker': kPublicProductClientMarker,
+        if (kPublicProductBuild) 'releaseChannel': kPublicProductReleaseChannel,
+        if (kPaidBetaCustomerUi) 'clientMarker': kPaidBetaClientMarker,
+        if (kPaidBetaCustomerUi) 'releaseChannel': kPaidBetaReleaseChannel,
       },
     );
     if (!res.ok) return ApiResult.err(res.message);
@@ -4102,8 +4111,10 @@ while True:
         'dedicatedIp': dedicatedIp,
         'autoRenew': autoRenew,
         'billingPlanCode': ?billingPlanCode,
-        if (kPaidBetaBuild) 'clientMarker': kPaidBetaClientMarker,
-        if (kPaidBetaBuild) 'releaseChannel': kPaidBetaReleaseChannel,
+        if (kPublicProductBuild) 'clientMarker': kPublicProductClientMarker,
+        if (kPublicProductBuild) 'releaseChannel': kPublicProductReleaseChannel,
+        if (kPaidBetaCustomerUi) 'clientMarker': kPaidBetaClientMarker,
+        if (kPaidBetaCustomerUi) 'releaseChannel': kPaidBetaReleaseChannel,
       },
     );
     if (!res.ok) return ApiResult.err(res.message);
@@ -12489,7 +12500,7 @@ class TariffPage extends StatelessWidget {
                   )
                 : const Icon(Icons.payment_rounded),
             label: Text(
-              '${_hasPaidPlan ? 'Продлить' : 'Оплатить'} $selectedPrice ₽ '
+              'Оплатить $selectedPrice ₽ '
               'за $selectedDays дней',
               style: const TextStyle(fontWeight: FontWeight.w900),
             ),

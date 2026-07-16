@@ -112,12 +112,15 @@ material. KZ is not in DNS, catalogs or assignment state.
 
 - Paths remain isolated at `/paid-beta` and `/paid-beta-api` until promotion.
 - Both control planes run release
-  `paid-beta-backend-active-active-20260713-r22`, backend
-  `0.9.116-active-active.3`.
+  `paid-beta-backend-public-client-20260716-r23`, backend
+  `0.9.117-public-client.1`.
 - The same immutable backend bundle and installer SHA-256 were applied to both
   nodes. Bundle SHA-256 is
-  `45F4EBA5DB00A1D78C6E0BB3C8F2F8EEF6CA1498CA80F457E1521E952261E04B`.
+  `158F938A8657BF6729380004B791B1095D9337EDD4DAA2C945B075DABF8DDE43`.
   Both SQLite databases pass `PRAGMA quick_check`.
+- The public-product client marker permits the final public candidate to create
+  a 249 RUB order for accounts previously enrolled in the paid-beta cohort;
+  unmarked legacy clients remain rejected.
 - Android candidate: `0.3.0-paid-beta.6`, package
   `pro.greenvpn.app.beta`, side-by-side with stable.
 - Windows candidate: `0.3.0-paid-beta.11`, SHA-256

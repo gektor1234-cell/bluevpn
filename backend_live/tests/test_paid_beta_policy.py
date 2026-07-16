@@ -172,6 +172,27 @@ class PaidBetaPolicyTests(unittest.TestCase):
             )
         )
 
+    def test_public_product_requires_exact_marker_and_channel(self) -> None:
+        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+            self.assertTrue(
+                main.public_product_request_allowed(
+                    "green-vpn-public-product-v1",
+                    "public-product",
+                )
+            )
+            self.assertFalse(
+                main.public_product_request_allowed(
+                    "green-vpn-public-product-v1",
+                    "stable",
+                )
+            )
+            self.assertFalse(
+                main.public_product_request_allowed(
+                    "stable-client",
+                    "public-product",
+                )
+            )
+
     def test_paid_beta_update_channel_uses_isolated_artifact(self) -> None:
         previous = copy.deepcopy(main.PAID_BETA_UPDATE_CONFIG["android"])
         main.PAID_BETA_UPDATE_CONFIG["android"] = {
@@ -774,17 +795,20 @@ class PaidBetaPolicyTests(unittest.TestCase):
         local_remove.assert_called_once_with("legacy-current-public-key")
         local_config_remove.assert_called_once_with("legacy-current-device")
 
-    def public_product_payload(self, *, plan_code: str = "green_30d"):
-        return main.TariffSelectionIn(
-            trafficPack="custom",
-            trafficGb=315,
-            unlimitedApps=["youtube", "telegram"],
-            devices=2,
-            dedicatedIp=True,
-            autoRenew=True,
-            releaseChannel="stable",
-            billingPlanCode=plan_code,
-        )
+    def public_product_payload(self, *, plan_code: str = "green_30d", **overrides):
+        values = {
+            "trafficPack": "custom",
+            "trafficGb": 315,
+            "unlimitedApps": ["youtube", "telegram"],
+            "devices": 2,
+            "dedicatedIp": True,
+            "autoRenew": True,
+            "clientMarker": "green-vpn-public-product-v1",
+            "releaseChannel": "public-product",
+            "billingPlanCode": plan_code,
+        }
+        values.update(overrides)
+        return main.TariffSelectionIn(**values)
 
     def test_public_product_catalog_has_three_fixed_terms(self) -> None:
         with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
@@ -855,6 +879,32 @@ class PaidBetaPolicyTests(unittest.TestCase):
         self.assertEqual(activated["subscription"]["periodDays"], 90)
         self.assertFalse(activated["subscription"]["autoRenew"])
         self.assertFalse(activated["subscription"]["paymentMethodSaved"])
+
+    def test_beta_user_can_create_public_product_order_from_public_client(self) -> None:
+        self.enroll_beta()
+        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(),
+            )
+
+        self.assertEqual(order["amountRub"], 249)
+
+    def test_beta_user_still_rejects_unmarked_legacy_client(self) -> None:
+        self.enroll_beta()
+        payload = self.public_product_payload(
+            clientMarker=None,
+            releaseChannel="stable",
+        )
+        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+            with self.assertRaises(main.HTTPException) as raised:
+                main.create_billing_order_for_user(self.user_id, payload)
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(
+            raised.exception.detail["code"],
+            "paid_beta_client_required",
+        )
 
     def test_public_product_auto_renewal_charges_once_and_extends_term(self) -> None:
         payload = self.public_product_payload(plan_code="green_30d")
