@@ -678,6 +678,60 @@ class TransportRolloutGuardTests(unittest.TestCase):
             "no_available_vpn_nodes",
         )
 
+    def test_public_product_transport_requires_exact_channel_and_allowlist(self) -> None:
+        protected = catalog_server("nl2-hysteria2-canary", "hysteria2")
+        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True), patch.object(
+            main,
+            "PUBLIC_PRODUCT_TRANSPORT_SERVER_IDS",
+            {"nl2-hysteria2-canary"},
+        ), patch.object(
+            main,
+            "SERVER_CLIENT_READY_PROTOCOLS",
+            {"wireguard_udp", "hysteria2"},
+        ), patch.object(
+            main,
+            "builtin_server_catalog_entry",
+            return_value=catalog_server("intelligent_smew", "wireguard_udp"),
+        ), patch.object(
+            main,
+            "list_public_client_catalog_servers",
+            return_value=[],
+        ), patch.object(
+            main,
+            "list_preview_client_catalog_servers",
+            side_effect=lambda server_ids, _protocols: [protected] if server_ids else [],
+        ), patch.object(main, "build_resilience_policy", return_value={}):
+            stable = main.build_server_catalog(
+                release_channel="stable",
+                client_supported_protocols=["wireguard_udp", "hysteria2"],
+            )
+            public_product = main.build_server_catalog(
+                release_channel=main.PUBLIC_PRODUCT_RELEASE_CHANNEL,
+                client_supported_protocols=["wireguard_udp", "hysteria2"],
+            )
+
+        self.assertNotIn(
+            "nl2-hysteria2-canary",
+            {server["id"] for server in stable["servers"]},
+        )
+        self.assertIn(
+            "nl2-hysteria2-canary",
+            {server["id"] for server in public_product["servers"]},
+        )
+        self.assertEqual(
+            public_product["managedCatalog"]["clientVisibleProtectedEntries"],
+            1,
+        )
+
+    def test_paid_beta_channel_can_use_explicit_preview_routes(self) -> None:
+        with patch.object(main, "PAID_BETA_ENABLED", True), patch.object(
+            main,
+            "PAID_BETA_RELEASE_CHANNEL",
+            "paid-beta",
+        ):
+            self.assertTrue(main.preview_catalog_allowed("paid-beta", "0.3.1"))
+            self.assertFalse(main.preview_catalog_allowed("stable", "0.3.1"))
+
     def test_awg_capability_is_accepted_only_when_server_gate_is_enabled(self) -> None:
         self.assertEqual(
             main.normalize_client_supported_protocols(["amneziawg"]),

@@ -325,6 +325,13 @@ PUBLIC_PRODUCT_PRICE_RUB = 249
 PUBLIC_PRODUCT_INCLUDED_DEVICES = 5
 PUBLIC_PRODUCT_MAX_DEVICES = 5
 PUBLIC_PRODUCT_PERIOD_DAYS = 30
+PUBLIC_PRODUCT_TRANSPORT_SERVER_IDS = {
+    item.strip()
+    for item in split_env_list(
+        os.getenv("GREENVPN_PUBLIC_PRODUCT_TRANSPORT_SERVER_IDS", "")
+    )
+    if item.strip()
+}
 PUBLIC_PRODUCT_PLANS = {
     "green_30d": {
         "title": "1 месяц",
@@ -8696,6 +8703,7 @@ def preview_catalog_allowed(release_channel: Optional[str], app_version: Optiona
     version = clean_limited_text(app_version, 120).strip().lower()
     return bool(
         channel in {"preview", "internal"}
+        or (PAID_BETA_ENABLED and channel == PAID_BETA_RELEASE_CHANNEL.lower())
         or "preview" in version
         or "adgate" in version
     )
@@ -8710,6 +8718,17 @@ def preview_server_ids_for_request(
     if not preview_catalog_allowed(release_channel, app_version):
         return set()
     return set(PREVIEW_SERVER_IDS)
+
+
+def public_product_transport_server_ids_for_request(
+    release_channel: Optional[str],
+) -> set[str]:
+    if not PUBLIC_PRODUCT_ENABLED or not PUBLIC_PRODUCT_TRANSPORT_SERVER_IDS:
+        return set()
+    channel = clean_limited_text(release_channel, 40).strip().lower()
+    if not hmac.compare_digest(channel, PUBLIC_PRODUCT_RELEASE_CHANNEL.lower()):
+        return set()
+    return set(PUBLIC_PRODUCT_TRANSPORT_SERVER_IDS)
 
 
 def managed_catalog_entry_to_public_server(
@@ -8852,8 +8871,22 @@ def build_server_catalog(
         for item in list_public_client_catalog_servers(negotiated)
         if item.get("id") != builtin["id"] and server_visible_to_client(item, negotiated)
     ]
+    protected_server_ids = public_product_transport_server_ids_for_request(
+        release_channel
+    )
     preview_server_ids = preview_server_ids_for_request(release_channel, app_version)
     existing_server_ids = {str(item.get("id") or "") for item in managed_servers}
+    protected_servers = [
+        item
+        for item in list_preview_client_catalog_servers(
+            protected_server_ids,
+            negotiated,
+        )
+        if item.get("id") != builtin["id"]
+        and item.get("id") not in existing_server_ids
+        and server_visible_to_client(item, negotiated)
+    ]
+    existing_server_ids.update(str(item.get("id") or "") for item in protected_servers)
     preview_servers = [
         item
         for item in list_preview_client_catalog_servers(preview_server_ids, negotiated)
@@ -8868,7 +8901,7 @@ def build_server_catalog(
         [builtin]
         if builtin_client_ready and server_visible_to_client(builtin, negotiated)
         else []
-    ) + managed_servers + preview_servers
+    ) + managed_servers + protected_servers + preview_servers
     default_candidates = [server for server in servers if server_auto_capacity_ok(server)]
     if not default_candidates:
         default_candidates = [
@@ -8916,6 +8949,7 @@ def build_server_catalog(
                 "клиенту без готового профиля конфига, свежего мониторинга и rollout gate."
             ),
             "clientVisibleManagedEntries": len(managed_servers),
+            "clientVisibleProtectedEntries": len(protected_servers),
             "clientVisiblePreviewEntries": len(preview_servers),
             "negotiatedClientProtocols": sorted(negotiated),
             "publicationRules": server_publication_requirements(),
