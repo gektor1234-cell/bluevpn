@@ -41,7 +41,7 @@ void main() {
         country: 'GB',
         city: 'London',
       ),
-      'Англия',
+      'Лондон',
     );
     expect(
       greenVpnServerLocationId(

@@ -27,7 +27,7 @@ String greenVpnServerLocationTitle({
       return 'Нидерланды';
     case 'GB':
     case 'UK':
-      return 'Англия';
+      return 'Лондон';
   }
 
   var title = serverTitle.trim();
