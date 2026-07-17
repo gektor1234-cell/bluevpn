@@ -43,4 +43,33 @@ void main() {
       isFalse,
     );
   });
+
+  test('only automatically replaced devices rotate their local identity', () {
+    expect(
+      greenVpnShouldRotateAutoReplacedDevice(<String, dynamic>{
+        'reason': 'device_disabled',
+        'device': <String, dynamic>{
+          'isEnabled': false,
+          'disabledReason': 'auto_replaced_by_new_device',
+        },
+      }),
+      isTrue,
+    );
+    expect(
+      greenVpnShouldRotateAutoReplacedDevice(<String, dynamic>{
+        'reason': 'device_disabled',
+        'device': <String, dynamic>{
+          'isEnabled': false,
+          'disabledReason': 'disabled_by_admin',
+        },
+      }),
+      isFalse,
+    );
+    expect(
+      greenVpnShouldRotateAutoReplacedDevice(<String, dynamic>{
+        'reason': 'device_limit_exceeded',
+      }),
+      isFalse,
+    );
+  });
 }

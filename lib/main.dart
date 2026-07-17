@@ -171,6 +171,16 @@ bool greenVpnShouldOpenSavedSessionDirectly({
   return hasSession && !isWeb && (isAndroid || isWindows);
 }
 
+bool greenVpnShouldRotateAutoReplacedDevice(Map<String, dynamic>? bootstrap) {
+  if (bootstrap == null || bootstrap['reason'] != 'device_disabled') {
+    return false;
+  }
+  final device = bootstrap['device'];
+  return device is Map &&
+      device['isEnabled'] != true &&
+      device['disabledReason'] == 'auto_replaced_by_new_device';
+}
+
 bool greenVpnUpdateManifestMatchesCurrentPlatform(
   GreenVpnUpdateManifest manifest,
 ) {
@@ -1961,9 +1971,11 @@ class DeviceIdStore {
     }
     final f = await _file();
     try {
+      await WindowsLocalSecurity.preparePrivateFileForWrite(f.path);
       await f.writeAsString(id);
     } on FileSystemException {
       await WindowsLocalSecurity.prepareSharedStateDirectory(f.parent.path);
+      await WindowsLocalSecurity.preparePrivateFileForWrite(f.path);
       await f.writeAsString(id);
     }
     await WindowsLocalSecurity.prepareSharedStateDirectory(f.parent.path);
@@ -8586,7 +8598,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       );
     }
 
-    if (!_isDeviceAttachedConflict(boot.message)) {
+    final attachedToAnotherUser = _isDeviceAttachedConflict(boot.message);
+    final autoReplaced = greenVpnShouldRotateAutoReplacedDevice(boot.data);
+    if (!attachedToAnotherUser && !autoReplaced) {
       return boot;
     }
 
@@ -8598,7 +8612,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     if (showToastOnRotate && mounted) {
       _toast(
         context,
-        'Устройство было привязано к старому аккаунту. Создаю новый device id...',
+        autoReplaced
+            ? 'Обновляем регистрацию этого устройства...'
+            : 'Устройство было привязано к другому аккаунту. Обновляем регистрацию...',
       );
     }
 

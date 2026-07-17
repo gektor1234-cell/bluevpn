@@ -27994,6 +27994,8 @@ def client_bootstrap(
             "deviceName": device["device_name"],
             "platform": device["platform"],
             "appVersion": device["app_version"],
+            "isEnabled": bool(device["is_enabled"]),
+            "disabledReason": device["disabled_reason"],
         },
         "subscription": sub,
         "accessPolicy": access_policy,

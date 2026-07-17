@@ -48,7 +48,21 @@ if (-not (Test-IsAdministrator)) {
         '-ExecutionPolicy',
         'RemoteSigned',
         '-File',
-        ('"' + $PSCommandPath + '"')
+        ('"' + $PSCommandPath + '"'),
+        '-AmneziaServiceName',
+        ('"' + $AmneziaServiceName + '"'),
+        '-GreenServiceName',
+        ('"' + $GreenServiceName + '"'),
+        '-GreenTunnelName',
+        ('"' + $GreenTunnelName + '"'),
+        '-GreenLocalPort',
+        $GreenLocalPort.ToString([Globalization.CultureInfo]::InvariantCulture),
+        '-HoldSeconds',
+        $HoldSeconds.ToString([Globalization.CultureInfo]::InvariantCulture),
+        '-ReportPath',
+        ('"' + $ReportPath + '"'),
+        '-LogPath',
+        ('"' + $LogPath + '"')
     )
     $process = Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -PassThru -ArgumentList $arguments
     Write-Output "Elevated smoke started with PID $($process.Id)."

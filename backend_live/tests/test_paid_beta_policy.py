@@ -724,6 +724,27 @@ class PaidBetaPolicyTests(unittest.TestCase):
         self.assertFalse(bootstrap["adGate"]["enabled"])
         self.assertFalse(bootstrap["adGate"]["sessionTimerEnabled"])
 
+    def test_bootstrap_exposes_safe_auto_replacement_reason(self) -> None:
+        self.enroll_beta()
+        device_uid = "auto-replaced-windows-device"
+        initial = self.bootstrap(paid_beta=True, device_uid=device_uid)
+        self.assertTrue(initial["device"]["isEnabled"])
+
+        main.set_device_enabled(
+            device_uid,
+            enabled=False,
+            reason="auto_replaced_by_new_device",
+        )
+        replaced = self.bootstrap(paid_beta=True, device_uid=device_uid)
+
+        self.assertFalse(replaced["canConnect"])
+        self.assertEqual(replaced["reason"], "device_disabled")
+        self.assertFalse(replaced["device"]["isEnabled"])
+        self.assertEqual(
+            replaced["device"]["disabledReason"],
+            "auto_replaced_by_new_device",
+        )
+
     def test_managed_current_wg0_peer_removal_uses_remote_profile(self) -> None:
         managed_row = object()
         remote_config = {"serverId": "current_wg0"}
