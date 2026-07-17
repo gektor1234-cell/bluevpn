@@ -21,16 +21,16 @@ param(
     [string]$ExpectedTestAndroidSha256 = "9F1357E3CB02196CDC8A351A2D6F995A27BF75ACC0017275465E6DD6254E0675",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedWindowsVersion = "0.3.4",
+    [string]$ExpectedWindowsVersion = "0.3.5",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedWindowsSha256 = "49C7D098ED7E3980EDE7742ED6AF03EB7F3CEFAFC1EAC6E543C69C890A818E47",
+    [string]$ExpectedWindowsSha256 = "70450F03F0B1DFE2DFDB5D5D1BBF017A44B3AAFD5752C684422A049C62344F3B",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestWindowsVersion = "0.3.4-paid-beta.1706",
+    [string]$ExpectedTestWindowsVersion = "0.3.5-paid-beta.1707",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestWindowsSha256 = "15CB30A0169AB064AD4EBB6DE4B75A6DACB3B43183BB0367E45CDC9A3D1B81CF",
+    [string]$ExpectedTestWindowsSha256 = "D5396C4A54ECBFE69750759AF0090E194BC4187397FE54DC5A3A11AF2700955E",
 
     [Parameter(Mandatory = $false)]
     [int]$TimeoutSec = 20

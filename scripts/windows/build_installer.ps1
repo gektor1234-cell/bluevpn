@@ -450,6 +450,7 @@ Copy-Item -LiteralPath (Join-Path $ProjectRoot 'windows\runner\resources\app_ico
 
 $installPs1 = Join-Path $payloadDir 'install_greenvpn.ps1'
 $installUiPs1 = Join-Path $payloadDir 'install_ui.ps1'
+$installBootstrapExe = Join-Path $payloadDir 'install_bootstrap.exe'
 
 @'
 param(
@@ -713,6 +714,22 @@ try {
     $shortcut.WorkingDirectory = $installRoot
     $shortcut.IconLocation = "$exe,0"
     $shortcut.Save()
+
+    foreach ($requiredPath in @($exe, $desktopShortcut, $startShortcut)) {
+        if (-not (Test-Path -LiteralPath $requiredPath)) {
+            throw "Green VPN installation postcondition failed: $requiredPath was not created."
+        }
+    }
+
+    foreach ($shortcutPath in @($desktopShortcut, $startShortcut)) {
+        $installedShortcut = $wsh.CreateShortcut($shortcutPath)
+        if (-not [System.IO.Path]::GetFullPath($installedShortcut.TargetPath).Equals(
+            [System.IO.Path]::GetFullPath($exe),
+            [System.StringComparison]::OrdinalIgnoreCase
+        )) {
+            throw "Green VPN installation postcondition failed: $shortcutPath points to an unexpected target."
+        }
+    }
 
     Write-Step "Настраиваем запуск Green VPN в трее..."
     $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
@@ -1244,6 +1261,22 @@ $form.Add_FormClosed({
 exit $script:exitCode
 '@ | Set-Content -LiteralPath $installUiPs1 -Encoding UTF8
 
+$bootstrapSource = Join-Path $ProjectRoot 'scripts\windows\installer_bootstrap.cs'
+if (-not (Test-Path -LiteralPath $bootstrapSource)) {
+    throw "Installer bootstrap source not found: $bootstrapSource"
+}
+$compiler = @(
+    (Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'),
+    (Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe')
+) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+if ([string]::IsNullOrWhiteSpace($compiler)) {
+    throw 'The .NET Framework C# compiler was not found.'
+}
+& $compiler /nologo /target:winexe /optimize+ /platform:anycpu /reference:System.Windows.Forms.dll "/win32icon:$payloadIcon" "/out:$installBootstrapExe" $bootstrapSource
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $installBootstrapExe)) {
+    throw "Installer bootstrap compilation failed with exit code $LASTEXITCODE."
+}
+
 if ($WindowsRuntimeScope -eq 'paid-beta') {
     $uiContent = Get-Content -LiteralPath $installUiPs1 -Raw
     $uiContent = $uiContent.Replace('Green VPN', 'Green VPN Beta')
@@ -1275,17 +1308,18 @@ DisplayLicense=
 FinishMessage=
 TargetName=$targetEscaped
 FriendlyName=$installerFriendlyName
-AppLaunched=powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy RemoteSigned -File install_ui.ps1
+AppLaunched=install_bootstrap.exe
 PostInstallCmd=<None>
 AdminQuietInstCmd=
 UserQuietInstCmd=
 SourceFiles=SourceFiles
 
 [Strings]
-FILE0="install_ui.ps1"
-FILE1="install_greenvpn.ps1"
-FILE2="GreenVPN_payload.zip"
-FILE3="app_icon.ico"
+FILE0="install_bootstrap.exe"
+FILE1="install_ui.ps1"
+FILE2="install_greenvpn.ps1"
+FILE3="GreenVPN_payload.zip"
+FILE4="app_icon.ico"
 
 [SourceFiles]
 SourceFiles0=$payloadEscaped
@@ -1295,6 +1329,7 @@ SourceFiles0=$payloadEscaped
 %FILE1%=
 %FILE2%=
 %FILE3%=
+%FILE4%=
 "@ | Set-Content -LiteralPath $sedPath -Encoding ASCII
 
 Write-Section 'BUILD INSTALLER EXE'

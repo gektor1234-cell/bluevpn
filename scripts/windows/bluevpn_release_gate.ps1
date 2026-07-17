@@ -987,8 +987,8 @@ else {
     Add-Pass "Installer does not launch PowerShell with ExecutionPolicy Bypass"
 }
 
-if ($installer.Contains("AppLaunched=powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy RemoteSigned -File install_ui.ps1")) {
-    Add-Pass "Installer bootstrap starts the branded installer UI without a visible PowerShell console"
+if ($installer.Contains("AppLaunched=install_bootstrap.exe") -and $installer.Contains("installer_bootstrap.cs")) {
+    Add-Pass "Installer uses the native MOTW-safe bootstrap for the branded installer UI"
 }
 else {
     Add-Warning "Installer bootstrap entry point was not recognized."

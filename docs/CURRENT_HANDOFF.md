@@ -25,7 +25,7 @@ This is the current operational entry point. Read it together with
    must reject first-payment creation and must not run the renewal executor.
 8. Server maintenance is one node at a time after alternate control/data planes
    pass readiness. The owner Windows PC must not be rebooted by automation.
-9. Windows 0.3.4 is temporarily public and mandatory by explicit owner decision,
+9. Windows 0.3.5 is temporarily public and mandatory by explicit owner decision,
    but remains unsigned. Keep the `NotSigned` status visible in operations and
    expect Windows SmartScreen/reputation warnings until a signed successor is
    released.
@@ -59,6 +59,7 @@ This is the current operational entry point. Read it together with
 - Windows device-recovery and final-smoke checkpoint:
   `b4ac12f837a896637687d3d860ce56e2e5ba8d81`.
 - Windows unsigned-publication checkpoint: the commit containing this handoff.
+- Windows 0.3.5 installer-repair checkpoint: the commit containing this handoff.
 - Admin console 0.9.121 checkpoint: the commit containing this handoff.
 - Generated binaries belong in `C:\BlueVPN_Builds`, encrypted restore points in
   `C:\Users\gekto\GreenVPN_Checkpoints`, and secrets outside Git.
@@ -115,16 +116,42 @@ This is the current operational entry point. Read it together with
   atomically on Timeweb and RUVDS Moscow. Stable and paid-beta Android manifests
   are mandatory and point to the matching hashes.
 - Published Windows production installer:
-  `C:\BlueVPN_Builds\green_vpn_windows_0.3.4_rc_20260717_06\GreenVPN_Setup_0.3.4.exe`.
-  Product/build: `0.3.4+1706`; SHA-256:
-  `49C7D098ED7E3980EDE7742ED6AF03EB7F3CEFAFC1EAC6E543C69C890A818E47`.
+  `C:\BlueVPN_Builds\green_vpn_windows_0.3.5_public_20260717_01\GreenVPN_Setup_0.3.5.exe`.
+  Product/build: `0.3.5+1707`; SHA-256:
+  `70450F03F0B1DFE2DFDB5D5D1BBF017A44B3AAFD5752C684422A049C62344F3B`.
   It is unsigned and was published by explicit owner instruction to production
   as mandatory on both RU control planes.
 - Published Windows test installer:
-  `C:\BlueVPN_Builds\green_vpn_windows_0.3.4_paid_beta_20260717_01\GreenVPN_Setup.exe`.
-  Version `0.3.4-paid-beta.1706`; SHA-256:
-  `15CB30A0169AB064AD4EBB6DE4B75A6DACB3B43183BB0367E45CDC9A3D1B81CF`.
+  `C:\BlueVPN_Builds\green_vpn_windows_0.3.5_paid_beta_20260717_01\GreenVPN_Beta_Setup_0.3.5-paid-beta.1707.exe`.
+  Version `0.3.5-paid-beta.1707`; SHA-256:
+  `D5396C4A54ECBFE69750759AF0090E194BC4187397FE54DC5A3A11AF2700955E`.
   It remains optional and uses the isolated paid-beta API contour.
+
+## Published Windows 0.3.5 installer repair, 2026-07-17
+
+- Root cause of the external silent installation: browser downloads can carry
+  `ZoneId=3`; the 0.3.4 IExpress entry point executed `install_ui.ps1` directly
+  under `RemoteSigned`, so Windows rejected the unsigned extracted script before
+  the UI and install transcript started.
+- IExpress now launches `install_bootstrap.exe`, a native .NET Framework helper.
+  It removes the Internet-zone stream only from this installer's extracted UI,
+  install script, payload archive and icon, then retains `RemoteSigned` for the
+  existing branded UI. It does not use `ExecutionPolicy Bypass`.
+- Installation success now requires a real `greenvpn.exe`, desktop shortcut and
+  Start menu shortcut. Both links are reopened and their targets checked before
+  the installer can return success.
+- The source bootstrap and exact compiled production/test bootstrap binaries
+  passed MOTW simulations. Standard release gate: zero warnings/errors.
+- Production `0.3.5+1707` is mandatory; test
+  `0.3.5-paid-beta.1707` remains optional. Main/fallback public EXEs match their
+  respective hashes byte-for-byte. Manifest/download check is fully green and
+  the independent public surface probe is 31/31.
+- Rollback:
+  - RUVDS Moscow: `/root/greenvpn-windows-release-backups/20260717T201752Z-ruvds-0.3.5-1707`;
+  - Timeweb Moscow: `/root/greenvpn-windows-release-backups/20260717T201835Z-timeweb-0.3.5-1707`.
+- Authenticode is still a separate external gate. The current shell is not
+  elevated, so a physical privileged install on this PC requires the owner to
+  accept UAC and is not claimed by this checkpoint.
 - Android 0.3.4 production UI was checked after an in-place update on physical
   Android 9 and Android 16/API 36. Both pickers contain exactly one `Авто`, one
   `Нидерланды` and one `Лондон` row; all carry numeric latency while the
@@ -259,8 +286,8 @@ material. KZ is not in DNS, catalogs or assignment state.
   `F97D26A4B62E7704517C1EF0BAE394D963151BFB09297872AED67A77B3879CE7`.
 - Android update is mandatory on Timeweb and RUVDS Moscow; both manifests report
   `required=true` and `fileReady=true`.
-- Windows: `0.3.4+1706`, mandatory, unsigned, SHA-256
-  `49C7D098ED7E3980EDE7742ED6AF03EB7F3CEFAFC1EAC6E543C69C890A818E47`.
+- Windows: `0.3.5+1707`, mandatory, unsigned, SHA-256
+  `70450F03F0B1DFE2DFDB5D5D1BBF017A44B3AAFD5752C684422A049C62344F3B`.
 - Public catalog contains only stable client-compatible endpoints. Server/provider
   implementation details are not shown in the client.
 - Both production control planes publish the same three physical stable routes;
@@ -279,8 +306,8 @@ material. KZ is not in DNS, catalogs or assignment state.
 - Android test release: `0.3.4+2026071701`, package
   `pro.greenvpn.app.beta`, side-by-side with stable, SHA-256
   `9F1357E3CB02196CDC8A351A2D6F995A27BF75ACC0017275465E6DD6254E0675`.
-- Windows candidate: `0.3.4-paid-beta.1706`, SHA-256
-  `15CB30A0169AB064AD4EBB6DE4B75A6DACB3B43183BB0367E45CDC9A3D1B81CF`.
+- Windows candidate: `0.3.5-paid-beta.1707`, SHA-256
+  `D5396C4A54ECBFE69750759AF0090E194BC4187397FE54DC5A3A11AF2700955E`.
   It is published on both RU nodes, technically tested, unsigned and optional.
 - Product model: trial 3 days; 249/649/1099 RUB for 30/90/180 days; no ads or
   disconnect timer; auto-renew is opt-out after YooKassa approval.

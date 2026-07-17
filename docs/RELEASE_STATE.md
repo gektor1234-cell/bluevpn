@@ -11,8 +11,8 @@ Updated: 2026-07-17.
 | Fallback API | RUVDS Moscow, backend `0.9.121-admin.1` |
 | Android | `0.3.4+2026071701`, package `pro.greenvpn.app`, mandatory |
 | Android SHA-256 | `F97D26A4B62E7704517C1EF0BAE394D963151BFB09297872AED67A77B3879CE7` |
-| Windows | `0.3.4+1706`, mandatory, unsigned |
-| Windows SHA-256 | `49C7D098ED7E3980EDE7742ED6AF03EB7F3CEFAFC1EAC6E543C69C890A818E47` |
+| Windows | `0.3.5+1707`, mandatory, unsigned |
+| Windows SHA-256 | `70450F03F0B1DFE2DFDB5D5D1BBF017A44B3AAFD5752C684422A049C62344F3B` |
 | Ads/session timer | disabled |
 
 Android 0.3.4 is published on Timeweb and RUVDS Moscow. Both stable manifests
@@ -52,8 +52,8 @@ staff authentication.
 | Primary/fallback backend | `0.9.120-public.1` |
 | Android | `0.3.4+2026071701`, package `pro.greenvpn.app.beta`, mandatory |
 | Android SHA-256 | `9F1357E3CB02196CDC8A351A2D6F995A27BF75ACC0017275465E6DD6254E0675` |
-| Windows | `0.3.4-paid-beta.1706`, optional, unsigned |
-| Windows SHA-256 | `15CB30A0169AB064AD4EBB6DE4B75A6DACB3B43183BB0367E45CDC9A3D1B81CF` |
+| Windows | `0.3.5-paid-beta.1707`, optional, unsigned |
+| Windows SHA-256 | `D5396C4A54ECBFE69750759AF0090E194BC4187397FE54DC5A3A11AF2700955E` |
 | Plans | trial 3 days; 249/649/1099 RUB for 30/90/180 days |
 | Auto-renew | recurring card binding approved; real save-method and unlink smoke passed on both control planes |
 | Billing writer | Timeweb only |
@@ -74,16 +74,58 @@ until public promotion.
 | Android production SHA-256 | `F97D26A4B62E7704517C1EF0BAE394D963151BFB09297872AED67A77B3879CE7` |
 | Android test | `0.3.4+2026071701`, package `pro.greenvpn.app.beta`, release signed |
 | Android test SHA-256 | `9F1357E3CB02196CDC8A351A2D6F995A27BF75ACC0017275465E6DD6254E0675` |
-| Windows production | `0.3.4+1706`, mandatory, unsigned |
-| Windows production SHA-256 | `49C7D098ED7E3980EDE7742ED6AF03EB7F3CEFAFC1EAC6E543C69C890A818E47` |
-| Windows test | `0.3.4-paid-beta.1706`, optional, unsigned |
-| Windows test SHA-256 | `15CB30A0169AB064AD4EBB6DE4B75A6DACB3B43183BB0367E45CDC9A3D1B81CF` |
+| Windows production | `0.3.5+1707`, mandatory, unsigned |
+| Windows production SHA-256 | `70450F03F0B1DFE2DFDB5D5D1BBF017A44B3AAFD5752C684422A049C62344F3B` |
+| Windows test | `0.3.5-paid-beta.1707`, optional, unsigned |
+| Windows test SHA-256 | `D5396C4A54ECBFE69750759AF0090E194BC4187397FE54DC5A3A11AF2700955E` |
 | YooKassa | real 249 RUB payment, saved-method verification and unlink smoke complete |
 | London | existing VPS `2584554` restored in place; production and paid-beta catalogs publish one logical `Лондон` location |
 
 Production and test APKs are published on both Russian control planes. The
 customer-facing stable and paid-beta update manifests force 0.3.4 and all four
 public APK aliases are ready.
+
+## Published Windows 0.3.5 Installer Repair
+
+| Component | Version/state |
+| --- | --- |
+| Production | `0.3.5+1707`, mandatory, unsigned |
+| Production installer | `C:\BlueVPN_Builds\green_vpn_windows_0.3.5_public_20260717_01\GreenVPN_Setup_0.3.5.exe` |
+| Production SHA-256 | `70450F03F0B1DFE2DFDB5D5D1BBF017A44B3AAFD5752C684422A049C62344F3B` |
+| Test | `0.3.5-paid-beta.1707`, optional, unsigned |
+| Test installer | `C:\BlueVPN_Builds\green_vpn_windows_0.3.5_paid_beta_20260717_01\GreenVPN_Beta_Setup_0.3.5-paid-beta.1707.exe` |
+| Test SHA-256 | `D5396C4A54ECBFE69750759AF0090E194BC4187397FE54DC5A3A11AF2700955E` |
+
+The 0.3.4 IExpress entry point invoked an extracted unsigned PowerShell file
+directly with `RemoteSigned`. A browser-applied Internet zone marker therefore
+caused Windows to reject the script before the branded installer UI, transcript,
+application files or shortcuts existed. This exactly matched the reported
+silent no-install behavior and was reproduced locally with `ZoneId=3`.
+
+The package now starts a small native .NET Framework bootstrap. It removes the
+Internet zone alternate stream only from the four extracted Green VPN installer
+payload files, keeps `RemoteSigned` for PowerShell and never uses an execution
+policy bypass. The install script also treats the application EXE, desktop
+shortcut and Start menu shortcut as mandatory postconditions and validates both
+shortcut targets before reporting success.
+
+The source bootstrap and the exact compiled production/test bootstrap binaries
+passed the MOTW smoke: exit code zero, branded UI script started and zero zone
+streams remained. The standard release gate passed with zero warnings/errors.
+Both Russian nodes were deployed sequentially after dry-run validation. All
+four public Windows files are byte-identical to their expected production/test
+artifacts, all eight Android/Windows manifest checks pass and the independent
+public surface probe is 31/31.
+
+Rollback directories:
+
+- RUVDS Moscow: `/root/greenvpn-windows-release-backups/20260717T201752Z-ruvds-0.3.5-1707`;
+- Timeweb Moscow: `/root/greenvpn-windows-release-backups/20260717T201835Z-timeweb-0.3.5-1707`.
+
+Authenticode remains intentionally unresolved. A privileged end-to-end install
+on the owner PC still requires accepting its UAC prompt; the current Codex shell
+is not elevated, so this release record does not claim that separate physical
+confirmation.
 
 ## Published Windows 0.3.4
 
@@ -192,7 +234,7 @@ trusted: SmartScreen/reputation warnings remain expected until Authenticode.
 ## Remaining Launch Gates
 
 1. Obtain an Authenticode code-signing certificate and build a higher-version
-   signed successor to the temporary public 0.3.4 release.
+   signed successor to the temporary public 0.3.5 release.
 2. Reverify the signed hash, then replace Windows atomically on main and test
    with rollback backups and public probes.
 
