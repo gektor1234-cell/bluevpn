@@ -12,6 +12,9 @@ void main() {
     expect(greenVpnPublicPlanTitle('green_30d'), '1 месяц');
     expect(greenVpnPublicPlanTitle('green_90d'), '3 месяца');
     expect(greenVpnPublicPlanTitle('green_180d'), '6 месяцев');
+    expect(greenVpnPublicBillingPeriodTitle('green_30d', 30), '1 месяц');
+    expect(greenVpnPublicBillingPeriodTitle('green_90d', 90), '3 месяца');
+    expect(greenVpnPublicBillingPeriodTitle('green_180d', 180), '6 месяцев');
   });
 
   test('public version hides internal release channel suffixes', () {
@@ -31,6 +34,22 @@ void main() {
     expect(
       greenVpnPublicChangelog(const ['Исправлено восстановление сессии']),
       const ['Исправлено восстановление сессии'],
+    );
+  });
+
+  test('public changelog localizes known Windows release notes', () {
+    expect(
+      greenVpnPublicChangelog(const [
+        'Windows: cleaner server list',
+        'Windows: hide provider/protocol/health details',
+        'Windows: generic VPN wording',
+        'Unknown English release note',
+      ]),
+      const [
+        'Упрощён выбор сервера.',
+        'Убраны лишние технические детали.',
+        'Улучшены тексты интерфейса.',
+      ],
     );
   });
 
@@ -66,6 +85,14 @@ void main() {
     expect(
       greenVpnSocialOnlyStatusText(allowed: false, enabled: false),
       contains('недоступна'),
+    );
+    expect(
+      greenVpnSocialOnlyStatusText(
+        allowed: true,
+        enabled: true,
+        usesApplications: false,
+      ),
+      contains('Выбранные сервисы'),
     );
   });
 

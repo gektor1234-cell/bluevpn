@@ -592,7 +592,7 @@ function Install-GreenVpnService {
         throw "Failed to create Green VPN service: $($_.Exception.Message)"
     }
 
-    & sc.exe description $serviceName 'Green VPN privileged local service for WireGuard tunnel control.' | Out-Null
+    & sc.exe description $serviceName 'Green VPN local system service for secure connection control.' | Out-Null
     & sc.exe start $serviceName | Out-Null
 
     for ($i = 0; $i -lt 30; $i++) {
@@ -613,7 +613,7 @@ if (-not (Test-Path -LiteralPath $PayloadZip)) {
 }
 
 if (-not (Test-IsAdministrator)) {
-    Write-Step "Requesting administrator rights for Green VPN installation..."
+    Write-Step "Запрашиваем права администратора для установки Green VPN..."
     $argList = @(
         '-NoProfile',
         '-NonInteractive',
@@ -649,24 +649,24 @@ $tmp = Join-Path $env:TEMP ("GreenVPNInstall_" + [System.Guid]::NewGuid().ToStri
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 
 try {
-    Write-Step "Stopping Green VPN tunnel if it is running..."
+    Write-Step "Останавливаем текущее подключение Green VPN..."
     Stop-BlueVpnTunnel
 
-    Write-Step "Stopping Green VPN system service if it is installed..."
+    Write-Step "Обновляем системную службу Green VPN..."
     Remove-GreenVpnService
 
-    Write-Step "Stopping old Green VPN process if it is running..."
+    Write-Step "Закрываем предыдущую версию Green VPN..."
     Get-Process -Name 'bluevpn' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Get-Process -Name 'greenvpn' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
-    Write-Step "Removing old BlueVPN shortcuts if present..."
+    Write-Step "Обновляем ярлыки приложения..."
     Remove-Item -LiteralPath $legacyDesktopShortcut -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $legacyStartMenuDir -Recurse -Force -ErrorAction SilentlyContinue
     if (-not $legacyInstallRoot.Equals($installRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
         Remove-Item -LiteralPath $legacyInstallRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    Write-Step "Extracting package..."
+    Write-Step "Распаковываем приложение..."
     Expand-Archive -LiteralPath $PayloadZip -DestinationPath $tmp -Force
 
     $appSource = Join-Path $tmp 'app'
@@ -674,7 +674,7 @@ try {
         throw "Invalid Green VPN package: app\greenvpn.exe not found."
     }
 
-    Write-Step "Installing to $installRoot..."
+    Write-Step "Устанавливаем Green VPN..."
     New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
     Get-ChildItem -LiteralPath $installRoot -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
     Get-ChildItem -LiteralPath $appSource -Force |
@@ -714,7 +714,7 @@ try {
     $shortcut.IconLocation = "$exe,0"
     $shortcut.Save()
 
-    Write-Step "Configuring Green VPN autostart in tray mode..."
+    Write-Step "Настраиваем запуск Green VPN в трее..."
     $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
     New-Item -Path $runKey -Force | Out-Null
     foreach ($valueName in @('GreenVPN', 'Green VPN', 'BlueVPN', 'Blue VPN')) {
@@ -862,7 +862,7 @@ foreach (`$runKey in @(
     }
 }
 
-Write-Step "Removing only Green VPN WireGuard tunnel BlueVPNDev1..."
+Write-Step "Останавливаем защищённое подключение Green VPN..."
 `$serviceName = 'WireGuardTunnel`$BlueVPNDev1'
 sc.exe stop `$serviceName 2>`$null | Out-Null
 Start-Sleep -Milliseconds 700
@@ -938,7 +938,7 @@ if (-not `$KeepProgramData) {
     }
 }
 
-Write-Step "Green VPN removed. WireGuard, Amnezia and WARP themselves were not removed."
+Write-Step "Green VPN удалён. Другие сетевые приложения не изменялись."
 "@ | Set-Content -LiteralPath (Join-Path $installRoot 'uninstall_greenvpn.ps1') -Encoding UTF8
 
 @"
@@ -950,24 +950,24 @@ popd >nul 2>nul
 exit /b %ERRORLEVEL%
 "@ | Set-Content -LiteralPath (Join-Path $installRoot 'uninstall_greenvpn.cmd') -Encoding ASCII
 
-    $unShortcut = Join-Path $startMenuDir 'Uninstall Green VPN.lnk'
+    $unShortcut = Join-Path $startMenuDir 'Удалить Green VPN.lnk'
     $shortcut = $wsh.CreateShortcut($unShortcut)
     $shortcut.TargetPath = Join-Path $installRoot 'uninstall_greenvpn.cmd'
     $shortcut.Arguments = ''
     $shortcut.WorkingDirectory = $installRoot
     $shortcut.Save()
 
-    Write-Step "Removing legacy Green VPN system tasks if present..."
+    Write-Step "Удаляем устаревшие системные задачи Green VPN..."
     Ensure-GreenVpnProgramDataAcl
     Ensure-GreenVpnServiceToken
     Unregister-GreenVpnTasks
 
-    Write-Step "Installing Green VPN system service..."
+    Write-Step "Устанавливаем системную службу Green VPN..."
     Install-GreenVpnService -ServiceExe $serviceExe -TaskScript $taskScript
 
-    Write-Step "Installed successfully."
+    Write-Step "Установка завершена."
     if (-not $NoLaunch) {
-        Write-Step "Launching Green VPN..."
+        Write-Step "Запускаем Green VPN..."
         Start-Process -FilePath $exe -WorkingDirectory $installRoot
     }
 }
@@ -1026,7 +1026,7 @@ function Set-UiText {
 }
 
 $form = [System.Windows.Forms.Form]::new()
-$form.Text = 'Green VPN Installer'
+$form.Text = 'Установка Green VPN'
 $form.StartPosition = 'CenterScreen'
 $form.FormBorderStyle = 'FixedDialog'
 $form.MaximizeBox = $false
@@ -1083,7 +1083,7 @@ $script:logoPanel.Add_Paint({
 })
 
 $script:titleLabel = [System.Windows.Forms.Label]::new()
-$script:titleLabel.Text = 'Installing Green VPN'
+$script:titleLabel.Text = 'Установка Green VPN'
 $script:titleLabel.Location = [System.Drawing.Point]::new(96, 20)
 $script:titleLabel.Size = [System.Drawing.Size]::new(324, 28)
 $script:titleLabel.ForeColor = $brandText
@@ -1091,7 +1091,7 @@ $script:titleLabel.Font = New-Font 15 ([System.Drawing.FontStyle]::Bold)
 $card.Controls.Add($script:titleLabel)
 
 $script:detailLabel = [System.Windows.Forms.Label]::new()
-$script:detailLabel.Text = 'Preparing the app, service and shortcuts.'
+$script:detailLabel.Text = 'Подготавливаем приложение и службу Green VPN.'
 $script:detailLabel.Location = [System.Drawing.Point]::new(98, 52)
 $script:detailLabel.Size = [System.Drawing.Size]::new(320, 42)
 $script:detailLabel.ForeColor = $brandMuted
@@ -1112,7 +1112,7 @@ $progress.MarqueeAnimationSpeed = 34
 $card.Controls.Add($progress)
 
 $stageLabel = [System.Windows.Forms.Label]::new()
-$stageLabel.Text = 'Starting installer...'
+$stageLabel.Text = 'Запуск установки...'
 $stageLabel.Location = [System.Drawing.Point]::new(22, 156)
 $stageLabel.Size = [System.Drawing.Size]::new(408, 24)
 $stageLabel.ForeColor = $brandText
@@ -1120,7 +1120,7 @@ $stageLabel.Font = New-Font 10 ([System.Drawing.FontStyle]::Bold)
 $card.Controls.Add($stageLabel)
 
 $hintLabel = [System.Windows.Forms.Label]::new()
-$hintLabel.Text = 'Administrator rights are used once to install Green VPN Service and system tasks.'
+$hintLabel.Text = 'Права администратора нужны один раз для системной службы Green VPN.'
 $hintLabel.Location = [System.Drawing.Point]::new(22, 184)
 $hintLabel.Size = [System.Drawing.Size]::new(408, 40)
 $hintLabel.ForeColor = $brandMuted
@@ -1128,7 +1128,7 @@ $hintLabel.Font = New-Font 8.5 ([System.Drawing.FontStyle]::Regular)
 $card.Controls.Add($hintLabel)
 
 $okButton = [System.Windows.Forms.Button]::new()
-$okButton.Text = 'Done'
+$okButton.Text = 'Готово'
 $okButton.Enabled = $false
 $okButton.Location = [System.Drawing.Point]::new(348, 274)
 $okButton.Size = [System.Drawing.Size]::new(128, 32)
@@ -1154,7 +1154,7 @@ $timer.Add_Tick({
         if ($line -match '^\[Green VPN\]\s*(.+)$') {
             $stageLabel.Text = $Matches[1]
         } elseif ($line -match 'Transcript started') {
-            $stageLabel.Text = 'Writing install log...'
+            $stageLabel.Text = 'Подготавливаем журнал установки...'
         }
     }
 
@@ -1168,15 +1168,15 @@ $timer.Add_Tick({
         $okButton.Enabled = $true
 
         if ($script:exitCode -eq 0) {
-            Set-UiText -Title 'Green VPN installed' -Detail 'System component is ready. The app can start without extra UAC prompts.' -Accent $brandGreen
-            $stageLabel.Text = 'Installation completed successfully.'
-            $hintLabel.Text = 'If Green VPN has opened already, you can close this window.'
-            $okButton.Text = 'Done'
+            Set-UiText -Title 'Green VPN установлен' -Detail 'Приложение и служба Green VPN готовы к работе.' -Accent $brandGreen
+            $stageLabel.Text = 'Установка успешно завершена.'
+            $hintLabel.Text = 'Green VPN уже запущен. Это окно можно закрыть.'
+            $okButton.Text = 'Готово'
         } else {
-            Set-UiText -Title 'Installation did not finish' -Detail "Exit code: $script:exitCode. Log: $logPath" -Accent $brandDanger
-            $stageLabel.Text = 'Check the install log.'
+            Set-UiText -Title 'Установка не завершена' -Detail "Код ошибки: $script:exitCode. Журнал: $logPath" -Accent $brandDanger
+            $stageLabel.Text = 'Проверьте журнал установки.'
             $hintLabel.Text = "Install log: $logPath"
-            $okButton.Text = 'Close'
+            $okButton.Text = 'Закрыть'
         }
     }
 })
@@ -1190,7 +1190,7 @@ $form.Add_Shown({
             throw "GreenVPN_payload.zip not found"
         }
 
-        $stageLabel.Text = 'Extracting and installing Green VPN...'
+        $stageLabel.Text = 'Распаковываем и устанавливаем Green VPN...'
         $psi = [System.Diagnostics.ProcessStartInfo]::new()
         $psi.FileName = 'powershell.exe'
         $psi.Arguments = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy RemoteSigned -File "' + $installPs1 + '" -PayloadZip "' + $payloadZip + '"'
@@ -1224,8 +1224,8 @@ $form.Add_Shown({
         $progress.MarqueeAnimationSpeed = 0
         $progress.Style = [System.Windows.Forms.ProgressBarStyle]::Blocks
         $progress.Value = 100
-        Set-UiText -Title 'Could not start installation' -Detail $_.Exception.Message -Accent $brandDanger
-        $stageLabel.Text = 'Installer did not start.'
+        Set-UiText -Title 'Не удалось начать установку' -Detail $_.Exception.Message -Accent $brandDanger
+        $stageLabel.Text = 'Установщик не запустился.'
         $hintLabel.Text = "Log: $logPath"
         $okButton.Enabled = $true
     }

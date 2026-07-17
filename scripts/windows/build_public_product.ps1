@@ -197,6 +197,7 @@ if ($Mode -in @("windows", "both")) {
     })
 }
 
+$effectiveTransportCascade = $EnableTransportCascade -and $Mode -ne "windows"
 $manifest = [ordered]@{
     channel = "stable"
     publicProduct = $true
@@ -211,7 +212,7 @@ $manifest = [ordered]@{
     )
     autoRenew = $true
     adsEnabled = $false
-    transportCascade = $EnableTransportCascade
+    transportCascade = $effectiveTransportCascade
     generatedAt = (Get-Date).ToUniversalTime().ToString("o")
     artifacts = [object[]]$artifacts
 }

@@ -25,6 +25,9 @@ This is the current operational entry point. Read it together with
    must reject first-payment creation and must not run the renewal executor.
 8. Server maintenance is one node at a time after alternate control/data planes
    pass readiness. The owner Windows PC must not be rebooted by automation.
+9. Windows 0.3.4 RC is unsigned and not public. Never upload it or make it a
+   mandatory update until the final elevated network smoke and Authenticode
+   signing are complete.
 
 ## Repository
 
@@ -47,6 +50,7 @@ This is the current operational entry point. Read it together with
 - Multiprotocol preview base: `d31c6d78337ce9d212d497e7e112085efd407f26`
   (`greenvpn-multiprotocol-preview-complete-20260713`).
 - Stable rollback tag: `greenvpn-stable-pre-paid-beta-20260710`.
+- Windows 0.3.4 parity checkpoint: the commit containing this handoff.
 - Generated binaries belong in `C:\BlueVPN_Builds`, encrypted restore points in
   `C:\Users\gekto\GreenVPN_Checkpoints`, and secrets outside Git.
 
@@ -68,13 +72,11 @@ This is the current operational entry point. Read it together with
 - Both APKs are release signed, passed artifact verification and were published
   atomically on Timeweb and RUVDS Moscow. Stable and paid-beta Android manifests
   are mandatory and point to the matching hashes.
-- Windows cascade candidate:
-  `C:\BlueVPN_Builds\public_product_final_candidate_20260716_r3\windows\GreenVPN_Windows_0.3.0_final_candidate.zip`.
-  SHA-256:
-  `04D2AB4AD84F9B63641590BDFEE2600C702E79DEC29224B1B4E84A9B17F1FF37`.
-  Its product/file version is `0.3.0+1603`; artifact verification passes.
-  The Green VPN executables are still unsigned, so this ZIP is an internal
-  candidate and must not be a mandatory public update.
+- Current Windows parity candidate:
+  `C:\BlueVPN_Builds\green_vpn_windows_0.3.4_rc_20260717_04\GreenVPN_Setup_0.3.4.exe`.
+  Product/build: `0.3.4+1704`; SHA-256:
+  `C761421B01DACDA10CCD89D3A696CD11B4A625242A46B12FC68A4A7D5E3BC2AA`.
+  It is unsigned, not uploaded and not referenced by a public update manifest.
 - Android 0.3.4 production UI was checked after an in-place update on physical
   Android 9 and Android 16/API 36. Both pickers contain exactly one `Авто`, one
   `Нидерланды` and one `Лондон` row; all carry numeric latency while the
@@ -116,6 +118,36 @@ This is the current operational entry point. Read it together with
 - `flutter analyze`, Flutter tests, backend tests, Android native unit
   tasks, both APK verifiers, public-surface probes, dependency audit, secret
   scan, standard release gate and strict payment gate are green.
+
+## Windows 0.3.4 parity candidate, 2026-07-17
+
+- A valid encrypted saved session now opens the product directly, matching
+  Android instead of showing the login gate again.
+- Closing the visible window hides it to the tray; launching the executable
+  again restores the existing process and window.
+- Tray connect and disconnect use the authenticated local service API on a
+  background thread, enforce an HTTP success response and show Russian result
+  notifications without blocking the UI.
+- The updater accepts only hostful HTTPS public URLs and launches the downloaded
+  installer directly without `cmd.exe`.
+- The server picker exposes only `Auto`, `Netherlands` and `London`, each with
+  numeric latency. Provider, physical node and transport names remain hidden.
+- Windows selective routing consistently uses service wording; Android retains
+  application/package wording. Tariff cards show one, three or six months, and
+  settings keep the dedicated auto-renew management page.
+- The installer has Russian visible copy and neutral Green VPN service wording.
+  It does not expose the underlying tunnel implementation.
+- The Windows-only public build explicitly leaves `transportCascade=false`.
+  No server, catalog or anti-blocking preview deployment changed in this work.
+- `flutter analyze`, 30 Flutter tests with two intentional skips, the Windows
+  C++ build and the release gate are green.
+- Physical UI checks passed for clean login, saved-session entry, tray hide and
+  restore, primary navigation, logical server picker, tariff, settings and
+  update pages. The authenticated service path was also proven: it correctly
+  rejected a connect request while the owner's Amnezia tunnel was active.
+- Final blockers are external/action-time gates: run one elevated current-build
+  network transition with restoration of the original VPN, then Authenticode
+  sign the exact installer. Do not publish before both pass.
 
 ## Live topology
 
@@ -323,11 +355,13 @@ material. KZ is not in DNS, catalogs or assignment state.
 
 ## Remaining owner/external launch gates
 
-1. Obtain an Authenticode code-signing certificate and sign the Windows
-   installer before mandatory public distribution.
-2. Android, London and the Russian production/test server contours are complete.
-   After code signing, publish the Windows installer and run its final
-   owner-visible smoke.
+1. Approve the one elevated Windows network-transition smoke. It must restore
+   the currently active Amnezia tunnel and ordinary connectivity on completion.
+2. Obtain an Authenticode code-signing certificate and sign the exact verified
+   Windows installer before public distribution.
+3. After both gates pass, atomically publish the signed installer to main and
+   test on Timeweb and RUVDS Moscow, verify all manifests/downloads and retain
+   deployment backups. Android, London and server contours are already complete.
 
 Do not perform a real payment, enter SMS/bank codes or accept legal terms on
 behalf of the owner.

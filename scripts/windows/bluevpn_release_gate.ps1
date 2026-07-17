@@ -60,6 +60,7 @@ $backendPath = Join-Path $ProjectRoot "backend_live\app\main.py"
 $installerPath = Join-Path $ProjectRoot "scripts\windows\build_installer.ps1"
 $signScriptPath = Join-Path $ProjectRoot "scripts\windows\sign_release_artifacts.ps1"
 $servicePath = Join-Path $ProjectRoot "windows\green_vpn_service\main.cpp"
+$runnerPath = Join-Path $ProjectRoot "windows\runner\flutter_window.cpp"
 $doctorPath = Join-Path $ProjectRoot "scripts\windows\doctor_bluevpn.ps1"
 $recoverPath = Join-Path $ProjectRoot "scripts\windows\bluevpn_network_recover.ps1"
 $networkProtectionPath = Join-Path $ProjectRoot "scripts\windows\check_windows_network_protection.ps1"
@@ -311,6 +312,27 @@ foreach ($fragment in $localServiceClientFragments) {
     }
     else {
         Add-Error "Client local service token support missing: $fragment"
+    }
+}
+
+$runnerSource = Read-Text $runnerPath
+$windowsParityFragments = @(
+    'greenVpnShouldOpenSavedSessionDirectly',
+    'ReadLocalServiceToken',
+    'X-GreenVPN-Local-Token',
+    '\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c VPN',
+    'const <String>[]',
+    'mode: ProcessStartMode.detached',
+    'kTrayTaskResultMessage',
+    'uri.scheme == ''https'''
+)
+$windowsParitySource = $main + "`n" + $runnerSource
+foreach ($fragment in $windowsParityFragments) {
+    if ($windowsParitySource.Contains($fragment)) {
+        Add-Pass "Windows product parity marker present: $fragment"
+    }
+    else {
+        Add-Error "Windows product parity marker missing: $fragment"
     }
 }
 

@@ -56,6 +56,34 @@ Production and test APKs are published on both Russian control planes. The
 customer-facing stable and paid-beta update manifests force 0.3.4 and all four
 public APK aliases are ready.
 
+## Windows 0.3.4 Release Candidate
+
+| Component | Version/state |
+| --- | --- |
+| Product/build | `0.3.4+1704` |
+| Installer | `C:\BlueVPN_Builds\green_vpn_windows_0.3.4_rc_20260717_04\GreenVPN_Setup_0.3.4.exe` |
+| SHA-256 | `C761421B01DACDA10CCD89D3A696CD11B4A625242A46B12FC68A4A7D5E3BC2AA` |
+| Authenticode | not signed; publication blocked |
+| Public state | not uploaded and not referenced by any update manifest |
+| Source checkpoint | the commit containing this handoff |
+
+The Windows public client now opens a valid saved session directly, restores
+the same window after tray hiding, executes authenticated tray connect and
+disconnect commands asynchronously, validates HTTPS update URLs, launches an
+installer without a command shell, and uses public Russian product copy. The
+server picker exposes only `Auto`, `Netherlands` and `London` with numeric
+latency; provider, node and transport details remain hidden. Windows selective
+routing is described as services instead of Android applications, and tariff
+periods are shown as one, three or six months.
+
+This candidate deliberately does not enable the isolated transport cascade and
+does not change server catalogs or anti-blocking deployments. Analyzer, 30
+Flutter tests with two intentional skips, the Windows C++ build and the release
+gate pass. The authenticated local-service path and competing-VPN protection
+were rechecked: a connect request was correctly rejected while the owner's
+Amnezia tunnel was active. The final current-build network transition still
+requires one owner-approved UAC run that restores the original tunnel.
+
 ## Verified
 
 - Both RU control planes run backend `0.9.119-public.1` and pass health,
@@ -116,7 +144,12 @@ public APK aliases are ready.
 
 ## Remaining Launch Gates
 
-1. The Windows installer requires Authenticode signing before mandatory rollout.
+1. Run the final elevated Windows network-transition smoke and verify that the
+   pre-existing Amnezia tunnel and connectivity are restored.
+2. Obtain an Authenticode code-signing certificate and sign the exact verified
+   installer before any public or mandatory rollout.
+3. Reverify the signed hash, then publish Windows atomically to main and test on
+   both Russian control planes with rollback backups and public probes.
 
 Android and the server-side location pool are published. No confirmed Android,
 London or Russian control-plane defect remains.
@@ -142,6 +175,11 @@ London or Russian control-plane defect remains.
 - Paid-beta catalog DB backups before London publication:
   - Timeweb: `/root/greenvpn-london-catalog-backups/20260716T104858Z-timeweb-paid-beta`;
   - RUVDS Moscow: `/root/greenvpn-london-catalog-backups/20260716T104858Z-ruvds-moscow-paid-beta`.
+- Unsigned Windows 0.3.4 release candidate (not public):
+  `C:\BlueVPN_Builds\green_vpn_windows_0.3.4_rc_20260717_04\GreenVPN_Setup_0.3.4.exe`,
+  SHA-256 `C761421B01DACDA10CCD89D3A696CD11B4A625242A46B12FC68A4A7D5E3BC2AA`.
+  Rollback remains the currently published Windows installer until a signed
+  artifact is atomically promoted.
 - Current final-candidate source commit:
   `ceec7aad27ab0399d3ec93f096bbae83c5187ee6`.
 - Current final-candidate tag:

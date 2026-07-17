@@ -37,8 +37,10 @@ class FlutterWindow : public Win32Window {
   void ShowTrayMenu(HWND window);
   void RestoreFromTray();
   void RunVpnTask(const wchar_t* task_name);
+  void ShowTrayTaskResult(bool success, bool connecting);
 
   bool tray_icon_added_ = false;
+  bool tray_task_running_ = false;
   bool exit_requested_ = false;
   NOTIFYICONDATAW tray_icon_data_{};
 };

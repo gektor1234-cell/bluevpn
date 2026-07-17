@@ -42,6 +42,12 @@ String greenVpnPublicVersionTitle(String rawVersion) {
 }
 
 List<String> greenVpnPublicChangelog(Iterable<String> rawItems) {
+  const localizedItems = <String, String>{
+    'windows: cleaner server list': 'Упрощён выбор сервера.',
+    'windows: hide provider/protocol/health details':
+        'Убраны лишние технические детали.',
+    'windows: generic vpn wording': 'Улучшены тексты интерфейса.',
+  };
   final internal = RegExp(
     r'preview|\bbeta\b|wireguard|amnezia|hysteria|vless|naive|dnstt|ruvds|timeweb|backend|/api/|forced disconnect|transport',
     caseSensitive: false,
@@ -49,6 +55,12 @@ List<String> greenVpnPublicChangelog(Iterable<String> rawItems) {
   final cleaned = rawItems
       .map((item) => item.trim().replaceFirst(RegExp(r'^[•*-]+\s*'), ''))
       .where((item) => item.isNotEmpty && !internal.hasMatch(item))
+      .map(
+        (item) =>
+            localizedItems[item.toLowerCase()] ??
+            (RegExp(r'[А-Яа-яЁё]').hasMatch(item) ? item : ''),
+      )
+      .where((item) => item.isNotEmpty)
       .toList(growable: false);
   if (cleaned.isNotEmpty || rawItems.isEmpty) return cleaned;
   return const ['Улучшены стабильность подключения и обновление приложения.'];
@@ -59,6 +71,18 @@ const List<String> greenVpnFixedPublicBillingPlanCodes = <String>[
   'green_90d',
   'green_180d',
 ];
+
+String greenVpnPublicBillingPeriodTitle(String rawPlanCode, int periodDays) {
+  switch (rawPlanCode.trim()) {
+    case 'green_30d':
+      return '1 месяц';
+    case 'green_90d':
+      return '3 месяца';
+    case 'green_180d':
+      return '6 месяцев';
+  }
+  return '$periodDays дней';
+}
 
 String greenVpnNormalizePublicBillingPlanCode(
   String rawCode, {
@@ -151,10 +175,12 @@ String greenVpnPublicErrorMessage({
 String greenVpnSocialOnlyStatusText({
   required bool allowed,
   required bool enabled,
+  bool usesApplications = true,
 }) {
   if (!allowed) return 'Функция временно недоступна для текущего режима.';
   if (enabled) {
-    return 'Функция активна. Выбранные приложения пойдут через VPN, '
+    final selectedKind = usesApplications ? 'приложения' : 'сервисы';
+    return 'Функция активна. Выбранные $selectedKind пойдут через VPN, '
         'остальной трафик останется обычным.';
   }
   return 'Функция выключена. При подключении весь трафик пойдёт через VPN.';

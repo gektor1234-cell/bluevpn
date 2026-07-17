@@ -143,6 +143,34 @@ String greenVpnClientPlatform() {
   return Platform.operatingSystem;
 }
 
+String greenVpnClientPlatformTitle() {
+  switch (greenVpnClientPlatform()) {
+    case 'android':
+      return 'Android';
+    case 'windows':
+      return 'Windows';
+    case 'ios':
+      return 'iOS';
+    case 'macos':
+      return 'macOS';
+    case 'linux':
+      return 'Linux';
+    case 'web':
+      return 'Web';
+    default:
+      return greenVpnClientPlatform();
+  }
+}
+
+bool greenVpnShouldOpenSavedSessionDirectly({
+  required bool hasSession,
+  required bool isWeb,
+  required bool isAndroid,
+  required bool isWindows,
+}) {
+  return hasSession && !isWeb && (isAndroid || isWindows);
+}
+
 bool greenVpnUpdateManifestMatchesCurrentPlatform(
   GreenVpnUpdateManifest manifest,
 ) {
@@ -623,7 +651,12 @@ class _AppBootstrapState extends State<AppBootstrap> {
     setState(() {
       _loadingStage = 'Открываем приложение...';
       _session = s;
-      _openSessionDirectly = s != null && !kIsWeb && Platform.isAndroid;
+      _openSessionDirectly = greenVpnShouldOpenSavedSessionDirectly(
+        hasSession: s != null,
+        isWeb: kIsWeb,
+        isAndroid: !kIsWeb && Platform.isAndroid,
+        isWindows: !kIsWeb && Platform.isWindows,
+      );
       _loading = false;
     });
   }
@@ -4244,9 +4277,7 @@ while True:
     );
     if (!res.ok) return ApiResult.err(res.message);
     if (res.data is! Map) {
-      return const ApiResult.err(
-        'РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ РѕС‚РІРµС‚ ads/challenge complete.',
-      );
+      return const ApiResult.err('Некорректный ответ ads/challenge complete.');
     }
     return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
   }
@@ -10606,7 +10637,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
   Future<void> _openSocialAppsPicker(BuildContext context) async {
     final tempPresets = Set<SocialApp>.from(socialOnlyApps);
-    final tempCustomPackages = Set<String>.from(socialOnlyCustomPackages);
+    final usesApplications = !kIsWeb && Platform.isAndroid;
+    final tempCustomPackages = usesApplications
+        ? Set<String>.from(socialOnlyCustomPackages)
+        : <String>{};
 
     final picked = await showDialog<bool>(
       context: context,
@@ -10622,7 +10656,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                     ),
               );
             return AlertDialog(
-              title: const Text('Приложения через VPN'),
+              title: Text(
+                usesApplications ? 'Приложения через VPN' : 'Сервисы через VPN',
+              ),
               content: SizedBox(
                 width: 460,
                 child: SingleChildScrollView(
@@ -10721,7 +10757,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                 ElevatedButton(
                   onPressed: () {
                     if (tempPresets.isEmpty && tempCustomPackages.isEmpty) {
-                      _toast(ctx, 'Выбери хотя бы одно приложение.');
+                      _toast(
+                        ctx,
+                        usesApplications
+                            ? 'Выбери хотя бы одно приложение.'
+                            : 'Выбери хотя бы один сервис.',
+                      );
                       return;
                     }
                     Navigator.of(ctx).pop(true);
@@ -10751,9 +10792,15 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       if (mounted) {
         setState(() {
           vpnBusy = vpnEnabled;
-          _vpnBusyStage = vpnEnabled ? 'Применяем список...' : null;
+          _vpnBusyStage = vpnEnabled
+              ? (usesApplications
+                    ? 'Применяем список приложений...'
+                    : 'Применяем список сервисов...')
+              : null;
           _vpnBusyHint = vpnEnabled
-              ? 'Переподключаем VPN с новым набором приложений.'
+              ? (usesApplications
+                    ? 'Переподключаем VPN с новым набором приложений.'
+                    : 'Переподключаем VPN с новым набором сервисов.')
               : null;
         });
       }
@@ -10966,7 +11013,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                         ),
                         const SizedBox(height: 14),
                         Text(
-                          'Можно продолжить пользоваться приложением, но лучше поставить свежую версию: исправления приезжают через обновление.',
+                          manifest.required
+                              ? 'Чтобы продолжить пользоваться Green VPN, установите это обновление.'
+                              : 'Можно продолжить пользоваться приложением, но лучше поставить свежую версию.',
                           style: TextStyle(
                             color: theme.colorScheme.onSurface.withValues(
                               alpha: 0.72,
@@ -11424,6 +11473,7 @@ class VpnPage extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     final textColor = theme.colorScheme.onSurface;
     final mutedColor = textColor.withValues(alpha: isDark ? 0.72 : 0.62);
+    final usesApplications = !kIsWeb && Platform.isAndroid;
     final statusText = vpnBusy
         ? (vpnBusyStage ?? (vpnEnabled ? 'Отключаем...' : 'Подключаем...'))
         : (vpnEnabled
@@ -11437,9 +11487,10 @@ class VpnPage extends StatelessWidget {
     final serverSub = greenVpnPublicServerSubtitle(selectedServer);
     final selectedAppTitles = <String>[
       ...socialOnlyApps.map((app) => app.title),
-      ...socialOnlyCustomPackages.map(
-        (packageName) => socialOnlyCustomLabels[packageName] ?? packageName,
-      ),
+      if (usesApplications)
+        ...socialOnlyCustomPackages.map(
+          (packageName) => socialOnlyCustomLabels[packageName] ?? packageName,
+        ),
     ]..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     final appsText = selectedAppTitles.isEmpty
         ? 'Не выбрано'
@@ -11593,14 +11644,18 @@ class VpnPage extends StatelessWidget {
             children: [
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
-                title: const Text(
-                  'Только для соц. сетей',
+                title: Text(
+                  usesApplications
+                      ? 'Только для соц. сетей'
+                      : 'Только для выбранных сервисов',
                   style: TextStyle(fontWeight: FontWeight.w900),
                 ),
                 subtitle: Text(
                   socialOnlyEnabled
                       ? 'Через VPN: $appsText'
-                      : 'Выбери приложения, которые должны идти через VPN',
+                      : (usesApplications
+                            ? 'Выбери приложения, которые должны идти через VPN'
+                            : 'Выбери сервисы, которые должны идти через VPN'),
                   style: const TextStyle(fontSize: 12),
                 ),
                 value: socialOnlyEnabled,
@@ -11612,8 +11667,10 @@ class VpnPage extends StatelessWidget {
                 child: OutlinedButton.icon(
                   onPressed: onConfigureSocialApps,
                   icon: const Icon(Icons.tune_rounded),
-                  label: const Text(
-                    'Настроить приложения',
+                  label: Text(
+                    usesApplications
+                        ? 'Настроить приложения'
+                        : 'Настроить сервисы',
                     style: TextStyle(fontWeight: FontWeight.w900),
                   ),
                   style: OutlinedButton.styleFrom(
@@ -11629,6 +11686,7 @@ class VpnPage extends StatelessWidget {
                 greenVpnSocialOnlyStatusText(
                   allowed: socialOnlyAllowed,
                   enabled: socialOnlyEnabled,
+                  usesApplications: usesApplications,
                 ),
                 style: TextStyle(
                   color: mutedColor,
@@ -12187,6 +12245,7 @@ class TariffPage extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     final textColor = theme.colorScheme.onSurface;
     final mutedColor = textColor.withValues(alpha: isDark ? 0.72 : 0.62);
+    final usesApplications = !kIsWeb && Platform.isAndroid;
     final rawPlans = (tariffCatalog?['plans'] as List?) ?? const [];
     final plans = rawPlans
         .whereType<Map>()
@@ -12231,6 +12290,10 @@ class TariffPage extends StatelessWidget {
     );
     final selectedPrice = (selectedPlan['priceRub'] as num?)?.toInt() ?? 249;
     final selectedDays = (selectedPlan['periodDays'] as num?)?.toInt() ?? 30;
+    final selectedPeriodTitle = greenVpnPublicBillingPeriodTitle(
+      effectiveSelectedPlanCode,
+      selectedDays,
+    );
     final pendingStatus = (pendingBillingOrder?['status'] ?? '')
         .toString()
         .trim()
@@ -12256,65 +12319,74 @@ class TariffPage extends StatelessWidget {
       final monthly = (plan['effectiveMonthlyRub'] as num?)?.toInt() ?? price;
       final discount = (plan['discountPercent'] as num?)?.toInt() ?? 0;
       final selected = code == effectiveSelectedPlanCode;
-      return InkWell(
-        onTap: tariffBusy || hasPendingOrder
-            ? null
-            : () => onPublicBillingPlanChanged(code),
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: selected ? kBrandPrimary : theme.dividerColor,
-              width: selected ? 2 : 1,
+      final enabled = !tariffBusy && !hasPendingOrder;
+      final monthlyText = discount > 0
+          ? '$monthly ₽ в месяц, выгода $discount%'
+          : '$monthly ₽ в месяц';
+      return Semantics(
+        button: true,
+        selected: selected,
+        enabled: enabled,
+        label: '$title. $monthlyText. Стоимость $price ₽',
+        excludeSemantics: true,
+        child: InkWell(
+          onTap: enabled ? () => onPublicBillingPlanChanged(code) : null,
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: selected ? kBrandPrimary : theme.dividerColor,
+                width: selected ? 2 : 1,
+              ),
+              color: selected
+                  ? kBrandPrimary.withValues(alpha: isDark ? 0.14 : 0.08)
+                  : Colors.transparent,
             ),
-            color: selected
-                ? kBrandPrimary.withValues(alpha: isDark ? 0.14 : 0.08)
-                : Colors.transparent,
-          ),
-          child: Row(
-            children: [
-              Icon(
-                selected
-                    ? Icons.radio_button_checked_rounded
-                    : Icons.radio_button_off_rounded,
-                color: selected ? kBrandPrimary : mutedColor,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(fontWeight: FontWeight.w900),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      discount > 0
-                          ? '$monthly ₽ в месяц • выгода $discount%'
-                          : '$monthly ₽ в месяц',
-                      style: TextStyle(
-                        color: mutedColor,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 12,
+            child: Row(
+              children: [
+                Icon(
+                  selected
+                      ? Icons.radio_button_checked_rounded
+                      : Icons.radio_button_off_rounded,
+                  color: selected ? kBrandPrimary : mutedColor,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(fontWeight: FontWeight.w900),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 3),
+                      Text(
+                        discount > 0
+                            ? '$monthly ₽ в месяц • выгода $discount%'
+                            : '$monthly ₽ в месяц',
+                        style: TextStyle(
+                          color: mutedColor,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(width: 10),
-              Text(
-                '$price ₽',
-                style: TextStyle(
-                  color: selected ? kBrandPrimary : textColor,
-                  fontWeight: FontWeight.w900,
-                  fontSize: 18,
+                const SizedBox(width: 10),
+                Text(
+                  '$price ₽',
+                  style: TextStyle(
+                    color: selected ? kBrandPrimary : textColor,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 18,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       );
@@ -12375,17 +12447,19 @@ class TariffPage extends StatelessWidget {
                 if (index != plans.length - 1) const SizedBox(height: 8),
               ],
               const SizedBox(height: 14),
-              const Wrap(
+              Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  _IncludedBadge(
+                  const _IncludedBadge(
                     icon: Icons.block_rounded,
                     text: 'Без рекламы',
                   ),
                   _IncludedBadge(
                     icon: Icons.alt_route_rounded,
-                    text: 'Только для выбранных приложений',
+                    text: usesApplications
+                        ? 'Только для выбранных приложений'
+                        : 'Только для выбранных сервисов',
                   ),
                 ],
               ),
@@ -12480,7 +12554,7 @@ class TariffPage extends StatelessWidget {
                 : const Icon(Icons.payment_rounded),
             label: Text(
               'Оплатить $selectedPrice ₽ '
-              'за $selectedDays дней',
+              'за $selectedPeriodTitle',
               style: const TextStyle(fontWeight: FontWeight.w900),
             ),
           ),
@@ -14016,7 +14090,7 @@ class SettingsPage extends StatelessWidget {
                 _SettingsActionRow(
                   title: 'О Green VPN',
                   subtitle:
-                      'Версия $displayedVersion, ${greenVpnClientPlatform().toUpperCase()}',
+                      'Версия $displayedVersion для ${greenVpnClientPlatformTitle()}',
                   icon: Icons.info_outline_rounded,
                   onTap: () => _showAbout(context),
                 ),
@@ -14339,11 +14413,7 @@ class _UpdatesPageState extends State<UpdatesPage> {
 
   String get _platform => greenVpnClientPlatform();
 
-  String get _platformTitle {
-    if (_platform == 'android') return 'Android';
-    if (_platform == 'windows') return 'Windows';
-    return _platform.toUpperCase();
-  }
+  String get _platformTitle => greenVpnClientPlatformTitle();
 
   String get _expectedUpdateExtension {
     if (!kIsWeb && Platform.isAndroid) return '.apk';
@@ -14507,7 +14577,10 @@ class _UpdatesPageState extends State<UpdatesPage> {
     }
 
     final uri = Uri.parse(url);
-    if (uri.scheme != 'https' && uri.scheme != 'http') {
+    final schemeAllowed = kPublicProductBuild
+        ? uri.scheme == 'https'
+        : uri.scheme == 'https' || uri.scheme == 'http';
+    if (!schemeAllowed || uri.host.trim().isEmpty) {
       throw Exception('Некорректная ссылка обновления.');
     }
 
@@ -14604,12 +14677,11 @@ class _UpdatesPageState extends State<UpdatesPage> {
     }
 
     if (!kIsWeb && Platform.isWindows) {
-      await Process.start('cmd', [
-        '/c',
-        'start',
-        '',
+      await Process.start(
         file.path,
-      ], mode: ProcessStartMode.detached);
+        const <String>[],
+        mode: ProcessStartMode.detached,
+      );
       return;
     }
 
@@ -16534,48 +16606,53 @@ class _SettingsNavRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return InkWell(
-      borderRadius: BorderRadius.circular(14),
-      onTap: onTap,
-      child: Row(
-        children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: theme.brightness == Brightness.dark
-                  ? kBrandDarkSurface
-                  : kBrandPrimarySoft,
-              borderRadius: BorderRadius.circular(14),
+    return Semantics(
+      button: true,
+      label: '$title. $subtitle',
+      excludeSemantics: true,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: theme.brightness == Brightness.dark
+                    ? kBrandDarkSurface
+                    : kBrandPrimarySoft,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(icon, color: kBrandPrimary),
             ),
-            child: Icon(icon, color: kBrandPrimary),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(fontWeight: FontWeight.w900),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(fontWeight: FontWeight.w900),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          Icon(
-            Icons.chevron_right_rounded,
-            color: theme.colorScheme.onSurface.withValues(alpha: 0.35),
-          ),
-        ],
+            Icon(
+              Icons.chevron_right_rounded,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.35),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -16598,48 +16675,53 @@ class _SettingsActionRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return InkWell(
-      borderRadius: BorderRadius.circular(14),
-      onTap: onTap,
-      child: Row(
-        children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: theme.brightness == Brightness.dark
-                  ? kBrandDarkSurface
-                  : kBrandPrimarySoft,
-              borderRadius: BorderRadius.circular(14),
+    return Semantics(
+      button: true,
+      label: '$title. $subtitle',
+      excludeSemantics: true,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: theme.brightness == Brightness.dark
+                    ? kBrandDarkSurface
+                    : kBrandPrimarySoft,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(icon, color: kBrandPrimary),
             ),
-            child: Icon(icon, color: kBrandPrimary),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(fontWeight: FontWeight.w900),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                    fontWeight: FontWeight.w700,
-                    fontSize: 12,
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(fontWeight: FontWeight.w900),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          Icon(
-            Icons.chevron_right_rounded,
-            color: theme.colorScheme.onSurface.withValues(alpha: 0.35),
-          ),
-        ],
+            Icon(
+              Icons.chevron_right_rounded,
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.35),
+            ),
+          ],
+        ),
       ),
     );
   }
