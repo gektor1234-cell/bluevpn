@@ -17,6 +17,15 @@ const state = {
   section: 'dashboard',
   activeUserId: null,
   activeUserDetail: null,
+  selectedUserIds: new Set(),
+  autoRefreshTimer: null,
+  pages: {
+    users: { limit: 50, offset: 0, total: 0 },
+    orders: { limit: 50, offset: 0, total: 0 },
+    support: { limit: 50, offset: 0, total: 0 },
+    auth: { limit: 80, offset: 0, total: 0 },
+    audit: { limit: 80, offset: 0, total: 0 },
+  },
   remotePeerSmokeBusyServerIds: new Set(),
   clientConfigSmokeBusyServerIds: new Set(),
   publicationGateBusyServerIds: new Set(),
@@ -3459,9 +3468,11 @@ function supportFilterParams() {
   const category = $('supportCategoryFilter')?.value || 'all';
   const assignedTo = $('supportAssignedFilter')?.value?.trim() || '';
   const raw = $('supportSearchInput')?.value?.trim() || '';
-  const params = { status, priority, category, limit: 80 };
+  const page = state.pages.support;
+  const params = { status, priority, category, limit: page.limit, offset: page.offset };
   if (assignedTo) params.assignedTo = assignedTo;
   if (!raw) return params;
+  params.q = raw;
   if (/^\d+$/.test(raw)) {
     params.userId = raw;
   } else if (raw.includes('@')) {
@@ -3483,19 +3494,49 @@ function incidentFilterParams() {
 }
 
 function userFilterParams() {
+  const page = state.pages.users;
   return {
-    limit: 100,
+    limit: page.limit,
+    offset: page.offset,
     q: $('userSearchInput')?.value?.trim() || '',
+    platform: $('userPlatformFilter')?.value || 'all',
+    subscription: $('userSubscriptionFilter')?.value || 'all',
+    sort: $('userSortFilter')?.value || 'newest',
+  };
+}
+
+function orderFilterParams() {
+  const page = state.pages.orders;
+  return {
+    limit: page.limit,
+    offset: page.offset,
+    q: $('orderSearchInput')?.value?.trim() || '',
+    status: $('orderStatusFilter')?.value || 'all',
   };
 }
 
 function authFilterParams() {
+  const page = state.pages.auth;
   return {
-    limit: 80,
+    limit: page.limit,
+    offset: page.offset,
     eventType: $('authTypeFilter')?.value || 'all',
     status: $('authStatusFilter')?.value || 'all',
     contact: $('authSearchInput')?.value?.trim() || '',
   };
+}
+
+function auditFilterParams() {
+  const page = state.pages.audit;
+  return {
+    limit: page.limit,
+    offset: page.offset,
+    q: $('auditSearchInput')?.value?.trim() || '',
+  };
+}
+
+function resetPage(name) {
+  if (state.pages[name]) state.pages[name].offset = 0;
 }
 
 function debounce(fn, delay = 350) {
@@ -3603,8 +3644,12 @@ function adminHeaders(baseHeaders = {}) {
   } else if (state.adminToken) {
     headers['X-Admin-Token'] = state.adminToken;
   }
-  if (state.adminActor) {
-    headers['X-Admin-Actor'] = state.adminActor;
+  const actor = String(state.adminActor || '').trim();
+  const safeActor = /^[\x20-\x7e]+$/.test(actor)
+    ? actor
+    : String(state.currentStaff?.email || state.adminEmail || 'staff');
+  if (safeActor) {
+    headers['X-Admin-Actor'] = safeActor;
   }
   return headers;
 }
@@ -3769,6 +3814,8 @@ function applyAuthUi() {
   $('loginPanel')?.classList.toggle('hidden', authenticated);
   $('logoutButton')?.classList.toggle('hidden', !authenticated);
   $('refreshButton')?.classList.toggle('hidden', !authenticated);
+  $('globalSearchGroup')?.classList.toggle('hidden', !authenticated || !can('users.read'));
+  $('autoRefreshControl')?.classList.toggle('hidden', !authenticated);
   $('openLoginButton')?.classList.toggle('hidden', authenticated);
   if ($('openLoginButton')) {
     $('openLoginButton').textContent = 'Войти';
@@ -3898,6 +3945,7 @@ function queueSectionRequests(requests, section) {
 
   if (currentSection === 'dashboard') {
     addAllowedRequest(requests, 'overview', 'dashboard.read', () => apiGet('/api/v1/admin/overview'));
+    addAllowedRequest(requests, 'analytics', 'analytics.read', () => apiGet('/api/v1/admin/analytics/summary'));
     return;
   }
 
@@ -3937,7 +3985,7 @@ function queueSectionRequests(requests, section) {
 
   if (currentSection === 'orders') {
     addAllowedRequest(requests, 'subscriptionExpiry', 'billing.read', () => apiGet('/api/v1/admin/subscriptions/expiry-readiness?limit=25'));
-    addAllowedRequest(requests, 'orders', 'billing.read', () => apiGet('/api/v1/admin/billing/orders?status=all'));
+    addAllowedRequest(requests, 'orders', 'billing.read', () => apiGet(`/api/v1/admin/billing/orders${encodeQuery(orderFilterParams())}`));
     addAllowedRequest(requests, 'billingPromos', 'billing.read', () => apiGet('/api/v1/admin/billing/promos'));
     addAllowedRequest(requests, 'billingPromoReadiness', 'billing.read', () => apiGet('/api/v1/admin/billing/promos/readiness'));
     addAllowedRequest(requests, 'billingPaymentSmoke', 'billing.read', () => apiGet('/api/v1/admin/billing/payment-smoke/readiness?limit=10'));
@@ -3958,7 +4006,7 @@ function queueSectionRequests(requests, section) {
   }
 
   if (currentSection === 'audit') {
-    addAllowedRequest(requests, 'audit', 'audit.read', () => apiGet('/api/v1/admin/audit?limit=80'));
+    addAllowedRequest(requests, 'audit', 'audit.read', () => apiGet(`/api/v1/admin/audit${encodeQuery(auditFilterParams())}`));
     return;
   }
 
@@ -4081,6 +4129,215 @@ function renderMetrics(overview) {
       `,
     )
     .join('');
+}
+
+function clientPlatformTitle(platform) {
+  const titles = {
+    android: 'Android',
+    windows: 'Windows',
+    ios: 'iOS',
+    macos: 'macOS',
+    linux: 'Linux',
+  };
+  return titles[String(platform || '').toLowerCase()] || safeText(platform, 'Другая');
+}
+
+function renderCommandCenter() {
+  const analytics = state.loaded.analytics || {};
+  const attention = analytics.attention || {};
+  const rows = [
+    ['support', 'Просроченные обращения', attention.supportOverdue, 'support'],
+    ['support', 'Без первого ответа', attention.supportFirstResponseMissing, 'support'],
+    ['incidents', 'Критичные инциденты', attention.criticalIncidents, 'incidents'],
+    ['orders', 'Платежи ожидают больше суток', attention.stalePendingOrders, 'orders'],
+    ['users', 'Подписки истекают за 7 дней', attention.subscriptionsExpiring7d, 'users'],
+  ];
+  const container = $('attentionQueuePanel');
+  if (container) {
+    container.innerHTML = rows
+      .map(([, label, value, section]) => {
+        const count = Number(value || 0);
+        return `
+          <div class="status-row attention-row">
+            ${statusDot(count === 0, count > 0 && count < 5)}
+            <div>
+              <strong>${escapeHtml(label)}</strong>
+              <span>${count ? 'Открыть очередь и обработать' : 'Нет задач'}</span>
+            </div>
+            <button class="small-button ${count ? '' : 'quiet'}" type="button" data-jump-section="${escapeHtml(section)}">
+              ${escapeHtml(numberText(count))}
+            </button>
+          </div>
+        `;
+      })
+      .join('');
+  }
+
+  const platforms = analytics.clients?.platforms || {};
+  const platformContainer = $('clientPlatformSummary');
+  if (platformContainer) {
+    platformContainer.innerHTML = ['android', 'windows']
+      .map((platform) => {
+        const item = platforms[platform] || {};
+        return `
+          <div class="status-row">
+            ${statusDot(Number(item.seen7d || 0) > 0, Number(item.devices || 0) > 0)}
+            <div>
+              <strong>${clientPlatformTitle(platform)}</strong>
+              <span>${numberText(item.users)} пользователей · ${numberText(item.enabled)} активных устройств</span>
+            </div>
+            <span class="status-pill muted">${numberText(item.seen24h)} за 24ч</span>
+          </div>
+        `;
+      })
+      .join('');
+  }
+  if ($('lastUpdatedAt')) {
+    $('lastUpdatedAt').textContent = analytics.generatedAt ? shortDate(analytics.generatedAt) : '—';
+  }
+}
+
+function renderClientAnalytics(analytics) {
+  const container = $('analyticsClientsPanel');
+  if (!container) return;
+  const platforms = analytics?.clients?.platforms || {};
+  const versions = analytics?.clients?.versions || {};
+  container.innerHTML = ['android', 'windows']
+    .map((platform) => {
+      const item = platforms[platform] || {};
+      const versionRows = (versions[platform] || [])
+        .map((version) => `
+          <div class="version-row">
+            <code>${escapeHtml(version.version)}</code>
+            <span>${numberText(version.devices)} устр.</span>
+            <span>${escapeHtml(shortDate(version.lastSeenAt))}</span>
+          </div>
+        `)
+        .join('') || '<p class="muted">Данных о версиях пока нет.</p>';
+      return `
+        <section class="platform-block">
+          <div class="platform-block-head">
+            <div>
+              <strong>${clientPlatformTitle(platform)}</strong>
+              <span>${numberText(item.users)} пользователей</span>
+            </div>
+            <span class="status-pill">${numberText(item.seen24h)} за 24ч</span>
+          </div>
+          <div class="platform-kpis">
+            <span>Устройства <strong>${numberText(item.devices)}</strong></span>
+            <span>Активны <strong>${numberText(item.enabled)}</strong></span>
+            <span>За 7 дней <strong>${numberText(item.seen7d)}</strong></span>
+            <span>С конфигом <strong>${numberText(item.configIssued)}</strong></span>
+          </div>
+          <div class="version-list">${versionRows}</div>
+        </section>
+      `;
+    })
+    .join('');
+}
+
+function renderPagination(name, containerId) {
+  const container = $(containerId);
+  if (!container) return;
+  const page = state.pages[name] || {};
+  const total = Number(page.total || 0);
+  const from = Number(page.from || 0);
+  const to = Number(page.to || 0);
+  container.innerHTML = `
+    <span>${numberText(from)}–${numberText(to)} из ${numberText(total)}</span>
+    <div class="row-actions">
+      <button class="small-button" type="button" data-page-name="${escapeHtml(name)}" data-page-direction="previous" ${page.hasPrevious ? '' : 'disabled'}>Назад</button>
+      <button class="small-button" type="button" data-page-name="${escapeHtml(name)}" data-page-direction="next" ${page.hasMore ? '' : 'disabled'}>Дальше</button>
+    </div>
+  `;
+}
+
+async function changePage(name, direction) {
+  const page = state.pages[name];
+  if (!page) return;
+  const target = direction === 'previous' ? page.previousOffset : page.nextOffset;
+  if (target === null || target === undefined) return;
+  page.offset = Math.max(0, Number(target || 0));
+  await loadDashboardData();
+}
+
+function clearUserSelection() {
+  state.selectedUserIds.clear();
+  renderUsersTable();
+}
+
+async function runBulkUserAction() {
+  const userIds = Array.from(state.selectedUserIds);
+  const action = $('userBulkAction')?.value || '';
+  const reason = $('userBulkReason')?.value?.trim() || '';
+  if (!userIds.length) {
+    setNotice('Выбери хотя бы один аккаунт.', true);
+    return;
+  }
+  if (reason.length < 8) {
+    setNotice('Для массового действия нужна причина не короче 8 символов.', true);
+    return;
+  }
+  const dangerous = action === 'disable_all_devices' || action === 'reset_user_sessions';
+  const confirmed = window.confirm(`Выполнить действие для ${userIds.length} аккаунтов?${dangerous ? ' Часть пользователей потеряет текущий доступ.' : ''}`);
+  if (!confirmed) return;
+  try {
+    const result = await apiPost('/api/v1/admin/users/bulk-actions', { userIds, action, reason });
+    const failed = (result.results || []).filter((item) => !item.ok);
+    clearUserSelection();
+    if ($('userBulkReason')) $('userBulkReason').value = '';
+    await loadDashboardData();
+    setNotice(
+      failed.length
+        ? `Пакет завершён: успешно ${numberText((result.results || []).length - failed.length)}, ошибок ${numberText(failed.length)}.`
+        : `Пакетное действие выполнено для ${numberText(userIds.length)} аккаунтов.`,
+      failed.length > 0,
+    );
+  } catch (error) {
+    setNotice(`Не удалось выполнить пакетное действие: ${error.message}`, true);
+  }
+}
+
+async function downloadAdminExport(dataset, params = {}) {
+  const query = { ...params };
+  delete query.limit;
+  delete query.offset;
+  const path = `/api/v1/admin/exports/${encodeURIComponent(dataset)}.csv${encodeQuery(query)}`;
+  try {
+    const response = await fetchWithTimeout(`${state.apiBase}${path}`, {
+      headers: { Accept: 'text/csv', ...adminHeaders() },
+    }, path);
+    if (!response.ok) {
+      const body = await response.text();
+      let parsed = null;
+      try { parsed = JSON.parse(body); } catch (_error) { parsed = null; }
+      throw new Error(`${response.status}: ${formatApiErrorDetail(parsed, body, response.statusText)}`);
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get('content-disposition') || '';
+    const filenameMatch = disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+    const filename = filenameMatch ? decodeURIComponent(filenameMatch[1]) : `greenvpn-${dataset}.csv`;
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    setNotice(`Выгрузка готова: ${filename}.`);
+  } catch (error) {
+    setNotice(`Не удалось скачать CSV: ${error.message}`, true);
+  }
+}
+
+function configureAutoRefresh(enabled) {
+  window.clearInterval(state.autoRefreshTimer);
+  state.autoRefreshTimer = null;
+  if (!enabled || !hasAdminCredential()) return;
+  state.autoRefreshTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible' && hasAdminCredential()) loadDashboardData();
+  }, 60000);
 }
 
 function renderAccountSecurity() {
@@ -4238,6 +4495,7 @@ function renderAnalytics() {
     $('analyticsSupportPanel').innerHTML = '<p class="muted">Аналитика ещё не загружена.</p>';
     $('analyticsOpsPanel').innerHTML = '<p class="muted">Аналитика ещё не загружена.</p>';
     $('analyticsTrendsPanel').innerHTML = '';
+    if ($('analyticsClientsPanel')) $('analyticsClientsPanel').innerHTML = '<p class="muted">Данные клиентов ещё не загружены.</p>';
     return;
   }
 
@@ -4246,6 +4504,7 @@ function renderAnalytics() {
   const subscriptions = analytics.business?.subscriptions || {};
   const orders = analytics.business?.orders || {};
   const conversion = analytics.business?.conversion || {};
+  const activity = analytics.business?.activity || {};
   const support = analytics.support || {};
   const incidents = analytics.incidents || {};
   const updates = analytics.updates || {};
@@ -4271,12 +4530,15 @@ function renderAnalytics() {
       </div>
     `)
     .join('');
+  renderClientAnalytics(analytics);
 
   $('analyticsBusinessPanel').innerHTML = [
     analyticsRow('Новые аккаунты за 30 дней', numberText(users.created30d), `${percentText(users.emailVerifiedSharePercent)} с подтверждённой почтой`),
     analyticsRow('Телефон подтверждён', numberText(users.phoneVerified), `${percentText(users.phoneVerifiedSharePercent)} от пользователей`),
     analyticsRow('Устройства', `${numberText(devices.enabled)} / ${numberText(devices.total)}`, `${numberText(devices.configIssued)} получили конфиг`),
+    analyticsRow('Активность 24ч / 30д', `${numberText(activity.users24h)} / ${numberText(activity.users30d)}`, `DAU/MAU ${percentText(activity.dauToMauPercent)}`),
     analyticsRow('Конверсия в оплату', percentText(conversion.paidUserSharePercent), `${numberText(conversion.usersWithPaidOrders)} пользователей с оплатой`),
+    analyticsRow('Автопродление', numberText(subscriptions.autoRenew), `${numberText(subscriptions.savedPaymentMethod)} сохранённых способов оплаты`),
     analyticsRow('Истекают за 7 дней', numberText(subscriptions.expires7d), 'нужно продление или ручной контакт', subscriptions.expires7d > 0 ? 'yellow' : 'muted'),
   ].join('');
 
@@ -5282,6 +5544,7 @@ function renderSupportTable() {
         `,
       )
       .join('') || '<tr><td colspan="9">Отчётов нет.</td></tr>';
+  renderPagination('support', 'supportPagination');
 }
 
 function renderSupportActionsOverview() {
@@ -5461,25 +5724,58 @@ function renderUsersTable() {
   const rows = state.loaded.users || [];
   $('usersTable').innerHTML =
     rows
-      .map(
-        (user) => `
+      .map((user) => {
+        const subscription = user.subscription || {};
+        const platforms = (user.platforms || [])
+          .map((platform) => `<span class="status-pill muted">${escapeHtml(clientPlatformTitle(platform))}</span>`)
+          .join('');
+        const checked = state.selectedUserIds.has(Number(user.id));
+        return `
           <tr>
+            <td><input type="checkbox" data-user-select="${escapeHtml(user.id)}" ${checked ? 'checked' : ''} aria-label="Выбрать пользователя #${escapeHtml(user.id)}"></td>
             <td>#${escapeHtml(user.id)}</td>
-            <td>${escapeHtml(user.email)}</td>
-            <td>${escapeHtml(user.phone)}</td>
-            <td>${boolLabel(user.emailVerified)}</td>
-            <td>${boolLabel(user.phoneVerified)}</td>
             <td>
-              ${escapeHtml(shortDate(user.createdAt))}<br>
-              <span class="muted">устройства: ${escapeHtml(user.enabledDeviceCount, '0')}/${escapeHtml(user.deviceCount, '0')}</span>
+              <strong>${escapeHtml(user.email)}</strong><br>
+              <span class="muted">${user.emailVerified ? 'подтверждена' : 'не подтверждена'}</span>
+            </td>
+            <td>
+              ${escapeHtml(user.phone)}<br>
+              <span class="muted">${user.phoneVerified ? 'подтверждён' : 'не подтверждён'}</span>
+            </td>
+            <td><div class="pill-list">${platforms || '<span class="muted">нет устройств</span>'}</div></td>
+            <td>
+              <span class="status-pill ${subscription.isActive ? '' : 'muted'}">${escapeHtml(subscription.planName || 'нет')}</span><br>
+              <span class="muted">${subscription.isActive ? `до ${escapeHtml(shortDate(subscription.expiresAt))}` : 'неактивна'}${subscription.autoRenew ? ' · автопродление' : ''}</span>
+            </td>
+            <td>
+              <strong>${escapeHtml(user.enabledDeviceCount, '0')}/${escapeHtml(user.deviceCount, '0')}</strong><br>
+              <span class="muted">активные / все</span>
+            </td>
+            <td>
+              ${escapeHtml(shortDate(user.lastSeenAt))}<br>
+              <span class="muted">создан ${escapeHtml(shortDate(user.createdAt))}</span>
             </td>
             <td>
               <button class="small-button" data-user-open="${safeText(user.id)}">Открыть</button>
             </td>
           </tr>
-        `,
-      )
-      .join('') || '<tr><td colspan="7">Пользователей нет.</td></tr>';
+        `;
+      })
+      .join('') || '<tr><td colspan="9">Пользователей нет.</td></tr>';
+  const pageIds = rows.map((user) => Number(user.id));
+  const selectedOnPage = pageIds.filter((id) => state.selectedUserIds.has(id)).length;
+  if ($('usersSelectPage')) {
+    $('usersSelectPage').checked = Boolean(pageIds.length) && selectedOnPage === pageIds.length;
+    $('usersSelectPage').indeterminate = selectedOnPage > 0 && selectedOnPage < pageIds.length;
+  }
+  renderUserBulkBar();
+  renderPagination('users', 'usersPagination');
+}
+
+function renderUserBulkBar() {
+  const count = state.selectedUserIds.size;
+  $('userBulkBar')?.classList.toggle('hidden', count === 0);
+  if ($('userBulkCount')) $('userBulkCount').textContent = `${numberText(count)} выбрано`;
 }
 
 function orderPlanLabel(order) {
@@ -5915,7 +6211,10 @@ function renderOrdersTable() {
         (order) => `
           <tr>
             <td>${escapeHtml(order.orderId || order.id)}</td>
-            <td>${escapeHtml(order.email || order.userId)}</td>
+            <td>
+              <strong>${escapeHtml(order.userEmail || order.email || order.userId)}</strong><br>
+              <span class="muted">ID ${escapeHtml(order.userId)}</span>
+            </td>
             <td>
               ${escapeHtml(money(order.priceRub || order.amountRub))}
               ${
@@ -5931,6 +6230,7 @@ function renderOrdersTable() {
         `,
       )
       .join('') || '<tr><td colspan="6">Заказов нет.</td></tr>';
+  renderPagination('orders', 'ordersPagination');
 }
 
 function renderAuthTable() {
@@ -5951,6 +6251,7 @@ function renderAuthTable() {
         `,
       )
       .join('') || '<tr><td colspan="6">Событий нет.</td></tr>';
+  renderPagination('auth', 'authPagination');
 }
 
 function renderUserAuthReadiness() {
@@ -6197,12 +6498,14 @@ function renderAuditTable() {
         `,
       )
       .join('') || '<tr><td colspan="7">Журнал действий пока пуст.</td></tr>';
+  renderPagination('audit', 'auditPagination');
 }
 
 function renderAll() {
   $('sidebarApiBase').textContent = 'Green VPN';
   applyAuthUi();
   renderMetrics(state.loaded.overview || {});
+  renderCommandCenter();
   renderAccountSecurity();
   renderAnalytics();
   renderServiceStatus();
@@ -6365,6 +6668,9 @@ async function logoutAdmin() {
   state.pendingAdmin2fa = null;
   state.permissions = [];
   state.roleTitle = '';
+  configureAutoRefresh(false);
+  if ($('autoRefreshInput')) $('autoRefreshInput').checked = false;
+  state.selectedUserIds.clear();
   localStorage.removeItem(STORAGE_KEY);
   $('adminTokenInput').value = '';
   $('adminPasswordInput').value = '';
@@ -6486,12 +6792,19 @@ async function loadDashboardData() {
   for (const result of entries) {
     if (result.status === 'fulfilled') {
       const [key, value] = result.value;
-      if (key === 'support') state.loaded.support = value.reports || [];
+      if (key === 'support') {
+        state.loaded.support = value.reports || [];
+        state.pages.support = { ...state.pages.support, ...(value.page || {}) };
+      }
       else if (key === 'supportSla') state.loaded.supportSla = value;
-      else if (key === 'users') state.loaded.users = value.users || [];
+      else if (key === 'users') {
+        state.loaded.users = value.users || [];
+        state.pages.users = { ...state.pages.users, ...(value.page || {}) };
+      }
       else if (key === 'subscriptionExpiry') state.loaded.subscriptionExpiry = value;
       else if (key === 'orders') {
         state.loaded.orders = value.orders || [];
+        state.pages.orders = { ...state.pages.orders, ...(value.page || {}) };
         state.loaded.billingReconciliation = value.reconciliation || state.loaded.billingReconciliation;
         state.loaded.promos = value.promos || state.loaded.promos;
       }
@@ -6503,8 +6816,14 @@ async function loadDashboardData() {
       else if (key === 'billingPromoReadiness') state.loaded.promoReadiness = value;
       else if (key === 'billingPaymentSmoke') state.loaded.billingPaymentSmoke = value;
       else if (key === 'billingRenewals') state.loaded.billingRenewals = value;
-      else if (key === 'auth') state.loaded.auth = value.events || [];
-      else if (key === 'audit') state.loaded.audit = value.events || [];
+      else if (key === 'auth') {
+        state.loaded.auth = value.events || [];
+        state.pages.auth = { ...state.pages.auth, ...(value.page || {}) };
+      }
+      else if (key === 'audit') {
+        state.loaded.audit = value.events || [];
+        state.pages.audit = { ...state.pages.audit, ...(value.page || {}) };
+      }
       else if (key === 'roles') state.loaded.roles = value.roles || [];
       else if (key === 'staff') state.loaded.staff = value.staff || [];
       else if (key === 'adminSessions') state.loaded.adminSessions = value.sessions || [];
@@ -7193,6 +7512,50 @@ function renderUserPaymentSummary(subscription = {}, orders = []) {
   `;
 }
 
+function renderUserSubscriptionEditor(user, subscription = {}) {
+  const canManageBilling = can('billing.manage');
+  return `
+    <section class="detail-card">
+      <p class="eyebrow">Доступ и тариф</p>
+      <h3>Ручное управление подпиской</h3>
+      <div class="subscription-editor">
+        <label>
+          Код тарифа
+          <input id="userPlanCodeInput" type="text" value="${escapeHtml(subscription.planCode || 'none')}" ${canManageBilling ? '' : 'disabled'}>
+        </label>
+        <label>
+          Название
+          <input id="userPlanNameInput" type="text" value="${escapeHtml(subscription.planName || 'Без подписки')}" ${canManageBilling ? '' : 'disabled'}>
+        </label>
+        <label>
+          Лимит устройств
+          <input id="userMaxDevicesInput" type="number" min="1" max="100" value="${escapeHtml(subscription.maxDevices || 1)}" ${canManageBilling ? '' : 'disabled'}>
+        </label>
+        <label>
+          Действует до
+          <input id="userSubscriptionExpiresInput" type="datetime-local" value="${escapeHtml(promoDateTimeValue(subscription.expiresAt))}" ${canManageBilling ? '' : 'disabled'}>
+        </label>
+        <label class="checkbox-line">
+          <input id="userSubscriptionActiveInput" type="checkbox" ${subscription.isActive ? 'checked' : ''} ${canManageBilling ? '' : 'disabled'}>
+          Подписка активна
+        </label>
+        <label class="checkbox-line">
+          <input id="userPaidBetaInput" type="checkbox" ${user.paidBeta ? 'checked' : ''} ${canManageBilling ? '' : 'disabled'}>
+          Доступ к тестовому контуру
+        </label>
+        <label class="subscription-reason">
+          Причина для журнала
+          <input id="userSubscriptionReasonInput" type="text" placeholder="Например: продление по обращению" ${canManageBilling ? '' : 'disabled'}>
+        </label>
+        <button class="primary-button" type="button" data-user-save-subscription="${escapeHtml(user.id)}" ${canManageBilling ? '' : 'disabled'}>
+          Сохранить доступ
+        </button>
+      </div>
+      <p class="muted compact-note">Изменение тарифа не совершает платёж и не раскрывает данные карты.</p>
+    </section>
+  `;
+}
+
 function renderUserOperatorActions(user, devices = []) {
   const canManageUsers = can('users.manage');
   const canManageDevices = can('devices.manage');
@@ -7250,6 +7613,7 @@ async function openUser(userId) {
         </section>
         ${renderUserPaymentSummary(subscription, response.orders || [])}
       </div>
+      ${renderUserSubscriptionEditor(user, subscription)}
       ${renderUserOperatorActions(user, response.devices || [])}
       <section>
         <p class="eyebrow">Устройства</p>
@@ -7274,6 +7638,53 @@ async function openUser(userId) {
     translateAdminDom($('userDialog'));
   } catch (error) {
     setNotice(`Не удалось открыть пользователя: ${error.message}`, true);
+  }
+}
+
+async function saveUserSubscription(userId) {
+  if (!requirePermission('billing.manage', 'Изменение подписки')) return;
+  const reason = $('userSubscriptionReasonInput')?.value?.trim() || '';
+  const planCode = $('userPlanCodeInput')?.value?.trim() || '';
+  const planName = $('userPlanNameInput')?.value?.trim() || '';
+  const maxDevices = Number($('userMaxDevicesInput')?.value || 0);
+  const expiresAt = promoDateTimeToIso($('userSubscriptionExpiresInput')?.value || '');
+  if (!planCode || !planName) {
+    setNotice('Заполни код и название тарифа.', true);
+    return;
+  }
+  if (!Number.isInteger(maxDevices) || maxDevices < 1 || maxDevices > 100) {
+    setNotice('Лимит устройств должен быть от 1 до 100.', true);
+    return;
+  }
+  if (reason.length < 8) {
+    setNotice('Укажи понятную причину изменения: минимум 8 символов.', true);
+    return;
+  }
+  const paidBeta = Boolean($('userPaidBetaInput')?.checked);
+  const wasPaidBeta = Boolean(state.activeUserDetail?.user?.paidBeta);
+  const confirmed = window.confirm('Сохранить новые условия доступа? Действие попадёт в аудит.');
+  if (!confirmed) return;
+  try {
+    await apiPost(`/api/v1/admin/users/${encodeURIComponent(userId)}/subscription`, {
+      planCode,
+      planName,
+      maxDevices,
+      isActive: Boolean($('userSubscriptionActiveInput')?.checked),
+      expiresAt,
+      reason,
+    });
+    if (paidBeta !== wasPaidBeta) {
+      await apiPost(`/api/v1/admin/users/${encodeURIComponent(userId)}/paid-beta`, {
+        enabled: paidBeta,
+        source: 'admin_console',
+        reason,
+      });
+    }
+    await openUser(userId);
+    await loadDashboardData();
+    setNotice('Доступ и тариф обновлены.');
+  } catch (error) {
+    setNotice(`Не удалось обновить подписку: ${error.message}`, true);
   }
 }
 
@@ -7509,16 +7920,21 @@ function bindEvents() {
 
   $('refreshButton').addEventListener('click', loadDashboardData);
   $('testAlertsButton')?.addEventListener('click', testAdminAlert);
-  $('supportStatusFilter').addEventListener('change', loadDashboardData);
-  $('supportPriorityFilter')?.addEventListener('change', loadDashboardData);
-  $('supportCategoryFilter')?.addEventListener('change', loadDashboardData);
+  const reloadPageFromStart = (name) => {
+    resetPage(name);
+    if (name === 'users') state.selectedUserIds.clear();
+    return loadDashboardData();
+  };
+  $('supportStatusFilter').addEventListener('change', () => reloadPageFromStart('support'));
+  $('supportPriorityFilter')?.addEventListener('change', () => reloadPageFromStart('support'));
+  $('supportCategoryFilter')?.addEventListener('change', () => reloadPageFromStart('support'));
   $('supportActionTypeFilter')?.addEventListener('change', loadDashboardData);
   $('supportActionStatusFilter')?.addEventListener('change', loadDashboardData);
   $('incidentStatusFilter')?.addEventListener('change', loadDashboardData);
   $('incidentSeverityFilter')?.addEventListener('change', loadDashboardData);
   $('incidentAssigneeFilter')?.addEventListener('change', loadDashboardData);
-  $('authTypeFilter')?.addEventListener('change', loadDashboardData);
-  $('authStatusFilter')?.addEventListener('change', loadDashboardData);
+  $('authTypeFilter')?.addEventListener('change', () => reloadPageFromStart('auth'));
+  $('authStatusFilter')?.addEventListener('change', () => reloadPageFromStart('auth'));
   $('releaseChannelFilter')?.addEventListener('change', loadDashboardData);
   $('releaseStatusFilter')?.addEventListener('change', loadDashboardData);
   $('serverStatusFilter')?.addEventListener('change', loadDashboardData);
@@ -7526,11 +7942,23 @@ function bindEvents() {
   $('serverPublicFilter')?.addEventListener('change', loadDashboardData);
   $('serverHealthStatusFilter')?.addEventListener('change', loadDashboardData);
   const delayedReload = debounce(loadDashboardData, 350);
-  $('supportSearchInput')?.addEventListener('input', delayedReload);
-  $('supportAssignedFilter')?.addEventListener('input', delayedReload);
+  const delayedPagedReload = (name) => debounce(() => reloadPageFromStart(name), 350);
+  const delayedSupportReload = delayedPagedReload('support');
+  const delayedUsersReload = delayedPagedReload('users');
+  const delayedOrdersReload = delayedPagedReload('orders');
+  const delayedAuthReload = delayedPagedReload('auth');
+  const delayedAuditReload = delayedPagedReload('audit');
+  $('supportSearchInput')?.addEventListener('input', delayedSupportReload);
+  $('supportAssignedFilter')?.addEventListener('input', delayedSupportReload);
   $('supportActionUserFilter')?.addEventListener('input', delayedReload);
-  $('userSearchInput')?.addEventListener('input', delayedReload);
-  $('authSearchInput')?.addEventListener('input', delayedReload);
+  $('userSearchInput')?.addEventListener('input', delayedUsersReload);
+  $('userPlatformFilter')?.addEventListener('change', () => reloadPageFromStart('users'));
+  $('userSubscriptionFilter')?.addEventListener('change', () => reloadPageFromStart('users'));
+  $('userSortFilter')?.addEventListener('change', () => reloadPageFromStart('users'));
+  $('orderSearchInput')?.addEventListener('input', delayedOrdersReload);
+  $('orderStatusFilter')?.addEventListener('change', () => reloadPageFromStart('orders'));
+  $('authSearchInput')?.addEventListener('input', delayedAuthReload);
+  $('auditSearchInput')?.addEventListener('input', delayedAuditReload);
   $('serverHealthEndpointFilter')?.addEventListener('input', delayedReload);
   $('monitoringTargetStatusFilter')?.addEventListener('change', loadDashboardData);
   $('monitoringTargetServiceFilter')?.addEventListener('input', delayedReload);
@@ -7539,6 +7967,25 @@ function bindEvents() {
   $('clientRouteStageFilter')?.addEventListener('change', loadDashboardData);
   $('clientRouteOkFilter')?.addEventListener('change', loadDashboardData);
   $('clientRouteServerFilter')?.addEventListener('input', delayedReload);
+  $('globalSearchInput')?.addEventListener('keydown', async (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    const query = $('globalSearchInput').value.trim();
+    switchSection('users');
+    if ($('userSearchInput')) $('userSearchInput').value = query;
+    resetPage('users');
+    state.selectedUserIds.clear();
+    await loadDashboardData();
+  });
+  $('autoRefreshInput')?.addEventListener('change', (event) => {
+    configureAutoRefresh(Boolean(event.target.checked));
+  });
+  $('exportUsersButton')?.addEventListener('click', () => downloadAdminExport('users', userFilterParams()));
+  $('exportOrdersButton')?.addEventListener('click', () => downloadAdminExport('orders', orderFilterParams()));
+  $('exportSupportButton')?.addEventListener('click', () => downloadAdminExport('support', supportFilterParams()));
+  $('exportAuditButton')?.addEventListener('click', () => downloadAdminExport('audit', auditFilterParams()));
+  $('userBulkRunButton')?.addEventListener('click', runBulkUserAction);
+  $('userBulkClearButton')?.addEventListener('click', clearUserSelection);
   $('releaseForm')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     await saveRelease();
@@ -7605,6 +8052,22 @@ function bindEvents() {
   });
 
   document.body.addEventListener('change', (event) => {
+    const userSelect = event.target.closest('[data-user-select]');
+    if (userSelect) {
+      const userId = Number(userSelect.dataset.userSelect);
+      if (userSelect.checked) state.selectedUserIds.add(userId);
+      else state.selectedUserIds.delete(userId);
+      renderUsersTable();
+      return;
+    }
+    if (event.target.id === 'usersSelectPage') {
+      for (const user of state.loaded.users || []) {
+        if (event.target.checked) state.selectedUserIds.add(Number(user.id));
+        else state.selectedUserIds.delete(Number(user.id));
+      }
+      renderUsersTable();
+      return;
+    }
     const assigneeSelect = event.target.closest('[data-incident-assignee]');
     if (assigneeSelect) {
       assignIncident(assigneeSelect.dataset.incidentAssignee, assigneeSelect.value);
@@ -7612,6 +8075,17 @@ function bindEvents() {
   });
 
   document.body.addEventListener('click', (event) => {
+    const paginationButton = event.target.closest('[data-page-name]');
+    if (paginationButton) {
+      changePage(paginationButton.dataset.pageName, paginationButton.dataset.pageDirection);
+      return;
+    }
+    const jumpButton = event.target.closest('[data-jump-section]');
+    if (jumpButton) {
+      switchSection(jumpButton.dataset.jumpSection);
+      loadDashboardData();
+      return;
+    }
     const promoEditButton = event.target.closest('[data-promo-edit]');
     if (promoEditButton) {
       fillPromoForm(findPromoCode(promoEditButton.dataset.promoEdit));
@@ -7738,10 +8212,19 @@ function bindEvents() {
       deleteUserRecord(userDeleteButton.dataset.userDelete);
       return;
     }
+    const userSaveSubscriptionButton = event.target.closest('[data-user-save-subscription]');
+    if (userSaveSubscriptionButton) {
+      saveUserSubscription(userSaveSubscriptionButton.dataset.userSaveSubscription);
+      return;
+    }
     const userOpenBillingButton = event.target.closest('[data-user-open-billing]');
     if (userOpenBillingButton) {
+      const user = state.activeUserDetail?.user || {};
       $('userDialog')?.close();
       switchSection('orders');
+      if ($('orderSearchInput')) $('orderSearchInput').value = user.email || String(user.id || '');
+      resetPage('orders');
+      loadDashboardData();
       setNotice('Раздел платежей открыт. Последние платежи выбранного пользователя также видны в его карточке.');
       return;
     }

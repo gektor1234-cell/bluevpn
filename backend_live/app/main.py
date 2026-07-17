@@ -1,8 +1,10 @@
 ﻿import base64
+import csv
 import gzip
 import hashlib
 import html
 import hmac
+import io
 import ipaddress
 import json
 import os
@@ -28,7 +30,7 @@ from typing import Any, Iterator, Optional
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel
 
 
@@ -1583,6 +1585,13 @@ class AdminSubscriptionIn(BaseModel):
     maxDevices: int
     isActive: bool = True
     expiresAt: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class AdminBulkUserActionIn(BaseModel):
+    userIds: list[int]
+    action: str
+    reason: str
 
 
 class AdminPaidBetaCohortIn(BaseModel):
@@ -3380,6 +3389,48 @@ def init_db() -> None:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_auth_events_created ON auth_events(created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_users_created ON users(created_at DESC, id DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_users_email_nocase ON users(email COLLATE NOCASE)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_devices_user_updated ON devices(user_id, updated_at DESC, id DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_devices_platform_seen ON devices(platform, last_seen_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_devices_enabled_seen ON devices(is_enabled, last_seen_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_subscriptions_user_latest ON subscriptions(user_id, id DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_subscriptions_active_expiry ON subscriptions(is_active, expires_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_billing_orders_status_created ON billing_orders(status, created_at DESC, id DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_billing_orders_user_created ON billing_orders(user_id, created_at DESC, id DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_support_reports_user_created ON support_reports(user_id, created_at DESC, id DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_log(created_at DESC, id DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_admin_audit_action ON admin_audit_log(action, created_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_auth_events_user_created ON auth_events(user_id, created_at DESC, id DESC)"
         )
 
         if SQLITE_NODE_ID_BASE > 0:
@@ -17300,31 +17351,151 @@ def enforce_device_limit_for_current_device(
     return enabled_device_count(conn, user_id)
 
 
-def list_admin_users(q: Optional[str] = None, limit: int = 100) -> list[dict]:
-    out: list[dict] = []
-    safe_limit = max(1, min(500, int(limit or 100)))
+def admin_page_payload(total: int, limit: int, offset: int) -> dict:
+    safe_total = max(0, int(total or 0))
+    safe_limit = max(1, int(limit or 1))
+    safe_offset = max(0, int(offset or 0))
+    next_offset = safe_offset + safe_limit
+    page_from = safe_offset + 1 if safe_offset < safe_total else 0
+    return {
+        "total": safe_total,
+        "limit": safe_limit,
+        "offset": safe_offset,
+        "from": page_from,
+        "to": min(safe_total, safe_offset + safe_limit),
+        "hasPrevious": safe_offset > 0,
+        "hasMore": next_offset < safe_total,
+        "previousOffset": max(0, safe_offset - safe_limit),
+        "nextOffset": next_offset if next_offset < safe_total else None,
+    }
+
+
+def normalize_admin_client_platform(value: Optional[str]) -> str:
+    candidate = clean_limited_text(value, 40).strip().lower()
+    if candidate.startswith("win"):
+        return "windows"
+    if candidate.startswith("android"):
+        return "android"
+    return candidate if candidate in {"linux", "macos", "ios"} else ""
+
+
+def query_admin_users(
+    q: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    platform: Optional[str] = None,
+    subscription: Optional[str] = None,
+    device_status: Optional[str] = None,
+    sort: Optional[str] = None,
+) -> dict:
+    safe_limit = max(1, min(200, int(limit or 100)))
+    safe_offset = max(0, int(offset or 0))
     q_clean = clean_limited_text(q, 180).strip().lower() if q else ""
-    filters = []
+    platform_clean = normalize_admin_client_platform(platform)
+    subscription_clean = clean_limited_text(subscription, 40).strip().lower()
+    device_status_clean = clean_limited_text(device_status, 40).strip().lower()
+    sort_clean = clean_limited_text(sort, 40).strip().lower() or "newest"
+    now_iso = utc_now_iso()
+    expires_7d = (utc_now() + timedelta(days=7)).isoformat()
+    filters: list[str] = []
     args: list = []
+
     if q_clean:
         pattern = f"%{q_clean}%"
+        query_parts = [
+            "LOWER(u.email) LIKE ?",
+            "LOWER(COALESCE(u.phone, '')) LIKE ?",
+            "EXISTS (SELECT 1 FROM devices sd WHERE sd.user_id = u.id AND LOWER(sd.device_uid) LIKE ?)",
+        ]
+        args.extend([pattern, pattern, pattern])
+        if q_clean.isdigit():
+            query_parts.append("u.id = ?")
+            args.append(int(q_clean))
+        filters.append("(" + " OR ".join(query_parts) + ")")
+
+    if platform_clean:
         filters.append(
             """
-            (
-                LOWER(u.email) LIKE ?
-                OR LOWER(COALESCE(u.phone, '')) LIKE ?
-                OR EXISTS (
-                    SELECT 1
-                    FROM devices sd
-                    WHERE sd.user_id = u.id
-                      AND LOWER(sd.device_uid) LIKE ?
-                )
+            EXISTS (
+                SELECT 1
+                FROM devices pf
+                WHERE pf.user_id = u.id
+                  AND CASE
+                        WHEN LOWER(pf.platform) LIKE 'win%' THEN 'windows'
+                        WHEN LOWER(pf.platform) LIKE 'android%' THEN 'android'
+                        ELSE LOWER(pf.platform)
+                      END = ?
             )
             """
         )
-        args.extend([pattern, pattern, pattern])
+        args.append(platform_clean)
 
-    query = """
+    active_subscription = "s.is_active = 1 AND (s.expires_at IS NULL OR s.expires_at > ?)"
+    if subscription_clean == "active":
+        filters.append(active_subscription)
+        args.append(now_iso)
+    elif subscription_clean == "paid":
+        filters.append(f"{active_subscription} AND s.plan_code != 'trial'")
+        args.append(now_iso)
+    elif subscription_clean == "trial":
+        filters.append(f"{active_subscription} AND s.plan_code = 'trial'")
+        args.append(now_iso)
+    elif subscription_clean == "inactive":
+        filters.append("(s.id IS NULL OR s.is_active != 1 OR (s.expires_at IS NOT NULL AND s.expires_at <= ?))")
+        args.append(now_iso)
+    elif subscription_clean == "expiring":
+        filters.append(f"{active_subscription} AND s.expires_at IS NOT NULL AND s.expires_at <= ?")
+        args.extend([now_iso, expires_7d])
+    elif subscription_clean == "auto_renew":
+        filters.append(f"{active_subscription} AND s.auto_renew = 1")
+        args.append(now_iso)
+
+    if device_status_clean == "enabled":
+        filters.append("COALESCE(ds.enabled_device_count, 0) > 0")
+    elif device_status_clean == "disabled":
+        filters.append("COALESCE(ds.device_count, 0) > 0 AND COALESCE(ds.enabled_device_count, 0) = 0")
+    elif device_status_clean == "without_devices":
+        filters.append("COALESCE(ds.device_count, 0) = 0")
+
+    where_sql = " WHERE " + " AND ".join(filters) if filters else ""
+    cte_sql = """
+        WITH device_stats AS (
+            SELECT
+                user_id,
+                COUNT(*) AS device_count,
+                COALESCE(SUM(CASE WHEN is_enabled = 1 THEN 1 ELSE 0 END), 0) AS enabled_device_count,
+                MAX(last_seen_at) AS last_seen_at,
+                MAX(last_config_at) AS last_config_at,
+                GROUP_CONCAT(DISTINCT CASE
+                    WHEN LOWER(platform) LIKE 'win%' THEN 'windows'
+                    WHEN LOWER(platform) LIKE 'android%' THEN 'android'
+                    ELSE LOWER(platform)
+                END) AS platforms
+            FROM devices
+            GROUP BY user_id
+        ),
+        latest_subscription AS (
+            SELECT s.*
+            FROM subscriptions s
+            INNER JOIN (
+                SELECT user_id, MAX(id) AS id
+                FROM subscriptions
+                GROUP BY user_id
+            ) latest ON latest.id = s.id
+        )
+    """
+    base_sql = """
+        FROM users u
+        LEFT JOIN device_stats ds ON ds.user_id = u.id
+        LEFT JOIN latest_subscription s ON s.user_id = u.id
+    """
+    order_sql = {
+        "oldest": "u.id ASC",
+        "recent": "CASE WHEN ds.last_seen_at IS NULL THEN 1 ELSE 0 END, ds.last_seen_at DESC, u.id DESC",
+        "paid": "CASE WHEN s.is_active = 1 AND s.plan_code != 'trial' THEN 0 ELSE 1 END, s.expires_at DESC, u.id DESC",
+    }.get(sort_clean, "u.id DESC")
+
+    select_sql = """
         SELECT
             u.id,
             u.email,
@@ -17335,30 +17506,57 @@ def list_admin_users(q: Optional[str] = None, limit: int = 100) -> list[dict]:
             u.acquisition_source,
             u.cohort_enrolled_at,
             u.created_at,
-            COUNT(d.id) AS device_count,
-            COALESCE(SUM(CASE WHEN d.is_enabled = 1 THEN 1 ELSE 0 END), 0) AS enabled_device_count,
-            MAX(d.last_seen_at) AS last_seen_at,
-            MAX(d.last_config_at) AS last_config_at
-        FROM users u
-        LEFT JOIN devices d ON d.user_id = u.id
+            COALESCE(ds.device_count, 0) AS device_count,
+            COALESCE(ds.enabled_device_count, 0) AS enabled_device_count,
+            ds.last_seen_at,
+            ds.last_config_at,
+            ds.platforms,
+            s.id AS subscription_id,
+            s.plan_code,
+            s.plan_name,
+            s.max_devices,
+            s.is_active,
+            s.expires_at,
+            s.monthly_price_rub,
+            s.selection_json,
+            s.auto_renew,
+            s.provider_payment_method_id
     """
-    if filters:
-        query += " WHERE " + " AND ".join(filters)
-    query += """
-        GROUP BY u.id, u.email, u.email_verified, u.phone, u.phone_verified,
-                 u.access_cohort, u.acquisition_source, u.cohort_enrolled_at,
-                 u.created_at
-        ORDER BY u.id ASC
-        LIMIT ?
-    """
-    args.append(safe_limit)
 
     with db() as conn:
-        rows = conn.execute(query, tuple(args)).fetchall()
+        total = int(
+            conn.execute(
+                cte_sql + "SELECT COUNT(*) " + base_sql + where_sql,
+                tuple(args),
+            ).fetchone()[0]
+        )
+        rows = conn.execute(
+            cte_sql
+            + select_sql
+            + base_sql
+            + where_sql
+            + f" ORDER BY {order_sql} LIMIT ? OFFSET ?",
+            (*args, safe_limit, safe_offset),
+        ).fetchall()
 
+    users: list[dict] = []
     for row in rows:
-        sub = subscription_status(get_subscription_row(row["id"]))
-        out.append(
+        subscription_row = None
+        if row["subscription_id"] is not None:
+            subscription_row = {
+                "plan_code": row["plan_code"],
+                "plan_name": row["plan_name"],
+                "max_devices": row["max_devices"],
+                "is_active": row["is_active"],
+                "expires_at": row["expires_at"],
+                "monthly_price_rub": row["monthly_price_rub"],
+                "selection_json": row["selection_json"],
+                "auto_renew": row["auto_renew"],
+                "provider_payment_method_id": row["provider_payment_method_id"],
+            }
+        device_count = int(row["device_count"] or 0)
+        enabled_device_count = int(row["enabled_device_count"] or 0)
+        users.append(
             {
                 "id": row["id"],
                 "email": row["email"],
@@ -17370,18 +17568,23 @@ def list_admin_users(q: Optional[str] = None, limit: int = 100) -> list[dict]:
                 "cohortEnrolledAt": row["cohort_enrolled_at"],
                 "paidBeta": user_access_cohort(row) == PAID_BETA_COHORT_CODE,
                 "createdAt": row["created_at"],
-                "deviceCount": int(row["device_count"]),
-                "enabledDeviceCount": int(row["enabled_device_count"]),
-                "disabledDeviceCount": max(
-                    0,
-                    int(row["device_count"]) - int(row["enabled_device_count"]),
-                ),
+                "deviceCount": device_count,
+                "enabledDeviceCount": enabled_device_count,
+                "disabledDeviceCount": max(0, device_count - enabled_device_count),
+                "platforms": [item for item in str(row["platforms"] or "").split(",") if item],
                 "lastSeenAt": row["last_seen_at"],
                 "lastConfigAt": row["last_config_at"],
-                "subscription": sub,
+                "subscription": subscription_status(subscription_row),
             }
         )
-    return out
+    return {
+        "users": users,
+        "page": admin_page_payload(total, safe_limit, safe_offset),
+    }
+
+
+def list_admin_users(q: Optional[str] = None, limit: int = 100) -> list[dict]:
+    return query_admin_users(q=q, limit=limit)["users"]
 
 
 def get_admin_user_detail(user_id: int) -> dict:
@@ -17518,9 +17721,22 @@ def delete_admin_user_record(user_id: int, payload: AdminUserDeleteIn) -> dict:
 
 
 def upsert_subscription_for_user(user_id: int, payload: AdminSubscriptionIn) -> dict:
+    if get_user_access_row(int(user_id)) is None:
+        raise HTTPException(status_code=404, detail="Пользователь не найден.")
+
+    plan_code = clean_limited_text(payload.planCode, 80).strip()
+    plan_name = clean_limited_text(payload.planName, 160).strip()
+    if not plan_code or not plan_name:
+        raise HTTPException(status_code=400, detail="Код и название тарифа обязательны.")
+    if payload.maxDevices < 1 or payload.maxDevices > 100:
+        raise HTTPException(status_code=400, detail="maxDevices должен быть от 1 до 100.")
+
     expires_at: Optional[str] = None
     if payload.expiresAt:
-        expires_at = parse_dt(payload.expiresAt).isoformat()
+        parsed_expires_at = parse_dt(payload.expiresAt)
+        if parsed_expires_at is None:
+            raise HTTPException(status_code=400, detail="expiresAt содержит некорректную дату.")
+        expires_at = parsed_expires_at.isoformat()
 
     now = utc_now_iso()
     with db() as conn:
@@ -17546,8 +17762,8 @@ def upsert_subscription_for_user(user_id: int, payload: AdminSubscriptionIn) -> 
                 """,
                 (
                     user_id,
-                    payload.planCode.strip(),
-                    payload.planName.strip(),
+                    plan_code,
+                    plan_name,
                     payload.maxDevices,
                     1 if payload.isActive else 0,
                     expires_at,
@@ -17564,8 +17780,8 @@ def upsert_subscription_for_user(user_id: int, payload: AdminSubscriptionIn) -> 
                 WHERE id = ?
                 """,
                 (
-                    payload.planCode.strip(),
-                    payload.planName.strip(),
+                    plan_code,
+                    plan_name,
                     payload.maxDevices,
                     1 if payload.isActive else 0,
                     expires_at,
@@ -19023,23 +19239,64 @@ def get_billing_order_for_user(user_id: int, public_id: str) -> dict:
     return sync_billing_order_with_provider_for_user(user_id, public_id)
 
 
-def list_billing_orders(status: Optional[str] = None) -> list[dict]:
-    query = """
-        SELECT *
-        FROM billing_orders
-    """
-    args: tuple = ()
-    if status and status != "all":
-        query += " WHERE status = ?"
-        args = (status,)
-    query += " ORDER BY id DESC LIMIT 200"
+def query_billing_orders(
+    status: Optional[str] = None,
+    q: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict:
+    safe_limit = max(1, min(200, int(limit or 100)))
+    safe_offset = max(0, int(offset or 0))
+    status_clean = clean_limited_text(status, 40).strip().lower()
+    q_clean = clean_limited_text(q, 180).strip().lower()
+    filters: list[str] = []
+    args: list = []
+    if status_clean and status_clean != "all":
+        filters.append("o.status = ?")
+        args.append(status_clean)
+    if q_clean:
+        pattern = f"%{q_clean}%"
+        parts = [
+            "LOWER(o.public_id) LIKE ?",
+            "LOWER(COALESCE(u.email, '')) LIKE ?",
+            "LOWER(COALESCE(u.phone, '')) LIKE ?",
+        ]
+        args.extend([pattern, pattern, pattern])
+        if q_clean.isdigit():
+            parts.append("o.user_id = ?")
+            args.append(int(q_clean))
+        filters.append("(" + " OR ".join(parts) + ")")
+    where_sql = " WHERE " + " AND ".join(filters) if filters else ""
+    from_sql = " FROM billing_orders o LEFT JOIN users u ON u.id = o.user_id"
 
     with db() as conn:
-        rows = conn.execute(query, args).fetchall()
-    return [
-        public_billing_order_status(billing_order_status(row))
-        for row in rows
-    ]
+        total = int(
+            conn.execute(
+                "SELECT COUNT(*)" + from_sql + where_sql,
+                tuple(args),
+            ).fetchone()[0]
+        )
+        rows = conn.execute(
+            "SELECT o.*, u.email AS user_email, u.phone AS user_phone"
+            + from_sql
+            + where_sql
+            + " ORDER BY o.id DESC LIMIT ? OFFSET ?",
+            (*args, safe_limit, safe_offset),
+        ).fetchall()
+    orders: list[dict] = []
+    for row in rows:
+        order = public_billing_order_status(billing_order_status(row))
+        order["userEmail"] = row["user_email"]
+        order["userPhone"] = row["user_phone"]
+        orders.append(order)
+    return {
+        "orders": orders,
+        "page": admin_page_payload(total, safe_limit, safe_offset),
+    }
+
+
+def list_billing_orders(status: Optional[str] = None) -> list[dict]:
+    return query_billing_orders(status=status, limit=200)["orders"]
 
 
 def billing_order_age_hours(row, now: datetime) -> Optional[float]:
@@ -23748,7 +24005,7 @@ def support_report_payload(row, include_report: bool = False) -> dict:
     return out
 
 
-def list_support_reports(
+def support_report_filter_sql(
     status: Optional[str] = None,
     user_id: Optional[int] = None,
     email: Optional[str] = None,
@@ -23756,12 +24013,7 @@ def list_support_reports(
     category: Optional[str] = None,
     priority: Optional[str] = None,
     assigned_to: Optional[str] = None,
-    limit: int = 100,
-    offset: int = 0,
-) -> list[dict]:
-    safe_limit = max(1, min(300, int(limit or 100)))
-    safe_offset = max(0, int(offset or 0))
-    query = "SELECT * FROM support_reports"
+) -> tuple[str, list]:
     filters = []
     args: list = []
     if status and status != "all":
@@ -23785,13 +24037,69 @@ def list_support_reports(
     if assigned_to:
         filters.append("LOWER(assigned_to) = LOWER(?)")
         args.append(clean_limited_text(assigned_to, 120))
-    if filters:
-        query += " WHERE " + " AND ".join(filters)
+    return (" WHERE " + " AND ".join(filters) if filters else "", args)
+
+
+def query_support_reports(
+    status: Optional[str] = None,
+    user_id: Optional[int] = None,
+    email: Optional[str] = None,
+    device_uid: Optional[str] = None,
+    category: Optional[str] = None,
+    priority: Optional[str] = None,
+    assigned_to: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict:
+    safe_limit = max(1, min(200, int(limit or 100)))
+    safe_offset = max(0, int(offset or 0))
+    where_sql, args = support_report_filter_sql(
+        status=status,
+        user_id=user_id,
+        email=email,
+        device_uid=device_uid,
+        category=category,
+        priority=priority,
+        assigned_to=assigned_to,
+    )
+    query = "SELECT * FROM support_reports" + where_sql
     query += " ORDER BY id DESC LIMIT ? OFFSET ?"
-    args.extend([safe_limit, safe_offset])
     with db() as conn:
-        rows = conn.execute(query, tuple(args)).fetchall()
-    return [support_report_payload(row) for row in rows]
+        total = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM support_reports" + where_sql,
+                tuple(args),
+            ).fetchone()[0]
+        )
+        rows = conn.execute(query, (*args, safe_limit, safe_offset)).fetchall()
+    return {
+        "reports": [support_report_payload(row) for row in rows],
+        "page": admin_page_payload(total, safe_limit, safe_offset),
+    }
+
+
+def list_support_reports(
+    status: Optional[str] = None,
+    user_id: Optional[int] = None,
+    email: Optional[str] = None,
+    device_uid: Optional[str] = None,
+    category: Optional[str] = None,
+    priority: Optional[str] = None,
+    assigned_to: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[dict]:
+    return query_support_reports(
+        status=status,
+        user_id=user_id,
+        email=email,
+        device_uid=device_uid,
+        category=category,
+        priority=priority,
+        assigned_to=assigned_to,
+        limit=limit,
+        offset=offset,
+    )["reports"]
 
 
 def build_support_sla_dashboard(limit: int = 25) -> dict:
@@ -24692,20 +25000,98 @@ def write_admin_audit(
         conn.commit()
 
 
-def list_admin_audit(limit: int = 100, offset: int = 0) -> list[dict]:
-    safe_limit = max(1, min(300, int(limit or 100)))
+def query_admin_audit(
+    limit: int = 100,
+    offset: int = 0,
+    q: Optional[str] = None,
+    action: Optional[str] = None,
+) -> dict:
+    safe_limit = max(1, min(200, int(limit or 100)))
     safe_offset = max(0, int(offset or 0))
+    q_clean = clean_limited_text(q, 180).strip().lower()
+    action_clean = clean_limited_text(action, 120).strip().lower()
+    filters: list[str] = []
+    args: list = []
+    if q_clean:
+        pattern = f"%{q_clean}%"
+        filters.append(
+            "(LOWER(actor) LIKE ? OR LOWER(action) LIKE ? OR LOWER(COALESCE(target_type, '')) LIKE ? OR LOWER(COALESCE(target_id, '')) LIKE ?)"
+        )
+        args.extend([pattern, pattern, pattern, pattern])
+    if action_clean and action_clean != "all":
+        filters.append("LOWER(action) = ?")
+        args.append(action_clean)
+    where_sql = " WHERE " + " AND ".join(filters) if filters else ""
     with db() as conn:
+        total = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM admin_audit_log" + where_sql,
+                tuple(args),
+            ).fetchone()[0]
+        )
         rows = conn.execute(
-            """
+            f"""
             SELECT *
             FROM admin_audit_log
+            {where_sql}
             ORDER BY id DESC
             LIMIT ? OFFSET ?
             """,
-            (safe_limit, safe_offset),
+            (*args, safe_limit, safe_offset),
         ).fetchall()
-    return [audit_log_payload(row) for row in rows]
+    return {
+        "events": [audit_log_payload(row) for row in rows],
+        "page": admin_page_payload(total, safe_limit, safe_offset),
+    }
+
+
+def list_admin_audit(limit: int = 100, offset: int = 0) -> list[dict]:
+    return query_admin_audit(limit=limit, offset=offset)["events"]
+
+
+def safe_admin_csv_cell(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list, tuple)):
+        text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    else:
+        text = str(value)
+    text = text.replace("\x00", "").replace("\r", " ").replace("\n", " ")
+    if text.lstrip().startswith(("=", "+", "-", "@")) or text.startswith(("\t", "\v", "\f")):
+        text = "'" + text
+    return text
+
+
+def admin_csv_response(filename: str, columns: list[tuple[str, str]], rows: list[dict]) -> Response:
+    buffer = io.StringIO(newline="")
+    writer = csv.writer(buffer, delimiter=";")
+    writer.writerow([title for _, title in columns])
+    for row in rows:
+        writer.writerow([safe_admin_csv_cell(row.get(key)) for key, _ in columns])
+    content = "\ufeff" + buffer.getvalue()
+    return Response(
+        content=content.encode("utf-8"),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+def collect_admin_export_rows(fetch_page, item_key: str, max_rows: int = 50000) -> list[dict]:
+    rows: list[dict] = []
+    offset = 0
+    while len(rows) < max_rows:
+        payload = fetch_page(offset)
+        items = list(payload.get(item_key) or [])
+        rows.extend(items[: max_rows - len(rows)])
+        page = payload.get("page") or {}
+        if not items or not page.get("hasMore"):
+            break
+        offset = int(page.get("nextOffset") or (offset + len(items)))
+    return rows
 
 
 def normalize_incident_status(value: Optional[str], fallback: str = "open") -> str:
@@ -26296,14 +26682,14 @@ def revoke_other_admin_sessions(context: dict, request: Request) -> dict:
     }
 
 
-def list_auth_events(
+def query_auth_events(
     limit: int = 100,
     offset: int = 0,
     event_type: Optional[str] = None,
     status: Optional[str] = None,
     contact: Optional[str] = None,
-) -> list[dict]:
-    safe_limit = max(1, min(300, int(limit or 100)))
+) -> dict:
+    safe_limit = max(1, min(200, int(limit or 100)))
     safe_offset = max(0, int(offset or 0))
     safe_event_type = clean_limited_text(event_type, 80).strip()
     safe_status = clean_limited_text(status, 80).strip()
@@ -26329,6 +26715,12 @@ def list_auth_events(
         params.extend([f"%{safe_contact}%", f"%{safe_contact}%", safe_contact])
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
     with db() as conn:
+        total = int(
+            conn.execute(
+                f"SELECT COUNT(*) FROM auth_events {where_sql}",
+                tuple(params),
+            ).fetchone()[0]
+        )
         rows = conn.execute(
             f"""
             SELECT *
@@ -26360,7 +26752,26 @@ def list_auth_events(
                 "createdAt": row["created_at"],
             }
         )
-    return events
+    return {
+        "events": events,
+        "page": admin_page_payload(total, safe_limit, safe_offset),
+    }
+
+
+def list_auth_events(
+    limit: int = 100,
+    offset: int = 0,
+    event_type: Optional[str] = None,
+    status: Optional[str] = None,
+    contact: Optional[str] = None,
+) -> list[dict]:
+    return query_auth_events(
+        limit=limit,
+        offset=offset,
+        event_type=event_type,
+        status=status,
+        contact=contact,
+    )["events"]
 
 
 @app.on_event("startup")
@@ -28845,6 +29256,105 @@ def build_admin_analytics_summary() -> dict:
         devices_disabled = max(0, devices_total - devices_enabled)
         devices_config_issued = db_count(conn, "devices", "last_config_at IS NOT NULL")
         devices_seen_7d = db_count(conn, "devices", "last_seen_at >= ?", (since_7d,))
+        users_seen_24h = int(
+            db_scalar(
+                conn,
+                "SELECT COUNT(DISTINCT user_id) FROM devices WHERE last_seen_at >= ?",
+                (since_24h,),
+                0,
+            )
+        )
+        users_seen_7d = int(
+            db_scalar(
+                conn,
+                "SELECT COUNT(DISTINCT user_id) FROM devices WHERE last_seen_at >= ?",
+                (since_7d,),
+                0,
+            )
+        )
+        users_seen_30d = int(
+            db_scalar(
+                conn,
+                "SELECT COUNT(DISTINCT user_id) FROM devices WHERE last_seen_at >= ?",
+                (since_30d,),
+                0,
+            )
+        )
+        platform_rows = conn.execute(
+            """
+            SELECT
+                CASE
+                    WHEN LOWER(platform) LIKE 'win%' THEN 'windows'
+                    WHEN LOWER(platform) LIKE 'android%' THEN 'android'
+                    ELSE LOWER(platform)
+                END AS platform_key,
+                COUNT(*) AS device_count,
+                COUNT(DISTINCT user_id) AS user_count,
+                SUM(CASE WHEN is_enabled = 1 THEN 1 ELSE 0 END) AS enabled_count,
+                SUM(CASE WHEN last_seen_at >= ? THEN 1 ELSE 0 END) AS seen_24h,
+                SUM(CASE WHEN last_seen_at >= ? THEN 1 ELSE 0 END) AS seen_7d,
+                SUM(CASE WHEN last_seen_at >= ? THEN 1 ELSE 0 END) AS seen_30d,
+                SUM(CASE WHEN last_config_at IS NOT NULL THEN 1 ELSE 0 END) AS config_issued
+            FROM devices
+            GROUP BY platform_key
+            ORDER BY device_count DESC, platform_key ASC
+            """,
+            (since_24h, since_7d, since_30d),
+        ).fetchall()
+        client_platforms = {
+            str(row["platform_key"] or "unknown"): {
+                "devices": int(row["device_count"] or 0),
+                "users": int(row["user_count"] or 0),
+                "enabled": int(row["enabled_count"] or 0),
+                "seen24h": int(row["seen_24h"] or 0),
+                "seen7d": int(row["seen_7d"] or 0),
+                "seen30d": int(row["seen_30d"] or 0),
+                "configIssued": int(row["config_issued"] or 0),
+            }
+            for row in platform_rows
+        }
+        empty_platform_summary = {
+            "devices": 0,
+            "users": 0,
+            "enabled": 0,
+            "seen24h": 0,
+            "seen7d": 0,
+            "seen30d": 0,
+            "configIssued": 0,
+        }
+        for supported_platform in ("android", "windows"):
+            client_platforms.setdefault(supported_platform, dict(empty_platform_summary))
+        version_rows = conn.execute(
+            """
+            SELECT
+                CASE
+                    WHEN LOWER(platform) LIKE 'win%' THEN 'windows'
+                    WHEN LOWER(platform) LIKE 'android%' THEN 'android'
+                    ELSE LOWER(platform)
+                END AS platform_key,
+                COALESCE(NULLIF(TRIM(app_version), ''), 'unknown') AS app_version,
+                COUNT(*) AS device_count,
+                MAX(last_seen_at) AS last_seen_at
+            FROM devices
+            GROUP BY platform_key, app_version
+            ORDER BY platform_key ASC, device_count DESC, app_version DESC
+            """
+        ).fetchall()
+        client_versions: dict[str, list[dict]] = {}
+        for row in version_rows:
+            key = str(row["platform_key"] or "unknown")
+            versions = client_versions.setdefault(key, [])
+            if len(versions) >= 8:
+                continue
+            versions.append(
+                {
+                    "version": row["app_version"],
+                    "devices": int(row["device_count"] or 0),
+                    "lastSeenAt": row["last_seen_at"],
+                }
+            )
+        for supported_platform in ("android", "windows"):
+            client_versions.setdefault(supported_platform, [])
 
         active_sub_where = "is_active = 1 AND (expires_at IS NULL OR expires_at > ?)"
         subs_total = db_count(conn, "subscriptions")
@@ -28862,6 +29372,18 @@ def build_admin_analytics_summary() -> dict:
             (now_iso,),
         )
         subs_inactive = max(0, subs_total - subs_active)
+        subs_auto_renew = db_count(
+            conn,
+            "subscriptions",
+            f"{active_sub_where} AND auto_renew = 1",
+            (now_iso,),
+        )
+        subs_saved_method = db_count(
+            conn,
+            "subscriptions",
+            f"{active_sub_where} AND provider_payment_method_id IS NOT NULL AND provider_payment_method_id != ''",
+            (now_iso,),
+        )
         subs_expires_7d = db_count(
             conn,
             "subscriptions",
@@ -28875,6 +29397,12 @@ def build_admin_analytics_summary() -> dict:
         orders_activated = db_count(conn, "billing_orders", "status = 'activated'")
         orders_failed = db_count(conn, "billing_orders", "status = 'failed'")
         orders_cancelled = db_count(conn, "billing_orders", "status = 'cancelled'")
+        orders_stale_pending = db_count(
+            conn,
+            "billing_orders",
+            "status = 'pending' AND created_at < ?",
+            (since_24h,),
+        )
         paid_status_where = "status IN ('paid', 'activated')"
         gross_revenue = db_sum(conn, "billing_orders", "amount_rub", paid_status_where)
         pending_revenue = db_sum(conn, "billing_orders", "amount_rub", "status = 'pending'")
@@ -29007,6 +29535,12 @@ def build_admin_analytics_summary() -> dict:
                     "configIssued": devices_config_issued,
                     "seen7d": devices_seen_7d,
                 },
+                "activity": {
+                    "users24h": users_seen_24h,
+                    "users7d": users_seen_7d,
+                    "users30d": users_seen_30d,
+                    "dauToMauPercent": analytics_percent(users_seen_24h, users_seen_30d),
+                },
                 "subscriptions": {
                     "total": subs_total,
                     "active": subs_active,
@@ -29014,6 +29548,8 @@ def build_admin_analytics_summary() -> dict:
                     "paid": subs_paid,
                     "inactive": subs_inactive,
                     "expires7d": subs_expires_7d,
+                    "autoRenew": subs_auto_renew,
+                    "savedPaymentMethod": subs_saved_method,
                     "paidSharePercent": analytics_percent(subs_paid, subs_active),
                 },
                 "orders": {
@@ -29032,6 +29568,25 @@ def build_admin_analytics_summary() -> dict:
                     "usersWithPaidOrders": users_with_paid_orders,
                     "paidUserSharePercent": analytics_percent(users_with_paid_orders, users_total),
                 },
+            },
+            "clients": {
+                "platforms": client_platforms,
+                "versions": client_versions,
+                "supportedPlatforms": ["android", "windows"],
+            },
+            "attention": {
+                "total": int(
+                    support_overdue
+                    + support_first_response_missing
+                    + incidents_critical_open
+                    + orders_stale_pending
+                    + subs_expires_7d
+                ),
+                "supportOverdue": support_overdue,
+                "supportFirstResponseMissing": support_first_response_missing,
+                "criticalIncidents": incidents_critical_open,
+                "stalePendingOrders": orders_stale_pending,
+                "subscriptionsExpiring7d": subs_expires_7d,
             },
             "support": {
                 "total": support_total,
@@ -31214,19 +31769,20 @@ def admin_support_reports(
     authorization: Optional[str] = Header(default=None),
 ):
     require_admin(x_admin_token, authorization, "support.read")
+    result = query_support_reports(
+        status=status,
+        user_id=userId,
+        email=email,
+        device_uid=deviceUid,
+        category=category,
+        priority=priority,
+        assigned_to=assignedTo,
+        limit=limit,
+        offset=offset,
+    )
     return {
         "ok": True,
-        "reports": list_support_reports(
-            status=status,
-            user_id=userId,
-            email=email,
-            device_uid=deviceUid,
-            category=category,
-            priority=priority,
-            assigned_to=assignedTo,
-            limit=limit,
-            offset=offset,
-        ),
+        **result,
     }
 
 
@@ -31418,14 +31974,239 @@ def admin_support_report_status(
 def admin_audit(
     limit: int = 100,
     offset: int = 0,
+    q: Optional[str] = None,
+    action: Optional[str] = None,
     x_admin_token: Optional[str] = Header(default=None),
     authorization: Optional[str] = Header(default=None),
 ):
     require_admin(x_admin_token, authorization, "audit.read")
+    result = query_admin_audit(
+        limit=limit,
+        offset=offset,
+        q=q,
+        action=action,
+    )
     return {
         "ok": True,
-        "events": list_admin_audit(limit=limit, offset=offset),
+        **result,
     }
+
+
+@app.get("/api/v1/admin/exports/{dataset}.csv")
+def admin_export_csv(
+    dataset: str,
+    request: Request,
+    q: Optional[str] = None,
+    status: Optional[str] = None,
+    priority: Optional[str] = None,
+    category: Optional[str] = None,
+    assignedTo: Optional[str] = None,
+    platform: Optional[str] = None,
+    subscription: Optional[str] = None,
+    deviceStatus: Optional[str] = None,
+    sort: Optional[str] = None,
+    action: Optional[str] = None,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    dataset_clean = clean_limited_text(dataset, 40).strip().lower()
+    date_suffix = utc_now().date().isoformat()
+
+    if dataset_clean == "users":
+        require_admin(x_admin_token, authorization, "users.read")
+        rows = collect_admin_export_rows(
+            lambda offset: query_admin_users(
+                q=q,
+                limit=200,
+                offset=offset,
+                platform=platform,
+                subscription=subscription,
+                device_status=deviceStatus,
+                sort=sort,
+            ),
+            "users",
+        )
+        flat_rows = []
+        for item in rows:
+            sub = item.get("subscription") or {}
+            flat_rows.append(
+                {
+                    "id": item.get("id"),
+                    "email": item.get("email"),
+                    "phone": item.get("phone"),
+                    "emailVerified": item.get("emailVerified"),
+                    "phoneVerified": item.get("phoneVerified"),
+                    "platforms": ",".join(item.get("platforms") or []),
+                    "deviceCount": item.get("deviceCount"),
+                    "enabledDeviceCount": item.get("enabledDeviceCount"),
+                    "planCode": sub.get("planCode"),
+                    "subscriptionActive": sub.get("isActive"),
+                    "autoRenew": sub.get("autoRenew"),
+                    "expiresAt": sub.get("expiresAt"),
+                    "lastSeenAt": item.get("lastSeenAt"),
+                    "createdAt": item.get("createdAt"),
+                }
+            )
+        write_admin_audit(
+            "admin_csv_exported",
+            "dataset",
+            dataset_clean,
+            {"rows": len(flat_rows)},
+            request=request,
+        )
+        return admin_csv_response(
+            f"greenvpn-users-{date_suffix}.csv",
+            [
+                ("id", "ID"),
+                ("email", "Email"),
+                ("phone", "Телефон"),
+                ("emailVerified", "Email подтверждён"),
+                ("phoneVerified", "Телефон подтверждён"),
+                ("platforms", "Платформы"),
+                ("deviceCount", "Устройств"),
+                ("enabledDeviceCount", "Активных устройств"),
+                ("planCode", "Тариф"),
+                ("subscriptionActive", "Подписка активна"),
+                ("autoRenew", "Автопродление"),
+                ("expiresAt", "Подписка до"),
+                ("lastSeenAt", "Последняя активность"),
+                ("createdAt", "Регистрация"),
+            ],
+            flat_rows,
+        )
+
+    if dataset_clean == "orders":
+        require_admin(x_admin_token, authorization, "billing.read")
+        rows = collect_admin_export_rows(
+            lambda offset: query_billing_orders(
+                status=status,
+                q=q,
+                limit=200,
+                offset=offset,
+            ),
+            "orders",
+        )
+        flat_rows = []
+        for item in rows:
+            selection = item.get("selection") or {}
+            quote = item.get("quote") or {}
+            flat_rows.append(
+                {
+                    "orderId": item.get("orderId"),
+                    "userId": item.get("userId"),
+                    "userEmail": item.get("userEmail"),
+                    "amountRub": item.get("amountRub"),
+                    "status": item.get("status"),
+                    "planCode": selection.get("billingPlanCode") or quote.get("planCode"),
+                    "autoRenew": item.get("autoRenew"),
+                    "createdAt": item.get("createdAt"),
+                    "paidAt": item.get("paidAt"),
+                    "activatedAt": item.get("activatedAt"),
+                }
+            )
+        write_admin_audit(
+            "admin_csv_exported",
+            "dataset",
+            dataset_clean,
+            {"rows": len(flat_rows)},
+            request=request,
+        )
+        return admin_csv_response(
+            f"greenvpn-orders-{date_suffix}.csv",
+            [
+                ("orderId", "Заказ"),
+                ("userId", "ID пользователя"),
+                ("userEmail", "Email"),
+                ("amountRub", "Сумма, RUB"),
+                ("status", "Статус"),
+                ("planCode", "Тариф"),
+                ("autoRenew", "Автопродление"),
+                ("createdAt", "Создан"),
+                ("paidAt", "Оплачен"),
+                ("activatedAt", "Активирован"),
+            ],
+            flat_rows,
+        )
+
+    if dataset_clean == "support":
+        require_admin(x_admin_token, authorization, "support.read")
+        q_clean = clean_limited_text(q, 180).strip()
+        user_id = int(q_clean) if q_clean.isdigit() else None
+        email = q_clean if "@" in q_clean else None
+        device_uid = q_clean if q_clean and not user_id and not email else None
+        rows = collect_admin_export_rows(
+            lambda offset: query_support_reports(
+                status=status,
+                user_id=user_id,
+                email=email,
+                device_uid=device_uid,
+                priority=priority,
+                category=category,
+                assigned_to=assignedTo,
+                limit=200,
+                offset=offset,
+            ),
+            "reports",
+        )
+        write_admin_audit(
+            "admin_csv_exported",
+            "dataset",
+            dataset_clean,
+            {"rows": len(rows)},
+            request=request,
+        )
+        return admin_csv_response(
+            f"greenvpn-support-{date_suffix}.csv",
+            [
+                ("id", "ID"),
+                ("userId", "ID пользователя"),
+                ("email", "Email"),
+                ("appVersion", "Версия приложения"),
+                ("category", "Категория"),
+                ("priority", "Приоритет"),
+                ("status", "Статус"),
+                ("slaStatus", "SLA"),
+                ("assignedTo", "Исполнитель"),
+                ("summary", "Сводка"),
+                ("createdAt", "Создано"),
+                ("handledAt", "Закрыто"),
+            ],
+            rows,
+        )
+
+    if dataset_clean == "audit":
+        require_admin(x_admin_token, authorization, "audit.read")
+        rows = collect_admin_export_rows(
+            lambda offset: query_admin_audit(
+                limit=200,
+                offset=offset,
+                q=q,
+                action=action,
+            ),
+            "events",
+        )
+        write_admin_audit(
+            "admin_csv_exported",
+            "dataset",
+            dataset_clean,
+            {"rows": len(rows)},
+            request=request,
+        )
+        return admin_csv_response(
+            f"greenvpn-audit-{date_suffix}.csv",
+            [
+                ("id", "ID"),
+                ("actor", "Кто"),
+                ("action", "Действие"),
+                ("targetType", "Тип объекта"),
+                ("targetId", "ID объекта"),
+                ("requestIp", "IP"),
+                ("createdAt", "Время"),
+            ],
+            rows,
+        )
+
+    raise HTTPException(status_code=404, detail="Набор данных для экспорта не найден.")
 
 
 @app.post("/api/v1/admin/auth/login")
@@ -31662,6 +32443,13 @@ def admin_auth_events(
     authorization: Optional[str] = Header(default=None),
 ):
     require_admin(x_admin_token, authorization, "audit.read")
+    result = query_auth_events(
+        limit=limit,
+        offset=offset,
+        event_type=eventType,
+        status=status,
+        contact=contact,
+    )
     return {
         "ok": True,
         "filters": {
@@ -31669,13 +32457,7 @@ def admin_auth_events(
             "status": status or "all",
             "contact": contact or "",
         },
-        "events": list_auth_events(
-            limit=limit,
-            offset=offset,
-            event_type=eventType,
-            status=status,
-            contact=contact,
-        ),
+        **result,
     }
 
 
@@ -31777,13 +32559,168 @@ def admin_alerts_test(
 def admin_users(
     q: Optional[str] = None,
     limit: int = 100,
+    offset: int = 0,
+    platform: Optional[str] = None,
+    subscription: Optional[str] = None,
+    deviceStatus: Optional[str] = None,
+    sort: Optional[str] = None,
     x_admin_token: Optional[str] = Header(default=None),
     authorization: Optional[str] = Header(default=None),
 ):
     require_admin(x_admin_token, authorization, "users.read")
+    result = query_admin_users(
+        q=q,
+        limit=limit,
+        offset=offset,
+        platform=platform,
+        subscription=subscription,
+        device_status=deviceStatus,
+        sort=sort,
+    )
     return {
         "ok": True,
-        "users": list_admin_users(q=q, limit=limit),
+        "filters": {
+            "q": q or "",
+            "platform": platform or "all",
+            "subscription": subscription or "all",
+            "deviceStatus": deviceStatus or "all",
+            "sort": sort or "newest",
+        },
+        **result,
+    }
+
+
+@app.post("/api/v1/admin/users/bulk-actions")
+def admin_users_bulk_action(
+    payload: AdminBulkUserActionIn,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    action = clean_limited_text(payload.action, 80).strip().lower()
+    reason = clean_limited_text(payload.reason, 1000).strip()
+    user_ids = sorted({int(item) for item in payload.userIds if int(item) > 0})
+    if not user_ids:
+        raise HTTPException(status_code=400, detail="Выбери хотя бы одного пользователя.")
+    if len(user_ids) > 100:
+        raise HTTPException(status_code=400, detail="За один пакет можно обработать не более 100 пользователей.")
+    if len(reason) < 8:
+        raise HTTPException(status_code=400, detail="Причина пакетного действия должна содержать минимум 8 символов.")
+
+    support_actions = {"reset_user_sessions", "request_config_refresh"}
+    device_actions = {"disable_all_devices", "enable_all_devices"}
+    if action in support_actions:
+        require_admin(
+            x_admin_token,
+            authorization,
+            "support_actions.manage",
+            request=request,
+        )
+    elif action in device_actions:
+        require_admin(
+            x_admin_token,
+            authorization,
+            "devices.manage",
+            request=request,
+        )
+    else:
+        raise HTTPException(status_code=400, detail="Пакетное действие не поддерживается.")
+
+    results: list[dict] = []
+    for user_id in user_ids:
+        try:
+            if get_user_access_row(user_id) is None:
+                raise HTTPException(status_code=404, detail="Пользователь не найден.")
+            if action in support_actions:
+                support_action = perform_admin_support_action(
+                    user_id,
+                    AdminSupportActionIn(
+                        action=action,
+                        reason=reason,
+                        note=reason,
+                    ),
+                    request=request,
+                )
+                results.append(
+                    {
+                        "userId": user_id,
+                        "ok": True,
+                        "status": support_action.get("status") or "done",
+                        "result": support_action.get("result") or {},
+                    }
+                )
+                continue
+
+            devices = list_user_devices(user_id)
+            changed = 0
+            enable = action == "enable_all_devices"
+            for device in devices:
+                if bool(device.get("isEnabled")) == enable:
+                    continue
+                set_device_enabled(
+                    str(device.get("deviceUid") or ""),
+                    enable,
+                    reason,
+                )
+                changed += 1
+            write_admin_audit(
+                action,
+                "user",
+                str(user_id),
+                {"reason": reason, "devicesChanged": changed},
+                request=request,
+            )
+            results.append(
+                {
+                    "userId": user_id,
+                    "ok": True,
+                    "status": "done" if changed else "noop",
+                    "result": {"devicesChanged": changed},
+                }
+            )
+        except HTTPException as error:
+            results.append(
+                {
+                    "userId": user_id,
+                    "ok": False,
+                    "status": "failed",
+                    "error": clean_limited_text(error.detail, 500),
+                }
+            )
+        except Exception as error:
+            results.append(
+                {
+                    "userId": user_id,
+                    "ok": False,
+                    "status": "failed",
+                    "error": f"internal_{type(error).__name__}",
+                }
+            )
+
+    succeeded = sum(1 for item in results if item["ok"])
+    failed = len(results) - succeeded
+    write_admin_audit(
+        "users_bulk_action",
+        "user_batch",
+        ",".join(str(item) for item in user_ids[:20]),
+        {
+            "action": action,
+            "reason": reason,
+            "requested": len(user_ids),
+            "succeeded": succeeded,
+            "failed": failed,
+        },
+        request=request,
+    )
+    return {
+        "ok": failed == 0,
+        "action": action,
+        "summary": {
+            "requested": len(user_ids),
+            "succeeded": succeeded,
+            "failed": failed,
+        },
+        "results": results,
     }
 
 
@@ -31850,13 +32787,22 @@ def admin_user_delete(
 @app.get("/api/v1/admin/billing/orders")
 def admin_billing_orders(
     status: Optional[str] = None,
+    q: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
     x_admin_token: Optional[str] = Header(default=None),
     authorization: Optional[str] = Header(default=None),
 ):
     require_admin(x_admin_token, authorization, "billing.read")
+    result = query_billing_orders(
+        status=status,
+        q=q,
+        limit=limit,
+        offset=offset,
+    )
     return {
         "ok": True,
-        "orders": list_billing_orders(status=status),
+        **result,
         "reconciliation": billing_reconciliation_payload(),
         "promos": list_promo_codes(),
     }
@@ -32262,8 +33208,9 @@ def admin_set_subscription(
     authorization: Optional[str] = Header(default=None),
 ):
     require_admin(x_admin_token, authorization, "billing.manage", request=request)
-    if payload.maxDevices < 1:
-        raise HTTPException(status_code=400, detail="maxDevices must be >= 1.")
+    reason = clean_limited_text(payload.reason, 500).strip()
+    if payload.reason is not None and len(reason) < 8:
+        raise HTTPException(status_code=400, detail="Причина изменения должна содержать минимум 8 символов.")
     subscription = upsert_subscription_for_user(user_id, payload)
     write_admin_audit(
         "subscription_updated",
@@ -32275,6 +33222,7 @@ def admin_set_subscription(
             "maxDevices": payload.maxDevices,
             "isActive": payload.isActive,
             "expiresAt": payload.expiresAt,
+            "reason": reason or "manual_admin_subscription_update",
         },
         request=request,
     )

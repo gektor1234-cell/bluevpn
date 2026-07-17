@@ -47,6 +47,13 @@
           <h1 id="pageTitle">Обзор</h1>
         </div>
         <div class="topbar-actions">
+          <div id="globalSearchGroup" class="global-search hidden">
+            <input id="globalSearchInput" type="search" placeholder="Найти аккаунт" aria-label="Найти аккаунт">
+          </div>
+          <label id="autoRefreshControl" class="checkbox-line compact-toggle hidden">
+            <input id="autoRefreshInput" type="checkbox">
+            Автообновление
+          </label>
           <button id="refreshButton" class="ghost-button">Обновить</button>
           <button id="logoutButton" class="ghost-button hidden">Выйти</button>
           <button id="openLoginButton" class="primary-button">Вход</button>
@@ -105,6 +112,27 @@
 
       <section id="dashboardSection" class="content-section active">
         <div class="metric-grid" id="metricGrid"></div>
+        <div class="operations-grid">
+          <article class="panel command-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Требует внимания</p>
+                <h2>Рабочая очередь</h2>
+              </div>
+              <span id="lastUpdatedAt" class="muted">—</span>
+            </div>
+            <div id="attentionQueuePanel" class="status-list"></div>
+          </article>
+          <article class="panel command-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Клиенты</p>
+                <h2>Android и Windows</h2>
+              </div>
+            </div>
+            <div id="clientPlatformSummary" class="status-list"></div>
+          </article>
+        </div>
         <article class="panel">
           <div class="panel-head">
             <div>
@@ -162,6 +190,15 @@
 
       <section id="analyticsSection" class="content-section">
         <div class="metric-grid" id="analyticsKpiGrid"></div>
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Приложения</p>
+              <h2>Платформы и версии</h2>
+            </div>
+          </div>
+          <div id="analyticsClientsPanel" class="platform-grid"></div>
+        </article>
         <div class="split-grid">
           <article class="panel">
             <div class="panel-head">
@@ -279,6 +316,7 @@
                 <option value="all">Любая категория</option>
               </select>
               <input id="supportAssignedFilter" type="search" placeholder="исполнитель">
+              <button id="exportSupportButton" class="small-button" type="button">CSV</button>
             </div>
           </div>
           <div class="table-wrap">
@@ -299,6 +337,7 @@
               <tbody id="supportTable"></tbody>
             </table>
           </div>
+          <div id="supportPagination" class="pagination"></div>
         </article>
 
         <article class="panel">
@@ -330,25 +369,60 @@
             </div>
             <div class="filter-row">
               <input id="userSearchInput" type="search" placeholder="почта, телефон или id устройства">
+              <select id="userPlatformFilter">
+                <option value="all">Все платформы</option>
+                <option value="android">Android</option>
+                <option value="windows">Windows</option>
+              </select>
+              <select id="userSubscriptionFilter">
+                <option value="all">Все подписки</option>
+                <option value="paid">Платные</option>
+                <option value="trial">Пробные</option>
+                <option value="auto_renew">С автопродлением</option>
+                <option value="expiring">Истекают за 7 дней</option>
+                <option value="inactive">Неактивные</option>
+              </select>
+              <select id="userSortFilter">
+                <option value="newest">Сначала новые</option>
+                <option value="recent">По активности</option>
+                <option value="paid">Сначала платные</option>
+                <option value="oldest">Сначала старые</option>
+              </select>
+              <button id="exportUsersButton" class="small-button" type="button">CSV</button>
             </div>
           </div>
           <div id="subscriptionExpirySummary" class="check-list"></div>
+          <div id="userBulkBar" class="bulk-bar hidden">
+            <strong id="userBulkCount">0 выбрано</strong>
+            <select id="userBulkAction">
+              <option value="request_config_refresh">Обновить конфиги</option>
+              <option value="reset_user_sessions">Сбросить входы</option>
+              <option value="disable_all_devices">Отключить устройства</option>
+              <option value="enable_all_devices">Включить устройства</option>
+            </select>
+            <input id="userBulkReason" type="text" placeholder="Причина для журнала">
+            <button id="userBulkRunButton" class="small-button" type="button">Выполнить</button>
+            <button id="userBulkClearButton" class="small-button" type="button">Снять выбор</button>
+          </div>
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
+                  <th><input id="usersSelectPage" type="checkbox" aria-label="Выбрать страницу"></th>
                   <th>Идентификатор</th>
                   <th>Почта</th>
                   <th>Телефон</th>
-                  <th>Почта подтверждена</th>
-                  <th>Телефон подтверждён</th>
-                  <th>Создан</th>
+                  <th>Платформа</th>
+                  <th>Подписка</th>
+                  <th>Устройства</th>
+                  <th>Активность</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody id="usersTable"></tbody>
             </table>
           </div>
+          <div id="usersPagination" class="pagination"></div>
         </article>
       </section>
 
@@ -358,6 +432,18 @@
             <div>
               <p class="eyebrow">Финансы</p>
               <h2>Заказы и платежи</h2>
+            </div>
+            <div class="filter-row">
+              <input id="orderSearchInput" type="search" placeholder="заказ, email или ID пользователя">
+              <select id="orderStatusFilter">
+                <option value="all">Все статусы</option>
+                <option value="pending">Ожидает</option>
+                <option value="paid">Оплачен</option>
+                <option value="activated">Активирован</option>
+                <option value="failed">Ошибка</option>
+                <option value="cancelled">Отменён</option>
+              </select>
+              <button id="exportOrdersButton" class="small-button" type="button">CSV</button>
             </div>
           </div>
           <div id="billingReconciliationSummary" class="check-list"></div>
@@ -439,6 +525,7 @@
               <tbody id="ordersTable"></tbody>
             </table>
           </div>
+          <div id="ordersPagination" class="pagination"></div>
         </article>
       </section>
 
@@ -484,6 +571,7 @@
               <tbody id="authTable"></tbody>
             </table>
           </div>
+          <div id="authPagination" class="pagination"></div>
         </article>
       </section>
 
@@ -557,6 +645,10 @@
               <p class="eyebrow">Контроль действий</p>
               <h2>Журнал действий</h2>
             </div>
+            <div class="filter-row">
+              <input id="auditSearchInput" type="search" placeholder="сотрудник, действие или объект">
+              <button id="exportAuditButton" class="small-button" type="button">CSV</button>
+            </div>
           </div>
           <div class="table-wrap">
             <table>
@@ -574,6 +666,7 @@
               <tbody id="auditTable"></tbody>
             </table>
           </div>
+          <div id="auditPagination" class="pagination"></div>
         </article>
       </section>
 

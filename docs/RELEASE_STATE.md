@@ -7,8 +7,8 @@ Updated: 2026-07-17.
 | Component | Version/state |
 | --- | --- |
 | Main site | `https://greenvpn.pro/`, healthy |
-| Primary API | `https://api.greenvpn.pro/`, backend `0.9.120-public.1` |
-| Fallback API | RUVDS Moscow, backend `0.9.120-public.1` |
+| Primary API | `https://api.greenvpn.pro/`, backend `0.9.121-admin.1` |
+| Fallback API | RUVDS Moscow, backend `0.9.121-admin.1` |
 | Android | `0.3.4+2026071701`, package `pro.greenvpn.app`, mandatory |
 | Android SHA-256 | `F97D26A4B62E7704517C1EF0BAE394D963151BFB09297872AED67A77B3879CE7` |
 | Windows | `0.3.4+1706`, mandatory, unsigned |
@@ -18,6 +18,32 @@ Updated: 2026-07-17.
 Android 0.3.4 is published on Timeweb and RUVDS Moscow. Both stable manifests
 have `required=true` and `fileReady=true`; the previous APK is retained in the
 root-only deployment backups listed under Rollback.
+
+## Published Admin Console
+
+| Component | Version/state |
+| --- | --- |
+| URL | `https://admin.greenvpn.pro/`, Basic Auth plus staff session/RBAC |
+| Production backend | `0.9.121-admin.1` on Timeweb and RUVDS Moscow |
+| Backend SHA-256 | `CF5AFB259E8D80059409A01F663F6E818E15E5494EE94AF8C6049D36090F214B` |
+| Static index SHA-256 | `1CD3EAA8A027C13400417DD1E96CECA3C61553D806F7EEBD5EF75168EC59FCCB` |
+| Static JavaScript SHA-256 | `9A87CAA3EF2F5CAD1ADB9FC22E925E522D411FE0FC90EE715558BBEEAEB711F9` |
+| Static CSS SHA-256 | `680AF9D1F48F8A042A0C592A987EB9077E8264EFE3C26AA7629ADD8CDB344A82` |
+
+The owner console now has a single operational dashboard, Android/Windows
+activity and version metrics, attention queues, global account search,
+server-side pagination and filters, audited CSV exports, bulk device/session
+actions, and a complete account card with subscription, devices, orders,
+support history and access controls. Large lists no longer load a fixed first
+page or perform one subscription query per user. New database indexes cover the
+main account, device, subscription, billing, support, auth and audit paths.
+
+Production smoke covered both control planes, SQLite quick-check, required
+indexes, analytics, platform filtering, pagination and formula-safe CSV. The
+static site passed desktop and 390 px mobile rendering checks with no page-wide
+horizontal overflow or browser-console errors. The public admin origin remains
+`noindex`, frame-denied and protected by Nginx Basic Auth before application
+staff authentication.
 
 ## Paid Public Candidate
 
@@ -105,8 +131,10 @@ trusted: SmartScreen/reputation warnings remain expected until Authenticode.
 
 ## Verified
 
-- Both RU control planes run backend `0.9.120-public.1` and pass health,
+- Both RU control planes run production backend `0.9.121-admin.1` and pass health,
   schema and SQLite quick-check.
+- Admin/backend validation: 98 backend unit tests, Python and JavaScript syntax,
+  unique HTML ids, desktop/mobile UI, live analytics/pagination/CSV and CORS.
 - Production and candidate sync timers are active. Latest explicit production
   cycles on both nodes: zero inserts/updates, zero conflicts/errors.
 - Public site, legal pages, downloads, manifests and all three API surfaces pass
@@ -172,6 +200,18 @@ Android and the server-side location pool are published. No confirmed Android,
 London or Russian control-plane defect remains.
 
 ## Rollback
+
+- Admin backend 0.9.121 deployment backups:
+  - Timeweb: `/root/greenvpn-admin-release-backups/20260717T181919Z-timeweb-0.9.121-admin.1`;
+  - RUVDS Moscow: `/root/greenvpn-admin-release-backups/20260717T181612Z-ruvds-0.9.121-admin.1`.
+  Each contains the previous `main.py`, production environment and a verified
+  online SQLite backup. Restore code/environment one node at a time and restart
+  `bluevpn-backend.service`; use the DB image only for a separately confirmed
+  database rollback.
+- Admin static backup on Timeweb:
+  `/root/greenvpn-admin-static-backups/20260717T182028Z-admin-console`.
+  Restore its three files to `/var/www/greenvpn-admin` with `www-data:www-data`
+  ownership and mode `0644`, then run `nginx -t`.
 
 - Android 0.3.4 deployment backups:
   - Timeweb: `/root/greenvpn-apk-release-backups/20260717T090025Z-timeweb-0.3.4-2026071701`;

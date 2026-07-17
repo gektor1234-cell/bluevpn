@@ -29,6 +29,9 @@ This is the current operational entry point. Read it together with
    but remains unsigned. Keep the `NotSigned` status visible in operations and
    expect Windows SmartScreen/reputation warnings until a signed successor is
    released.
+10. The admin console is a protected operator surface. Keep Nginx Basic Auth,
+    `noindex`, frame denial, staff authentication, RBAC and audit enabled; never
+    expose bootstrap tokens or payment/tunnel secrets in the UI or exports.
 
 ## Repository
 
@@ -56,8 +59,42 @@ This is the current operational entry point. Read it together with
 - Windows device-recovery and final-smoke checkpoint:
   `b4ac12f837a896637687d3d860ce56e2e5ba8d81`.
 - Windows unsigned-publication checkpoint: the commit containing this handoff.
+- Admin console 0.9.121 checkpoint: the commit containing this handoff.
 - Generated binaries belong in `C:\BlueVPN_Builds`, encrypted restore points in
   `C:\Users\gekto\GreenVPN_Checkpoints`, and secrets outside Git.
+
+## Published Admin Console, 2026-07-17
+
+- Operator URL: `https://admin.greenvpn.pro/`. Nginx Basic Auth is the outer
+  gate; staff email/password, short-lived session, optional 2FA and backend RBAC
+  remain the inner gate.
+- Production API version is `0.9.121-admin.1` on both Russian control planes.
+  Timeweb remains the only billing writer; RUVDS remains billing read-only.
+- One dashboard exposes users, devices, subscriptions, pending payments,
+  support workload, incidents and the Android/Windows split. The analytics view
+  includes active users for 24 hours, 7 days and 30 days, DAU/MAU, auto-renew,
+  saved payment-method counts, platform activity and client-version adoption.
+- User, support, payment, auth and audit lists use server-side pagination. User
+  search covers email, phone, numeric account id and device id; filters cover
+  platform, subscription state, device state and sort order.
+- The account card shows identity state, subscription/access override with a
+  required operator reason, Android and Windows devices, orders, support history
+  and audited account/device/session actions. Up to 100 selected users can be
+  handled in one audited batch without reporting missing accounts as successes.
+- CSV exports exist for users, payments, support and audit. They require the
+  matching read permission, are written to audit, omit provider payment-method
+  identifiers and escape spreadsheet formulas.
+- Desktop and mobile layouts were physically rendered. Mobile navigation is a
+  compact horizontal section bar; tables scroll inside their own container and
+  the page has no horizontal overflow.
+- Validation: 98 backend tests; Python/JavaScript compile; 264 unique HTML ids;
+  live health, database indexes, analytics, pagination, CSV and CORS passed on
+  both control planes. Backend SHA-256 is
+  `CF5AFB259E8D80059409A01F663F6E818E15E5494EE94AF8C6049D36090F214B`.
+- Rollback:
+  - Timeweb backend: `/root/greenvpn-admin-release-backups/20260717T181919Z-timeweb-0.9.121-admin.1`;
+  - RUVDS backend: `/root/greenvpn-admin-release-backups/20260717T181612Z-ruvds-0.9.121-admin.1`;
+  - Timeweb static: `/root/greenvpn-admin-static-backups/20260717T182028Z-admin-console`.
 
 ## Published product releases, 2026-07-17
 
@@ -217,7 +254,7 @@ material. KZ is not in DNS, catalogs or assignment state.
 ## Stable public contour
 
 - Site/API: `https://greenvpn.pro`, `https://api.greenvpn.pro`.
-- Backend: `0.9.120-public.1` on both RU control planes.
+- Backend: `0.9.121-admin.1` on both RU control planes.
 - Android: `0.3.4`, build `2026071701`, package `pro.greenvpn.app`, SHA-256
   `F97D26A4B62E7704517C1EF0BAE394D963151BFB09297872AED67A77B3879CE7`.
 - Android update is mandatory on Timeweb and RUVDS Moscow; both manifests report

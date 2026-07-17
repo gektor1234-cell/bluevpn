@@ -1302,6 +1302,142 @@ class PaidBetaPolicyTests(unittest.TestCase):
         self.assertEqual(paid_bootstrap["subscription"]["periodDays"], 180)
         self.assertFalse(paid_bootstrap["adGate"]["required"])
 
+    def test_admin_user_query_paginates_and_filters_client_platforms(self) -> None:
+        main.ensure_device_row(
+            self.user_id,
+            "admin-android-device",
+            "Android test",
+            "android",
+            "0.3.4",
+        )
+        with main.db() as conn:
+            conn.execute(
+                "INSERT INTO users(email, password_hash, created_at) VALUES (?, ?, ?)",
+                ("windows@example.test", main.hash_password("test-password"), main.utc_now_iso()),
+            )
+            windows_user_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+            main.create_trial_subscription(conn, windows_user_id)
+            conn.commit()
+        main.ensure_device_row(
+            windows_user_id,
+            "admin-windows-device",
+            "Windows test",
+            "windows",
+            "0.3.4",
+        )
+
+        first_page = main.query_admin_users(limit=1, offset=0, sort="oldest")
+        android_only = main.query_admin_users(platform="android", limit=50)
+        windows_only = main.query_admin_users(platform="windows", limit=50)
+
+        self.assertEqual(first_page["page"]["total"], 2)
+        self.assertTrue(first_page["page"]["hasMore"])
+        self.assertEqual(first_page["page"]["nextOffset"], 1)
+        self.assertEqual([item["id"] for item in android_only["users"]], [self.user_id])
+        self.assertEqual([item["id"] for item in windows_only["users"]], [windows_user_id])
+        self.assertEqual(windows_only["users"][0]["platforms"], ["windows"])
+        self.assertNotIn("providerPaymentMethodId", windows_only["users"][0]["subscription"])
+
+    def test_admin_analytics_separates_android_and_windows(self) -> None:
+        main.ensure_device_row(
+            self.user_id,
+            "analytics-android-device",
+            "Android analytics",
+            "android",
+            "0.3.4",
+        )
+        with main.db() as conn:
+            conn.execute(
+                "UPDATE devices SET last_seen_at = ?, last_config_at = ? WHERE device_uid = ?",
+                (main.utc_now_iso(), main.utc_now_iso(), "analytics-android-device"),
+            )
+            conn.commit()
+
+        analytics = main.build_admin_analytics_summary()
+
+        self.assertIn("clients", analytics)
+        self.assertEqual(analytics["clients"]["platforms"]["android"]["users"], 1)
+        self.assertEqual(analytics["clients"]["platforms"]["android"]["seen24h"], 1)
+        self.assertIn("windows", analytics["clients"]["platforms"])
+        self.assertIn("activity", analytics["business"])
+        self.assertIn("attention", analytics)
+
+    def test_admin_csv_cells_are_formula_safe(self) -> None:
+        self.assertEqual(main.safe_admin_csv_cell("=HYPERLINK('x')"), "'=HYPERLINK('x')")
+        self.assertEqual(main.safe_admin_csv_cell("  +SUM(1,2)"), "'  +SUM(1,2)")
+        self.assertEqual(main.safe_admin_csv_cell("\t=1+1"), "'\t=1+1")
+        self.assertEqual(main.safe_admin_csv_cell("line\nbreak"), "line break")
+
+    def test_admin_page_outside_result_range_has_empty_bounds(self) -> None:
+        page = main.admin_page_payload(total=3, limit=50, offset=100)
+        self.assertEqual(page["from"], 0)
+        self.assertEqual(page["to"], 3)
+        self.assertFalse(page["hasMore"])
+        self.assertTrue(page["hasPrevious"])
+
+    def test_admin_bulk_device_action_reports_missing_users(self) -> None:
+        main.ensure_device_row(
+            self.user_id,
+            "bulk-android-device",
+            "Android bulk",
+            "android",
+            "0.3.4",
+        )
+        with main.db() as conn:
+            conn.execute(
+                "INSERT INTO users(email, password_hash, created_at) VALUES (?, ?, ?)",
+                ("bulk-windows@example.test", main.hash_password("test-password"), main.utc_now_iso()),
+            )
+            second_user_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+            main.create_trial_subscription(conn, second_user_id)
+            conn.commit()
+        main.ensure_device_row(
+            second_user_id,
+            "bulk-windows-device",
+            "Windows bulk",
+            "windows",
+            "0.3.4",
+        )
+
+        with patch.object(main, "require_admin", return_value={"actor": "test-suite"}):
+            result = main.admin_users_bulk_action(
+                main.AdminBulkUserActionIn(
+                    userIds=[self.user_id, second_user_id, 999999999],
+                    action="disable_all_devices",
+                    reason="Пакетная проверка устройств",
+                ),
+                request=None,
+                x_admin_token="test-token",
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["summary"], {"requested": 3, "succeeded": 2, "failed": 1})
+        self.assertFalse(main.list_user_devices(self.user_id)[0]["isEnabled"])
+        self.assertFalse(main.list_user_devices(second_user_id)[0]["isEnabled"])
+        missing = next(item for item in result["results"] if item["userId"] == 999999999)
+        self.assertEqual(missing["status"], "failed")
+
+    def test_admin_subscription_rejects_invalid_limits_and_missing_user(self) -> None:
+        invalid_limit = main.AdminSubscriptionIn(
+            planCode="green_30d",
+            planName="30 дней",
+            maxDevices=101,
+            reason="Проверка лимита устройств",
+        )
+        with self.assertRaises(main.HTTPException) as raised_limit:
+            main.upsert_subscription_for_user(self.user_id, invalid_limit)
+        self.assertEqual(raised_limit.exception.status_code, 400)
+
+        missing_user = main.AdminSubscriptionIn(
+            planCode="green_30d",
+            planName="30 дней",
+            maxDevices=3,
+            reason="Проверка отсутствующего аккаунта",
+        )
+        with self.assertRaises(main.HTTPException) as raised_missing:
+            main.upsert_subscription_for_user(999999999, missing_user)
+        self.assertEqual(raised_missing.exception.status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()
