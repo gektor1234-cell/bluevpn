@@ -11,7 +11,8 @@ Updated: 2026-07-17.
 | Fallback API | RUVDS Moscow, backend `0.9.120-public.1` |
 | Android | `0.3.4+2026071701`, package `pro.greenvpn.app`, mandatory |
 | Android SHA-256 | `F97D26A4B62E7704517C1EF0BAE394D963151BFB09297872AED67A77B3879CE7` |
-| Windows SHA-256 | `0B2FEAA2232582207CFB998902B04107067C8DDE1C4243A003FF979C2F2B5F15` |
+| Windows | `0.3.4+1706`, mandatory, unsigned |
+| Windows SHA-256 | `49C7D098ED7E3980EDE7742ED6AF03EB7F3CEFAFC1EAC6E543C69C890A818E47` |
 | Ads/session timer | disabled |
 
 Android 0.3.4 is published on Timeweb and RUVDS Moscow. Both stable manifests
@@ -25,8 +26,8 @@ root-only deployment backups listed under Rollback.
 | Primary/fallback backend | `0.9.120-public.1` |
 | Android | `0.3.4+2026071701`, package `pro.greenvpn.app.beta`, mandatory |
 | Android SHA-256 | `9F1357E3CB02196CDC8A351A2D6F995A27BF75ACC0017275465E6DD6254E0675` |
-| Windows | `0.3.0-paid-beta.11`, unsigned |
-| Windows SHA-256 | `ECA801FBCFED9A08CD5470E6BDC9F2FC327019D6C3DE61D50F7AECC69668FE32` |
+| Windows | `0.3.4-paid-beta.1706`, optional, unsigned |
+| Windows SHA-256 | `15CB30A0169AB064AD4EBB6DE4B75A6DACB3B43183BB0367E45CDC9A3D1B81CF` |
 | Plans | trial 3 days; 249/649/1099 RUB for 30/90/180 days |
 | Auto-renew | recurring card binding approved; real save-method and unlink smoke passed on both control planes |
 | Billing writer | Timeweb only |
@@ -47,8 +48,10 @@ until public promotion.
 | Android production SHA-256 | `F97D26A4B62E7704517C1EF0BAE394D963151BFB09297872AED67A77B3879CE7` |
 | Android test | `0.3.4+2026071701`, package `pro.greenvpn.app.beta`, release signed |
 | Android test SHA-256 | `9F1357E3CB02196CDC8A351A2D6F995A27BF75ACC0017275465E6DD6254E0675` |
-| Windows ZIP | `0.3.0+1603`, four protected fallback engines plus stable tunnel, unsigned |
-| Windows ZIP SHA-256 | `04D2AB4AD84F9B63641590BDFEE2600C702E79DEC29224B1B4E84A9B17F1FF37` |
+| Windows production | `0.3.4+1706`, mandatory, unsigned |
+| Windows production SHA-256 | `49C7D098ED7E3980EDE7742ED6AF03EB7F3CEFAFC1EAC6E543C69C890A818E47` |
+| Windows test | `0.3.4-paid-beta.1706`, optional, unsigned |
+| Windows test SHA-256 | `15CB30A0169AB064AD4EBB6DE4B75A6DACB3B43183BB0367E45CDC9A3D1B81CF` |
 | YooKassa | real 249 RUB payment, saved-method verification and unlink smoke complete |
 | London | existing VPS `2584554` restored in place; production and paid-beta catalogs publish one logical `Лондон` location |
 
@@ -56,16 +59,16 @@ Production and test APKs are published on both Russian control planes. The
 customer-facing stable and paid-beta update manifests force 0.3.4 and all four
 public APK aliases are ready.
 
-## Windows 0.3.4 Release Candidate
+## Published Windows 0.3.4
 
 | Component | Version/state |
 | --- | --- |
 | Product/build | `0.3.4+1706` |
 | Installer | `C:\BlueVPN_Builds\green_vpn_windows_0.3.4_rc_20260717_06\GreenVPN_Setup_0.3.4.exe` |
 | SHA-256 | `49C7D098ED7E3980EDE7742ED6AF03EB7F3CEFAFC1EAC6E543C69C890A818E47` |
-| Authenticode | not signed; publication blocked |
-| Public state | not uploaded and not referenced by any update manifest |
-| Source checkpoint | parity base `649214d`; recovery commit containing this handoff |
+| Authenticode | not signed; published temporarily by explicit owner decision |
+| Public state | production mandatory; test optional; mirrored on both RU nodes |
+| Source checkpoint | parity `649214d`; recovery `b4ac12f`; publication commit containing this handoff |
 
 The Windows public client now opens a valid saved session directly, restores
 the same window after tray hiding, executes authenticated tray connect and
@@ -92,6 +95,13 @@ external probes, DNS resolution, no direct DNS leak and 10/10 network-protection
 checks. Cleanup removed the temporary Green VPN tunnel and restored Amnezia,
 ordinary Internet access and both production API ingress paths. Evidence is in
 `C:\BlueVPN_Builds\green_vpn_windows_0.3.4_rc_20260717_06\windows-network-transition-report.json`.
+
+Production and test installers were published atomically on Timeweb and RUVDS
+Moscow after dry-runs. Public downloads are byte-identical across mirrors and
+match the hashes above. Eight Android/Windows update manifests, eight HEAD
+download checks, the paid-beta static download manifest and the independent
+31/31 public-surface probe pass. This does not make the unsigned installer
+trusted: SmartScreen/reputation warnings remain expected until Authenticode.
 
 ## Verified
 
@@ -153,10 +163,10 @@ ordinary Internet access and both production API ingress paths. Evidence is in
 
 ## Remaining Launch Gates
 
-1. Obtain an Authenticode code-signing certificate and sign the exact verified
-   installer before any public or mandatory rollout.
-2. Reverify the signed hash, then publish Windows atomically to main and test on
-   both Russian control planes with rollback backups and public probes.
+1. Obtain an Authenticode code-signing certificate and build a higher-version
+   signed successor to the temporary public 0.3.4 release.
+2. Reverify the signed hash, then replace Windows atomically on main and test
+   with rollback backups and public probes.
 
 Android and the server-side location pool are published. No confirmed Android,
 London or Russian control-plane defect remains.
@@ -180,6 +190,12 @@ London or Russian control-plane defect remains.
 - Previous backend 0.9.119 paid-candidate backups:
   - Timeweb: `/root/greenvpn-paid-beta-backend-backups/20260716T175858Z-paid-beta-backend-fallback-peer-20260716-r23`;
   - RUVDS Moscow: `/root/greenvpn-paid-beta-backend-backups/20260716T175919Z-paid-beta-backend-fallback-peer-20260716-r23`.
+- Windows 0.3.4 pre-release rollback backups:
+  - Timeweb: `/root/greenvpn-windows-release-backups/20260717T122847Z-timeweb-0.3.4-1706`;
+  - RUVDS Moscow: `/root/greenvpn-windows-release-backups/20260717T122919Z-ruvds-0.3.4-1706`.
+- Windows static-manifest correction backups:
+  - Timeweb: `/root/greenvpn-windows-release-backups/20260717T123644Z-timeweb-0.3.4-1706`;
+  - RUVDS Moscow: `/root/greenvpn-windows-release-backups/20260717T123748Z-ruvds-0.3.4-1706`.
 - London preserved-state recovery backup:
   `/root/greenvpn-london-recovery-backups/20260716T100956Z`.
 - Production catalog DB backups before London publication:
@@ -188,13 +204,13 @@ London or Russian control-plane defect remains.
 - Paid-beta catalog DB backups before London publication:
   - Timeweb: `/root/greenvpn-london-catalog-backups/20260716T104858Z-timeweb-paid-beta`;
   - RUVDS Moscow: `/root/greenvpn-london-catalog-backups/20260716T104858Z-ruvds-moscow-paid-beta`.
-- Unsigned Windows 0.3.4 release candidate (not public):
+- Temporarily public unsigned Windows 0.3.4 production installer:
   `C:\BlueVPN_Builds\green_vpn_windows_0.3.4_rc_20260717_06\GreenVPN_Setup_0.3.4.exe`,
   SHA-256 `49C7D098ED7E3980EDE7742ED6AF03EB7F3CEFAFC1EAC6E543C69C890A818E47`.
-  Rollback remains the currently published Windows installer until a signed
-  artifact is atomically promoted.
-- Current final-candidate source commit:
-  `ceec7aad27ab0399d3ec93f096bbae83c5187ee6`.
+  The pre-release backups above contain the previously published Windows
+  installer and env state.
+- Windows final-smoke source commit:
+  `b4ac12f837a896637687d3d860ce56e2e5ba8d81`.
 - Current final-candidate tag:
   `greenvpn-final-candidate-autorenew-20260716`.
 - Final-candidate tag: `greenvpn-final-candidate-20260716`.

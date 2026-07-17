@@ -25,9 +25,10 @@ This is the current operational entry point. Read it together with
    must reject first-payment creation and must not run the renewal executor.
 8. Server maintenance is one node at a time after alternate control/data planes
    pass readiness. The owner Windows PC must not be rebooted by automation.
-9. Windows 0.3.4 RC is unsigned and not public. Its elevated network smoke is
-   complete; never upload it or make it mandatory until Authenticode signing is
-   complete.
+9. Windows 0.3.4 is temporarily public and mandatory by explicit owner decision,
+   but remains unsigned. Keep the `NotSigned` status visible in operations and
+   expect Windows SmartScreen/reputation warnings until a signed successor is
+   released.
 
 ## Repository
 
@@ -52,12 +53,13 @@ This is the current operational entry point. Read it together with
 - Stable rollback tag: `greenvpn-stable-pre-paid-beta-20260710`.
 - Windows 0.3.4 parity checkpoint:
   `649214dc4a42bfa2aafacd18e815c6159325c163`.
-- Windows device-recovery and final-smoke checkpoint: the commit containing this
-  handoff.
+- Windows device-recovery and final-smoke checkpoint:
+  `b4ac12f837a896637687d3d860ce56e2e5ba8d81`.
+- Windows unsigned-publication checkpoint: the commit containing this handoff.
 - Generated binaries belong in `C:\BlueVPN_Builds`, encrypted restore points in
   `C:\Users\gekto\GreenVPN_Checkpoints`, and secrets outside Git.
 
-## Published Android release, 2026-07-17
+## Published product releases, 2026-07-17
 
 - The customer server picker exposes logical locations only: `Авто`,
   `Нидерланды`, and `Лондон` when a healthy published London route exists.
@@ -75,11 +77,17 @@ This is the current operational entry point. Read it together with
 - Both APKs are release signed, passed artifact verification and were published
   atomically on Timeweb and RUVDS Moscow. Stable and paid-beta Android manifests
   are mandatory and point to the matching hashes.
-- Current Windows parity candidate:
+- Published Windows production installer:
   `C:\BlueVPN_Builds\green_vpn_windows_0.3.4_rc_20260717_06\GreenVPN_Setup_0.3.4.exe`.
   Product/build: `0.3.4+1706`; SHA-256:
   `49C7D098ED7E3980EDE7742ED6AF03EB7F3CEFAFC1EAC6E543C69C890A818E47`.
-  It is unsigned, not uploaded and not referenced by a public update manifest.
+  It is unsigned and was published by explicit owner instruction to production
+  as mandatory on both RU control planes.
+- Published Windows test installer:
+  `C:\BlueVPN_Builds\green_vpn_windows_0.3.4_paid_beta_20260717_01\GreenVPN_Setup.exe`.
+  Version `0.3.4-paid-beta.1706`; SHA-256:
+  `15CB30A0169AB064AD4EBB6DE4B75A6DACB3B43183BB0367E45CDC9A3D1B81CF`.
+  It remains optional and uses the isolated paid-beta API contour.
 - Android 0.3.4 production UI was checked after an in-place update on physical
   Android 9 and Android 16/API 36. Both pickers contain exactly one `Авто`, one
   `Нидерланды` and one `Лондон` row; all carry numeric latency while the
@@ -122,7 +130,7 @@ This is the current operational entry point. Read it together with
   tasks, both APK verifiers, public-surface probes, dependency audit, secret
   scan, standard release gate and strict payment gate are green.
 
-## Windows 0.3.4 parity candidate, 2026-07-17
+## Published Windows 0.3.4, 2026-07-17
 
 - A valid encrypted saved session now opens the product directly, matching
   Android instead of showing the login gate again.
@@ -158,8 +166,13 @@ This is the current operational entry point. Read it together with
   protection checks. Cleanup removed the test tunnel and restored Amnezia,
   ordinary Internet access and both production API ingress paths. Evidence:
   `C:\BlueVPN_Builds\green_vpn_windows_0.3.4_rc_20260717_06\windows-network-transition-report.json`.
-- The only remaining Windows launch gate is Authenticode signing of the exact
-  verified installer. Do not publish before it passes.
+- The exact production and test bytes are published on Timeweb and RUVDS Moscow.
+  All eight Android/Windows manifests, all eight download probes, the paid-beta
+  static manifest and the independent 31-target public probe pass. Production
+  Windows is mandatory; test Windows remains optional.
+- Authenticode remains an acknowledged trust/reputation defect. Do not silently
+  replace public 0.3.4 with different signed bytes under the same version; build
+  and publish a higher signed successor so installed clients receive it.
 
 ## Live topology
 
@@ -209,8 +222,8 @@ material. KZ is not in DNS, catalogs or assignment state.
   `F97D26A4B62E7704517C1EF0BAE394D963151BFB09297872AED67A77B3879CE7`.
 - Android update is mandatory on Timeweb and RUVDS Moscow; both manifests report
   `required=true` and `fileReady=true`.
-- Windows SHA-256:
-  `0B2FEAA2232582207CFB998902B04107067C8DDE1C4243A003FF979C2F2B5F15`.
+- Windows: `0.3.4+1706`, mandatory, unsigned, SHA-256
+  `49C7D098ED7E3980EDE7742ED6AF03EB7F3CEFAFC1EAC6E543C69C890A818E47`.
 - Public catalog contains only stable client-compatible endpoints. Server/provider
   implementation details are not shown in the client.
 - Both production control planes publish the same three physical stable routes;
@@ -229,9 +242,9 @@ material. KZ is not in DNS, catalogs or assignment state.
 - Android test release: `0.3.4+2026071701`, package
   `pro.greenvpn.app.beta`, side-by-side with stable, SHA-256
   `9F1357E3CB02196CDC8A351A2D6F995A27BF75ACC0017275465E6DD6254E0675`.
-- Windows candidate: `0.3.0-paid-beta.11`, SHA-256
-  `ECA801FBCFED9A08CD5470E6BDC9F2FC327019D6C3DE61D50F7AECC69668FE32`.
-  It is technically tested but unsigned and must not become mandatory.
+- Windows candidate: `0.3.4-paid-beta.1706`, SHA-256
+  `15CB30A0169AB064AD4EBB6DE4B75A6DACB3B43183BB0367E45CDC9A3D1B81CF`.
+  It is published on both RU nodes, technically tested, unsigned and optional.
 - Product model: trial 3 days; 249/649/1099 RUB for 30/90/180 days; no ads or
   disconnect timer; auto-renew is opt-out after YooKassa approval.
 - The real 249 RUB provider-backed payment smoke and the subsequent unlink
@@ -330,6 +343,13 @@ material. KZ is not in DNS, catalogs or assignment state.
 - Previous backend 0.9.119 paid-candidate rollback directories:
   - Timeweb: `/root/greenvpn-paid-beta-backend-backups/20260716T175858Z-paid-beta-backend-fallback-peer-20260716-r23`;
   - RUVDS Moscow: `/root/greenvpn-paid-beta-backend-backups/20260716T175919Z-paid-beta-backend-fallback-peer-20260716-r23`.
+- Windows 0.3.4 pre-release rollback directories, containing the previous
+  production/test EXEs and env files:
+  - Timeweb: `/root/greenvpn-windows-release-backups/20260717T122847Z-timeweb-0.3.4-1706`;
+  - RUVDS Moscow: `/root/greenvpn-windows-release-backups/20260717T122919Z-ruvds-0.3.4-1706`.
+- Windows static-manifest correction backups:
+  - Timeweb: `/root/greenvpn-windows-release-backups/20260717T123644Z-timeweb-0.3.4-1706`;
+  - RUVDS Moscow: `/root/greenvpn-windows-release-backups/20260717T123748Z-ruvds-0.3.4-1706`.
 - London runtime backup before the 2026-07-16 repair:
   `/root/greenvpn-london-recovery-backups/20260716T100956Z`.
 - London catalog online DB backups, all `PRAGMA quick_check=ok`:
@@ -373,11 +393,11 @@ material. KZ is not in DNS, catalogs or assignment state.
 
 ## Remaining owner/external launch gates
 
-1. Obtain an Authenticode code-signing certificate and sign the exact verified
-   Windows installer before public distribution.
-2. After signing passes, atomically publish the signed installer to main and
-   test on Timeweb and RUVDS Moscow, verify all manifests/downloads and retain
-   deployment backups. Android, London and server contours are already complete.
+1. Obtain an Authenticode code-signing certificate and build a higher-version
+   signed Windows successor.
+2. Atomically replace the temporary unsigned release on main and test, verify
+   all manifests/downloads and retain deployment backups. Android, London and
+   server contours are already complete.
 
 Do not perform a real payment, enter SMS/bank codes or accept legal terms on
 behalf of the owner.
