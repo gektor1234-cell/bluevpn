@@ -3719,7 +3719,15 @@ def free_ad_platform_enabled(platform: Optional[str]) -> bool:
 def free_ad_client_supports_gate(app_version: Optional[str]) -> bool:
     if not FREE_AD_GATE_CLIENT_MARKER:
         return True
-    return FREE_AD_GATE_CLIENT_MARKER in (app_version or "").strip().lower()
+    version = (app_version or "").strip().lower()
+    marker = FREE_AD_GATE_CLIENT_MARKER.strip().lower()
+    if marker in version:
+        return True
+    version_match = re.match(r"^(\d+(?:\.\d+){1,3})", version)
+    marker_match = re.match(r"^(\d+(?:\.\d+){1,3})", marker)
+    if version_match is None or marker_match is None:
+        return False
+    return compare_versions(version_match.group(1), marker_match.group(1)) >= 0
 
 
 def subscription_is_paid_active(sub: dict) -> bool:

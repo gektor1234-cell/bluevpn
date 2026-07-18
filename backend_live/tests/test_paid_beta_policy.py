@@ -968,6 +968,14 @@ class PaidBetaPolicyTests(unittest.TestCase):
         )
         self.assertTrue(beta_policy["adsDisabled"])
 
+    def test_rewarded_ad_marker_is_a_minimum_client_version(self) -> None:
+        with patch.object(main, "FREE_AD_GATE_CLIENT_MARKER", "0.3.5"):
+            self.assertFalse(main.free_ad_client_supports_gate("0.3.4"))
+            self.assertTrue(main.free_ad_client_supports_gate("0.3.5"))
+            self.assertTrue(main.free_ad_client_supports_gate("0.3.6"))
+            self.assertTrue(main.free_ad_client_supports_gate("0.4.0"))
+            self.assertFalse(main.free_ad_client_supports_gate("legacy-client"))
+
     def test_reward_grant_is_one_connect_when_session_timer_is_disabled(self) -> None:
         device_uid = "rewarded-ad-single-connect"
         self.bootstrap(paid_beta=False, device_uid=device_uid)

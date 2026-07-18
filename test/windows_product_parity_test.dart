@@ -72,4 +72,32 @@ void main() {
       isFalse,
     );
   });
+
+  test(
+    'account switch rotates a device after a sanitized ownership conflict',
+    () {
+      expect(
+        greenVpnIsDeviceAttachedConflict(
+          'This device is already attached to another user.',
+        ),
+        isTrue,
+      );
+      expect(
+        greenVpnIsDeviceAttachedConflict(
+          'Ошибка bootstrap (409): This device is already attached to another user.',
+        ),
+        isTrue,
+      );
+      expect(
+        greenVpnIsDeviceAttachedConflict(
+          'Это устройство уже привязано к другому аккаунту.',
+        ),
+        isTrue,
+      );
+      expect(
+        greenVpnIsDeviceAttachedConflict('Сервис временно недоступен.'),
+        isFalse,
+      );
+    },
+  );
 }

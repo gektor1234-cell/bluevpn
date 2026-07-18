@@ -15,12 +15,12 @@ This is the current operational entry point. Read it together with
    client profiles.
 3. Never touch Friendly Linnet `5.129.237.163` without a new explicit owner
    instruction.
-4. Android 0.3.5 is already public and mandatory. Do not republish or roll it
+4. Android 0.3.6 is already public and mandatory. Do not republish or roll it
    back without a verified artifact, alternate-node health and an atomic backup.
 5. AWG2, Hysteria2, VLESS REALITY/XHTTP, Naive HTTPS and dnstt remain isolated
    to NL2 `5.129.216.42`. The rollout runbook is documentation, not permission
    to deploy them elsewhere.
-6. Rewarded ads are enabled only for free Android 0.3.5 connections. Paid
+6. Rewarded ads are enabled for free Android 0.3.5 and newer connections. Paid
    subscriptions and Windows are exempt. The forced VPN disconnect timer must
    remain disabled unless the owner gives a new explicit instruction.
 7. Billing has one writer: Timeweb. RUVDS serves failover reads/auth/config but
@@ -63,7 +63,7 @@ This is the current operational entry point. Read it together with
 - Windows unsigned-publication checkpoint: the commit containing this handoff.
 - Windows 0.3.5 installer-repair checkpoint: the commit containing this handoff.
 - Admin console 0.9.121 checkpoint: the commit containing this handoff.
-- Android 0.3.5 rewarded-ads checkpoint: the commit containing this handoff.
+- Android 0.3.6 account-switch checkpoint: the commit containing this handoff.
 - Generated binaries belong in `C:\BlueVPN_Builds`, encrypted restore points in
   `C:\Users\gekto\GreenVPN_Checkpoints`, and secrets outside Git.
 
@@ -72,7 +72,7 @@ This is the current operational entry point. Read it together with
 - Operator URL: `https://admin.greenvpn.pro/`. Nginx Basic Auth is the outer
   gate; staff email/password, short-lived session, optional 2FA and backend RBAC
   remain the inner gate.
-- Production API version is `0.9.122-ads.3` on both Russian control planes.
+- Production API version is `0.9.123-ads.1` on both Russian control planes.
   Timeweb remains the only billing writer; RUVDS remains billing read-only.
 - One dashboard exposes users, devices, subscriptions, pending payments,
   support workload, incidents and the Android/Windows split. The analytics view
@@ -91,7 +91,7 @@ This is the current operational entry point. Read it together with
 - Desktop and mobile layouts were physically rendered. Mobile navigation is a
   compact horizontal section bar; tables scroll inside their own container and
   the page has no horizontal overflow.
-- Validation: 100 backend tests; Python/JavaScript compile; 264 unique HTML ids;
+- Validation: 101 backend tests; Python/JavaScript compile; 264 unique HTML ids;
   live health, database indexes, analytics, pagination, CSV and CORS passed on
   both control planes. Backend SHA-256 is
   `E51399F0C4A36BAF2DAA474B7207EFA771293ED133279EE0A25588FE66A8C551`.
@@ -107,14 +107,14 @@ This is the current operational entry point. Read it together with
   Physical nodes and transports stay internal. Every picker row, including
   `Авто`, has a numeric latency label; an unavailable measurement is displayed
   as `0 мс`.
-- Production Android `0.3.5+2026071801`, package `pro.greenvpn.app`:
-  `C:\BlueVPN_Builds\public_product_ads_20260718_r1\GreenVPN_Android_0.3.5_2026071801.apk`.
+- Production Android `0.3.6+2026071802`, package `pro.greenvpn.app`:
+  `C:\BlueVPN_Builds\public_product_account_switch_20260718_r2\GreenVPN_Android_0.3.6_2026071802.apk`.
   SHA-256:
-  `2C6DF6EB6F9D85E54CE7D9F9CD7FF03D551F715EC09067156CE30DA6437C09ED`.
-- Test Android `0.3.5+2026071801`, package `pro.greenvpn.app.beta`:
-  `C:\BlueVPN_Builds\public_product_ads_20260718_r1_test\GreenVPN_Android_0.3.5_2026071801.apk`.
+  `E8CF324C1EC9DE4EDB2B178973F5102E9A316F7DCF26C09D80E6949DE72BB61E`.
+- Test Android `0.3.6+2026071802`, package `pro.greenvpn.app.beta`:
+  `C:\BlueVPN_Builds\public_product_account_switch_20260718_r2_test\GreenVPN_Android_0.3.6_2026071802.apk`.
   SHA-256:
-  `4D34F487573BBB8CA32E2998D4866DC3DF47353A235A38C0FB36D65F22959FBB`.
+  `97461512A0B709D9BD4CF348B66C53EDC43F205722B4D0E749343E2CFA536706`.
 - Both APKs are release signed, passed artifact verification and were published
   atomically on Timeweb and RUVDS Moscow. Stable and paid-beta Android manifests
   are mandatory and point to the matching hashes.
@@ -132,10 +132,10 @@ This is the current operational entry point. Read it together with
 
 ## Rewarded ads, 2026-07-18
 
-- Production and paid-beta backends are `0.9.122-ads.3` on Timeweb and RUVDS
+- Production and paid-beta backends are `0.9.123-ads.1` on Timeweb and RUVDS
   Moscow. Timeweb remains the only billing writer and all four services are
   healthy.
-- The Yandex rewarded block `R-M-19313018-1` is served only to Android 0.3.5
+- The Yandex rewarded block `R-M-19313018-1` is served to Android 0.3.5 and newer
   users whose active plan is free/trial. One completed ad grants one new VPN
   connection. Active paid plans bypass the gate. The platform allow-list is
   exactly `android`, so Windows behavior is unchanged.
@@ -148,11 +148,16 @@ This is the current operational entry point. Read it together with
   `CONNECTED`/`VALIDATED`, survival beyond the former three-minute cutoff and
   another ad on the following connection. The test tunnel was disconnected at
   handoff.
+- Physical production 0.3.6 smoke preserved a second-account session on a
+  phone already registered to the owner's original account. The client
+  recognized the sanitized ownership conflict, rotated its local device
+  identity, retried bootstrap successfully and opened the real rewarded ad.
+  The ad was not completed by automation and the VPN was left disconnected.
 - Account deletion now removes ad challenges/grants and records replication
   tombstones by `public_id`. The disposable smoke account and four historical
   orphan ad rows were removed; both paid-beta databases report zero orphan ad
   rows and `PRAGMA quick_check=ok`.
-- 100 backend tests and 31 Flutter tests pass, Flutter analysis is clean, all
+- 101 backend tests and 32 Flutter tests pass, Flutter analysis is clean, all
   eight API manifests, both static paid-beta manifests and all eight download
   checks pass, and the public probe is 31/31. Exact production and test APKs
   downloaded from the primary site match the hashes above.
@@ -160,12 +165,12 @@ This is the current operational entry point. Read it together with
   and complete the requested payout/legal profile. Do not enter bank, passport,
   tax or self-employment data on the owner's behalf.
 - Rollback directories:
-  - APK Timeweb: `/root/greenvpn-apk-release-backups/20260718T115642Z-timeweb-0.3.5-2026071801`;
-  - APK RUVDS: `/root/greenvpn-apk-release-backups/20260718T115552Z-ruvds-0.3.5-2026071801`;
-  - production backend Timeweb: `/root/greenvpn-public-product-backups/20260718T122021Z-timeweb-0.9.122-ads.3`;
-  - production backend RUVDS: `/root/greenvpn-public-product-backups/20260718T121922Z-ruvds-0.9.122-ads.3`;
-  - paid-beta backend Timeweb: `/root/greenvpn-paid-beta-backend-backups/20260718T122017Z-paid-beta-backend-rewarded-ads-tombstones-20260718-r27`;
-  - paid-beta backend RUVDS: `/root/greenvpn-paid-beta-backend-backups/20260718T121906Z-paid-beta-backend-rewarded-ads-tombstones-20260718-r27`;
+  - APK Timeweb: `/root/greenvpn-apk-release-backups/20260718T170717Z-timeweb-0.3.6-2026071802`;
+  - APK RUVDS: `/root/greenvpn-apk-release-backups/20260718T170502Z-ruvds-0.3.6-2026071802`;
+  - production backend Timeweb: `/root/greenvpn-public-product-backups/20260718T165718Z-timeweb-0.9.123-ads.1`;
+  - production backend RUVDS: `/root/greenvpn-public-product-backups/20260718T165626Z-ruvds-0.9.123-ads.1`;
+  - paid-beta backend Timeweb: `/root/greenvpn-paid-beta-backend-backups/20260718T165737Z-paid-beta-backend-ad-min-version-20260718-r28`;
+  - paid-beta backend RUVDS: `/root/greenvpn-paid-beta-backend-backups/20260718T165631Z-paid-beta-backend-ad-min-version-20260718-r28`;
   - static manifest Timeweb: `/root/greenvpn-paid-beta-static-manifest-backups/20260718T120557Z-android-0.3.5-2026071801`;
   - static manifest RUVDS: `/root/greenvpn-paid-beta-static-manifest-backups/20260718T120534Z-android-0.3.5-2026071801`.
   - orphan cleanup Timeweb: `/root/greenvpn-paid-beta-ad-orphan-cleanup-backups/20260718T122049Z`.
@@ -324,9 +329,9 @@ material. KZ is not in DNS, catalogs or assignment state.
 ## Stable public contour
 
 - Site/API: `https://greenvpn.pro`, `https://api.greenvpn.pro`.
-- Backend: `0.9.122-ads.3` on both RU control planes.
-- Android: `0.3.5`, build `2026071801`, package `pro.greenvpn.app`, SHA-256
-  `2C6DF6EB6F9D85E54CE7D9F9CD7FF03D551F715EC09067156CE30DA6437C09ED`.
+- Backend: `0.9.123-ads.1` on both RU control planes.
+- Android: `0.3.6`, build `2026071802`, package `pro.greenvpn.app`, SHA-256
+  `E8CF324C1EC9DE4EDB2B178973F5102E9A316F7DCF26C09D80E6949DE72BB61E`.
 - Android update is mandatory on Timeweb and RUVDS Moscow; both manifests report
   `required=true` and `fileReady=true`.
 - Windows: `0.3.5+1707`, mandatory, unsigned, SHA-256
@@ -341,14 +346,14 @@ material. KZ is not in DNS, catalogs or assignment state.
 ## Paid public candidate
 
 - Paths remain isolated at `/paid-beta` and `/paid-beta-api` until promotion.
-- Both control planes currently report backend `0.9.122-ads.3`.
+- Both control planes currently report backend `0.9.123-ads.1`.
 - Both SQLite databases pass `PRAGMA quick_check`.
 - The public-product client marker permits the final public candidate to create
   a 249 RUB order for accounts previously enrolled in the paid-beta cohort;
   unmarked legacy clients remain rejected.
-- Android test release: `0.3.5+2026071801`, package
+- Android test release: `0.3.6+2026071802`, package
   `pro.greenvpn.app.beta`, side-by-side with stable, SHA-256
-  `4D34F487573BBB8CA32E2998D4866DC3DF47353A235A38C0FB36D65F22959FBB`.
+  `97461512A0B709D9BD4CF348B66C53EDC43F205722B4D0E749343E2CFA536706`.
 - Windows candidate: `0.3.5-paid-beta.1707`, SHA-256
   `D5396C4A54ECBFE69750759AF0090E194BC4187397FE54DC5A3A11AF2700955E`.
   It is published on both RU nodes, technically tested, unsigned and optional.
@@ -421,11 +426,11 @@ material. KZ is not in DNS, catalogs or assignment state.
 
 ## Verified gates
 
-- Public surface probe: 31/31 targets green after Android 0.3.5 publication.
-- Backend tests: 100 passed.
+- Public surface probe: 31/31 targets green after Android 0.3.6 publication.
+- Backend tests: 101 passed.
 - `pip-audit`: no known vulnerabilities.
 - `flutter analyze`: no issues.
-- Flutter tests: 31 passed and 2 public-only tests skipped by design.
+- Flutter tests: 32 passed and 2 public-only tests skipped by design.
 - Android debug/profile/release unit-test tasks: 343 tasks successful.
 - Release gate: 0 warnings, 0 errors.
 - Secret scan: tracked, untracked and complete Git history passed.
@@ -434,15 +439,15 @@ material. KZ is not in DNS, catalogs or assignment state.
 
 ## Restore points
 
-- Android 0.3.5 online rollback directories:
-  - Timeweb: `/root/greenvpn-apk-release-backups/20260718T115642Z-timeweb-0.3.5-2026071801`;
-  - RUVDS Moscow: `/root/greenvpn-apk-release-backups/20260718T115552Z-ruvds-0.3.5-2026071801`.
-- Backend 0.9.122 production deployment backup directories:
-  - Timeweb: `/root/greenvpn-public-product-backups/20260718T122021Z-timeweb-0.9.122-ads.3`;
-  - RUVDS Moscow: `/root/greenvpn-public-product-backups/20260718T121922Z-ruvds-0.9.122-ads.3`.
-- Backend 0.9.122 paid-beta deployment backup directories:
-  - Timeweb: `/root/greenvpn-paid-beta-backend-backups/20260718T122017Z-paid-beta-backend-rewarded-ads-tombstones-20260718-r27`;
-  - RUVDS Moscow: `/root/greenvpn-paid-beta-backend-backups/20260718T121906Z-paid-beta-backend-rewarded-ads-tombstones-20260718-r27`.
+- Android 0.3.6 online rollback directories:
+  - Timeweb: `/root/greenvpn-apk-release-backups/20260718T170717Z-timeweb-0.3.6-2026071802`;
+  - RUVDS Moscow: `/root/greenvpn-apk-release-backups/20260718T170502Z-ruvds-0.3.6-2026071802`.
+- Backend 0.9.123 production deployment backup directories:
+  - Timeweb: `/root/greenvpn-public-product-backups/20260718T165718Z-timeweb-0.9.123-ads.1`;
+  - RUVDS Moscow: `/root/greenvpn-public-product-backups/20260718T165626Z-ruvds-0.9.123-ads.1`.
+- Backend 0.9.123 paid-beta deployment backup directories:
+  - Timeweb: `/root/greenvpn-paid-beta-backend-backups/20260718T165737Z-paid-beta-backend-ad-min-version-20260718-r28`;
+  - RUVDS Moscow: `/root/greenvpn-paid-beta-backend-backups/20260718T165631Z-paid-beta-backend-ad-min-version-20260718-r28`.
 
 - Android 0.3.4 online rollback directories:
   - Timeweb: `/root/greenvpn-apk-release-backups/20260717T090025Z-timeweb-0.3.4-2026071701`;

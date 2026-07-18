@@ -180,6 +180,21 @@ bool greenVpnShouldRotateAutoReplacedDevice(Map<String, dynamic>? bootstrap) {
       device['disabledReason'] == 'auto_replaced_by_new_device';
 }
 
+bool greenVpnIsDeviceAttachedConflict(String? message) {
+  final raw = (message ?? '').trim().toLowerCase();
+  if (raw.isEmpty) return false;
+  final english =
+      raw.contains('device') &&
+      raw.contains('attached') &&
+      raw.contains('another user');
+  final russian =
+      raw.contains('устройство') &&
+      raw.contains('привязан') &&
+      raw.contains('друг') &&
+      (raw.contains('аккаунт') || raw.contains('пользовател'));
+  return english || russian;
+}
+
 bool greenVpnUpdateManifestMatchesCurrentPlatform(
   GreenVpnUpdateManifest manifest,
 ) {
@@ -3031,14 +3046,6 @@ class AuthProvisioningService {
     required this.deviceStore,
   });
 
-  bool _isDeviceAttachedConflict(String? message) {
-    final raw = (message ?? '').toLowerCase();
-    return raw.contains('409') &&
-        raw.contains('device') &&
-        raw.contains('attached') &&
-        raw.contains('another user');
-  }
-
   String _buildManagedConfig(String baseConfig) {
     return preserveFullTunnelAllowedIps(baseConfig);
   }
@@ -3087,7 +3094,7 @@ class AuthProvisioningService {
       appVersion: kAppVersion,
     );
 
-    if (_isDeviceAttachedConflict(boot.message)) {
+    if (greenVpnIsDeviceAttachedConflict(boot.message)) {
       deviceId = await deviceStore.rotate();
       boot = await api.bootstrapClient(
         accessToken: session.accessToken,
@@ -8501,14 +8508,6 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
   }
 
-  bool _isDeviceAttachedConflict(String? message) {
-    final raw = (message ?? '').toLowerCase();
-    return raw.contains('409') &&
-        raw.contains('device') &&
-        raw.contains('attached') &&
-        raw.contains('another user');
-  }
-
   bool _isAndroidNetworkFailureMessage(String? message) {
     if (kIsWeb || !Platform.isAndroid) return false;
     final raw = (message ?? '').toLowerCase();
@@ -8597,7 +8596,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       );
     }
 
-    final attachedToAnotherUser = _isDeviceAttachedConflict(boot.message);
+    final attachedToAnotherUser = greenVpnIsDeviceAttachedConflict(
+      boot.message,
+    );
     final autoReplaced = greenVpnShouldRotateAutoReplacedDevice(boot.data);
     if (!attachedToAnotherUser && !autoReplaced) {
       return boot;
