@@ -72,7 +72,7 @@ This is the current operational entry point. Read it together with
 - Operator URL: `https://admin.greenvpn.pro/`. Nginx Basic Auth is the outer
   gate; staff email/password, short-lived session, optional 2FA and backend RBAC
   remain the inner gate.
-- Production API version is `0.9.123-ads.1` on both Russian control planes.
+- Production API version is `0.9.124-admin-cleanup.1` on both Russian control planes.
   Timeweb remains the only billing writer; RUVDS remains billing read-only.
 - One dashboard exposes users, devices, subscriptions, pending payments,
   support workload, incidents and the Android/Windows split. The analytics view
@@ -132,7 +132,7 @@ This is the current operational entry point. Read it together with
 
 ## Rewarded ads, 2026-07-18
 
-- Production and paid-beta backends are `0.9.123-ads.1` on Timeweb and RUVDS
+- Production and paid-beta backends are `0.9.124-admin-cleanup.1` on Timeweb and RUVDS
   Moscow. Timeweb remains the only billing writer and all four services are
   healthy.
 - The Yandex rewarded block `R-M-19313018-1` is served to Android 0.3.5 and newer
@@ -157,7 +157,7 @@ This is the current operational entry point. Read it together with
   tombstones by `public_id`. The disposable smoke account and four historical
   orphan ad rows were removed; both paid-beta databases report zero orphan ad
   rows and `PRAGMA quick_check=ok`.
-- 101 backend tests and 32 Flutter tests pass, Flutter analysis is clean, all
+- 102 backend tests and 32 Flutter tests pass, Flutter analysis is clean, all
   eight API manifests, both static paid-beta manifests and all eight download
   checks pass, and the public probe is 31/31. Exact production and test APKs
   downloaded from the primary site match the hashes above.
@@ -174,6 +174,36 @@ This is the current operational entry point. Read it together with
   - static manifest Timeweb: `/root/greenvpn-paid-beta-static-manifest-backups/20260718T120557Z-android-0.3.5-2026071801`;
   - static manifest RUVDS: `/root/greenvpn-paid-beta-static-manifest-backups/20260718T120534Z-android-0.3.5-2026071801`.
   - orphan cleanup Timeweb: `/root/greenvpn-paid-beta-ad-orphan-cleanup-backups/20260718T122049Z`.
+
+## Confirmed Codex test-account cleanup, 2026-07-18
+
+- Exactly six production identities and one paid-beta identity were attributed
+  to Codex test/smoke work. All ambiguous, phone-generated and real-looking
+  customer identities were excluded. Production now contains 25 users and
+  paid-beta contains one user on both control planes.
+- Before deletion, both SQLite databases on each node were backed up online to
+  root-only directories. The complete preserved identity digest and protected
+  account core state match those backups after deletion and after explicit
+  Timeweb/RUVDS sync cycles.
+- Backend `0.9.124-admin-cleanup.1` deletes every user-owned database row,
+  endpoint/transport assignment and route event; it removes the configured/live
+  peer and emits replication tombstones for all synchronized records. The sync
+  merger also removes complete account dependents when applying a user
+  tombstone.
+- Post-cleanup checks on both nodes: `PRAGMA quick_check=ok`, zero candidate
+  dependents, zero old-key hits in live/configured `wg0`, active sync timers and
+  all four public health endpoints green. Backend tests: 102 passed.
+- Source hashes:
+  - `main.py`: `94E3879A429CF618CAC02817D2199736B9249BAED994E586222C63E673B1295E`;
+  - state sync: `BC1A55F94913EEA3759ABC4A058A3FE1F75932B9BBD576F2C2FF906CDF2F6457`.
+- Cleanup backups:
+  - Timeweb: `/root/greenvpn-agent-user-cleanup-backups/20260718T184419Z-timeweb`;
+  - RUVDS Moscow: `/root/greenvpn-agent-user-cleanup-backups/20260718T184357Z-ruvds`.
+- Backend deployment rollback:
+  - production Timeweb: `/root/greenvpn-public-product-backups/20260718T184055Z-timeweb-0.9.124-admin-cleanup.1`;
+  - production RUVDS: `/root/greenvpn-public-product-backups/20260718T184000Z-ruvds-0.9.124-admin-cleanup.1`;
+  - paid-beta Timeweb: `/root/greenvpn-paid-beta-backend-backups/20260718T184108Z-account-delete-complete-20260718-r29`;
+  - paid-beta RUVDS: `/root/greenvpn-paid-beta-backend-backups/20260718T184022Z-account-delete-complete-20260718-r29`.
 
 ## Published Windows 0.3.5 installer repair, 2026-07-17
 
@@ -329,7 +359,7 @@ material. KZ is not in DNS, catalogs or assignment state.
 ## Stable public contour
 
 - Site/API: `https://greenvpn.pro`, `https://api.greenvpn.pro`.
-- Backend: `0.9.123-ads.1` on both RU control planes.
+- Backend: `0.9.124-admin-cleanup.1` on both RU control planes.
 - Android: `0.3.6`, build `2026071802`, package `pro.greenvpn.app`, SHA-256
   `E8CF324C1EC9DE4EDB2B178973F5102E9A316F7DCF26C09D80E6949DE72BB61E`.
 - Android update is mandatory on Timeweb and RUVDS Moscow; both manifests report
@@ -346,7 +376,7 @@ material. KZ is not in DNS, catalogs or assignment state.
 ## Paid public candidate
 
 - Paths remain isolated at `/paid-beta` and `/paid-beta-api` until promotion.
-- Both control planes currently report backend `0.9.123-ads.1`.
+- Both control planes currently report backend `0.9.124-admin-cleanup.1`.
 - Both SQLite databases pass `PRAGMA quick_check`.
 - The public-product client marker permits the final public candidate to create
   a 249 RUB order for accounts previously enrolled in the paid-beta cohort;
@@ -427,7 +457,7 @@ material. KZ is not in DNS, catalogs or assignment state.
 ## Verified gates
 
 - Public surface probe: 31/31 targets green after Android 0.3.6 publication.
-- Backend tests: 101 passed.
+- Backend tests: 102 passed.
 - `pip-audit`: no known vulnerabilities.
 - `flutter analyze`: no issues.
 - Flutter tests: 32 passed and 2 public-only tests skipped by design.

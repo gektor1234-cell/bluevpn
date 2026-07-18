@@ -7,8 +7,8 @@ Updated: 2026-07-18.
 | Component | Version/state |
 | --- | --- |
 | Main site | `https://greenvpn.pro/`, healthy |
-| Primary API | `https://api.greenvpn.pro/`, backend `0.9.123-ads.1` |
-| Fallback API | RUVDS Moscow, backend `0.9.123-ads.1` |
+| Primary API | `https://api.greenvpn.pro/`, backend `0.9.124-admin-cleanup.1` |
+| Fallback API | RUVDS Moscow, backend `0.9.124-admin-cleanup.1` |
 | Android | `0.3.6+2026071802`, package `pro.greenvpn.app`, mandatory |
 | Android SHA-256 | `E8CF324C1EC9DE4EDB2B178973F5102E9A316F7DCF26C09D80E6949DE72BB61E` |
 | Windows | `0.3.5+1707`, mandatory, unsigned |
@@ -24,8 +24,8 @@ root-only deployment backups listed under Rollback.
 | Component | Version/state |
 | --- | --- |
 | URL | `https://admin.greenvpn.pro/`, Basic Auth plus staff session/RBAC |
-| Production backend | `0.9.123-ads.1` on Timeweb and RUVDS Moscow |
-| Backend SHA-256 | `3E82EEB35ADC3F27154C187841887DE0958D974D1CEBE197B05A9C737C96DF8C` |
+| Production backend | `0.9.124-admin-cleanup.1` on Timeweb and RUVDS Moscow |
+| Backend SHA-256 | `94E3879A429CF618CAC02817D2199736B9249BAED994E586222C63E673B1295E` |
 | Static index SHA-256 | `1CD3EAA8A027C13400417DD1E96CECA3C61553D806F7EEBD5EF75168EC59FCCB` |
 | Static JavaScript SHA-256 | `9A87CAA3EF2F5CAD1ADB9FC22E925E522D411FE0FC90EE715558BBEEAEB711F9` |
 | Static CSS SHA-256 | `680AF9D1F48F8A042A0C592A987EB9077E8264EFE3C26AA7629ADD8CDB344A82` |
@@ -49,7 +49,7 @@ staff authentication.
 
 | Component | Version/state |
 | --- | --- |
-| Primary/fallback backend | `0.9.123-ads.1` |
+| Primary/fallback backend | `0.9.124-admin-cleanup.1` |
 | Android | `0.3.6+2026071802`, package `pro.greenvpn.app.beta`, mandatory |
 | Android SHA-256 | `97461512A0B709D9BD4CF348B66C53EDC43F205722B4D0E749343E2CFA536706` |
 | Windows | `0.3.5-paid-beta.1707`, optional, unsigned |
@@ -86,11 +86,39 @@ Production and test APKs are published on both Russian control planes. The
 customer-facing stable and paid-beta update manifests force 0.3.6 and all four
 public APK aliases are ready.
 
+## Confirmed Test-account Cleanup
+
+- Six production and one paid-beta identities were confirmed as Codex-created
+  test, payment-shape, webhook, preview or incomplete-registration accounts.
+  Ambiguous identities, phone-generated identities and every real-looking
+  customer account were excluded from the operation.
+- The production account count changed from 31 to 25 on each control plane;
+  paid-beta changed from 2 to 1. The complete preserved identity digest and the
+  protected `users`/`devices`/`subscriptions`/`billing_orders` state match the
+  pre-delete backup on both nodes.
+- Account deletion now removes endpoint and transport assignments, client route
+  telemetry, invite/funnel rows, ad grants/challenges and every other user-owned
+  row before the user. It removes the live/configured peer and records all
+  replicated natural-key tombstones so a peer cannot be resurrected by sync.
+- Post-delete verification reports zero candidate-dependent rows and zero old
+  public-key hits in live `wg0` or `/etc/wireguard/wg0.conf` on both nodes.
+  Explicit production and paid-beta sync cycles succeeded and did not restore
+  any deleted identity.
+- Backend `0.9.124-admin-cleanup.1` is deployed on all four services. Source
+  `main.py` SHA-256 is
+  `94E3879A429CF618CAC02817D2199736B9249BAED994E586222C63E673B1295E`;
+  the synchronized state-merge script SHA-256 is
+  `BC1A55F94913EEA3759ABC4A058A3FE1F75932B9BBD576F2C2FF906CDF2F6457`.
+- Validation: 102 backend tests, Python compile, shell syntax, SQLite
+  `quick_check`, protected-state digest, explicit sync and all four public
+  health endpoints. The admin origin still returns the expected unauthenticated
+  `401` at the outer Basic Auth gate.
+
 ## Rewarded Ads Activation
 
-- Backend `0.9.123-ads.1` is deployed on production and paid-beta services on
-  both Russian control planes. Source `main.py` SHA-256 is
-  `3E82EEB35ADC3F27154C187841887DE0958D974D1CEBE197B05A9C737C96DF8C`.
+- Backend `0.9.124-admin-cleanup.1` is deployed on production and paid-beta
+  services on both Russian control planes. It preserves the rewarded-ad policy
+  of `0.9.123-ads.1` unchanged while adding complete account cleanup.
 - Yandex rewarded block `R-M-19313018-1` is enabled for Android 0.3.5 and newer
   clients on free/trial plans. A completed ad grants exactly one new VPN
   connection. Paid active subscriptions bypass the gate. Windows is unchanged.
@@ -112,7 +140,7 @@ public APK aliases are ready.
   same physical phone signs into another account. It rotates only the local
   per-account device identity, retries bootstrap and leaves the original
   account and its subscription unchanged.
-- Validation: 101 backend tests, 32 Flutter tests with two intentional skips,
+- Validation: 102 backend tests, 32 Flutter tests with two intentional skips,
   clean Flutter analysis, 8/8 API manifests, 2/2 static paid-beta manifests,
   8/8 download checks and the independent 31/31 public-surface probe. Primary
   website APK downloads match their exact production/test SHA-256 values.
@@ -209,9 +237,9 @@ trusted: SmartScreen/reputation warnings remain expected until Authenticode.
 
 ## Verified
 
-- Both RU control planes run production backend `0.9.123-ads.1` and pass health,
+- Both RU control planes run production backend `0.9.124-admin-cleanup.1` and pass health,
   schema and SQLite quick-check.
-- Admin/backend validation: 101 backend unit tests, Python and JavaScript syntax,
+- Admin/backend validation: 102 backend unit tests, Python and JavaScript syntax,
   unique HTML ids, desktop/mobile UI, live analytics/pagination/CSV and CORS.
 - Production and candidate sync timers are active. Latest explicit production
   cycles on both nodes: zero inserts/updates, zero conflicts/errors.
@@ -282,6 +310,17 @@ London or Russian control-plane defect remains.
 
 ## Rollback
 
+- Backend 0.9.124 production deployment backups:
+  - Timeweb: `/root/greenvpn-public-product-backups/20260718T184055Z-timeweb-0.9.124-admin-cleanup.1`;
+  - RUVDS Moscow: `/root/greenvpn-public-product-backups/20260718T184000Z-ruvds-0.9.124-admin-cleanup.1`.
+- Backend 0.9.124 paid-beta deployment backups:
+  - Timeweb: `/root/greenvpn-paid-beta-backend-backups/20260718T184108Z-account-delete-complete-20260718-r29`;
+  - RUVDS Moscow: `/root/greenvpn-paid-beta-backend-backups/20260718T184022Z-account-delete-complete-20260718-r29`.
+- Root-only pre-delete database backups and cleanup manifests:
+  - Timeweb: `/root/greenvpn-agent-user-cleanup-backups/20260718T184419Z-timeweb`;
+  - RUVDS Moscow: `/root/greenvpn-agent-user-cleanup-backups/20260718T184357Z-ruvds`.
+  Database rollback is not sufficient by itself: any intentionally restored
+  test identity must receive a controlled peer re-provision before use.
 - Android 0.3.6 deployment backups:
   - Timeweb: `/root/greenvpn-apk-release-backups/20260718T170717Z-timeweb-0.3.6-2026071802`;
   - RUVDS Moscow: `/root/greenvpn-apk-release-backups/20260718T170502Z-ruvds-0.3.6-2026071802`.

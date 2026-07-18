@@ -238,8 +238,10 @@ REPLICATION_DELETE_KEYS: dict[str, tuple[str, ...]] = {
     "users": ("email",),
     "tokens": ("token",),
     "devices": ("device_uid",),
+    "device_transport_assignments": ("device_uid", "transport_key"),
     "subscriptions": ("user_id",),
     "billing_orders": ("public_id",),
+    "client_endpoint_assignments": ("user_id", "device_uid"),
     "ad_challenges": ("public_id",),
     "free_access_grants": ("public_id",),
     "device_traffic_usage": ("user_id", "device_uid", "server_id", "period_key"),
@@ -249,7 +251,10 @@ REPLICATION_DELETE_KEYS: dict[str, tuple[str, ...]] = {
     "email_outbox": ("email", "subject", "created_at"),
     "sms_outbox": ("phone", "body", "created_at"),
     "support_reports": ("report_code",),
+    "support_report_comments": ("report_id", "author", "body", "created_at"),
     "promo_redemptions": ("code", "user_id", "order_public_id"),
+    "beta_invite_redemptions": ("user_id",),
+    "beta_funnel_events": ("event_id",),
 }
 DB_BUSY_TIMEOUT_SECONDS = env_float("BLUEVPN_DB_BUSY_TIMEOUT_SECONDS", 30.0, min_value=1.0)
 DB_BUSY_TIMEOUT_MS = int(DB_BUSY_TIMEOUT_SECONDS * 1000)
@@ -17690,6 +17695,45 @@ def delete_admin_user_record(user_id: int, payload: AdminUserDeleteIn) -> dict:
         if user_email and confirm_email != user_email:
             raise HTTPException(status_code=400, detail="confirmEmail не совпадает с email пользователя.")
 
+        device_rows = conn.execute(
+            """
+            SELECT
+                d.device_uid,
+                d.client_public_key,
+                cea.server_id
+            FROM devices d
+            LEFT JOIN client_endpoint_assignments cea
+              ON cea.user_id = d.user_id
+             AND cea.device_uid = d.device_uid
+            WHERE d.user_id = ?
+            """,
+            (int(user_id),),
+        ).fetchall()
+
+    peer_cleanup = {
+        "attempted": 0,
+        "removed": 0,
+    }
+    for device_row in device_rows:
+        public_key = str(device_row["client_public_key"] or "").strip()
+        if not public_key:
+            continue
+        peer_cleanup["attempted"] += 1
+        if best_effort_remove_peer_from_server(
+            device_row["server_id"] or "intelligent_smew",
+            device_uid=str(device_row["device_uid"]),
+            public_key=public_key,
+        ):
+            peer_cleanup["removed"] += 1
+
+    with db() as conn:
+        user_row = conn.execute(
+            "SELECT id, email, phone, created_at FROM users WHERE id = ?",
+            (int(user_id),),
+        ).fetchone()
+        if user_row is None:
+            raise HTTPException(status_code=404, detail="Пользователь не найден.")
+
         deleted: dict[str, int] = {}
 
         def delete_from(table: str, where_sql: str, args: tuple) -> None:
@@ -17707,15 +17751,24 @@ def delete_admin_user_record(user_id: int, payload: AdminUserDeleteIn) -> dict:
             "report_id IN (SELECT id FROM support_reports WHERE user_id = ?)",
             (int(user_id),),
         )
+        delete_from(
+            "device_transport_assignments",
+            "device_uid IN (SELECT device_uid FROM devices WHERE user_id = ?)",
+            (int(user_id),),
+        )
         for table in [
             "admin_support_actions",
             "subscription_expiry_reviews",
             "promo_redemptions",
+            "beta_invite_redemptions",
+            "beta_funnel_events",
             "ad_challenges",
             "free_access_grants",
             "billing_orders",
             "subscriptions",
+            "client_endpoint_assignments",
             "device_traffic_usage",
+            "client_route_events",
             "devices",
             "sms_outbox",
             "email_login_codes",
@@ -17740,6 +17793,7 @@ def delete_admin_user_record(user_id: int, payload: AdminUserDeleteIn) -> dict:
         "createdAt": user_row["created_at"],
         "reason": reason,
         "deleted": deleted,
+        "peerCleanup": peer_cleanup,
     }
 
 
@@ -32797,6 +32851,7 @@ def admin_user_delete(
             "phone": result.get("phone"),
             "reason": result.get("reason"),
             "deleted": result.get("deleted"),
+            "peerCleanup": result.get("peerCleanup"),
         },
         request=request,
     )

@@ -64,6 +64,9 @@ class PaidBetaPolicyTests(unittest.TestCase):
             conn.execute("DELETE FROM billing_orders")
             conn.execute("DELETE FROM subscriptions")
             conn.execute("DELETE FROM tokens")
+            conn.execute("DELETE FROM device_transport_assignments")
+            conn.execute("DELETE FROM client_endpoint_assignments")
+            conn.execute("DELETE FROM client_route_events")
             conn.execute("DELETE FROM devices")
             conn.execute("DELETE FROM users")
             conn.execute(
@@ -1023,15 +1026,76 @@ class PaidBetaPolicyTests(unittest.TestCase):
             self.assertTrue(policy_after_connect["required"])
             self.assertFalse(policy_after_connect["sessionTimerEnabled"])
 
-            deleted = main.delete_admin_user_record(
-                self.user_id,
-                main.AdminUserDeleteIn(
-                    reason="rewarded advertising smoke cleanup",
-                    confirmEmail="beta@example.test",
-                ),
+            with main.db() as conn:
+                conn.execute(
+                    "UPDATE devices SET client_public_key = ? WHERE user_id = ?",
+                    ("account-deletion-test-public-key", self.user_id),
+                )
+                device = conn.execute(
+                    "SELECT device_uid, client_public_key FROM devices WHERE user_id = ?",
+                    (self.user_id,),
+                ).fetchone()
+                now = main.utc_now_iso()
+                conn.execute(
+                    """
+                    INSERT INTO client_endpoint_assignments(
+                        user_id, device_uid, server_id, protocol, selected_by,
+                        assignment_reason, sticky_until_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        self.user_id,
+                        device["device_uid"],
+                        "intelligent_smew",
+                        "wireguard_udp",
+                        "test",
+                        "account deletion test",
+                        "2099-01-01T00:00:00+00:00",
+                        now,
+                        now,
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO device_transport_assignments(
+                        device_uid, transport_key, assigned_ip, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (device["device_uid"], "amneziawg", "10.202.0.24", now, now),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO client_route_events(
+                        user_id, device_uid, protocol, stage, ok, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (self.user_id, device["device_uid"], "wireguard_udp", "smoke", 1, now),
+                )
+                conn.commit()
+
+            with patch.object(
+                main,
+                "best_effort_remove_peer_from_server",
+                return_value=True,
+            ) as peer_remove:
+                deleted = main.delete_admin_user_record(
+                    self.user_id,
+                    main.AdminUserDeleteIn(
+                        reason="rewarded advertising smoke cleanup",
+                        confirmEmail="beta@example.test",
+                    ),
+                )
+            peer_remove.assert_called_once_with(
+                "intelligent_smew",
+                device_uid=device["device_uid"],
+                public_key=device["client_public_key"],
             )
+            self.assertEqual(deleted["peerCleanup"], {"attempted": 1, "removed": 1})
             self.assertEqual(deleted["deleted"]["ad_challenges"], 1)
             self.assertEqual(deleted["deleted"]["free_access_grants"], 1)
+            self.assertEqual(deleted["deleted"]["client_endpoint_assignments"], 1)
+            self.assertEqual(deleted["deleted"]["device_transport_assignments"], 1)
+            self.assertEqual(deleted["deleted"]["client_route_events"], 1)
             with main.db() as conn:
                 self.assertEqual(
                     conn.execute(
@@ -1040,6 +1104,43 @@ class PaidBetaPolicyTests(unittest.TestCase):
                     ).fetchone()[0],
                     0,
                 )
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM client_endpoint_assignments WHERE user_id = ?",
+                        (self.user_id,),
+                    ).fetchone()[0],
+                    0,
+                )
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM device_transport_assignments WHERE device_uid = ?",
+                        (device["device_uid"],),
+                    ).fetchone()[0],
+                    0,
+                )
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM client_route_events WHERE user_id = ?",
+                        (self.user_id,),
+                    ).fetchone()[0],
+                    0,
+                )
+                for table in (
+                    "client_endpoint_assignments",
+                    "device_transport_assignments",
+                    "devices",
+                ):
+                    self.assertEqual(
+                        conn.execute(
+                            """
+                            SELECT COUNT(*)
+                            FROM replication_tombstones
+                            WHERE table_name = ?
+                            """,
+                            (table,),
+                        ).fetchone()[0],
+                        1,
+                    )
                 self.assertEqual(
                     conn.execute(
                         "SELECT COUNT(*) FROM free_access_grants WHERE user_id = ?",

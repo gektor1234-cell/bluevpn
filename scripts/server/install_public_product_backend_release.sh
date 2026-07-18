@@ -13,6 +13,9 @@ BETA_ENV_FILE="/etc/bluevpn/paid-beta.env"
 SERVICE="bluevpn-backend.service"
 SYNC_SERVICE="greenvpn-db-sync.service"
 SYNC_TIMER="greenvpn-db-sync.timer"
+SYNC_SCRIPT="/usr/local/sbin/greenvpn_db_sync_from_peer.sh"
+SYNC_SNAPSHOT_SCRIPT="/usr/local/sbin/greenvpn_sqlite_snapshot_stdout.py"
+SYNC_STATE_SCRIPT="/usr/local/sbin/greenvpn_sqlite_state_sync.py"
 
 usage() {
   cat <<'EOF'
@@ -25,8 +28,9 @@ Usage:
     --backend-version VERSION \
     [--apply]
 
-The default is a dry run. Apply mode creates a root-only code/env/SQLite
-backup, updates one node, and restores code and env automatically on error.
+The default is a dry run. Apply mode creates a root-only
+code/env/SQLite/sync backup, updates one node, and restores code, env and sync
+scripts automatically on error.
 Database content is never replaced from the paid-beta contour.
 EOF
 }
@@ -53,7 +57,12 @@ esac
   exit 2
 }
 [[ -d "$BUNDLE_DIR" ]] || { echo "Bundle directory not found" >&2; exit 2; }
-for relative in backend/app/main.py backend/requirements.txt; do
+for relative in \
+  backend/app/main.py \
+  backend/requirements.txt \
+  ops/greenvpn_db_sync_from_peer.sh \
+  ops/greenvpn_sqlite_snapshot_stdout.py \
+  ops/greenvpn_sqlite_state_sync.py; do
   [[ -f "$BUNDLE_DIR/$relative" && ! -L "$BUNDLE_DIR/$relative" ]] || {
     echo "Required bundle file is missing or unsafe: $relative" >&2
     exit 2
@@ -82,6 +91,9 @@ cp -a "$APP_ROOT/app/main.py" "$backup_dir/main.py"
 cp -a "$APP_ROOT/requirements.txt" "$backup_dir/requirements.txt"
 cp -a "$ENV_FILE" "$backup_dir/backend.env"
 cp -a /etc/systemd/system/bluevpn-backend.service "$backup_dir/bluevpn-backend.service"
+cp -a "$SYNC_SCRIPT" "$backup_dir/greenvpn_db_sync_from_peer.sh"
+cp -a "$SYNC_SNAPSHOT_SCRIPT" "$backup_dir/greenvpn_sqlite_snapshot_stdout.py"
+cp -a "$SYNC_STATE_SCRIPT" "$backup_dir/greenvpn_sqlite_state_sync.py"
 chmod 600 "$backup_dir"/*
 
 python3 - "$DATA_DIR/bluevpn.db" "$backup_dir/bluevpn.db" <<'PY'
@@ -110,6 +122,7 @@ chmod 600 "$backup_dir/bluevpn.db.gz"
 sync_was_active=0
 env_modified=0
 code_modified=0
+sync_scripts_modified=0
 if systemctl is-active --quiet "$SYNC_TIMER"; then sync_was_active=1; fi
 
 rollback_on_error() {
@@ -118,6 +131,11 @@ rollback_on_error() {
   if [[ $code_modified -eq 1 ]]; then
     cp -a "$backup_dir/main.py" "$APP_ROOT/app/main.py"
     cp -a "$backup_dir/requirements.txt" "$APP_ROOT/requirements.txt"
+  fi
+  if [[ $sync_scripts_modified -eq 1 ]]; then
+    install -m 755 "$backup_dir/greenvpn_db_sync_from_peer.sh" "$SYNC_SCRIPT"
+    install -m 755 "$backup_dir/greenvpn_sqlite_snapshot_stdout.py" "$SYNC_SNAPSHOT_SCRIPT"
+    install -m 755 "$backup_dir/greenvpn_sqlite_state_sync.py" "$SYNC_STATE_SCRIPT"
   fi
   if [[ $env_modified -eq 1 ]]; then cp -a "$backup_dir/backend.env" "$ENV_FILE"; fi
   systemctl restart "$SERVICE" >/dev/null 2>&1 || true
@@ -135,6 +153,11 @@ install -m 644 "$BUNDLE_DIR/backend/requirements.txt" "$APP_ROOT/requirements.tx
 install -m 644 "$BUNDLE_DIR/backend/app/main.py" "$APP_ROOT/app/main.py"
 code_modified=1
 "$APP_ROOT/.venv/bin/python" -m py_compile "$APP_ROOT/app/main.py"
+sync_scripts_modified=1
+install -m 755 "$BUNDLE_DIR/ops/greenvpn_db_sync_from_peer.sh" "$SYNC_SCRIPT"
+install -m 755 "$BUNDLE_DIR/ops/greenvpn_sqlite_snapshot_stdout.py" "$SYNC_SNAPSHOT_SCRIPT"
+install -m 755 "$BUNDLE_DIR/ops/greenvpn_sqlite_state_sync.py" "$SYNC_STATE_SCRIPT"
+python3 -m py_compile "$SYNC_SNAPSHOT_SCRIPT" "$SYNC_STATE_SCRIPT"
 
 python3 - "$ENV_FILE" "$BETA_ENV_FILE" "$BACKEND_VERSION" "$BILLING_PRIMARY" <<'PY'
 import os

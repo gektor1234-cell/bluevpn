@@ -82,10 +82,16 @@ UNIQUE_CONFLICT_KEYS: dict[str, tuple[str, ...]] = {
 }
 DELETE_TABLE_ORDER = (
     "support_report_comments",
+    "beta_funnel_events",
+    "beta_invite_redemptions",
     "promo_redemptions",
+    "ad_challenges",
+    "free_access_grants",
     "billing_orders",
     "subscriptions",
+    "client_endpoint_assignments",
     "device_traffic_usage",
+    "device_transport_assignments",
     "devices",
     "sms_outbox",
     "email_login_codes",
@@ -99,10 +105,16 @@ DELETE_TABLE_ORDER = (
 ACCOUNT_DELETE_TABLES = (
     "admin_support_actions",
     "subscription_expiry_reviews",
+    "beta_funnel_events",
+    "beta_invite_redemptions",
     "promo_redemptions",
+    "ad_challenges",
+    "free_access_grants",
     "billing_orders",
     "subscriptions",
+    "client_endpoint_assignments",
     "device_traffic_usage",
+    "client_route_events",
     "devices",
     "sms_outbox",
     "email_login_codes",
@@ -268,6 +280,15 @@ def _delete_user_dependents(
 ) -> int:
     available = _tables(conn)
     deleted = 0
+    device_uids: tuple[str, ...] = ()
+    if "devices" in available:
+        device_uids = tuple(
+            str(row["device_uid"])
+            for row in conn.execute(
+                "SELECT device_uid FROM devices WHERE user_id = ?",
+                (user_id,),
+            ).fetchall()
+        )
     if "support_report_comments" in available and "support_reports" in available:
         cursor = conn.execute(
             """
@@ -275,6 +296,13 @@ def _delete_user_dependents(
             WHERE report_id IN (SELECT id FROM support_reports WHERE user_id = ?)
             """,
             (user_id,),
+        )
+        deleted += max(0, int(cursor.rowcount or 0))
+    if device_uids and "device_transport_assignments" in available:
+        placeholders = ", ".join(["?"] * len(device_uids))
+        cursor = conn.execute(
+            f"DELETE FROM device_transport_assignments WHERE device_uid IN ({placeholders})",
+            device_uids,
         )
         deleted += max(0, int(cursor.rowcount or 0))
     for table in ACCOUNT_DELETE_TABLES:
