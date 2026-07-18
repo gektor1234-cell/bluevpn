@@ -12,13 +12,16 @@ param(
     [string]$FallbackSiteBaseUrl = "https://176-113-81-35.sslip.io",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedAndroidVersion = "0.3.4",
+    [string]$ExpectedAndroidVersion = "0.3.5",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedAndroidSha256 = "F97D26A4B62E7704517C1EF0BAE394D963151BFB09297872AED67A77B3879CE7",
+    [string]$ExpectedAndroidSha256 = "2C6DF6EB6F9D85E54CE7D9F9CD7FF03D551F715EC09067156CE30DA6437C09ED",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestAndroidSha256 = "9F1357E3CB02196CDC8A351A2D6F995A27BF75ACC0017275465E6DD6254E0675",
+    [string]$ExpectedTestAndroidSha256 = "4D34F487573BBB8CA32E2998D4866DC3DF47353A235A38C0FB36D65F22959FBB",
+
+    [Parameter(Mandatory = $false)]
+    [string]$ExpectedAndroidBuildNumber = "2026071801",
 
     [Parameter(Mandatory = $false)]
     [string]$ExpectedWindowsVersion = "0.3.5",
@@ -157,6 +160,49 @@ function Get-DownloadHeadCheck {
     }
 }
 
+function Get-PaidBetaStaticManifestCheck {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Name,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Uri
+    )
+
+    try {
+        $value = Invoke-RestMethod -Uri $Uri -TimeoutSec $TimeoutSec -ErrorAction Stop
+        $android = @($value.artifacts | Where-Object { ([string]$_.platform) -eq "android" }) | Select-Object -First 1
+        $versionOk = ([string]$value.appVersion) -eq $ExpectedAndroidVersion -and
+            ([string]$android.version) -eq $ExpectedAndroidVersion
+        $buildOk = ([string]$android.buildNumber) -eq $ExpectedAndroidBuildNumber
+        $sha256Ok = ([string]$android.sha256).ToUpperInvariant() -eq $ExpectedTestAndroidSha256.ToUpperInvariant()
+        $sizeOk = [int64]$android.sizeBytes -gt 0
+        return [pscustomobject]@{
+            name = $Name
+            ok = [bool]($versionOk -and $buildOk -and $sha256Ok -and $sizeOk)
+            url = $Uri
+            appVersion = $value.appVersion
+            expectedVersion = $ExpectedAndroidVersion
+            versionOk = $versionOk
+            buildNumber = $android.buildNumber
+            expectedBuildNumber = $ExpectedAndroidBuildNumber
+            buildOk = $buildOk
+            sha256 = $android.sha256
+            expectedSha256 = $ExpectedTestAndroidSha256
+            sha256Ok = $sha256Ok
+            sizeBytes = $android.sizeBytes
+            sizeOk = $sizeOk
+        }
+    } catch {
+        return [pscustomobject]@{
+            name = $Name
+            ok = $false
+            url = $Uri
+            error = (Protect-GreenVpnString -Value $_.Exception.Message)
+        }
+    }
+}
+
 $api = $ApiBaseUrl.TrimEnd("/")
 $site = $SiteBaseUrl.TrimEnd("/")
 $fallbackApi = $FallbackApiBaseUrl.TrimEnd("/")
@@ -248,7 +294,12 @@ $downloadChecks = @(
     Get-DownloadHeadCheck -Name "windows-test-fallback-installer" -Uri "$fallbackSite/paid-beta/downloads/GreenVPN_Setup.exe" -ExpectedExtension ".exe"
 )
 
-$allChecks = @($manifestChecks + $downloadChecks)
+$staticManifestChecks = @(
+    Get-PaidBetaStaticManifestCheck -Name "android-test-primary-static-manifest" -Uri "$site/paid-beta/downloads/manifest.json"
+    Get-PaidBetaStaticManifestCheck -Name "android-test-fallback-static-manifest" -Uri "$fallbackSite/paid-beta/downloads/manifest.json"
+)
+
+$allChecks = @($manifestChecks + $staticManifestChecks + $downloadChecks)
 
 Write-GreenVpnJson -InputObject ([pscustomobject]@{
     ok = -not [bool](@($allChecks | Where-Object { -not $_.ok }).Count)
@@ -257,5 +308,6 @@ Write-GreenVpnJson -InputObject ([pscustomobject]@{
     fallbackApiBaseUrl = $fallbackApi
     fallbackSiteBaseUrl = $fallbackSite
     manifests = $manifestChecks
+    staticManifests = $staticManifestChecks
     downloads = $downloadChecks
 })

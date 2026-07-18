@@ -240,6 +240,8 @@ REPLICATION_DELETE_KEYS: dict[str, tuple[str, ...]] = {
     "devices": ("device_uid",),
     "subscriptions": ("user_id",),
     "billing_orders": ("public_id",),
+    "ad_challenges": ("public_id",),
+    "free_access_grants": ("public_id",),
     "device_traffic_usage": ("user_id", "device_uid", "server_id", "period_key"),
     "email_confirmations": ("token_hash",),
     "email_login_codes": ("email", "code_hash", "created_at"),
@@ -3858,7 +3860,11 @@ def free_ad_gate_policy(
         ),
         "grant": grant_payload,
         "grantTtlMinutes": FREE_AD_GRANT_TTL_MINUTES,
-        "grantMaxConnects": FREE_AD_SESSION_MAX_CONNECTS,
+        "grantMaxConnects": (
+            FREE_AD_SESSION_MAX_CONNECTS
+            if FREE_AD_SESSION_TIMER_ENABLED
+            else FREE_AD_GRANT_CONNECTS
+        ),
         "sessionTimerEnabled": FREE_AD_SESSION_TIMER_ENABLED,
         "sessionTtlSeconds": FREE_AD_SESSION_SECONDS if FREE_AD_SESSION_TIMER_ENABLED else 0,
         "sessionMaxConnects": FREE_AD_SESSION_MAX_CONNECTS,
@@ -4098,7 +4104,11 @@ def complete_ad_challenge(public_id: str, token: str) -> dict:
                     row["device_uid"],
                     row["provider"],
                     "active",
-                    FREE_AD_SESSION_MAX_CONNECTS,
+                    (
+                        FREE_AD_SESSION_MAX_CONNECTS
+                        if FREE_AD_SESSION_TIMER_ENABLED
+                        else FREE_AD_GRANT_CONNECTS
+                    ),
                     0,
                     starts_at.isoformat(),
                     expires_at.isoformat(),
@@ -4802,7 +4812,10 @@ def client_subscription_access_policy(
             if beta_user
             else max(1, int(sub.get("maxDevices") or DEFAULT_MAX_DEVICES))
         ),
-        "adsDisabled": beta_scope or public_product_scope,
+        # Paid-beta remains permanently ad-free. Public-product users are
+        # filtered later by subscription state, so only unpaid/trial users can
+        # enter the rewarded-ad gate.
+        "adsDisabled": beta_scope,
     }
 
 
@@ -17690,6 +17703,8 @@ def delete_admin_user_record(user_id: int, payload: AdminUserDeleteIn) -> dict:
             "admin_support_actions",
             "subscription_expiry_reviews",
             "promo_redemptions",
+            "ad_challenges",
+            "free_access_grants",
             "billing_orders",
             "subscriptions",
             "device_traffic_usage",

@@ -14,6 +14,8 @@ param(
     [string]$ClientMarker = "green-vpn-paid-beta-v1",
     [string]$OutDir = "C:\BlueVPN_Builds\paid_beta_20260710",
     [bool]$EnableTransportCascade = $true,
+    [switch]$PublicProductCandidate,
+    [switch]$EnableAndroidRewardedAds,
     [switch]$SkipChecks
 )
 
@@ -29,8 +31,16 @@ if (-not $ApiBaseUrl.Contains("/paid-beta-api")) {
 if (-not $ApiFallbackBaseUrls.Contains("/paid-beta-api")) {
     throw "Fallback API must use the isolated /paid-beta-api contour."
 }
-if ($ClientMarker -ne "green-vpn-paid-beta-v1") {
-    throw "Unexpected paid beta client marker."
+$expectedClientMarker = if ($PublicProductCandidate) {
+    "green-vpn-public-product-v1"
+} else {
+    "green-vpn-paid-beta-v1"
+}
+if ($ClientMarker -ne $expectedClientMarker) {
+    throw "Unexpected client marker for this build mode."
+}
+if ($PublicProductCandidate -and $Mode -ne "android") {
+    throw "Public-product test candidate is supported only for Android."
 }
 if ($AndroidApplicationId -eq "pro.greenvpn.app") {
     throw "Paid beta Android must not replace the production application ID."
@@ -80,7 +90,7 @@ if ($Mode -in @("android", "both")) {
         GREENVPN_ANDROID_APP_LABEL = $AndroidAppLabel
         GREENVPN_ANDROID_API_BASE_URL = $ApiBaseUrl
         GREENVPN_ANDROID_API_FALLBACK_BASE_URLS = $ApiFallbackBaseUrls
-        GREENVPN_ANDROID_RELEASE_CHANNEL = "paid-beta"
+        GREENVPN_ANDROID_RELEASE_CHANNEL = if ($PublicProductCandidate) { "public-product" } else { "paid-beta" }
         GREENVPN_ANDROID_CLIENT_MARKER = $ClientMarker
         GREENVPN_ANDROID_AWG2_PREVIEW_ENABLED = $EnableTransportCascade.ToString().ToLowerInvariant()
         GREENVPN_ANDROID_HYSTERIA2_PREVIEW_ENABLED = $EnableTransportCascade.ToString().ToLowerInvariant()
@@ -115,9 +125,11 @@ if ($Mode -in @("android", "both")) {
             --build-number $AndroidBuildNumber `
             --dart-define="GREENVPN_APP_VERSION=$AppVersion" `
             --dart-define="GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=false" `
-            --dart-define="GREENVPN_PAID_BETA_BUILD=true" `
+            --dart-define="GREENVPN_PAID_BETA_BUILD=$(((-not $PublicProductCandidate)).ToString().ToLowerInvariant())" `
+            --dart-define="GREENVPN_PUBLIC_PRODUCT_BUILD=$($PublicProductCandidate.ToString().ToLowerInvariant())" `
+            --dart-define="GREENVPN_PUBLIC_PRODUCT_CLIENT_MARKER=green-vpn-public-product-v1" `
             --dart-define="GREENVPN_PAID_BETA_CLIENT_MARKER=$ClientMarker" `
-            --dart-define="GREENVPN_YANDEX_REWARDED_ADS_ENABLED=false" `
+            --dart-define="GREENVPN_YANDEX_REWARDED_ADS_ENABLED=$($EnableAndroidRewardedAds.ToString().ToLowerInvariant())" `
             --dart-define="GREENVPN_AWG2_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" `
             --dart-define="GREENVPN_HYSTERIA2_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" `
             --dart-define="GREENVPN_VLESS_REALITY_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" `
@@ -235,8 +247,9 @@ $manifest = [pscustomobject]@{
     apiBaseUrl = $ApiBaseUrl
     apiFallbackBaseUrls = $ApiFallbackBaseUrls
     trialOnlyNoAdsBuild = $false
-    paidBetaBuild = $true
-    rewardedAdsEnabled = $false
+    paidBetaBuild = -not $PublicProductCandidate
+    publicProductBuild = [bool]$PublicProductCandidate
+    rewardedAdsEnabled = [bool]$EnableAndroidRewardedAds
     transportCascade = $EnableTransportCascade
     generatedAt = (Get-Date).ToUniversalTime().ToString("o")
     artifacts = @($artifacts | ForEach-Object { $_ })

@@ -14,6 +14,7 @@ PRODUCTION_ENV="/etc/bluevpn/backend.env"
 TEST_ENV="/etc/bluevpn/paid-beta.env"
 PRODUCTION_DOWNLOADS="/var/www/greenvpn/downloads"
 TEST_DOWNLOADS="/var/www/paid-beta/downloads"
+TEST_STATIC_MANIFEST="${TEST_DOWNLOADS}/manifest.json"
 PRODUCTION_SERVICE="bluevpn-backend.service"
 TEST_SERVICE="greenvpn-paid-beta.service"
 
@@ -72,6 +73,10 @@ TEST_SHA256="${TEST_SHA256^^}"
 for path in "$PRODUCTION_APK" "$TEST_APK" "$PRODUCTION_ENV" "$TEST_ENV"; do
   [[ -f "$path" && ! -L "$path" ]] || { echo "Missing or unsafe file: $path" >&2; exit 2; }
 done
+if [[ -e "$TEST_STATIC_MANIFEST" && ( ! -f "$TEST_STATIC_MANIFEST" || -L "$TEST_STATIC_MANIFEST" ) ]]; then
+  echo "Unsafe static test manifest: $TEST_STATIC_MANIFEST" >&2
+  exit 2
+fi
 
 actual_production="$(sha256sum "$PRODUCTION_APK" | awk '{print toupper($1)}')"
 actual_test="$(sha256sum "$TEST_APK" | awk '{print toupper($1)}')"
@@ -95,12 +100,18 @@ cp -a --reflink=auto "$PRODUCTION_ENV" "$backup_dir/backend.env"
 cp -a --reflink=auto "$TEST_ENV" "$backup_dir/paid-beta.env"
 cp -a --reflink=auto "$PRODUCTION_DOWNLOADS/GreenVPN_Android.apk" "$backup_dir/GreenVPN_Android.production.previous.apk"
 cp -a --reflink=auto "$TEST_DOWNLOADS/GreenVPN_Android.apk" "$backup_dir/GreenVPN_Android.test.previous.apk"
+static_manifest_existed=0
+if [[ -f "$TEST_STATIC_MANIFEST" && ! -L "$TEST_STATIC_MANIFEST" ]]; then
+  cp -a --reflink=auto "$TEST_STATIC_MANIFEST" "$backup_dir/manifest.test.previous.json"
+  static_manifest_existed=1
+fi
 chmod 600 "$backup_dir"/*
 sha256sum "$backup_dir"/*.apk >"$backup_dir/previous-apk-sha256.txt"
 chmod 600 "$backup_dir/previous-apk-sha256.txt"
 
 aliases_switched=0
 env_modified=0
+static_manifest_modified=0
 rollback_on_error() {
   code=$?
   trap - ERR
@@ -111,6 +122,13 @@ rollback_on_error() {
   if [[ $env_modified -eq 1 ]]; then
     cp -a "$backup_dir/backend.env" "$PRODUCTION_ENV"
     cp -a "$backup_dir/paid-beta.env" "$TEST_ENV"
+  fi
+  if [[ $static_manifest_modified -eq 1 ]]; then
+    if [[ $static_manifest_existed -eq 1 ]]; then
+      install -m 644 "$backup_dir/manifest.test.previous.json" "$TEST_STATIC_MANIFEST"
+    else
+      rm -f "$TEST_STATIC_MANIFEST"
+    fi
   fi
   systemctl restart "$PRODUCTION_SERVICE" >/dev/null 2>&1 || true
   systemctl restart "$TEST_SERVICE" >/dev/null 2>&1 || true
@@ -139,9 +157,8 @@ import sys
 production_path, test_path, version, production_url, test_url, production_sha, test_sha, released_at = sys.argv[1:]
 assignment = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
 changelog = (
-    f"Green VPN {version}: подписка на 1, 3 или 6 месяцев; управление автопродлением "
-    "в настройках; автоматическое защищённое переключение; серверы сгруппированы "
-    "по странам; реклама и таймер отключены."
+    f"Green VPN {version}: реклама перед новым подключением бесплатного режима; "
+    "платные тарифы остаются без рекламы; VPN не отключается по таймеру."
 )
 
 def rewrite(path_raw, updates):
@@ -192,6 +209,61 @@ env_modified=1
 chown root:root "$PRODUCTION_ENV" "$TEST_ENV"
 chmod 600 "$PRODUCTION_ENV" "$TEST_ENV"
 
+python3 - \
+  "$TEST_STATIC_MANIFEST" "$VERSION" "$BUILD_NUMBER" "$TEST_SHA256" \
+  "$TEST_APK" "$released_at" <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+version, build_number, sha256, apk_raw, released_at = sys.argv[2:]
+apk = pathlib.Path(apk_raw)
+value = {}
+if path.exists():
+    parsed = json.loads(path.read_text(encoding="utf-8-sig"))
+    if isinstance(parsed, dict):
+        value = parsed
+artifacts = [
+    item
+    for item in (value.get("artifacts") or [])
+    if isinstance(item, dict) and str(item.get("platform") or "").lower() != "android"
+]
+artifacts.insert(
+    0,
+    {
+        "platform": "android",
+        "fileName": "GreenVPN_Android.apk",
+        "version": version,
+        "buildNumber": build_number,
+        "sizeBytes": apk.stat().st_size,
+        "sha256": sha256,
+        "signed": True,
+        "signatureStatus": None,
+    },
+)
+value.update(
+    {
+        "channel": "paid-beta",
+        "isolated": True,
+        "productionPublished": False,
+        "appVersion": version,
+        "androidApplicationId": "pro.greenvpn.app.beta",
+        "androidAppLabel": "Green VPN Test",
+        "generatedAt": released_at,
+        "artifacts": artifacts,
+    }
+)
+temporary = path.with_name(path.name + ".android-release.tmp")
+temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+os.chmod(temporary, 0o644)
+os.replace(temporary, path)
+PY
+static_manifest_modified=1
+chown root:root "$TEST_STATIC_MANIFEST"
+chmod 644 "$TEST_STATIC_MANIFEST"
+
 systemctl restart "$PRODUCTION_SERVICE"
 systemctl restart "$TEST_SERVICE"
 for port in 8000 8010; do
@@ -222,6 +294,34 @@ for label, raw, expected_sha in (
         raise SystemExit(f"{label} manifest is not mandatory and ready")
 print("production_manifest_ready=true")
 print("test_manifest_ready=true")
+PY
+
+python3 - "$TEST_STATIC_MANIFEST" "$VERSION" "$BUILD_NUMBER" "$TEST_SHA256" "$TEST_APK" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+version, build_number, sha256, apk_raw = sys.argv[2:]
+apk = pathlib.Path(apk_raw)
+value = json.loads(path.read_text(encoding="utf-8-sig"))
+android = next(
+    (
+        item
+        for item in value.get("artifacts") or []
+        if str(item.get("platform") or "").lower() == "android"
+    ),
+    None,
+)
+if value.get("appVersion") != version or android is None:
+    raise SystemExit("static paid-beta Android manifest version mismatch")
+if str(android.get("buildNumber") or "") != build_number:
+    raise SystemExit("static paid-beta Android manifest build mismatch")
+if str(android.get("sha256") or "").upper() != sha256:
+    raise SystemExit("static paid-beta Android manifest hash mismatch")
+if int(android.get("sizeBytes") or 0) != apk.stat().st_size:
+    raise SystemExit("static paid-beta Android manifest size mismatch")
+print("test_static_manifest_ready=true")
 PY
 
 [[ "$(sha256sum "$PRODUCTION_DOWNLOADS/GreenVPN_Android.apk" | awk '{print toupper($1)}')" == "$PRODUCTION_SHA256" ]]

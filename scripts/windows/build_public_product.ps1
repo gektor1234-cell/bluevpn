@@ -12,6 +12,7 @@ param(
     [string]$ApiFallbackBaseUrls = "https://176-113-81-35.sslip.io",
     [string]$OutDir = "C:\BlueVPN_Builds\public_product_20260711",
     [bool]$EnableTransportCascade = $true,
+    [switch]$EnableAndroidRewardedAds,
     [switch]$SkipChecks
 )
 
@@ -100,7 +101,7 @@ if ($Mode -in @("android", "both")) {
             --dart-define="GREENVPN_PAID_BETA_BUILD=false" `
             --dart-define="GREENVPN_PUBLIC_PRODUCT_BUILD=true" `
             --dart-define="GREENVPN_PUBLIC_PRODUCT_CLIENT_MARKER=green-vpn-public-product-v1" `
-            --dart-define="GREENVPN_YANDEX_REWARDED_ADS_ENABLED=false" `
+            --dart-define="GREENVPN_YANDEX_REWARDED_ADS_ENABLED=$($EnableAndroidRewardedAds.ToString().ToLowerInvariant())" `
             --dart-define="GREENVPN_AWG2_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" `
             --dart-define="GREENVPN_HYSTERIA2_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" `
             --dart-define="GREENVPN_VLESS_REALITY_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" `
@@ -211,7 +212,7 @@ $manifest = [ordered]@{
         [pscustomobject]@{ code = 'green_180d'; periodDays = 180; priceRub = 1099 }
     )
     autoRenew = $true
-    adsEnabled = $false
+    adsEnabled = [bool]$EnableAndroidRewardedAds
     transportCascade = $effectiveTransportCascade
     generatedAt = (Get-Date).ToUniversalTime().ToString("o")
     artifacts = [object[]]$artifacts

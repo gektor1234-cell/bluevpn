@@ -91,8 +91,7 @@ const bool kTransportPreviewFallbackEnabled =
     kVlessRealityPreviewEnabled ||
     kNaiveHttpsPreviewEnabled ||
     kDnsttPreviewEnabled;
-const bool kAdsDisabledBuild =
-    kTrialOnlyNoAdsBuild || kPaidBetaBuild || kPublicProductBuild;
+const bool kAdsDisabledBuild = kTrialOnlyNoAdsBuild || kPaidBetaBuild;
 const bool kYandexRewardedAdsEnabled = bool.fromEnvironment(
   'GREENVPN_YANDEX_REWARDED_ADS_ENABLED',
   defaultValue: false,

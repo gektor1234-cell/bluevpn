@@ -59,6 +59,8 @@ class PaidBetaPolicyTests(unittest.TestCase):
             conn.execute("DELETE FROM beta_invite_redemptions")
             conn.execute("DELETE FROM beta_invites")
             conn.execute("DELETE FROM promo_redemptions")
+            conn.execute("DELETE FROM ad_challenges")
+            conn.execute("DELETE FROM free_access_grants")
             conn.execute("DELETE FROM billing_orders")
             conn.execute("DELETE FROM subscriptions")
             conn.execute("DELETE FROM tokens")
@@ -939,6 +941,128 @@ class PaidBetaPolicyTests(unittest.TestCase):
             [(plan["periodDays"], plan["priceRub"]) for plan in catalog["plans"]],
             [(30, 249), (90, 649), (180, 1099)],
         )
+
+    def test_public_product_allows_ad_gate_but_paid_beta_stays_ad_free(self) -> None:
+        user = main.get_user_access_row(self.user_id)
+        sub = main.subscription_status(main.get_subscription_row(self.user_id))
+
+        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+            public_policy = main.client_subscription_access_policy(
+                user,
+                sub,
+                client_marker="green-vpn-public-product-v1",
+                release_channel="public-product",
+            )
+
+        self.assertTrue(public_policy["publicProductScope"])
+        self.assertFalse(public_policy["adsDisabled"])
+
+        self.enroll_beta()
+        beta_user = main.get_user_access_row(self.user_id)
+        beta_sub = main.subscription_status(main.get_subscription_row(self.user_id))
+        beta_policy = main.client_subscription_access_policy(
+            beta_user,
+            beta_sub,
+            client_marker="green-vpn-paid-beta-v1",
+            release_channel="paid-beta",
+        )
+        self.assertTrue(beta_policy["adsDisabled"])
+
+    def test_reward_grant_is_one_connect_when_session_timer_is_disabled(self) -> None:
+        device_uid = "rewarded-ad-single-connect"
+        self.bootstrap(paid_beta=False, device_uid=device_uid)
+
+        with (
+            patch.object(main, "FREE_AD_GATE_ENABLED", True),
+            patch.object(main, "FREE_AD_GATE_PLATFORMS", {"android"}),
+            patch.object(main, "FREE_AD_GATE_CLIENT_MARKER", "0.3.5"),
+            patch.object(main, "FREE_AD_GRANT_CONNECTS", 1),
+            patch.object(main, "FREE_AD_SESSION_TIMER_ENABLED", False),
+            patch.object(main, "FREE_AD_SESSION_SECONDS", 0),
+            patch.object(main, "FREE_AD_SESSION_MAX_CONNECTS", 1000),
+        ):
+            started = main.create_free_ad_challenge(
+                main.get_user_access_row(self.user_id),
+                main.AdChallengeStartIn(
+                    deviceUid=device_uid,
+                    platform="android",
+                    provider="yandex_mobile_ads",
+                    appVersion="0.3.5",
+                ),
+            )
+            challenge = started["challenge"]
+            token = main.urllib.parse.parse_qs(
+                main.urllib.parse.urlparse(challenge["rewardUrl"]).query
+            )["t"][0]
+            completed = main.complete_ad_challenge(
+                challenge["challengeId"],
+                token,
+            )
+
+            self.assertFalse(completed["grant"]["sessionTimerEnabled"])
+            self.assertEqual(completed["grant"]["maxConnects"], 1)
+            self.assertEqual(completed["adGate"]["grantMaxConnects"], 1)
+
+            consumed = main.consume_free_access_grant(self.user_id, device_uid)
+            self.assertEqual(consumed["connectsRemaining"], 0)
+            policy_after_connect = main.free_ad_gate_policy(
+                self.user_id,
+                device_uid,
+                "android",
+                main.subscription_status(main.get_subscription_row(self.user_id)),
+                app_version="0.3.5",
+            )
+            self.assertTrue(policy_after_connect["required"])
+            self.assertFalse(policy_after_connect["sessionTimerEnabled"])
+
+            deleted = main.delete_admin_user_record(
+                self.user_id,
+                main.AdminUserDeleteIn(
+                    reason="rewarded advertising smoke cleanup",
+                    confirmEmail="beta@example.test",
+                ),
+            )
+            self.assertEqual(deleted["deleted"]["ad_challenges"], 1)
+            self.assertEqual(deleted["deleted"]["free_access_grants"], 1)
+            with main.db() as conn:
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM ad_challenges WHERE user_id = ?",
+                        (self.user_id,),
+                    ).fetchone()[0],
+                    0,
+                )
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM free_access_grants WHERE user_id = ?",
+                        (self.user_id,),
+                    ).fetchone()[0],
+                    0,
+                )
+                self.assertEqual(
+                    conn.execute(
+                        """
+                        SELECT COUNT(*)
+                        FROM replication_tombstones
+                        WHERE table_name = 'ad_challenges'
+                          AND natural_key_json LIKE ?
+                        """,
+                        (f'%{challenge["challengeId"]}%',),
+                    ).fetchone()[0],
+                    1,
+                )
+                self.assertEqual(
+                    conn.execute(
+                        """
+                        SELECT COUNT(*)
+                        FROM replication_tombstones
+                        WHERE table_name = 'free_access_grants'
+                          AND natural_key_json LIKE ?
+                        """,
+                        (f'%{completed["grant"]["grantId"]}%',),
+                    ).fetchone()[0],
+                    1,
+                )
 
     def test_public_product_pricing_overrides_legacy_beta_marker(self) -> None:
         payload = self.beta_payload()
