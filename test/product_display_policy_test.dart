@@ -73,6 +73,37 @@ void main() {
     expect(greenVpnPublicPlanTitle('Base'), 'Базовый');
   });
 
+  test('paid entitlement excludes free and trial plans', () {
+    expect(
+      greenVpnHasPaidEntitlement(
+        isActive: true,
+        planCode: 'green_30d',
+        monthlyPriceRub: 249,
+      ),
+      isTrue,
+    );
+    expect(
+      greenVpnHasPaidEntitlement(
+        isActive: true,
+        planCode: 'trial',
+        monthlyPriceRub: 0,
+      ),
+      isFalse,
+    );
+    expect(
+      greenVpnHasPaidEntitlement(isActive: true, planName: 'Базовый'),
+      isFalse,
+    );
+    expect(
+      greenVpnHasPaidEntitlement(
+        isActive: false,
+        planCode: 'green_30d',
+        monthlyPriceRub: 249,
+      ),
+      isFalse,
+    );
+  });
+
   test('social-only description matches the actual switch state', () {
     expect(
       greenVpnSocialOnlyStatusText(allowed: true, enabled: false),
@@ -84,7 +115,7 @@ void main() {
     );
     expect(
       greenVpnSocialOnlyStatusText(allowed: false, enabled: false),
-      contains('недоступна'),
+      contains('по подписке'),
     );
     expect(
       greenVpnSocialOnlyStatusText(
@@ -93,6 +124,14 @@ void main() {
         usesApplications: false,
       ),
       contains('Выбранные сервисы'),
+    );
+    expect(
+      greenVpnSocialOnlyStatusText(
+        allowed: true,
+        enabled: true,
+        usesMixedSelection: true,
+      ),
+      contains('сервисы, программы и сайты'),
     );
   });
 
@@ -114,6 +153,15 @@ void main() {
         statusCode: 409,
       ),
       'Эта версия приложения устарела. Установите последнее обновление и повторите оплату.',
+    );
+    expect(
+      greenVpnPublicErrorMessage(
+        rawError: 'Ошибка сервера (403)',
+        responseBody:
+            '{"detail":{"code":"premium_feature_required","message":"internal"}}',
+        statusCode: 403,
+      ),
+      'Режим «Только для соцсетей» доступен по подписке.',
     );
     expect(
       greenVpnPublicErrorMessage(

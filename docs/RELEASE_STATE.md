@@ -19,6 +19,59 @@ Android 0.3.7 is published on Timeweb and RUVDS Moscow. Both stable manifests
 have `required=true` and `fileReady=true`; the previous APK is retained in the
 root-only deployment backups listed under Rollback.
 
+## Freemium And Windows Rewarded Beta, 2026-07-19
+
+- Production remains unchanged at backend `0.9.129-final-audit.5`, Android
+  `0.3.7` and Windows `0.3.6`. Its rewarded-ad platform allow-list is still
+  exactly `android`; no test advertising path is enabled in production.
+- The isolated paid-beta contour runs backend `0.9.131-freemium.2` on Timeweb
+  and RUVDS Moscow. Free accounts cannot request `social_only` configs; the
+  client also routes the locked control to the tariff page. Existing logical
+  Netherlands and London entries remain free. New server-catalog drafts
+  default to `premium`, and both the public catalog and config endpoint enforce
+  that tier server-side.
+- Paid-beta Android is `0.3.9+2026071902`, package
+  `pro.greenvpn.app.beta`, SHA-256
+  `2B016FCB70A8C50DD6D5F86DD2B326CFB82D636AA9CB39D1FB8BC25B38A91AFC`.
+- Paid-beta Windows is unsigned `0.3.9-paid-beta.1902`, SHA-256
+  `CE282C7BC56082F53DA030F047DA83F7FDD64315DD9C4FFE823B9C023BDBA8FC`.
+  The exact public installer is installed on the owner PC, its app and system
+  service are running, both common desktop and Start menu shortcuts exist, and
+  the saved paid session opens the product without a crash. Evidence:
+  `C:\BlueVPN_Builds\green_vpn_0.3.9_public_download_verify\windows-beta-current.png`.
+- Paid-beta enables the ad gate for `android,windows`. Android keeps the real
+  Yandex Mobile Ads rewarded unit. Windows uses `test_web` only in this closed
+  contour. One completed challenge grants one config/connect operation and the
+  forced disconnect timer is disabled. Production rejects `test_web` by code
+  and configuration.
+- The final deployment corrected the beta test flag contract: the deploy script
+  and backend now share `GREENVPN_FREE_AD_TEST_WEB_ENABLED`, while the backend
+  keeps the former key as a read-only compatibility fallback. The running
+  process environments on both nodes report the canonical flag enabled.
+- The current Windows beta session belongs to an active paid 249 RUB plan, so
+  its live bootstrap correctly bypasses ads and leaves social-only routing
+  available. Free-user denial, provider selection, reward completion and
+  one-connect consumption are covered by the 128-test backend suite and 46
+  Flutter tests; no disposable live account was created.
+- Real production Windows rewarded ads are externally blocked until Yandex
+  approves desktop Web Rewarded for site `api.greenvpn.pro` (site id
+  `19615469`) and supplies a block id matching `R-A-N-N`. The support request
+  is open. Production promotion must wait for that id and a real beta reward
+  callback smoke; a local or fake completion button is forbidden.
+- Paid-beta rollback directories:
+  - backend Timeweb:
+    `/root/greenvpn-paid-beta-backend-backups/20260719T125141Z-paid-beta-backend-freemium-20260719-r7`;
+  - backend RUVDS Moscow:
+    `/root/greenvpn-paid-beta-backend-backups/20260719T124934Z-paid-beta-backend-freemium-20260719-r7`;
+  - client Timeweb:
+    `/root/greenvpn-paid-beta-client-release-backups/20260719T103659Z-timeweb-0.3.9-paid-beta.1902-0.3.9-paid-beta.1902`;
+  - client RUVDS Moscow:
+    `/root/greenvpn-paid-beta-client-release-backups/20260719T103700Z-ruvds-0.3.9-paid-beta.1902-0.3.9-paid-beta.1902`;
+  - Windows ad env Timeweb:
+    `/root/greenvpn-rewarded-ads-backups/20260719T104843Z-paid-beta-windows`;
+  - Windows ad env RUVDS Moscow:
+    `/root/greenvpn-rewarded-ads-backups/20260719T104844Z-paid-beta-windows`.
+
 ## Final Full Audit, 2026-07-19
 
 - Production and paid-beta services on both Russian control planes run backend
@@ -82,16 +135,16 @@ staff authentication.
 
 | Component | Version/state |
 | --- | --- |
-| Primary/fallback backend | `0.9.129-final-audit.5` |
-| Android | `0.3.7+2026071902`, package `pro.greenvpn.app.beta`, mandatory |
-| Android SHA-256 | `910D7C8D03E224484050EFB4AE845C0B2DD6FC592B85B7A3FF8B1475DE21E5C5` |
-| Windows | `0.3.6-paid-beta.1808`, optional, unsigned |
-| Windows SHA-256 | `19BCCFB0866CAC69F78B9F6A3BFBC8C9A0AFE293876D95E3091179FEEBAB2AF4` |
+| Primary/fallback backend | `0.9.131-freemium.2` |
+| Android | `0.3.9+2026071902`, package `pro.greenvpn.app.beta`, optional |
+| Android SHA-256 | `2B016FCB70A8C50DD6D5F86DD2B326CFB82D636AA9CB39D1FB8BC25B38A91AFC` |
+| Windows | `0.3.9-paid-beta.1902`, optional, unsigned |
+| Windows SHA-256 | `CE282C7BC56082F53DA030F047DA83F7FDD64315DD9C4FFE823B9C023BDBA8FC` |
 | Plans | trial 3 days; 249/649/1099 RUB for 30/90/180 days |
 | Auto-renew | recurring card binding approved; real save-method and unlink smoke passed on both control planes |
 | Billing writer | Timeweb only |
 | DB replication | active-active state merge with tombstones |
-| Ads/session timer | same free-Android ad gate as production; paid users exempt; timer disabled |
+| Ads/session timer | Android real rewarded plus Windows closed `test_web`; paid users exempt; timer disabled |
 
 The candidate is isolated at `/paid-beta` and `/paid-beta-api`. It is not a
 closed-first-20 product anymore, but those paths remain the safe staging contour

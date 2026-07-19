@@ -320,12 +320,12 @@ for server_id, port, protocol, transport, profile, priority, notes in entries:
         """
         INSERT INTO server_catalog_entries(
             server_id, title, subtitle, country, city, provider, host, port,
-            protocol, transport, client_config_profile, status, health_score,
+            protocol, transport, access_tier, client_config_profile, status, health_score,
             latency_ms, priority, is_active, is_public, planned_bandwidth_mbps,
             reserved_bandwidth_mbps, current_load_mbps, active_clients,
             assigned_users, load_updated_at, notes, created_at, updated_at,
             publication_paused_at, publication_paused_reason, publication_paused_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
         ON CONFLICT(server_id) DO UPDATE SET
             title=excluded.title, subtitle=excluded.subtitle, country=excluded.country,
             city=excluded.city, provider=excluded.provider, host=excluded.host,
@@ -340,7 +340,7 @@ for server_id, port, protocol, transport, profile, priority, notes in entries:
         """,
         (
             server_id, "Netherlands #2", "", "NL", "Amsterdam", "internal-canary",
-            host, port, protocol, transport, profile, "healthy", 100, 44,
+            host, port, protocol, transport, "premium", profile, "healthy", 100, 44,
             priority, 1, 0, 1000, 100, 0, 0, 0, now, notes, now, now,
         ),
     )

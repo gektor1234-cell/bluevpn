@@ -58,6 +58,22 @@ String greenVpnPublicLatencyLabel(int? latencyMs) {
   return '$normalized мс';
 }
 
+String greenVpnNormalizeServerAccessTier(String? rawTier) {
+  return rawTier?.trim().toLowerCase() == 'premium' ? 'premium' : 'free';
+}
+
+bool greenVpnServerRequiresPaidSubscription(String? rawTier) {
+  return greenVpnNormalizeServerAccessTier(rawTier) == 'premium';
+}
+
+bool greenVpnServerAllowedForSubscription({
+  required String? rawTier,
+  required bool hasPaidSubscription,
+}) {
+  return hasPaidSubscription ||
+      !greenVpnServerRequiresPaidSubscription(rawTier);
+}
+
 List<T> greenVpnVisibleLocationRepresentatives<T>({
   required Iterable<T> candidates,
   required bool Function(T candidate) isAutomatic,

@@ -1543,6 +1543,10 @@ function renderRunbooks() {
 function serverWorkflow() {
   return state.loaded.serverWorkflow || {
     statuses: ['draft', 'healthy', 'degraded', 'maintenance', 'disabled'],
+    accessTiers: [
+      { code: 'free', title: 'Доступен всем' },
+      { code: 'premium', title: 'Только по подписке' },
+    ],
     protocols: [
       'wireguard_udp',
       'wireguard_tcp',
@@ -1579,6 +1583,14 @@ function serverStatusPillClass(status) {
   if (status === 'degraded' || status === 'maintenance') return 'yellow';
   if (status === 'disabled') return 'red';
   return 'muted';
+}
+
+function serverAccessTierTitle(tier) {
+  return tier === 'premium' ? 'По подписке' : 'Доступен всем';
+}
+
+function serverAccessTierPillClass(tier) {
+  return tier === 'premium' ? 'yellow' : '';
 }
 
 function serverHealthStatusTitle(status) {
@@ -1636,6 +1648,7 @@ function serverFilterParams() {
     status: $('serverStatusFilter')?.value || 'all',
     active: $('serverActiveFilter')?.value || 'all',
     public: $('serverPublicFilter')?.value || 'all',
+    accessTier: $('serverAccessTierFilter')?.value || 'all',
     limit: 100,
   };
 }
@@ -1651,7 +1664,9 @@ function serverHealthFilterParams() {
 function renderServerFilters() {
   const workflow = serverWorkflow();
   const statusSelect = $('serverStatusFilter');
+  const accessTierFilter = $('serverAccessTierFilter');
   const statusInput = $('serverStatusInput');
+  const accessTierInput = $('serverAccessTierInput');
   const protocolInput = $('serverProtocolInput');
   const transportInput = $('serverTransportInput');
   const clientConfigProfileInput = $('serverClientConfigProfileInput');
@@ -1664,6 +1679,14 @@ function renderServerFilters() {
     code: protocol,
     title: serverProtocolTitle(protocol),
   }));
+  const accessTierItems = (workflow.accessTiers || []).map((tier) => (
+    typeof tier === 'string'
+      ? { code: tier, title: serverAccessTierTitle(tier) }
+      : {
+          code: tier.code || tier.id || 'premium',
+          title: tier.title || serverAccessTierTitle(tier.code || tier.id),
+        }
+  ));
   const transportItems = (workflow.transports || []).map((transport) => ({
     code: transport,
     title: serverTransportTitle(transport),
@@ -1681,10 +1704,23 @@ function renderServerFilters() {
     const current = statusSelect.value || 'all';
     statusSelect.innerHTML = workflowOptionsHtml(statusItems, current, 'Все статусы');
   }
+  if (accessTierFilter) {
+    const current = accessTierFilter.value || 'all';
+    accessTierFilter.innerHTML = workflowOptionsHtml(
+      accessTierItems,
+      current,
+      'Все уровни доступа',
+    );
+  }
   if (statusInput) {
     const current = statusInput.value || 'draft';
     statusInput.innerHTML = workflowOptionsHtml(statusItems, current);
     if (!statusInput.value) statusInput.value = 'draft';
+  }
+  if (accessTierInput) {
+    const current = accessTierInput.value || 'premium';
+    accessTierInput.innerHTML = workflowOptionsHtml(accessTierItems, current);
+    if (!accessTierInput.value) accessTierInput.value = 'premium';
   }
   if (protocolInput) {
     const current = protocolInput.value || 'wireguard_udp';
@@ -1774,7 +1810,7 @@ function renderServerCatalogSummary() {
     {
       title: 'Управляемые VPN-узлы',
       message: summary
-        ? `${summary.managedTotal || 0} всего, ${summary.managedClientConfigReady || 0} с готовым конфигом, ${summary.managedPublicEligible || 0} можно публиковать`
+        ? `${summary.managedTotal || 0} всего, ${summary.managedFree || 0} доступны всем, ${summary.managedPremium || 0} по подписке, ${summary.managedPublicEligible || 0} можно публиковать`
         : 'Сводка пока не загружена.',
       ok: !summary || Number(summary.managedPublicEligible || 0) === 0,
       warning: Boolean(summary && Number(summary.managedPublicCandidates || 0) > 0),
@@ -2232,6 +2268,7 @@ function renderServersTable() {
             <span class="muted">${escapeHtml(serverTransportTitle(server.transport))}</span><br>
             <span class="muted">конфиг: ${escapeHtml(server.clientConfigProfileTitle || serverClientConfigProfileTitle(server.clientConfigProfile))}</span>
           </td>
+          <td><span class="status-pill ${serverAccessTierPillClass(server.accessTier)}">${escapeHtml(serverAccessTierTitle(server.accessTier))}</span></td>
           <td><span class="status-pill ${serverStatusPillClass(server.status)}">${escapeHtml(serverStatusTitle(server.status))}</span></td>
           <td>
             <strong>${escapeHtml(server.healthScore, '0')}%</strong><br>
@@ -2304,7 +2341,7 @@ function renderServersTable() {
         </tr>
       `;
       })
-      .join('') || '<tr><td colspan="9">Серверы не загрузились. Нажмите «Обновить»; если строка останется пустой, проверьте доступ к API и каталог серверов.</td></tr>';
+      .join('') || '<tr><td colspan="10">Серверы не загрузились. Нажмите «Обновить»; если строка останется пустой, проверьте доступ к API и каталог серверов.</td></tr>';
 }
 
 function renderServerHealth() {
@@ -2450,6 +2487,7 @@ function fillServerForm(server) {
   $('serverPortInput').value = server.port || 443;
   $('serverProtocolInput').value = server.protocol || 'wireguard_udp';
   $('serverTransportInput').value = server.transport || 'udp';
+  $('serverAccessTierInput').value = server.accessTier || 'free';
   $('serverClientConfigProfileInput').value = server.clientConfigProfile || 'none';
   $('serverStatusInput').value = server.status || 'draft';
   $('serverHealthInput').value = server.healthScore ?? 0;
@@ -2467,6 +2505,7 @@ function resetServerForm() {
   $('serverPortInput').value = 443;
   $('serverProtocolInput').value = 'wireguard_udp';
   $('serverTransportInput').value = 'udp';
+  $('serverAccessTierInput').value = 'premium';
   $('serverClientConfigProfileInput').value = 'none';
   $('serverStatusInput').value = 'draft';
   $('serverHealthInput').value = 0;
@@ -2486,6 +2525,7 @@ function serverFormPayload(statusOverride = null) {
     port: Number($('serverPortInput').value || 443),
     protocol: $('serverProtocolInput').value || 'wireguard_udp',
     transport: $('serverTransportInput').value || 'udp',
+    accessTier: $('serverAccessTierInput').value || 'premium',
     clientConfigProfile: $('serverClientConfigProfileInput').value || 'none',
     status: statusOverride || $('serverStatusInput').value || 'draft',
     healthScore: Number($('serverHealthInput').value || 0),
@@ -4573,6 +4613,7 @@ function renderAnalytics() {
     analyticsRow('Оповещения админки', readiness.alerts?.ready ? 'готово' : 'нужна настройка', readiness.alerts?.message || 'Оповещения Telegram об инцидентах'),
     analyticsRow('Готовность продукта', readiness.product?.productionReady ? 'готово' : 'нужна настройка', readiness.product?.summary?.message || ''),
     renderBreakdown('Серверы по протоколам', servers.byProtocol),
+    renderBreakdown('Серверы по доступу', servers.byAccessTier),
   ].join('');
 
   $('analyticsTrendsPanel').innerHTML = [
@@ -7983,6 +8024,7 @@ function bindEvents() {
   $('serverStatusFilter')?.addEventListener('change', loadDashboardData);
   $('serverActiveFilter')?.addEventListener('change', loadDashboardData);
   $('serverPublicFilter')?.addEventListener('change', loadDashboardData);
+  $('serverAccessTierFilter')?.addEventListener('change', loadDashboardData);
   $('serverHealthStatusFilter')?.addEventListener('change', loadDashboardData);
   const delayedReload = debounce(loadDashboardData, 350);
   const delayedPagedReload = (name) => debounce(() => reloadPageFromStart(name), 350);

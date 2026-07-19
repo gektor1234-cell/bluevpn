@@ -5,6 +5,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart' as crypto;
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
@@ -16,6 +17,7 @@ import 'services/product_display_policy.dart';
 import 'services/route_failure_cooldown.dart';
 import 'services/server_location_policy.dart';
 import 'services/transport_preview_policy.dart';
+import 'services/windows_selective_routing_service.dart';
 
 /*
   Green VPN — режим "как пользовательский продукт":
@@ -2496,6 +2498,8 @@ class Prefs {
   final bool socialOnlyEnabled;
   final List<String> socialOnlyApps; // SocialApp.name
   final List<String> socialOnlyCustomPackages; // Android package names
+  final List<String> socialOnlyWindowsApplications; // Absolute .exe paths
+  final List<String> socialOnlyWindowsSites; // Normalized host names
 
   final List<String> selectedApps; // TariffApp.name
   final String trafficPack; // TrafficPack.name
@@ -2514,6 +2518,8 @@ class Prefs {
     required this.socialOnlyEnabled,
     required this.socialOnlyApps,
     required this.socialOnlyCustomPackages,
+    required this.socialOnlyWindowsApplications,
+    required this.socialOnlyWindowsSites,
     required this.selectedApps,
     required this.trafficPack,
     required this.trafficGb,
@@ -2531,6 +2537,8 @@ class Prefs {
     socialOnlyEnabled: false,
     socialOnlyApps: ['telegram', 'instagram'],
     socialOnlyCustomPackages: [],
+    socialOnlyWindowsApplications: [],
+    socialOnlyWindowsSites: [],
     selectedApps: [],
     trafficPack: 'gb20',
     trafficGb: 20,
@@ -2548,6 +2556,8 @@ class Prefs {
     bool? socialOnlyEnabled,
     List<String>? socialOnlyApps,
     List<String>? socialOnlyCustomPackages,
+    List<String>? socialOnlyWindowsApplications,
+    List<String>? socialOnlyWindowsSites,
     List<String>? selectedApps,
     String? trafficPack,
     double? trafficGb,
@@ -2565,6 +2575,10 @@ class Prefs {
       socialOnlyApps: socialOnlyApps ?? this.socialOnlyApps,
       socialOnlyCustomPackages:
           socialOnlyCustomPackages ?? this.socialOnlyCustomPackages,
+      socialOnlyWindowsApplications:
+          socialOnlyWindowsApplications ?? this.socialOnlyWindowsApplications,
+      socialOnlyWindowsSites:
+          socialOnlyWindowsSites ?? this.socialOnlyWindowsSites,
       selectedApps: selectedApps ?? this.selectedApps,
       trafficPack: trafficPack ?? this.trafficPack,
       trafficGb: trafficGb ?? this.trafficGb,
@@ -2583,6 +2597,8 @@ class Prefs {
     'socialOnlyEnabled': socialOnlyEnabled,
     'socialOnlyApps': socialOnlyApps,
     'socialOnlyCustomPackages': socialOnlyCustomPackages,
+    'socialOnlyWindowsApplications': socialOnlyWindowsApplications,
+    'socialOnlyWindowsSites': socialOnlyWindowsSites,
     'selectedApps': selectedApps,
     'trafficPack': trafficPack,
     'trafficGb': trafficGb,
@@ -2660,6 +2676,14 @@ class Prefs {
       socialOnlyCustomPackages: ls(
         'socialOnlyCustomPackages',
         d.socialOnlyCustomPackages,
+      ),
+      socialOnlyWindowsApplications: ls(
+        'socialOnlyWindowsApplications',
+        d.socialOnlyWindowsApplications,
+      ),
+      socialOnlyWindowsSites: ls(
+        'socialOnlyWindowsSites',
+        d.socialOnlyWindowsSites,
       ),
       selectedApps: ls('selectedApps', d.selectedApps),
       trafficPack: s0('trafficPack', d.trafficPack),
@@ -4268,7 +4292,7 @@ while True:
     required String accessToken,
     required String deviceId,
     required String platform,
-    String provider = 'test_web',
+    String provider = 'auto',
     String appVersion = kAppVersion,
   }) async {
     final res = await _jsonRequest(
@@ -4387,6 +4411,7 @@ while True:
     String? deviceId,
     String? serverId,
     String? releaseChannel,
+    String mode = 'full',
   }) async {
     try {
       if (deviceId == null || deviceId.trim().isEmpty) {
@@ -4404,7 +4429,7 @@ while True:
         req.headers.set('Authorization', 'Bearer $accessToken');
         final payload = <String, dynamic>{
           'deviceUid': deviceId,
-          'mode': 'full',
+          'mode': mode == 'social_only' ? 'social_only' : 'full',
           'releaseChannel': releaseChannel ?? greenVpnUpdateChannel(),
           'supportedProtocols': kSupportedVpnProtocols,
           if (kPaidBetaBuild) 'clientMarker': kPaidBetaClientMarker,
@@ -5210,6 +5235,68 @@ class ConfigStore {
       if (!file.parent.existsSync()) file.parent.createSync(recursive: true);
       await file.writeAsString(_mobileManagedProtocol);
     }
+  }
+
+  Future<void> writeWindowsRoutingPolicy({
+    required bool applicationsOnly,
+    required Iterable<String> applicationPaths,
+    required Iterable<String> destinationCidrs,
+  }) async {
+    if (kIsWeb || !Platform.isWindows) return;
+
+    final normalized =
+        applicationPaths
+            .map((value) => value.trim())
+            .where(isValidWindowsApplicationPath)
+            .toSet()
+            .toList()
+          ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    if (normalized.length > maxWindowsVpnApplications) {
+      throw StateError(
+        'Можно выбрать не более $maxWindowsVpnApplications приложений.',
+      );
+    }
+    final normalizedDestinations =
+        destinationCidrs
+            .map((value) => value.trim())
+            .where(isValidWindowsVpnDestinationCidr)
+            .toSet()
+            .toList()
+          ..sort();
+    if (normalizedDestinations.length > maxWindowsVpnDestinationCidrs) {
+      throw StateError('Для выбранных сайтов получено слишком много адресов.');
+    }
+    if (applicationsOnly &&
+        normalized.isEmpty &&
+        normalizedDestinations.isEmpty) {
+      throw StateError('Выбери хотя бы один сервис, программу или сайт.');
+    }
+
+    await _runConfigIo(() async {
+      final root = Directory(greenVpnProgramDataRootSync());
+      if (!root.existsSync()) root.createSync(recursive: true);
+      await WindowsLocalSecurity.prepareSharedConfigDirectory(root.path);
+
+      final appsFile = File(greenVpnWindowsRoutingAppsPathSync());
+      final payload = jsonEncode({
+        'schemaVersion': 2,
+        'applications': normalized,
+        'destinationCidrs': normalizedDestinations,
+        'proxy': {
+          'host': _windowsApplicationProxyHost,
+          'port': _windowsApplicationProxyPort,
+        },
+      });
+      await appsFile.writeAsString(payload, flush: true);
+      await WindowsLocalSecurity.prepareSharedConfigFile(appsFile.path);
+
+      final modeFile = File(greenVpnWindowsRoutingModePathSync());
+      await modeFile.writeAsString(
+        applicationsOnly ? 'applications\n' : 'full\n',
+        flush: true,
+      );
+      await WindowsLocalSecurity.prepareSharedConfigFile(modeFile.path);
+    });
   }
 
   Future<void> writeBaseConfig(String content) async {
@@ -6158,6 +6245,7 @@ class ServerLocation {
   final String protocolLabel;
   final String protocolCode;
   final bool clientConfigReady;
+  final String accessTier;
 
   const ServerLocation({
     required this.id,
@@ -6174,12 +6262,16 @@ class ServerLocation {
     this.protocolLabel = 'WireGuard',
     this.protocolCode = 'wireguard_udp',
     this.clientConfigReady = true,
+    this.accessTier = 'free',
   });
 
   bool get isCurrentClientReady =>
       available &&
       clientConfigReady &&
       kSupportedVpnProtocols.contains(protocolCode);
+
+  bool get requiresPaidSubscription =>
+      greenVpnServerRequiresPaidSubscription(accessTier);
 
   String get publicLocationId =>
       greenVpnServerLocationId(serverId: id, country: country, city: city);
@@ -6230,6 +6322,9 @@ class ServerLocation {
       protocolLabel: protocolLabel,
       protocolCode: protocolCode,
       clientConfigReady: json['clientConfigReady'] != false,
+      accessTier: greenVpnNormalizeServerAccessTier(
+        (json['accessTier'] ?? 'free').toString(),
+      ),
     );
   }
 }
@@ -6293,6 +6388,7 @@ class PostConnectProbeResult {
 
 enum SocialApp {
   telegram('Telegram', Icons.send_rounded),
+  vk('VK', Icons.people_alt_rounded),
   instagram('Instagram', Icons.photo_camera_rounded),
   tiktok('TikTok', Icons.music_note_rounded),
   discord('Discord', Icons.forum_rounded),
@@ -6311,6 +6407,9 @@ bool _isValidAndroidPackageName(String value) {
   final clean = value.trim();
   return clean.length <= 255 && _androidPackageNamePattern.hasMatch(clean);
 }
+
+const String _windowsApplicationProxyHost = '10.10.0.1';
+const int _windowsApplicationProxyPort = 1080;
 
 class _AndroidLaunchableApp {
   final String packageName;
@@ -6397,12 +6496,40 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     SocialApp.tiktok: ['23.192.0.0/11', '23.32.0.0/11'],
   };
 
+  static const Map<SocialApp, List<String>> _socialDomains = {
+    SocialApp.telegram: ['telegram.org', 't.me'],
+    SocialApp.vk: [
+      'vk.com',
+      'vk.ru',
+      'vkvideo.ru',
+      'userapi.com',
+      'vkuseraudio.net',
+      'vkuserlive.net',
+      'vkcdnservice.com',
+    ],
+    SocialApp.instagram: ['instagram.com', 'cdninstagram.com'],
+    SocialApp.tiktok: ['tiktok.com', 'tiktokcdn.com', 'tiktokv.com'],
+    SocialApp.discord: [
+      'discord.com',
+      'discord.gg',
+      'discordapp.com',
+      'discordapp.net',
+    ],
+    SocialApp.youtube: [
+      'youtube.com',
+      'youtu.be',
+      'googlevideo.com',
+      'ytimg.com',
+    ],
+  };
+
   static const Map<SocialApp, List<String>> _androidSocialPackageNames = {
     SocialApp.telegram: [
       'org.telegram.messenger',
       'org.telegram.messenger.web',
       'org.thunderdog.challegram',
     ],
+    SocialApp.vk: ['com.vkontakte.android'],
     SocialApp.instagram: ['com.instagram.android'],
     SocialApp.youtube: ['com.google.android.youtube'],
     SocialApp.discord: ['com.discord'],
@@ -6518,12 +6645,17 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
   // "Только для соцсетей"
   bool socialOnlyEnabled = false;
+  bool _socialOnlyPreferenceRequested = false;
   final Set<SocialApp> socialOnlyApps = {
     SocialApp.telegram,
     SocialApp.instagram,
   };
   final Set<String> socialOnlyCustomPackages = <String>{};
+  final Set<String> socialOnlyWindowsApplications = <String>{};
+  final Set<String> socialOnlyWindowsSites = <String>{};
   final Map<String, String> _androidInstalledAppLabels = <String, String>{};
+  final Map<String, String> _windowsInstalledAppLabels = <String, String>{};
+  List<String> _windowsSelectiveDestinationCidrs = const <String>[];
 
   // Сервер
   List<ServerLocation> servers = _fallbackServerCatalogForCurrentChannel();
@@ -6581,6 +6713,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   String? _adaptiveRouteProtocol;
   int? _adaptiveRouteScore;
   bool _subscriptionActive = false;
+  bool _subscriptionEntitlementResolved = false;
+  String _subscriptionPlanCode = 'base';
   bool _subscriptionAutoRenew = false;
   bool _paymentMethodSaved = false;
   String? _subscriptionExpiresAt;
@@ -6609,6 +6743,13 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   void goToTab(int i) => setState(() => _index = i);
 
   bool get _vpnInteractionLocked => vpnBusy || _vpnTapCooldown;
+
+  bool get _hasPaidSubscriptionEntitlement => greenVpnHasPaidEntitlement(
+    isActive: _subscriptionActive,
+    planCode: _subscriptionPlanCode,
+    planName: planName,
+    monthlyPriceRub: _subscriptionMonthlyPriceRub,
+  );
 
   @override
   void initState() {
@@ -7174,7 +7315,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       }
 
       // Apply social-only
-      socialOnlyEnabled = p.socialOnlyEnabled;
+      _socialOnlyPreferenceRequested = p.socialOnlyEnabled;
+      socialOnlyEnabled =
+          p.socialOnlyEnabled && _hasPaidSubscriptionEntitlement;
       socialOnlyApps
         ..clear()
         ..addAll(
@@ -7203,6 +7346,30 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         } catch (_) {
           // Stored package names remain usable even if Android hides an app label.
         }
+      }
+      socialOnlyWindowsApplications
+        ..clear()
+        ..addAll(
+          p.socialOnlyWindowsApplications
+              .map((value) => value.trim())
+              .where(isValidWindowsApplicationPath)
+              .take(maxWindowsVpnApplications),
+        );
+      socialOnlyWindowsSites
+        ..clear()
+        ..addAll(
+          p.socialOnlyWindowsSites
+              .map(normalizeWindowsVpnSite)
+              .whereType<String>()
+              .take(maxWindowsVpnSites),
+        );
+      if (Platform.isWindows &&
+          socialOnlyEnabled &&
+          socialOnlyApps.isEmpty &&
+          socialOnlyWindowsApplications.isEmpty &&
+          socialOnlyWindowsSites.isEmpty) {
+        // An empty selective policy must never look enabled to the user.
+        socialOnlyEnabled = false;
       }
 
       // Apply tariff settings
@@ -7240,6 +7407,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           ? true
           : p.optAutoRenew;
 
+      await _syncWindowsRoutingPolicy();
       await _repairProvisionedConfigFromPreferredDevSource(showToast: false);
       await _cfg.ensureBaseSeededFromManagedIfMissing();
       final base = await _cfg.readBaseConfig();
@@ -7302,6 +7470,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           'socialOnlyEnabled': socialOnlyEnabled,
           'socialOnlyApps': socialOnlyApps.map((e) => e.name).toList(),
           'socialOnlyCustomPackages': socialOnlyCustomPackages.toList()..sort(),
+          'socialOnlyWindowsApplications':
+              socialOnlyWindowsApplications.toList()
+                ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase())),
+          'socialOnlyWindowsSites': socialOnlyWindowsSites.toList()..sort(),
           'selectedApps': selectedApps.map((e) => e.name).toList(),
           'trafficPack': trafficPack.name,
           'trafficGb': trafficGb,
@@ -7440,6 +7612,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         }
         _applySubscriptionUiState(res.data!, subscription);
       });
+      await _reconcileSubscriptionEntitlements();
     } catch (_) {}
   }
 
@@ -7454,6 +7627,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
     _subscriptionActive =
         profile['isActive'] == true || sub?['isActive'] == true;
+    _subscriptionEntitlementResolved = true;
+    final planCodeRaw = profile['planCode'] ?? sub?['planCode'];
+    final nextPlanCode = (planCodeRaw ?? '').toString().trim().toLowerCase();
+    _subscriptionPlanCode = nextPlanCode.isEmpty ? 'base' : nextPlanCode;
     final expiresRaw = profile['expiresAt'] ?? sub?['expiresAt'];
     final expires = expiresRaw == null ? '' : expiresRaw.toString().trim();
     _subscriptionExpiresAt = expires.isEmpty ? null : expires;
@@ -7468,6 +7645,58 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     final paymentMethodRaw =
         profile['paymentMethodSaved'] ?? sub?['paymentMethodSaved'];
     _paymentMethodSaved = paymentMethodRaw == true;
+  }
+
+  Future<void> _reconcileSubscriptionEntitlements() async {
+    if (!mounted) return;
+    if (!_subscriptionEntitlementResolved) return;
+    final paid = _hasPaidSubscriptionEntitlement;
+    final shouldEnableSocial = paid && _socialOnlyPreferenceRequested;
+    final socialModeChanged = socialOnlyEnabled != shouldEnableSocial;
+
+    ServerLocation? replacementServer;
+    if (!paid &&
+        !selectedServer.isAuto &&
+        selectedServer.requiresPaidSubscription) {
+      final freeCandidates =
+          servers
+              .where(
+                (server) =>
+                    !server.isAuto &&
+                    server.isCurrentClientReady &&
+                    !server.requiresPaidSubscription &&
+                    server.publicLocationId == selectedServer.publicLocationId,
+              )
+              .toList()
+            ..sort(_compareServerConnectionCandidates);
+      replacementServer =
+          freeCandidates.firstOrNull ??
+          servers.where((server) => server.isAuto).firstOrNull;
+    }
+
+    if (!socialModeChanged && replacementServer == null) return;
+    setState(() {
+      socialOnlyEnabled = shouldEnableSocial;
+      if (!paid) _socialOnlyPreferenceRequested = false;
+      if (replacementServer != null) {
+        selectedServer = replacementServer;
+        _persistedServerId = _serverSelectionKey(replacementServer);
+      }
+    });
+    _schedulePrefsSave();
+
+    if (socialModeChanged) {
+      try {
+        await _applyCurrentConfigMode(
+          reconnectIfNeeded: vpnEnabled,
+          showToastOnSuccess: false,
+        );
+      } catch (e) {
+        await appendBlueVpnClientLog(
+          'premium entitlement config reconcile failed error=$e',
+        );
+      }
+    }
   }
 
   Future<bool> _cancelAutoRenew() async {
@@ -7504,6 +7733,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         _tariffStatus =
             'Автопродление отключено. Текущий оплаченный период останется активным.';
       });
+      await _reconcileSubscriptionEntitlements();
+      if (!mounted) return false;
       _schedulePrefsSave();
       _toast(context, 'Автопродление отключено.');
       return true;
@@ -7657,6 +7888,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         if (nextPlan.isNotEmpty) planName = nextPlan;
         _applySubscriptionUiState(const <String, dynamic>{}, subscription);
       });
+      await _reconcileSubscriptionEntitlements();
       await _refreshTariffServerState(showToast: false);
       if (!mounted) return;
       setState(() {
@@ -8182,6 +8414,56 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     );
   }
 
+  String _buildWindowsApplicationOnlyConfig(String baseConfig) {
+    final withoutIncluded = _removeWireGuardInterfaceField(
+      baseConfig,
+      'IncludedApplications',
+    );
+    final withoutExcluded = _removeWireGuardInterfaceField(
+      withoutIncluded,
+      'ExcludedApplications',
+    );
+    final allowedIps = <String>{
+      if (socialOnlyWindowsApplications.isNotEmpty)
+        '$_windowsApplicationProxyHost/32',
+      ..._windowsSelectiveDestinationCidrs,
+    }.toList()..sort();
+    if (allowedIps.isEmpty) {
+      throw StateError('Выбери хотя бы один сервис, программу или сайт.');
+    }
+    return _replaceAllowedIps(withoutExcluded, allowedIps);
+  }
+
+  Future<void> _syncWindowsRoutingPolicy() async {
+    if (kIsWeb || !Platform.isWindows) return;
+    final destinations = <String>{};
+    if (socialOnlyEnabled) {
+      final domains = <String>{...socialOnlyWindowsSites};
+      for (final app in socialOnlyApps) {
+        destinations.addAll(_socialAllowedIps[app] ?? const <String>[]);
+        domains.addAll(_socialDomains[app] ?? const <String>[]);
+      }
+      final resolution = await resolveWindowsVpnSites(domains);
+      final unresolvedCustomSites = resolution.unresolvedSites
+          .where(socialOnlyWindowsSites.contains)
+          .toList();
+      if (unresolvedCustomSites.isNotEmpty) {
+        throw StateError(
+          'Не удалось найти сайт: ${unresolvedCustomSites.first}. Проверь адрес и интернет.',
+        );
+      }
+      destinations.addAll(resolution.ipv4Cidrs);
+    }
+    final normalizedDestinations =
+        destinations.where(isValidWindowsVpnDestinationCidr).toList()..sort();
+    _windowsSelectiveDestinationCidrs = normalizedDestinations;
+    await _cfg.writeWindowsRoutingPolicy(
+      applicationsOnly: socialOnlyEnabled,
+      applicationPaths: socialOnlyWindowsApplications,
+      destinationCidrs: normalizedDestinations,
+    );
+  }
+
   String _buildManagedConfigFromBase(String baseConfig) {
     if (!socialOnlyEnabled) {
       final fullTunnel = preserveFullTunnelAllowedIps(baseConfig);
@@ -8199,6 +8481,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       return _buildAndroidSocialOnlyConfig(baseConfig);
     }
 
+    if (!kIsWeb && Platform.isWindows) {
+      return _buildWindowsApplicationOnlyConfig(baseConfig);
+    }
+
     final allowedIps = _resolveSocialAllowedIps(socialOnlyApps);
     return _replaceAllowedIps(baseConfig, allowedIps);
   }
@@ -8207,6 +8493,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     String rawConfig, {
     ServerLocation? server,
   }) async {
+    await _syncWindowsRoutingPolicy();
     final protocol = server?.protocolCode ?? 'wireguard_udp';
     await _cfg.writeManagedConfig(
       greenVpnTransportRequiresFullTunnel(protocol)
@@ -8306,6 +8593,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     required bool reconnectIfNeeded,
     required bool showToastOnSuccess,
   }) async {
+    await _syncWindowsRoutingPolicy();
     await _cfg.ensureBaseSeededFromManagedIfMissing();
 
     final base = await _cfg.readBaseConfig();
@@ -8745,9 +9033,16 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
       final sub = boot.data!['subscription'];
       if (sub is Map) {
-        final p = (sub['planName'] ?? sub['planCode'] ?? '').toString().trim();
-        if (p.isNotEmpty && mounted) {
-          setState(() => planName = p);
+        final subMap = Map<String, dynamic>.from(sub);
+        final p = (subMap['planName'] ?? subMap['planCode'] ?? '')
+            .toString()
+            .trim();
+        if (mounted) {
+          setState(() {
+            if (p.isNotEmpty) planName = p;
+            _applySubscriptionUiState(const <String, dynamic>{}, subMap);
+          });
+          await _reconcileSubscriptionEntitlements();
         }
       }
 
@@ -8755,6 +9050,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         accessToken: widget.session.accessToken,
         deviceId: did,
         serverId: selectedServer.id == 'auto' ? null : selectedServer.id,
+        mode: socialOnlyEnabled ? 'social_only' : 'full',
       );
       if (!res.ok && _isAndroidNetworkFailureMessage(res.message)) {
         await _recoverAndroidStaleVpnForNetwork(
@@ -8764,6 +9060,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           accessToken: widget.session.accessToken,
           deviceId: did,
           serverId: selectedServer.id == 'auto' ? null : selectedServer.id,
+          mode: socialOnlyEnabled ? 'social_only' : 'full',
         );
       }
       if (greenVpnIsInvalidSessionMessage(res.message)) {
@@ -9068,7 +9365,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       platform: greenVpnClientPlatform(),
       provider: yandexRewardedAdUnitId.isNotEmpty
           ? 'yandex_mobile_ads'
-          : 'test_web',
+          : (!kIsWeb && Platform.isWindows ? 'yandex_web_rewarded' : 'auto'),
       appVersion: kAppVersion,
     );
     if (!mounted) return false;
@@ -9156,6 +9453,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       accessToken: widget.session.accessToken,
       deviceId: deviceId,
       serverId: effectiveServer.isAuto ? null : effectiveServer.id,
+      mode: socialOnlyEnabled ? 'social_only' : 'full',
     );
     if (!res.ok && _isAndroidNetworkFailureMessage(res.message)) {
       await _recoverAndroidStaleVpnForNetwork(
@@ -9165,6 +9463,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         accessToken: widget.session.accessToken,
         deviceId: deviceId,
         serverId: effectiveServer.isAuto ? null : effectiveServer.id,
+        mode: socialOnlyEnabled ? 'social_only' : 'full',
       );
     }
     await appendBlueVpnClientLog(
@@ -9242,9 +9541,16 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     final bootMap = boot.data!;
     final sub = bootMap['subscription'];
     if (sub is Map) {
-      final p = (sub['planName'] ?? sub['planCode'] ?? '').toString().trim();
-      if (p.isNotEmpty && mounted) {
-        setState(() => planName = p);
+      final subMap = Map<String, dynamic>.from(sub);
+      final p = (subMap['planName'] ?? subMap['planCode'] ?? '')
+          .toString()
+          .trim();
+      if (mounted) {
+        setState(() {
+          if (p.isNotEmpty) planName = p;
+          _applySubscriptionUiState(const <String, dynamic>{}, subMap);
+        });
+        await _reconcileSubscriptionEntitlements();
       }
     }
 
@@ -9507,7 +9813,13 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   List<ServerLocation> _serverPickerLocations() {
     final auto = servers.where((server) => server.isAuto).firstOrNull;
     final routes = servers.where((server) => !server.isAuto).toList()
-      ..sort(_compareServerConnectionCandidates);
+      ..sort((left, right) {
+        if (!_hasPaidSubscriptionEntitlement &&
+            left.requiresPaidSubscription != right.requiresPaidSubscription) {
+          return left.requiresPaidSubscription ? 1 : -1;
+        }
+        return _compareServerConnectionCandidates(left, right);
+      });
     return greenVpnVisibleLocationRepresentatives<ServerLocation>(
       candidates: <ServerLocation>[
         auto ??
@@ -9535,6 +9847,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               (server) =>
                   !server.isAuto &&
                   server.isCurrentClientReady &&
+                  (_hasPaidSubscriptionEntitlement ||
+                      !server.requiresPaidSubscription) &&
                   !(socialOnlyEnabled &&
                       greenVpnTransportRequiresFullTunnel(server.protocolCode)),
             )
@@ -9556,12 +9870,17 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     if (selectedLocationCandidates.isNotEmpty) {
       return selectedLocationCandidates;
     }
-    return selectedServer.isCurrentClientReady
+    return selectedServer.isCurrentClientReady &&
+            (_hasPaidSubscriptionEntitlement ||
+                !selectedServer.requiresPaidSubscription)
         ? <ServerLocation>[selectedServer]
         : const <ServerLocation>[];
   }
 
   String _serverUnsupportedReason(ServerLocation server) {
+    if (server.requiresPaidSubscription && !_hasPaidSubscriptionEntitlement) {
+      return 'эта локация доступна по подписке';
+    }
     if (!server.available) return 'локация сейчас недоступна';
     if (!server.clientConfigReady) {
       return 'подключение к этой локации ещё не готово';
@@ -9873,6 +10192,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                 : 'Запускаем VPN и проверяем подключение.',
           );
           final configPath = _cfg.managedConfigPath;
+          await _syncWindowsRoutingPolicy();
           await appendBlueVpnClientLog(
             'toggle connect backend start server=${candidate.id} cfg=$configPath',
           );
@@ -10218,6 +10538,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             : nextServers.first;
         _serverCatalogStatus = 'Список локаций обновлён.';
       });
+      await _reconcileSubscriptionEntitlements();
+      if (!mounted) return;
       if (showToast) _toast(context, _serverCatalogStatus!);
     } finally {
       if (mounted) setState(() => _serverCatalogBusy = false);
@@ -10241,24 +10563,32 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: pickerServers.map((s) {
+                  final locked =
+                      s.requiresPaidSubscription &&
+                      !_hasPaidSubscriptionEntitlement;
                   final selected = s.isAuto
                       ? selectedServer.isAuto
                       : !selectedServer.isAuto &&
                             s.publicLocationId ==
                                 selectedServer.publicLocationId;
                   final title = greenVpnPublicServerTitle(s);
-                  final subtitle = greenVpnPublicLatencyLabel(
+                  final latency = greenVpnPublicLatencyLabel(
                     s.isAuto ? automaticLatencyMs : s.pingMs,
                   );
+                  final subtitle = locked ? '$latency • По подписке' : latency;
                   return ListTile(
                     contentPadding: EdgeInsets.zero,
                     leading: Icon(
                       s.isAuto
                           ? Icons.auto_awesome_rounded
-                          : (s.isCurrentClientReady
+                          : (locked
+                                ? Icons.lock_rounded
+                                : s.isCurrentClientReady
                                 ? Icons.public_rounded
                                 : Icons.warning_amber_rounded),
-                      color: s.isAuto || s.isCurrentClientReady
+                      color: locked
+                          ? kBrandWarm
+                          : s.isAuto || s.isCurrentClientReady
                           ? kBrandPrimary
                           : kBrandWarm,
                     ),
@@ -10268,13 +10598,23 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                     ),
                     subtitle: Text(subtitle),
                     enabled: true,
-                    trailing: selected
+                    trailing: locked
+                        ? const Icon(Icons.lock_outline_rounded)
+                        : selected
                         ? const Icon(
                             Icons.check_circle_rounded,
                             color: kBrandPrimary,
                           )
                         : const Icon(Icons.chevron_right_rounded),
-                    onTap: () => Navigator.of(ctx).pop(s),
+                    onTap: () {
+                      if (locked) {
+                        Navigator.of(ctx).pop();
+                        goToTab(1);
+                        _toast(context, 'Эта локация доступна по подписке.');
+                        return;
+                      }
+                      Navigator.of(ctx).pop(s);
+                    },
                   );
                 }).toList(),
               ),
@@ -10296,6 +10636,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   Future<void> _selectServerAndReconnectIfNeeded(ServerLocation picked) async {
+    if (picked.requiresPaidSubscription && !_hasPaidSubscriptionEntitlement) {
+      goToTab(1);
+      _toast(context, 'Эта локация доступна по подписке.');
+      return;
+    }
     if (vpnBusy) {
       _toast(
         context,
@@ -10657,11 +11002,228 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
   }
 
+  Future<List<WindowsLaunchableApp>> _loadWindowsLaunchableApps() async {
+    if (kIsWeb || !Platform.isWindows) {
+      return const <WindowsLaunchableApp>[];
+    }
+    final apps = await listWindowsLaunchableApps();
+    _windowsInstalledAppLabels
+      ..clear()
+      ..addEntries(apps.map((app) => MapEntry(app.path, app.label)));
+    return apps;
+  }
+
+  Future<Set<String>?> _openWindowsInstalledAppsPicker(
+    BuildContext context,
+    Set<String> current,
+  ) async {
+    final apps = await _loadWindowsLaunchableApps();
+    if (!mounted || !context.mounted) return null;
+    if (apps.isEmpty) {
+      _toast(context, 'Windows не вернул список установленных программ.');
+      return null;
+    }
+
+    final selected = Set<String>.from(current);
+    final searchController = TextEditingController();
+    try {
+      return await showDialog<Set<String>>(
+        context: context,
+        builder: (ctx) {
+          var query = '';
+          return StatefulBuilder(
+            builder: (ctx, setLocal) {
+              final normalizedQuery = query.trim().toLowerCase();
+              final filtered = normalizedQuery.isEmpty
+                  ? apps
+                  : apps.where((app) {
+                      return app.label.toLowerCase().contains(
+                            normalizedQuery,
+                          ) ||
+                          windowsApplicationLabel(
+                            app.path,
+                          ).toLowerCase().contains(normalizedQuery);
+                    }).toList();
+              return AlertDialog(
+                title: const Text('Установленные программы'),
+                content: SizedBox(
+                  width: 520,
+                  height: min(MediaQuery.of(ctx).size.height * 0.68, 580.0),
+                  child: Column(
+                    children: [
+                      TextField(
+                        controller: searchController,
+                        autofocus: true,
+                        onChanged: (value) => setLocal(() => query = value),
+                        decoration: const InputDecoration(
+                          hintText: 'Найти программу',
+                          prefixIcon: Icon(Icons.search_rounded),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Expanded(
+                        child: filtered.isEmpty
+                            ? const Center(child: Text('Ничего не найдено'))
+                            : ListView.builder(
+                                itemCount: filtered.length,
+                                itemBuilder: (ctx, index) {
+                                  final app = filtered[index];
+                                  return CheckboxListTile(
+                                    value: selected.contains(app.path),
+                                    onChanged: (value) {
+                                      setLocal(() {
+                                        if (value == true) {
+                                          if (selected.length <
+                                              maxWindowsVpnApplications) {
+                                            selected.add(app.path);
+                                          }
+                                        } else {
+                                          selected.remove(app.path);
+                                        }
+                                      });
+                                    },
+                                    title: Text(
+                                      app.label,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    secondary: const Icon(Icons.apps_rounded),
+                                    controlAffinity:
+                                        ListTileControlAffinity.trailing,
+                                    contentPadding: EdgeInsets.zero,
+                                  );
+                                },
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    child: const Text('Отмена'),
+                  ),
+                  ElevatedButton(
+                    onPressed: () =>
+                        Navigator.of(ctx).pop(Set<String>.from(selected)),
+                    child: const Text('Готово'),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+    } finally {
+      searchController.dispose();
+    }
+  }
+
+  Future<String?> _openWindowsSitePicker(BuildContext context) async {
+    final controller = TextEditingController();
+    try {
+      return await showDialog<String>(
+        context: context,
+        builder: (ctx) {
+          var busy = false;
+          String? error;
+          return StatefulBuilder(
+            builder: (ctx, setLocal) => AlertDialog(
+              title: const Text('Добавить сайт'),
+              content: SizedBox(
+                width: 440,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Вставь адрес сайта, например vk.com.'),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: controller,
+                      autofocus: true,
+                      enabled: !busy,
+                      keyboardType: TextInputType.url,
+                      textInputAction: TextInputAction.done,
+                      decoration: InputDecoration(
+                        hintText: 'example.com',
+                        prefixIcon: const Icon(Icons.language_rounded),
+                        errorText: error,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: busy ? null : () => Navigator.of(ctx).pop(),
+                  child: const Text('Отмена'),
+                ),
+                ElevatedButton(
+                  onPressed: busy
+                      ? null
+                      : () async {
+                          final site = normalizeWindowsVpnSite(controller.text);
+                          if (site == null) {
+                            setLocal(() => error = 'Проверь адрес сайта');
+                            return;
+                          }
+                          setLocal(() {
+                            busy = true;
+                            error = null;
+                          });
+                          WindowsSiteResolution resolution;
+                          try {
+                            resolution = await resolveWindowsVpnSites([site]);
+                          } catch (_) {
+                            if (ctx.mounted) {
+                              setLocal(() {
+                                busy = false;
+                                error = 'Не удалось проверить сайт';
+                              });
+                            }
+                            return;
+                          }
+                          if (!ctx.mounted) return;
+                          if (resolution.ipv4Cidrs.isEmpty) {
+                            setLocal(() {
+                              busy = false;
+                              error = 'Сайт не найден';
+                            });
+                            return;
+                          }
+                          Navigator.of(ctx).pop(site);
+                        },
+                  child: busy
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Добавить'),
+                ),
+              ],
+            ),
+          );
+        },
+      );
+    } finally {
+      controller.dispose();
+    }
+  }
+
   Future<void> _openSocialAppsPicker(BuildContext context) async {
     final tempPresets = Set<SocialApp>.from(socialOnlyApps);
-    final usesApplications = !kIsWeb && Platform.isAndroid;
-    final tempCustomPackages = usesApplications
+    final usesAndroidApplications = !kIsWeb && Platform.isAndroid;
+    final usesWindowsApplications = !kIsWeb && Platform.isWindows;
+    final usesApplications = usesAndroidApplications || usesWindowsApplications;
+    final tempCustomPackages = usesAndroidApplications
         ? Set<String>.from(socialOnlyCustomPackages)
+        : <String>{};
+    final tempWindowsApplications = usesWindowsApplications
+        ? Set<String>.from(socialOnlyWindowsApplications)
+        : <String>{};
+    final tempWindowsSites = usesWindowsApplications
+        ? Set<String>.from(socialOnlyWindowsSites)
         : <String>{};
 
     final picked = await showDialog<bool>(
@@ -10677,39 +11239,64 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                       (_androidInstalledAppLabels[b] ?? b).toLowerCase(),
                     ),
               );
+            final sortedWindowsApplications = tempWindowsApplications.toList()
+              ..sort(
+                (a, b) =>
+                    (_windowsInstalledAppLabels[a] ??
+                            windowsApplicationLabel(a))
+                        .toLowerCase()
+                        .compareTo(
+                          (_windowsInstalledAppLabels[b] ??
+                                  windowsApplicationLabel(b))
+                              .toLowerCase(),
+                        ),
+              );
+            final sortedWindowsSites = tempWindowsSites.toList()..sort();
             return AlertDialog(
               title: Text(
-                usesApplications ? 'Приложения через VPN' : 'Сервисы через VPN',
+                usesWindowsApplications
+                    ? 'Что работает через VPN'
+                    : (usesApplications
+                          ? 'Приложения через VPN'
+                          : 'Сервисы через VPN'),
               ),
               content: SizedBox(
-                width: 460,
+                width: usesWindowsApplications ? 560 : 460,
                 child: SingleChildScrollView(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        'Рекомендуемые',
-                        style: Theme.of(ctx).textTheme.labelLarge,
-                      ),
-                      ...SocialApp.values.map((app) {
-                        return CheckboxListTile(
-                          value: tempPresets.contains(app),
-                          onChanged: (v) {
-                            setLocal(() {
-                              if (v == true) {
-                                tempPresets.add(app);
-                              } else {
-                                tempPresets.remove(app);
-                              }
-                            });
-                          },
-                          title: Text(app.title),
-                          secondary: Icon(app.icon, color: kBrandPrimary),
-                          controlAffinity: ListTileControlAffinity.trailing,
-                          contentPadding: EdgeInsets.zero,
-                        );
-                      }),
+                      if (usesWindowsApplications) ...[
+                        const Text(
+                          'Выбери готовый сервис, установленную программу или сайт. Остальной интернет останется без VPN.',
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+                      ...[
+                        Text(
+                          'Готовые сервисы',
+                          style: Theme.of(ctx).textTheme.labelLarge,
+                        ),
+                        ...SocialApp.values.map((app) {
+                          return CheckboxListTile(
+                            value: tempPresets.contains(app),
+                            onChanged: (v) {
+                              setLocal(() {
+                                if (v == true) {
+                                  tempPresets.add(app);
+                                } else {
+                                  tempPresets.remove(app);
+                                }
+                              });
+                            },
+                            title: Text(app.title),
+                            secondary: Icon(app.icon, color: kBrandPrimary),
+                            controlAffinity: ListTileControlAffinity.trailing,
+                            contentPadding: EdgeInsets.zero,
+                          );
+                        }),
+                      ],
                       if (tempCustomPackages.isNotEmpty) ...[
                         const SizedBox(height: 8),
                         Text(
@@ -10767,6 +11354,167 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                           ),
                         ),
                       ],
+                      if (usesWindowsApplications) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                          'Мои программы',
+                          style: Theme.of(ctx).textTheme.labelLarge,
+                        ),
+                        ...sortedWindowsApplications.map(
+                          (path) => ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(Icons.apps_rounded),
+                            title: Text(
+                              _windowsInstalledAppLabels[path] ??
+                                  windowsApplicationLabel(path),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            trailing: IconButton(
+                              tooltip: 'Убрать',
+                              onPressed: () => setLocal(
+                                () => tempWindowsApplications.remove(path),
+                              ),
+                              icon: const Icon(Icons.close_rounded),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: () async {
+                              try {
+                                final selected =
+                                    await _openWindowsInstalledAppsPicker(
+                                      ctx,
+                                      tempWindowsApplications,
+                                    );
+                                if (selected == null || !ctx.mounted) return;
+                                setLocal(() {
+                                  tempWindowsApplications
+                                    ..clear()
+                                    ..addAll(selected);
+                                });
+                              } catch (e) {
+                                if (ctx.mounted) {
+                                  _toast(
+                                    ctx,
+                                    'Не удалось открыть список программ: $e',
+                                  );
+                                }
+                              }
+                            },
+                            icon: const Icon(Icons.search_rounded),
+                            label: const Text('Найти установленную программу'),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        SizedBox(
+                          width: double.infinity,
+                          child: TextButton.icon(
+                            onPressed: () async {
+                              try {
+                                final result = await FilePicker.platform
+                                    .pickFiles(
+                                      dialogTitle: 'Выбери файл программы',
+                                      type: FileType.custom,
+                                      allowedExtensions: const ['exe'],
+                                      allowMultiple: true,
+                                    );
+                                if (result == null || !ctx.mounted) return;
+                                final pickedPaths = result.paths
+                                    .whereType<String>()
+                                    .map((value) => value.trim())
+                                    .where(isValidWindowsApplicationPath)
+                                    .where((value) => File(value).existsSync())
+                                    .toSet();
+                                if (pickedPaths.isEmpty) {
+                                  _toast(
+                                    ctx,
+                                    'Не удалось определить программу в выбранном файле.',
+                                  );
+                                  return;
+                                }
+                                if (tempWindowsApplications.length +
+                                        pickedPaths.length >
+                                    maxWindowsVpnApplications) {
+                                  _toast(
+                                    ctx,
+                                    'Можно выбрать не более $maxWindowsVpnApplications приложений.',
+                                  );
+                                  return;
+                                }
+                                setLocal(
+                                  () => tempWindowsApplications.addAll(
+                                    pickedPaths,
+                                  ),
+                                );
+                              } catch (e) {
+                                if (ctx.mounted) {
+                                  _toast(
+                                    ctx,
+                                    'Не удалось выбрать приложение: $e',
+                                  );
+                                }
+                              }
+                            },
+                            icon: const Icon(Icons.folder_open_rounded),
+                            label: const Text('Выбрать файл вручную'),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          'Мои сайты',
+                          style: Theme.of(ctx).textTheme.labelLarge,
+                        ),
+                        ...sortedWindowsSites.map(
+                          (site) => ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: const Icon(Icons.language_rounded),
+                            title: Text(
+                              site,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            trailing: IconButton(
+                              tooltip: 'Убрать',
+                              onPressed: () =>
+                                  setLocal(() => tempWindowsSites.remove(site)),
+                              icon: const Icon(Icons.close_rounded),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed:
+                                tempWindowsSites.length >= maxWindowsVpnSites
+                                ? null
+                                : () async {
+                                    try {
+                                      final site = await _openWindowsSitePicker(
+                                        ctx,
+                                      );
+                                      if (site == null || !ctx.mounted) return;
+                                      setLocal(
+                                        () => tempWindowsSites.add(site),
+                                      );
+                                    } catch (e) {
+                                      if (ctx.mounted) {
+                                        _toast(
+                                          ctx,
+                                          'Не удалось добавить сайт: $e',
+                                        );
+                                      }
+                                    }
+                                  },
+                            icon: const Icon(Icons.add_rounded),
+                            label: const Text('Добавить сайт'),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -10778,7 +11526,16 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                 ),
                 ElevatedButton(
                   onPressed: () {
-                    if (tempPresets.isEmpty && tempCustomPackages.isEmpty) {
+                    if (usesWindowsApplications &&
+                        tempPresets.isEmpty &&
+                        tempWindowsApplications.isEmpty &&
+                        tempWindowsSites.isEmpty) {
+                      _toast(ctx, 'Выбери сервис, программу или сайт.');
+                      return;
+                    }
+                    if (!usesWindowsApplications &&
+                        tempPresets.isEmpty &&
+                        tempCustomPackages.isEmpty) {
                       _toast(
                         ctx,
                         usesApplications
@@ -10807,6 +11564,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       socialOnlyCustomPackages
         ..clear()
         ..addAll(tempCustomPackages);
+      socialOnlyWindowsApplications
+        ..clear()
+        ..addAll(tempWindowsApplications);
+      socialOnlyWindowsSites
+        ..clear()
+        ..addAll(tempWindowsSites);
     });
     _schedulePrefsSave();
 
@@ -10814,15 +11577,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       if (mounted) {
         setState(() {
           vpnBusy = vpnEnabled;
-          _vpnBusyStage = vpnEnabled
-              ? (usesApplications
-                    ? 'Применяем список приложений...'
-                    : 'Применяем список сервисов...')
-              : null;
+          _vpnBusyStage = vpnEnabled ? 'Применяем выбранный список...' : null;
           _vpnBusyHint = vpnEnabled
-              ? (usesApplications
-                    ? 'Переподключаем VPN с новым набором приложений.'
-                    : 'Переподключаем VPN с новым набором сервисов.')
+              ? 'Переподключаем VPN с новым набором сервисов и программ.'
               : null;
         });
       }
@@ -10831,6 +11588,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           reconnectIfNeeded: true,
           showToastOnSuccess: true,
         );
+      } catch (e) {
+        if (context.mounted) {
+          _toast(context, e.toString().replaceFirst('Bad state: ', ''));
+        }
       } finally {
         if (mounted) {
           setState(() {
@@ -11164,12 +11925,37 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
         // Соцсети
         socialOnlyEnabled: socialOnlyEnabled,
-        socialOnlyAllowed: optSmartRouting,
+        socialOnlyAllowed: _hasPaidSubscriptionEntitlement,
         socialOnlyApps: socialOnlyApps,
         socialOnlyCustomPackages: socialOnlyCustomPackages,
+        socialOnlyWindowsApplications: socialOnlyWindowsApplications,
+        socialOnlyWindowsSites: socialOnlyWindowsSites,
         socialOnlyCustomLabels: _androidInstalledAppLabels,
+        socialOnlyWindowsApplicationLabels: _windowsInstalledAppLabels,
         onToggleSocialOnly: (v) async {
           if (_vpnInteractionLocked) return;
+          if (!_hasPaidSubscriptionEntitlement) {
+            goToTab(1);
+            _toast(
+              context,
+              'Режим «Только для соцсетей» доступен по подписке.',
+            );
+            return;
+          }
+          if (v &&
+              !kIsWeb &&
+              Platform.isWindows &&
+              socialOnlyApps.isEmpty &&
+              socialOnlyWindowsApplications.isEmpty &&
+              socialOnlyWindowsSites.isEmpty) {
+            await _openSocialAppsPicker(context);
+            if (!mounted ||
+                (socialOnlyApps.isEmpty &&
+                    socialOnlyWindowsApplications.isEmpty &&
+                    socialOnlyWindowsSites.isEmpty)) {
+              return;
+            }
+          }
 
           setState(() {
             vpnBusy = true;
@@ -11177,6 +11963,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             _vpnBusyHint =
                 'Пересобираем конфиг и аккуратно применяем новый режим трафика.';
             socialOnlyEnabled = v;
+            _socialOnlyPreferenceRequested = v;
           });
           _schedulePrefsSave();
 
@@ -11185,6 +11972,15 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               reconnectIfNeeded: true,
               showToastOnSuccess: true,
             );
+          } catch (e) {
+            if (context.mounted) {
+              setState(() {
+                socialOnlyEnabled = !v;
+                _socialOnlyPreferenceRequested = !v;
+              });
+              _schedulePrefsSave();
+              _toast(context, e.toString().replaceFirst('Bad state: ', ''));
+            }
           } finally {
             if (mounted) {
               setState(() {
@@ -11199,6 +11995,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         },
         onConfigureSocialApps: () async {
           if (_vpnInteractionLocked) return;
+          if (!_hasPaidSubscriptionEntitlement) {
+            goToTab(1);
+            _toast(context, 'Выбор приложений и сайтов доступен по подписке.');
+            return;
+          }
           await _openSocialAppsPicker(context);
         },
 
@@ -11458,7 +12259,10 @@ class VpnPage extends StatelessWidget {
   final bool socialOnlyAllowed;
   final Set<SocialApp> socialOnlyApps;
   final Set<String> socialOnlyCustomPackages;
+  final Set<String> socialOnlyWindowsApplications;
+  final Set<String> socialOnlyWindowsSites;
   final Map<String, String> socialOnlyCustomLabels;
+  final Map<String, String> socialOnlyWindowsApplicationLabels;
   final ValueChanged<bool> onToggleSocialOnly;
   final VoidCallback onConfigureSocialApps;
 
@@ -11484,7 +12288,10 @@ class VpnPage extends StatelessWidget {
     required this.socialOnlyAllowed,
     required this.socialOnlyApps,
     required this.socialOnlyCustomPackages,
+    required this.socialOnlyWindowsApplications,
+    required this.socialOnlyWindowsSites,
     required this.socialOnlyCustomLabels,
+    required this.socialOnlyWindowsApplicationLabels,
     required this.onToggleSocialOnly,
     required this.onConfigureSocialApps,
   });
@@ -11495,7 +12302,9 @@ class VpnPage extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     final textColor = theme.colorScheme.onSurface;
     final mutedColor = textColor.withValues(alpha: isDark ? 0.72 : 0.62);
-    final usesApplications = !kIsWeb && Platform.isAndroid;
+    final usesAndroidApplications = !kIsWeb && Platform.isAndroid;
+    final usesWindowsApplications = !kIsWeb && Platform.isWindows;
+    final usesApplications = usesAndroidApplications || usesWindowsApplications;
     final statusText = vpnBusy
         ? (vpnBusyStage ?? (vpnEnabled ? 'Отключаем...' : 'Подключаем...'))
         : (vpnEnabled
@@ -11509,10 +12318,17 @@ class VpnPage extends StatelessWidget {
     final serverSub = greenVpnPublicServerSubtitle(selectedServer);
     final selectedAppTitles = <String>[
       ...socialOnlyApps.map((app) => app.title),
-      if (usesApplications)
+      if (usesAndroidApplications)
         ...socialOnlyCustomPackages.map(
           (packageName) => socialOnlyCustomLabels[packageName] ?? packageName,
         ),
+      if (usesWindowsApplications)
+        ...socialOnlyWindowsApplications.map(
+          (path) =>
+              socialOnlyWindowsApplicationLabels[path] ??
+              windowsApplicationLabel(path),
+        ),
+      if (usesWindowsApplications) ...socialOnlyWindowsSites,
     ]..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     final appsText = selectedAppTitles.isEmpty
         ? 'Не выбрано'
@@ -11675,23 +12491,36 @@ class VpnPage extends StatelessWidget {
                 subtitle: Text(
                   socialOnlyEnabled
                       ? 'Через VPN: $appsText'
-                      : (usesApplications
+                      : (usesWindowsApplications
+                            ? 'Выбери сервисы, программы или сайты'
+                            : usesApplications
                             ? 'Выбери приложения, которые должны идти через VPN'
                             : 'Выбери сервисы, которые должны идти через VPN'),
                   style: const TextStyle(fontSize: 12),
                 ),
                 value: socialOnlyEnabled,
                 onChanged: onToggleSocialOnly,
+                secondary: socialOnlyAllowed
+                    ? null
+                    : const Icon(Icons.lock_rounded, color: kBrandWarm),
               ),
               const SizedBox(height: 8),
               SizedBox(
                 width: double.infinity,
                 child: OutlinedButton.icon(
                   onPressed: onConfigureSocialApps,
-                  icon: const Icon(Icons.tune_rounded),
+                  icon: Icon(
+                    socialOnlyAllowed
+                        ? Icons.tune_rounded
+                        : Icons.lock_outline_rounded,
+                  ),
                   label: Text(
-                    usesApplications
-                        ? 'Настроить приложения'
+                    !socialOnlyAllowed
+                        ? 'Доступно по подписке'
+                        : usesApplications
+                        ? (usesWindowsApplications
+                              ? 'Выбрать сервисы, программы и сайты'
+                              : 'Настроить приложения')
                         : 'Настроить сервисы',
                     style: TextStyle(fontWeight: FontWeight.w900),
                   ),
@@ -11709,6 +12538,7 @@ class VpnPage extends StatelessWidget {
                   allowed: socialOnlyAllowed,
                   enabled: socialOnlyEnabled,
                   usesApplications: usesApplications,
+                  usesMixedSelection: usesWindowsApplications,
                 ),
                 style: TextStyle(
                   color: mutedColor,
@@ -18462,6 +19292,46 @@ class WireGuardWindowsBackend extends VpnBackend {
   // Use raw string + concat.
   String get _serviceName => r'WireGuardTunnel$' + tunnelName;
 
+  bool _applicationRoutingRequested() {
+    try {
+      final mode = File(
+        greenVpnWindowsRoutingModePathSync(),
+      ).readAsStringSync().trim().toLowerCase();
+      return mode == 'applications';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool _processRouterRequired() {
+    try {
+      final raw = File(greenVpnWindowsRoutingAppsPathSync()).readAsStringSync();
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return true;
+      final applications = decoded['applications'];
+      return applications is! List || applications.isNotEmpty;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  Future<bool> _processRouterIsReady({
+    required Future<void> Function(String) log,
+  }) async {
+    if (!_applicationRoutingRequested()) return true;
+    const systemService = _GreenVpnSystemServiceClient();
+    final response = await systemService.status();
+    final routingMode = response.data['routingMode']?.toString() ?? '';
+    final routerState = response.data['processRouterState']?.toString() ?? '';
+    final routerRequired = _processRouterRequired();
+    await log(
+      'application routing status ok=${response.ok} mode=$routingMode router=$routerState required=$routerRequired',
+    );
+    return response.ok &&
+        routingMode == 'applications' &&
+        (!routerRequired || routerState == 'running');
+  }
+
   Future<ProcessResult> _run(String exe, List<String> args) async {
     return Process.run(exe, args, runInShell: true);
   }
@@ -18660,9 +19530,11 @@ if ($null -eq $svc) { exit 0 }
       );
 
       final admin = await isAdmin();
+      final applicationRoutingRequested = _applicationRoutingRequested();
       await log('isAdmin=$admin');
+      await log('applicationRoutingRequested=$applicationRoutingRequested');
 
-      if (admin) {
+      if (admin && !applicationRoutingRequested) {
         if (q0.exitCode == 0) {
           final stop = await _run('sc', ['stop', _serviceName]);
           await log(
@@ -18766,7 +19638,7 @@ if ($null -eq $svc) { exit 0 }
       for (var i = 0; i < 35; i++) {
         final status = await runtimeStatus();
         await log('verify(connect)[$i] ${status.describe()}');
-        if (status.isReallyConnected) {
+        if (status.isReallyConnected && await _processRouterIsReady(log: log)) {
           await log('=== CONNECT OK ===');
           return const VpnBackendResult(ok: true);
         }
@@ -18777,6 +19649,13 @@ if ($null -eq $svc) { exit 0 }
       await log(
         '=== CONNECT FAIL: real tunnel not confirmed :: ${status.describe()}',
       );
+      if (_applicationRoutingRequested()) {
+        const systemService = _GreenVpnSystemServiceClient();
+        final serviceDisconnect = await systemService.disconnect();
+        await log(
+          'application routing fail-safe disconnect ok=${serviceDisconnect.ok} http=${serviceDisconnect.statusCode} exit=${serviceDisconnect.exitCode}',
+        );
+      }
       return VpnBackendResult(
         ok: false,
         message:
@@ -18935,7 +19814,10 @@ if ($null -eq $svc) { exit 0 }
         configPath: _lastConfigPath ?? greenVpnManagedConfigPathSync(),
         wireguardExePath: _exe,
       );
-      return status.isReallyConnected;
+      if (!status.isReallyConnected) return false;
+      if (!_applicationRoutingRequested()) return true;
+      Future<void> ignoreLog(String _) async {}
+      return _processRouterIsReady(log: ignoreLog);
     } catch (_) {
       return false;
     }

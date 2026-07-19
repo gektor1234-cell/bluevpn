@@ -147,16 +147,58 @@ try {
         finally {
             $zip.Dispose()
         }
+        $processRouterPayload = @(
+            'tools/process-router/proxybridge_cli.exe',
+            'tools/process-router/proxybridgecore.dll',
+            'tools/process-router/windivert.dll',
+            'tools/process-router/windivert64.sys',
+            'tools/process-router/provenance.md',
+            'tools/process-router/third_party_notices.txt',
+            'tools/process-router/proxybridge_license.txt',
+            'tools/process-router/windivert_license.txt'
+        )
         $requiredPayload = if ($Channel -eq 'production') {
-            @('app/greenvpn.exe', 'app/greenvpn_service.exe', 'tools/greenvpn_vpn_task.ps1')
+            @('app/greenvpn.exe', 'app/greenvpn_service.exe', 'tools/greenvpn_vpn_task.ps1') + $processRouterPayload
         }
         else {
-            @('app/greenvpn_beta.exe', 'app/greenvpn_beta_service.exe', 'tools/greenvpn_vpn_task.ps1', 'tools/uninstall_greenvpn_beta.ps1')
+            @('app/greenvpn_beta.exe', 'app/greenvpn_beta_service.exe', 'tools/greenvpn_vpn_task.ps1', 'tools/uninstall_greenvpn_beta.ps1') + $processRouterPayload
         }
         foreach ($entry in $requiredPayload) {
             if ($entryNames -notcontains $entry) {
                 $errors.Add("Payload entry missing: $entry") | Out-Null
             }
+        }
+
+        $zip = [IO.Compression.ZipFile]::OpenRead($payloadPath)
+        try {
+            $vpnTaskEntry = $zip.Entries | Where-Object {
+                $_.FullName.Replace('\', '/').ToLowerInvariant() -eq 'tools/greenvpn_vpn_task.ps1'
+            } | Select-Object -First 1
+            if ($null -eq $vpnTaskEntry) {
+                $errors.Add('Packaged Windows VPN task entry is missing.') | Out-Null
+            }
+            else {
+                $reader = [IO.StreamReader]::new($vpnTaskEntry.Open())
+                try {
+                    $vpnTaskText = $reader.ReadToEnd()
+                }
+                finally {
+                    $reader.Dispose()
+                }
+                foreach ($marker in @(
+                    'Get-GreenRoutingPolicy',
+                    'destinationCidrs',
+                    'Get-GreenDestinationCidrs',
+                    'process router not required'
+                )) {
+                    if (-not $vpnTaskText.Contains($marker)) {
+                        $errors.Add("Packaged Windows VPN task marker missing: $marker") | Out-Null
+                    }
+                }
+            }
+        }
+        finally {
+            $zip.Dispose()
         }
     }
 

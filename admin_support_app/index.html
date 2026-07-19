@@ -1022,6 +1022,10 @@
                   Статус
                   <select id="serverStatusInput"></select>
                 </label>
+                <label>
+                  Доступ
+                  <select id="serverAccessTierInput"></select>
+                </label>
               </div>
               <label>
                 Профиль выдачи конфига
@@ -1083,6 +1087,9 @@
                   <option value="public">Кандидаты</option>
                   <option value="internal">Внутренние</option>
                 </select>
+                <select id="serverAccessTierFilter">
+                  <option value="all">Все уровни доступа</option>
+                </select>
               </div>
             </div>
             <div class="table-wrap">
@@ -1093,6 +1100,7 @@
                     <th>Локация</th>
                     <th>VPN-узел</th>
                     <th>Протокол</th>
+                    <th>Доступ</th>
                     <th>Статус</th>
                     <th>Оценка здоровья</th>
                     <th>Нагрузка</th>

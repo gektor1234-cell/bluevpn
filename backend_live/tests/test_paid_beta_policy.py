@@ -1071,6 +1071,223 @@ class PaidBetaPolicyTests(unittest.TestCase):
             self.assertTrue(main.free_ad_client_supports_gate("0.4.0"))
             self.assertFalse(main.free_ad_client_supports_gate("legacy-client"))
 
+    def test_social_only_requires_a_paid_subscription(self) -> None:
+        free_sub = main.subscription_status(main.get_subscription_row(self.user_id))
+        with self.assertRaises(main.HTTPException) as caught:
+            main.enforce_client_config_mode_entitlement("social_only", free_sub)
+        self.assertEqual(caught.exception.status_code, 403)
+        self.assertEqual(caught.exception.detail["code"], "premium_feature_required")
+
+        paid_sub = {
+            "isActive": True,
+            "planCode": "green_30d",
+            "monthlyPriceRub": 249,
+        }
+        self.assertEqual(
+            main.enforce_client_config_mode_entitlement("social_only", paid_sub),
+            "social_only",
+        )
+        self.assertEqual(
+            main.enforce_client_config_mode_entitlement("full", free_sub),
+            "full",
+        )
+
+    def test_free_auto_selection_excludes_premium_locations(self) -> None:
+        free_server = {
+            "id": "free-nl",
+            "accessTier": "free",
+            "available": True,
+            "clientConfigReady": True,
+            "selectionScore": 10,
+            "priority": 20,
+            "capacity": {"capacityStatus": "green", "capacityScore": 10},
+            "protocols": [{"code": "wireguard_udp", "primary": True}],
+        }
+        premium_server = {
+            **free_server,
+            "id": "premium-se",
+            "accessTier": "premium",
+            "selectionScore": 100,
+            "priority": 1,
+            "capacity": {"capacityStatus": "green", "capacityScore": 100},
+        }
+        catalog = {"servers": [premium_server, free_server]}
+
+        self.assertEqual(
+            main.select_best_capacity_server(catalog, paid_access=False)["id"],
+            "free-nl",
+        )
+        self.assertEqual(
+            main.select_best_capacity_server(catalog, paid_access=True)["id"],
+            "premium-se",
+        )
+        with self.assertRaises(main.HTTPException) as caught:
+            main.select_client_server_for_device(
+                catalog,
+                user_id=self.user_id,
+                device_uid="premium-location-denied",
+                requested_server_id="premium-se",
+                paid_access=False,
+            )
+        self.assertEqual(caught.exception.status_code, 403)
+        self.assertEqual(caught.exception.detail["code"], "premium_server_required")
+
+    def test_server_catalog_access_tier_migration_defaults_existing_rows_to_free(self) -> None:
+        main.init_db()
+        with main.db() as conn:
+            columns = {
+                row["name"]: row
+                for row in conn.execute("PRAGMA table_info(server_catalog_entries)").fetchall()
+            }
+        self.assertIn("access_tier", columns)
+        self.assertIn("free", str(columns["access_tier"]["dflt_value"]))
+
+    def test_new_catalog_entries_default_to_premium_and_updates_preserve_tier(self) -> None:
+        common = {
+            "serverId": "tier-policy-test",
+            "title": "Tier policy test",
+            "country": "NL",
+            "host": "203.0.113.10",
+            "port": 443,
+            "isActive": False,
+            "isPublic": False,
+        }
+        created = main.upsert_managed_server_catalog_entry(
+            main.AdminServerCatalogEntryIn(**common)
+        )
+        self.assertEqual(created["accessTier"], "premium")
+
+        changed = main.upsert_managed_server_catalog_entry(
+            main.AdminServerCatalogEntryIn(**common, accessTier="free"),
+            entry_id=created["id"],
+        )
+        self.assertEqual(changed["accessTier"], "free")
+
+        preserved = main.upsert_managed_server_catalog_entry(
+            main.AdminServerCatalogEntryIn(**common),
+            entry_id=created["id"],
+        )
+        self.assertEqual(preserved["accessTier"], "free")
+        self.assertEqual(
+            [entry["serverId"] for entry in main.list_managed_server_catalog_entries(access_tier="free")],
+            ["tier-policy-test"],
+        )
+        self.assertEqual(main.list_managed_server_catalog_entries(access_tier="premium"), [])
+
+    def test_windows_reward_page_uses_yandex_and_never_trusts_client_provider(self) -> None:
+        device_uid = "rewarded-ad-windows-web"
+        main.ensure_device_row(
+            user_id=self.user_id,
+            device_uid=device_uid,
+            device_name="Windows rewarded test",
+            platform="windows",
+            app_version="0.3.8",
+        )
+        with (
+            patch.object(main, "FREE_AD_GATE_ENABLED", True),
+            patch.object(main, "FREE_AD_GATE_PLATFORMS", {"windows"}),
+            patch.object(main, "FREE_AD_GATE_CLIENT_MARKER", "0.3.5"),
+            patch.object(main, "FREE_AD_WEB_REWARDED_ENABLED", True),
+            patch.object(main, "FREE_AD_WEB_REWARDED_DESKTOP_BLOCK_ID", "R-A-123456-7"),
+            patch.object(main, "FREE_AD_TEST_WEB_ENABLED", False),
+        ):
+            started = main.create_free_ad_challenge(
+                main.get_user_access_row(self.user_id),
+                main.AdChallengeStartIn(
+                    deviceUid=device_uid,
+                    platform="windows",
+                    provider="test_web",
+                    appVersion="0.3.8",
+                ),
+            )
+            challenge = started["challenge"]
+            token = main.urllib.parse.parse_qs(
+                main.urllib.parse.urlparse(challenge["rewardUrl"]).query
+            )["t"][0]
+            response = main.ad_reward_page(challenge["challengeId"], token)
+
+        body = response.body.decode("utf-8")
+        self.assertEqual(challenge["provider"], "yandex_web_rewarded")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("R-A-123456-7", body)
+        self.assertIn('type: "rewarded"', body)
+        self.assertIn("onRewarded", body)
+        self.assertNotIn("Засчитать просмотр", body)
+
+    def test_windows_test_web_uses_the_deploy_environment_key(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "GREENVPN_FREE_AD_TEST_WEB_ENABLED": "1",
+                "GREENVPN_AD_TEST_WEB_ENABLED": "0",
+            },
+            clear=False,
+        ):
+            self.assertTrue(
+                main.environment_flag(
+                    "GREENVPN_FREE_AD_TEST_WEB_ENABLED",
+                    legacy_name="GREENVPN_AD_TEST_WEB_ENABLED",
+                )
+            )
+
+        with patch.dict(
+            os.environ,
+            {"GREENVPN_AD_TEST_WEB_ENABLED": "1"},
+            clear=False,
+        ):
+            os.environ.pop("GREENVPN_FREE_AD_TEST_WEB_ENABLED", None)
+            self.assertTrue(
+                main.environment_flag(
+                    "GREENVPN_FREE_AD_TEST_WEB_ENABLED",
+                    legacy_name="GREENVPN_AD_TEST_WEB_ENABLED",
+                )
+            )
+
+    def test_test_web_reward_page_is_closed_without_explicit_test_flag(self) -> None:
+        device_uid = "rewarded-ad-test-web-closed"
+        main.ensure_device_row(
+            user_id=self.user_id,
+            device_uid=device_uid,
+            device_name="Closed test web",
+            platform="windows",
+            app_version="0.3.8",
+        )
+        now = main.utc_now()
+        public_id = "ad_closed_test_web"
+        token = "closed-test-token"
+        with main.db() as conn:
+            conn.execute(
+                """
+                INSERT INTO ad_challenges(
+                    public_id, user_id, device_uid, platform, provider, status,
+                    token_hash, reward_url, app_version, expires_at,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    public_id,
+                    self.user_id,
+                    device_uid,
+                    "windows",
+                    "test_web",
+                    "pending",
+                    main.free_ad_token_hash(token),
+                    f"https://api.greenvpn.pro/ads/reward/{public_id}?t={token}",
+                    "0.3.8",
+                    (now + timedelta(minutes=10)).isoformat(),
+                    now.isoformat(),
+                    now.isoformat(),
+                ),
+            )
+            conn.commit()
+
+        with patch.object(main, "FREE_AD_TEST_WEB_ENABLED", False):
+            response = main.ad_reward_page(public_id, token)
+        body = response.body.decode("utf-8")
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("Реклама недоступна", body)
+        self.assertNotIn("Засчитать", body)
+
     def test_reward_grant_is_one_connect_when_session_timer_is_disabled(self) -> None:
         device_uid = "rewarded-ad-single-connect"
         self.bootstrap(paid_beta=False, device_uid=device_uid)
@@ -1083,6 +1300,8 @@ class PaidBetaPolicyTests(unittest.TestCase):
             patch.object(main, "FREE_AD_SESSION_TIMER_ENABLED", False),
             patch.object(main, "FREE_AD_SESSION_SECONDS", 0),
             patch.object(main, "FREE_AD_SESSION_MAX_CONNECTS", 1000),
+            patch.object(main, "FREE_AD_ANDROID_REWARDED_ENABLED", True),
+            patch.object(main, "FREE_AD_ANDROID_REWARDED_AD_UNIT_ID", "demo-rewarded-yandex"),
         ):
             started = main.create_free_ad_challenge(
                 main.get_user_access_row(self.user_id),

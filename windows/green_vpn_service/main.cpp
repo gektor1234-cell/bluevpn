@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <fstream>
 #include <iterator>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -51,13 +52,21 @@ constexpr char kNaivePidPath[] =
     GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\naive-https-client.pid";
 constexpr char kNaiveHevPidPath[] =
     GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\naive-https-hev.pid";
+constexpr char kRoutingModePath[] =
+    GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\routing_mode";
+constexpr char kProcessRouterPidPath[] =
+    GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\process-router.pid";
+constexpr wchar_t kProcessRouterActivePath[] =
+    GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_W L"\\process-router.active";
 
 SERVICE_STATUS_HANDLE g_status_handle = nullptr;
 SERVICE_STATUS g_status = {};
 HANDLE g_stop_event = nullptr;
 HANDLE g_worker_thread = nullptr;
+HANDLE g_guard_thread = nullptr;
 SOCKET g_listen_socket = INVALID_SOCKET;
 std::wstring g_task_script_path;
+std::mutex g_task_action_mutex;
 
 std::wstring Utf8ToWide(const std::string& text) {
   if (text.empty()) {
@@ -401,6 +410,7 @@ std::wstring GetPowerShellPath() {
 }
 
 int RunTaskAction(const wchar_t* action, DWORD timeout_ms) {
+  const std::lock_guard<std::mutex> lock(g_task_action_mutex);
   if (g_task_script_path.empty() || !FileExists(g_task_script_path)) {
     AppendLog(L"task script missing: " + g_task_script_path);
     return 3;
@@ -615,13 +625,24 @@ std::string QueryTunnelStatusJson() {
   const std::string& selected_state =
       awg_selected ? amneziawg_state : wireguard_state;
   const char* selected_protocol = awg_selected ? "amneziawg" : "wireguard_udp";
+  const std::string requested_routing_mode =
+      ReadTrimmedAsciiFile(kRoutingModePath) == "applications" ? "applications"
+                                                               : "full";
+  const bool process_router_active = FileExists(kProcessRouterActivePath);
+  const std::string routing_mode =
+      process_router_active ? "applications" : requested_routing_mode;
+  const std::string process_router_state = QueryPidFileProcessState(
+      kProcessRouterPidPath,
+      module_dir + L"\\tools\\process-router\\ProxyBridge_CLI.exe");
 
   return std::string("{\"ok\":true,\"service\":\"") + kServiceNameUtf8 +
          "\",\"tunnelService\":\"" + selected_service + "\"," +
          "\"tunnelState\":\"" + selected_state + "\"," +
          "\"protocol\":\"" + selected_protocol + "\"," +
          "\"wireGuardState\":\"" + wireguard_state + "\"," +
-         "\"amneziaWgState\":\"" + amneziawg_state + "\"}";
+         "\"amneziaWgState\":\"" + amneziawg_state + "\"," +
+         "\"routingMode\":\"" + routing_mode + "\"," +
+         "\"processRouterState\":\"" + process_router_state + "\"}";
 }
 
 std::string TaskResultJson(bool ok, int exit_code, const std::string& message) {
@@ -773,6 +794,38 @@ DWORD WINAPI HttpWorkerThread(LPVOID) {
   return 0;
 }
 
+DWORD WINAPI ProcessRouterGuardThread(LPVOID) {
+  bool disconnect_attempted = false;
+  while (WaitForSingleObject(g_stop_event, 500) == WAIT_TIMEOUT) {
+    if (!FileExists(kProcessRouterActivePath)) {
+      disconnect_attempted = false;
+      continue;
+    }
+
+    const std::string tunnel_state = QueryServiceState(kTunnelServiceName);
+    const std::string router_state = QueryPidFileProcessState(
+        kProcessRouterPidPath,
+        GetModuleDirectory() +
+            L"\\tools\\process-router\\ProxyBridge_CLI.exe");
+    if (tunnel_state != "running" || router_state == "running") {
+      disconnect_attempted = false;
+      continue;
+    }
+    if (disconnect_attempted) {
+      continue;
+    }
+
+    disconnect_attempted = true;
+    AppendLog(L"process router stopped unexpectedly; disconnecting "
+              L"application-only tunnel");
+    const int exit_code = RunTaskAction(L"Disconnect", 120000);
+    AppendLog(L"process router guard disconnect exit=" +
+              std::to_wstring(exit_code));
+  }
+  AppendLog(L"process router guard stopped");
+  return 0;
+}
+
 void WINAPI ServiceControlHandler(DWORD control) {
   if (control == SERVICE_CONTROL_STOP) {
     ReportServiceStatus(SERVICE_STOP_PENDING, NO_ERROR, 3000);
@@ -808,6 +861,23 @@ void WINAPI ServiceMain(DWORD, LPWSTR*) {
     return;
   }
 
+  g_guard_thread =
+      CreateThread(nullptr, 0, ProcessRouterGuardThread, nullptr, 0, nullptr);
+  if (g_guard_thread == nullptr) {
+    const DWORD guard_error = GetLastError();
+    SetEvent(g_stop_event);
+    if (g_listen_socket != INVALID_SOCKET) {
+      closesocket(g_listen_socket);
+    }
+    WaitForSingleObject(g_worker_thread, 5000);
+    CloseHandle(g_worker_thread);
+    CloseHandle(g_stop_event);
+    g_worker_thread = nullptr;
+    g_stop_event = nullptr;
+    ReportServiceStatus(SERVICE_STOPPED, guard_error, 0);
+    return;
+  }
+
   ReportServiceStatus(SERVICE_RUNNING, NO_ERROR, 0);
   WaitForSingleObject(g_stop_event, INFINITE);
   ReportServiceStatus(SERVICE_STOP_PENDING, NO_ERROR, 3000);
@@ -815,9 +885,12 @@ void WINAPI ServiceMain(DWORD, LPWSTR*) {
     closesocket(g_listen_socket);
   }
   WaitForSingleObject(g_worker_thread, 5000);
+  WaitForSingleObject(g_guard_thread, 5000);
   CloseHandle(g_worker_thread);
+  CloseHandle(g_guard_thread);
   CloseHandle(g_stop_event);
   g_worker_thread = nullptr;
+  g_guard_thread = nullptr;
   g_stop_event = nullptr;
   ReportServiceStatus(SERVICE_STOPPED, NO_ERROR, 0);
 }

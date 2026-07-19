@@ -293,12 +293,12 @@ conn.execute(
     """
     INSERT INTO server_catalog_entries(
         server_id, title, subtitle, country, city, provider, host, port,
-        protocol, transport, client_config_profile, status, health_score,
+        protocol, transport, access_tier, client_config_profile, status, health_score,
         latency_ms, priority, is_active, is_public, planned_bandwidth_mbps,
         reserved_bandwidth_mbps, current_load_mbps, active_clients,
         assigned_users, load_updated_at, notes, created_at, updated_at,
         publication_paused_at, publication_paused_reason, publication_paused_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
     ON CONFLICT(server_id) DO UPDATE SET
         title=excluded.title, subtitle=excluded.subtitle, country=excluded.country,
         city=excluded.city, provider=excluded.provider, host=excluded.host,
@@ -315,7 +315,7 @@ conn.execute(
     """,
     (
         server_id, "Netherlands #2", "", "NL", "Amsterdam", "internal-canary",
-        host, int(port), "vless_reality", "reality", "static_vless_reality_canary",
+        host, int(port), "vless_reality", "reality", "premium", "static_vless_reality_canary",
         "healthy", 100, 44, 950, 1, 0, 1000, 100, 0, 0, 0, now,
         "Isolated VLESS REALITY/XHTTP preview canary; capability-gated and non-default.",
         now, now,

@@ -442,6 +442,26 @@ FREE_AD_ANDROID_REWARDED_AD_UNIT_ID = os.getenv(
     "",
 ).strip()
 FREE_AD_ANDROID_REWARDED_PROVIDER = "yandex_mobile_ads"
+def environment_flag(name: str, legacy_name: Optional[str] = None) -> bool:
+    raw = os.getenv(name)
+    if raw is None and legacy_name:
+        raw = os.getenv(legacy_name)
+    return (raw or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+FREE_AD_WEB_REWARDED_ENABLED = environment_flag(
+    "GREENVPN_YANDEX_REWARDED_WEB_ENABLED"
+)
+FREE_AD_WEB_REWARDED_DESKTOP_BLOCK_ID = os.getenv(
+    "GREENVPN_YANDEX_REWARDED_WEB_DESKTOP_BLOCK_ID",
+    "",
+).strip()
+FREE_AD_WEB_REWARDED_PROVIDER = "yandex_web_rewarded"
+FREE_AD_TEST_WEB_ENABLED = environment_flag(
+    "GREENVPN_FREE_AD_TEST_WEB_ENABLED",
+    legacy_name="GREENVPN_AD_TEST_WEB_ENABLED",
+)
+FREE_AD_WEB_LOADER_URL = "https://yandex.ru/ads/system/context.js"
 
 YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID", "").strip()
 YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "").strip()
@@ -760,6 +780,8 @@ APP_RELEASE_PLATFORMS = ["windows", "android"]
 APP_RELEASE_CHANNELS = ["stable", "beta", "internal", "preview", "paid-beta"]
 APP_RELEASE_STATUSES = ["draft", "published", "paused", "retired"]
 SERVER_CATALOG_STATUSES = ["draft", "healthy", "degraded", "maintenance", "disabled"]
+SERVER_ACCESS_TIERS = ["free", "premium"]
+CLIENT_CONFIG_MODES = {"full", "social_only"}
 SERVER_CATALOG_PROTOCOLS = [
     "wireguard_udp",
     "wireguard_tcp",
@@ -1899,6 +1921,7 @@ class AdminServerCatalogEntryIn(BaseModel):
     port: Optional[int] = None
     protocol: Optional[str] = "wireguard_udp"
     transport: Optional[str] = "udp"
+    accessTier: Optional[str] = None
     clientConfigProfile: Optional[str] = "none"
     status: Optional[str] = "draft"
     healthScore: Optional[int] = None
@@ -1948,6 +1971,7 @@ class AdminServerCatalogDraftIn(BaseModel):
     provider: Optional[str] = None
     host: Optional[str] = None
     port: Optional[int] = None
+    accessTier: Optional[str] = "premium"
     plannedBandwidthMbps: Optional[int] = None
     monthlyCostRub: Optional[int] = None
     notes: Optional[str] = None
@@ -2621,6 +2645,7 @@ def init_db() -> None:
                 port INTEGER NOT NULL,
                 protocol TEXT NOT NULL,
                 transport TEXT NOT NULL,
+                access_tier TEXT NOT NULL DEFAULT 'free',
                 client_config_profile TEXT NOT NULL DEFAULT 'none',
                 status TEXT NOT NULL,
                 health_score INTEGER NOT NULL DEFAULT 0,
@@ -2639,6 +2664,12 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL
             )
             """
+        )
+        ensure_column(
+            conn,
+            "server_catalog_entries",
+            "access_tier",
+            "access_tier TEXT NOT NULL DEFAULT 'free'",
         )
         ensure_column(
             conn,
@@ -3806,6 +3837,28 @@ def free_ad_client_supports_gate(app_version: Optional[str]) -> bool:
     return compare_versions(version_match.group(1), marker_match.group(1)) >= 0
 
 
+def yandex_web_rewarded_configured() -> bool:
+    return bool(
+        FREE_AD_WEB_REWARDED_ENABLED
+        and re.fullmatch(r"R-A-\d+-\d+", FREE_AD_WEB_REWARDED_DESKTOP_BLOCK_ID)
+    )
+
+
+def free_ad_reward_provider_for_platform(platform: Optional[str]) -> str:
+    normalized = (platform or "").strip().lower()
+    if (
+        normalized == "android"
+        and FREE_AD_ANDROID_REWARDED_ENABLED
+        and FREE_AD_ANDROID_REWARDED_AD_UNIT_ID
+    ):
+        return FREE_AD_ANDROID_REWARDED_PROVIDER
+    if normalized == "windows" and yandex_web_rewarded_configured():
+        return FREE_AD_WEB_REWARDED_PROVIDER
+    if FREE_AD_TEST_WEB_ENABLED:
+        return "test_web"
+    return "unavailable"
+
+
 def subscription_is_paid_active(sub: dict) -> bool:
     if not sub.get("isActive"):
         return False
@@ -3815,6 +3868,39 @@ def subscription_is_paid_active(sub: dict) -> bool:
     except Exception:
         amount = 0
     return amount > 0 and plan_code not in FREE_AD_PLAN_CODES
+
+
+def normalize_client_config_mode(value: Optional[str]) -> str:
+    candidate = clean_limited_text(value, 40).strip().lower() or "full"
+    aliases = {
+        "social": "social_only",
+        "selective": "social_only",
+        "split_tunnel": "social_only",
+    }
+    candidate = aliases.get(candidate, candidate)
+    if candidate not in CLIENT_CONFIG_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "client_mode_invalid",
+                "message": "Неизвестный режим подключения.",
+            },
+        )
+    return candidate
+
+
+def enforce_client_config_mode_entitlement(value: Optional[str], sub: dict) -> str:
+    requested_mode = normalize_client_config_mode(value)
+    if requested_mode != "full" and not subscription_is_paid_active(sub):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "premium_feature_required",
+                "feature": "social_routing",
+                "message": "Режим «Только для соцсетей» доступен по подписке.",
+            },
+        )
+    return requested_mode
 
 
 def free_ad_gate_required_for(
@@ -3914,6 +4000,7 @@ def free_ad_gate_policy(
     platform_normalized = (platform or "").strip().lower()
     client_supported = free_ad_client_supports_gate(app_version)
     required_by_plan = free_ad_gate_required_for(sub, platform_normalized, app_version)
+    provider = free_ad_reward_provider_for_platform(platform_normalized)
     grant = None
     if FREE_AD_GATE_ENABLED:
         with db() as conn:
@@ -3932,7 +4019,7 @@ def free_ad_gate_policy(
         "enabled": FREE_AD_GATE_ENABLED,
         "required": required,
         "requiredByPlan": required_by_plan,
-        "provider": FREE_AD_GATE_PROVIDER,
+        "provider": provider,
         "platform": platform_normalized,
         "clientSupported": client_supported,
         "clientMarker": FREE_AD_GATE_CLIENT_MARKER,
@@ -3975,6 +4062,14 @@ def free_ad_gate_policy(
                 else ""
             ),
         },
+        "webRewarded": {
+            "enabled": bool(
+                platform_normalized == "windows"
+                and client_supported
+                and yandex_web_rewarded_configured()
+            ),
+            "provider": FREE_AD_WEB_REWARDED_PROVIDER,
+        },
     }
 
 
@@ -4004,6 +4099,10 @@ def disabled_ad_gate_policy(
             "enabled": False,
             "provider": "none",
             "adUnitId": "",
+        },
+        "webRewarded": {
+            "enabled": False,
+            "provider": "none",
         },
     }
 
@@ -4056,7 +4155,16 @@ def create_free_ad_challenge(user: sqlite3.Row, payload: AdChallengeStartIn) -> 
         f"{PUBLIC_API_BASE_URL}/ads/reward/{urllib.parse.quote(public_id)}"
         f"?t={urllib.parse.quote(token)}"
     )
-    provider = (payload.provider or FREE_AD_GATE_PROVIDER).strip().lower() or "test_web"
+    provider = free_ad_reward_provider_for_platform(platform)
+    if provider == "unavailable":
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "ad_provider_unavailable",
+                "message": "Реклама временно недоступна. Попробуйте подключиться позже.",
+                "platform": platform,
+            },
+        )
 
     with db() as conn:
         expire_free_ad_gate_rows(conn, now)
@@ -8743,6 +8851,7 @@ def builtin_server_catalog_entry() -> dict:
         "country": "NL",
         "city": "Amsterdam",
         "provider": "current-dev-provider",
+        "accessTier": "free",
         "status": "healthy" if runtime_ready else "unavailable",
         "available": runtime_ready,
         "healthScore": health_score,
@@ -8932,6 +9041,10 @@ def managed_catalog_entry_to_public_server(
         "country": entry.get("country") or "",
         "city": entry.get("city") or "",
         "provider": entry.get("provider") or "",
+        "accessTier": normalize_server_access_tier(
+            entry.get("accessTier"),
+            fallback="free",
+        ),
         "status": entry.get("status") or "unknown",
         "available": bool(preview_available or public_available),
         "healthScore": int(entry.get("healthScore") or 0),
@@ -9169,6 +9282,13 @@ def normalize_server_catalog_transport(value: Optional[str], fallback: str = "ud
     candidate = clean_limited_text(value, 40).strip().lower() or fallback
     if candidate not in SERVER_CATALOG_TRANSPORTS:
         raise HTTPException(status_code=400, detail="Неизвестный транспорт сервера.")
+    return candidate
+
+
+def normalize_server_access_tier(value: Optional[str], fallback: str = "premium") -> str:
+    candidate = clean_limited_text(value, 20).strip().lower() or fallback
+    if candidate not in SERVER_ACCESS_TIERS:
+        raise HTTPException(status_code=400, detail="Неизвестный уровень доступа сервера.")
     return candidate
 
 
@@ -10480,6 +10600,18 @@ def server_public_eligibility(row: sqlite3.Row, health_meta: Optional[dict] = No
 def server_catalog_workflow_options() -> dict:
     return {
         "statuses": list(SERVER_CATALOG_STATUSES),
+        "accessTiers": [
+            {
+                "code": "free",
+                "title": "Доступен всем",
+                "description": "Локация доступна бесплатным и платным пользователям.",
+            },
+            {
+                "code": "premium",
+                "title": "Только по подписке",
+                "description": "Локация видна всем, но подключение доступно только по платной подписке.",
+            },
+        ],
         "protocols": list(SERVER_CATALOG_PROTOCOLS),
         "transports": list(SERVER_CATALOG_TRANSPORTS),
         "clientConfigProfiles": [
@@ -10506,6 +10638,7 @@ def server_catalog_workflow_options() -> dict:
                 "isActive": False,
                 "isPublic": False,
                 "clientConfigProfile": "none",
+                "accessTier": "premium",
                 "protocol": "wireguard_udp",
                 "transport": "udp",
                 "healthScore": 0,
@@ -10549,6 +10682,10 @@ def server_catalog_entry_payload(row: sqlite3.Row, health_meta: Optional[dict] =
         "port": int(row["port"]),
         "protocol": row["protocol"],
         "transport": row["transport"],
+        "accessTier": normalize_server_access_tier(
+            safe_row_text(row, "access_tier", "free"),
+            fallback="free",
+        ),
         "clientConfigProfile": config_readiness["profile"],
         "clientConfigProfileTitle": config_readiness["title"],
         "clientConfigReadiness": config_readiness,
@@ -10584,6 +10721,7 @@ def list_managed_server_catalog_entries(
     status: Optional[str] = None,
     active: Optional[str] = None,
     public: Optional[str] = None,
+    access_tier: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict]:
@@ -10598,6 +10736,9 @@ def list_managed_server_catalog_entries(
     if public not in {None, "", "all"}:
         where.append("is_public = ?")
         params.append(1 if str(public).lower() in {"1", "true", "yes", "public"} else 0)
+    if access_tier not in {None, "", "all"}:
+        where.append("access_tier = ?")
+        params.append(normalize_server_access_tier(access_tier))
     sql = "SELECT * FROM server_catalog_entries"
     if where:
         sql += " WHERE " + " AND ".join(where)
@@ -10633,6 +10774,10 @@ def build_server_catalog_admin_summary(
         "managedActive": sum(1 for entry in managed_entries if entry.get("isActive")),
         "managedPublicCandidates": sum(1 for entry in managed_entries if entry.get("isPublic")),
         "managedHealthy": sum(1 for entry in managed_entries if entry.get("status") == "healthy"),
+        "managedFree": sum(1 for entry in managed_entries if entry.get("accessTier") == "free"),
+        "managedPremium": sum(
+            1 for entry in managed_entries if entry.get("accessTier") == "premium"
+        ),
         "managedClientConfigReady": sum(
             1 for entry in managed_entries if entry.get("clientConfigReady")
         ),
@@ -11563,6 +11708,7 @@ def safe_new_server_draft_entry_input(payload: AdminServerCatalogDraftIn) -> Adm
         port=port,
         protocol="wireguard_udp",
         transport="udp",
+        accessTier=normalize_server_access_tier(payload.accessTier, fallback="premium"),
         clientConfigProfile="none",
         status="draft",
         healthScore=0,
@@ -11596,6 +11742,11 @@ def upsert_managed_server_catalog_entry(
     port = normalize_server_port(payload.port)
     protocol = normalize_server_catalog_protocol(payload.protocol)
     transport = normalize_server_catalog_transport(payload.transport)
+    access_tier = (
+        normalize_server_access_tier(payload.accessTier, fallback="premium")
+        if payload.accessTier is not None
+        else None
+    )
     client_config_profile = normalize_server_client_config_profile(payload.clientConfigProfile)
     status = normalize_server_catalog_status(payload.status)
     health_score = normalize_percentish(payload.healthScore, 0)
@@ -11644,7 +11795,7 @@ def upsert_managed_server_catalog_entry(
                 UPDATE server_catalog_entries
                 SET server_id = ?, title = ?, subtitle = ?, country = ?, city = ?,
                     provider = ?, host = ?, port = ?, protocol = ?, transport = ?,
-                    client_config_profile = ?, status = ?, health_score = ?, latency_ms = ?, priority = ?,
+                    access_tier = COALESCE(?, access_tier), client_config_profile = ?, status = ?, health_score = ?, latency_ms = ?, priority = ?,
                     is_active = ?, is_public = ?,
                     planned_bandwidth_mbps = ?, reserved_bandwidth_mbps = ?,
                     current_load_mbps = ?, active_clients = ?, assigned_users = ?,
@@ -11666,6 +11817,7 @@ def upsert_managed_server_catalog_entry(
                     port,
                     protocol,
                     transport,
+                    access_tier,
                     client_config_profile,
                     status,
                     health_score,
@@ -11699,12 +11851,12 @@ def upsert_managed_server_catalog_entry(
                 """
                 INSERT INTO server_catalog_entries(
                     server_id, title, subtitle, country, city, provider, host, port,
-                    protocol, transport, client_config_profile, status, health_score, latency_ms, priority,
+                    protocol, transport, access_tier, client_config_profile, status, health_score, latency_ms, priority,
                     is_active, is_public, planned_bandwidth_mbps, reserved_bandwidth_mbps,
                     current_load_mbps, active_clients, assigned_users, load_updated_at,
                     notes, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     server_id,
@@ -11717,6 +11869,7 @@ def upsert_managed_server_catalog_entry(
                     port,
                     protocol,
                     transport,
+                    access_tier or "premium",
                     client_config_profile,
                     status,
                     health_score,
@@ -11857,6 +12010,7 @@ def current_wireguard_managed_server_payload() -> AdminServerCatalogEntryIn:
         port=WG_ENDPOINT_PORT,
         protocol="wireguard_udp",
         transport="udp",
+        accessTier="free",
         clientConfigProfile="builtin_wg0",
         status="healthy",
         healthScore=95,
@@ -14388,17 +14542,33 @@ def server_auto_capacity_ok(server: dict) -> bool:
     )
 
 
-def select_best_capacity_server(catalog: dict) -> dict:
+def server_access_tier(server: Optional[dict]) -> str:
+    raw = str((server or {}).get("accessTier") or "free").strip().lower()
+    return "free" if raw == "free" else "premium"
+
+
+def server_requires_paid_subscription(server: Optional[dict]) -> bool:
+    return server_access_tier(server) == "premium"
+
+
+def server_allowed_for_subscription(server: Optional[dict], paid_access: bool) -> bool:
+    return bool(server) and (paid_access or not server_requires_paid_subscription(server))
+
+
+def select_best_capacity_server(catalog: dict, *, paid_access: bool = False) -> dict:
     servers = [
         server
         for server in catalog.get("servers") or []
         if server_auto_capacity_ok(server)
+        and server_allowed_for_subscription(server, paid_access)
     ]
     if not servers:
         servers = [
             server
             for server in catalog.get("servers") or []
-            if bool(server.get("available")) and bool(server.get("clientConfigReady"))
+            if bool(server.get("available"))
+            and bool(server.get("clientConfigReady"))
+            and server_allowed_for_subscription(server, paid_access)
         ]
     if not servers:
         return {}
@@ -14419,8 +14589,12 @@ def selected_server_client_ready(server: Optional[dict]) -> bool:
     return bool(server.get("available")) and bool(server.get("clientConfigReady"))
 
 
-def select_fallback_client_server_or_503(catalog: dict) -> dict:
-    selected = select_best_capacity_server(catalog)
+def select_fallback_client_server_or_503(
+    catalog: dict,
+    *,
+    paid_access: bool = False,
+) -> dict:
+    selected = select_best_capacity_server(catalog, paid_access=paid_access)
     if selected_server_client_ready(selected):
         return selected
     raise HTTPException(
@@ -14523,6 +14697,8 @@ def select_client_server_for_device(
     user_id: int,
     device_uid: str,
     requested_server_id: Optional[str] = None,
+    *,
+    paid_access: bool = False,
 ) -> tuple[dict, dict]:
     lookup = public_server_lookup(catalog)
     request = str(requested_server_id or "auto").strip() or "auto"
@@ -14531,11 +14707,24 @@ def select_client_server_for_device(
         fallback_reason = ""
         if selected is None:
             fallback_reason = "requested_server_unknown"
+        elif not server_allowed_for_subscription(selected, paid_access):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "premium_server_required",
+                    "message": "Эта локация доступна по подписке.",
+                    "serverId": request,
+                    "accessTier": server_access_tier(selected),
+                },
+            )
         elif not selected_server_client_ready(selected):
             fallback_reason = "requested_server_unavailable"
 
         if fallback_reason:
-            selected = select_fallback_client_server_or_503(catalog)
+            selected = select_fallback_client_server_or_503(
+                catalog,
+                paid_access=paid_access,
+            )
             with db() as conn:
                 assignment = upsert_sticky_endpoint_assignment(
                     conn,
@@ -14573,10 +14762,14 @@ def select_client_server_for_device(
                 str(sticky.get("selectedBy") or "") != "manual"
                 and sticky_server is not None
                 and server_auto_capacity_ok(sticky_server)
+                and server_allowed_for_subscription(sticky_server, paid_access)
             ):
                 return sticky_server, {**sticky, "selectedBy": "sticky", "stickyHours": CLIENT_ENDPOINT_STICKY_HOURS}
 
-        selected = select_fallback_client_server_or_503(catalog)
+        selected = select_fallback_client_server_or_503(
+            catalog,
+            paid_access=paid_access,
+        )
         assignment = upsert_sticky_endpoint_assignment(
             conn,
             user_id=user_id,
@@ -28782,6 +28975,7 @@ def client_bootstrap(
         user_id=int(user["id"]),
         device_uid=device["device_uid"],
         requested_server_id="auto",
+        paid_access=subscription_is_paid_active(sub),
     )
     selected_endpoint = selected_server.get("endpoint") or {}
     client_resilience = client_route_probe_safe_resilience(
@@ -28860,6 +29054,7 @@ def client_config(
                 "accessPolicy": access_policy,
             },
         )
+    enforce_client_config_mode_entitlement(payload.mode, sub)
     effective_max_devices = int(access_policy["maxDevices"])
     if access_policy["paidBetaUser"]:
         sub = {**sub, "maxDevices": effective_max_devices}
@@ -28927,6 +29122,7 @@ def client_config(
         user_id=int(user["id"]),
         device_uid=payload.deviceUid.strip(),
         requested_server_id=payload.serverId,
+        paid_access=subscription_is_paid_active(sub),
     )
     selected_protocol = server_primary_protocol(selected_server)
 
@@ -29330,14 +29526,99 @@ def ad_free_access_me(
 
 @app.get("/ads/reward/{challenge_id}", response_class=HTMLResponse)
 def ad_reward_page(challenge_id: str, t: str = ""):
-    safe_id = html.escape(challenge_id.strip())
-    safe_token = html.escape(t.strip())
-    if not safe_id or not safe_token:
+    public_id = challenge_id.strip()
+    token = t.strip()
+    no_store_headers = {"Cache-Control": "no-store, max-age=0"}
+
+    def message_page(title: str, message: str, status_code: int) -> HTMLResponse:
         return HTMLResponse(
-            "<!doctype html><meta charset='utf-8'><title>Green VPN</title>"
-            "<body><h1>Ссылка недействительна</h1><p>Вернитесь в Green VPN и запросите рекламу ещё раз.</p></body>",
-            status_code=400,
+            f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow"><title>Green VPN</title>
+<style>body{{margin:0;min-height:100vh;display:grid;place-items:center;font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#f4f7f3;color:#14231a}}main{{width:min(520px,calc(100vw - 32px));padding:28px;border:1px solid #dfe8e1;border-radius:8px;background:#fff}}h1{{margin:0 0 12px;font-size:28px}}p{{margin:0;color:#526458;line-height:1.5}}</style>
+</head><body><main><h1>{html.escape(title)}</h1><p>{html.escape(message)}</p></main></body></html>""",
+            status_code=status_code,
+            headers=no_store_headers,
         )
+
+    if not public_id or not token:
+        return message_page(
+            "Ссылка недействительна",
+            "Вернитесь в Green VPN и запросите рекламу ещё раз.",
+            400,
+        )
+
+    now = utc_now()
+    with db() as conn:
+        expire_free_ad_gate_rows(conn, now)
+        row = conn.execute(
+            "SELECT * FROM ad_challenges WHERE public_id = ?",
+            (public_id,),
+        ).fetchone()
+        conn.commit()
+
+    if row is None:
+        return message_page("Ссылка не найдена", "Запросите рекламу в Green VPN ещё раз.", 404)
+    if not hmac.compare_digest(str(row["token_hash"] or ""), free_ad_token_hash(token)):
+        return message_page("Ссылка недействительна", "Запросите рекламу в Green VPN ещё раз.", 403)
+    if row["status"] == "expired":
+        return message_page("Время просмотра истекло", "Вернитесь в Green VPN и повторите подключение.", 410)
+    if row["status"] in {"completed", "consumed"}:
+        return message_page("Доступ уже получен", "Вернитесь в Green VPN. Подключение продолжится автоматически.", 200)
+
+    provider = str(row["provider"] or "").strip().lower()
+    if provider == "test_web" and not FREE_AD_TEST_WEB_ENABLED:
+        return message_page("Реклама недоступна", "Попробуйте подключиться немного позже.", 503)
+    if provider == FREE_AD_WEB_REWARDED_PROVIDER and not yandex_web_rewarded_configured():
+        return message_page("Реклама недоступна", "Попробуйте подключиться немного позже.", 503)
+    if provider not in {FREE_AD_WEB_REWARDED_PROVIDER, "test_web"}:
+        return message_page("Неверный рекламный экран", "Вернитесь в Green VPN и повторите подключение.", 409)
+
+    challenge_json = json.dumps(public_id, ensure_ascii=False)
+    token_json = json.dumps(token, ensure_ascii=False)
+    block_id_json = json.dumps(FREE_AD_WEB_REWARDED_DESKTOP_BLOCK_ID)
+    loader_url = html.escape(FREE_AD_WEB_LOADER_URL, quote=True)
+    test_mode = provider == "test_web"
+    loader_tags = "" if test_mode else (
+        "<script>window.yaContextCb=window.yaContextCb||[];</script>"
+        f"<script src=\"{loader_url}\" async></script>"
+    )
+    button_text = "Засчитать тестовый просмотр" if test_mode else "Посмотреть рекламу и подключиться"
+    intro = (
+        "Тестовый рекламный экран включён только для проверки закрытого контура."
+        if test_mode
+        else "После полного просмотра Green VPN автоматически продолжит подключение."
+    )
+    start_action = (
+        "completeReward();"
+        if test_mode
+        else f"""
+      statusEl.textContent = "Загружаем рекламу...";
+      const loadTimeout = window.setTimeout(() => failReward("Реклама не загрузилась. Повторите попытку позже."), 15000);
+      window.yaContextCb.push(() => {{
+        window.clearTimeout(loadTimeout);
+        try {{
+          const renderResult = Ya.Context.AdvManager.render({{
+            blockId: {block_id_json},
+            type: "rewarded",
+            platform: "desktop",
+            onRewarded: (isRewarded) => {{
+              if (isRewarded) {{
+                completeReward();
+              }} else {{
+                failReward("Просмотр не завершён. Для подключения нужно досмотреть рекламу до конца.");
+              }}
+            }}
+          }});
+          if (renderResult && typeof renderResult.catch === "function") {{
+            renderResult.catch(() => failReward("Реклама не загрузилась. Повторите попытку позже."));
+          }}
+        }} catch (_) {{
+          failReward("Реклама не загрузилась. Повторите попытку позже.");
+        }}
+      }});
+        """
+    )
 
     return HTMLResponse(
         f"""<!doctype html>
@@ -29347,76 +29628,64 @@ def ad_reward_page(challenge_id: str, t: str = ""):
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex,nofollow">
   <title>Green VPN — рекламный доступ</title>
+  {loader_tags}
   <style>
-    :root {{ color-scheme: light dark; }}
-    body {{
-      margin: 0;
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
-      font-family: system-ui, -apple-system, Segoe UI, sans-serif;
-      background: #f4f7f3;
-      color: #14231a;
-    }}
-    main {{
-      width: min(520px, calc(100vw - 32px));
-      padding: 28px;
-      border: 1px solid rgba(20, 35, 26, 0.12);
-      border-radius: 8px;
-      background: #fff;
-      box-shadow: 0 24px 80px rgba(31, 53, 39, 0.14);
-    }}
-    h1 {{ margin: 0 0 12px; font-size: 28px; line-height: 1.1; }}
-    p {{ color: #526458; line-height: 1.5; }}
-    button {{
-      width: 100%;
-      min-height: 48px;
-      margin-top: 18px;
-      border: 0;
-      border-radius: 8px;
-      background: #12a36f;
-      color: #fff;
-      font-size: 16px;
-      font-weight: 800;
-    }}
-    .status {{ min-height: 24px; font-weight: 700; }}
+    body {{ margin:0; min-height:100vh; display:grid; place-items:center; font-family:system-ui,-apple-system,Segoe UI,sans-serif; background:#f4f7f3; color:#14231a; }}
+    main {{ width:min(520px,calc(100vw - 32px)); padding:28px; border:1px solid #dfe8e1; border-radius:8px; background:#fff; box-shadow:0 24px 80px rgba(31,53,39,.14); }}
+    h1 {{ margin:0 0 12px; font-size:28px; line-height:1.1; }}
+    p {{ color:#526458; line-height:1.5; }}
+    button {{ width:100%; min-height:48px; margin-top:18px; border:0; border-radius:8px; background:#12a36f; color:#fff; font-size:16px; font-weight:800; cursor:pointer; }}
+    button:disabled {{ cursor:default; opacity:.6; }}
+    .status {{ min-height:24px; font-weight:700; }}
   </style>
 </head>
 <body>
   <main>
     <h1>Green VPN</h1>
-    <p>Закрытый тест рекламного доступа. В production здесь будет рекламный блок провайдера, а сейчас эта кнопка имитирует событие reward granted для проверки Windows и Android flow.</p>
-    <p class="status" id="status">Нажмите кнопку и вернитесь в приложение.</p>
-    <button id="complete">Засчитать просмотр</button>
+    <p>{html.escape(intro)}</p>
+    <p class="status" id="status">Реклама откроется только после нажатия кнопки.</p>
+    <button id="reward" type="button">{html.escape(button_text)}</button>
   </main>
   <script>
-    const challengeId = "{safe_id}";
-    const token = "{safe_token}";
+    const challengeId = {challenge_json};
+    const token = {token_json};
     const statusEl = document.getElementById("status");
-    const button = document.getElementById("complete");
-    button.addEventListener("click", async () => {{
+    const button = document.getElementById("reward");
+    let rewardFinalized = false;
+
+    function failReward(message) {{
+      if (rewardFinalized) return;
+      statusEl.textContent = message;
+      button.disabled = false;
+    }}
+
+    async function completeReward() {{
+      if (rewardFinalized) return;
       button.disabled = true;
-      statusEl.textContent = "Засчитываем просмотр...";
+      statusEl.textContent = "Подтверждаем просмотр...";
       try {{
         const response = await fetch(`/api/v1/ads/challenges/${{encodeURIComponent(challengeId)}}/complete`, {{
           method: "POST",
           headers: {{ "Content-Type": "application/json" }},
           body: JSON.stringify({{ token }})
         }});
-        if (!response.ok) {{
-          const text = await response.text();
-          throw new Error(text || `HTTP ${{response.status}}`);
-        }}
-        statusEl.textContent = "Готово. Вернитесь в Green VPN и нажмите подключение ещё раз.";
+        if (!response.ok) throw new Error(`HTTP ${{response.status}}`);
+        rewardFinalized = true;
+        statusEl.textContent = "Готово. Вернитесь в Green VPN — подключение продолжится автоматически.";
         button.textContent = "Просмотр засчитан";
-      }} catch (error) {{
-        statusEl.textContent = "Не удалось засчитать просмотр. Запросите рекламу в приложении ещё раз.";
-        button.disabled = false;
+      }} catch (_) {{
+        failReward("Не удалось подтвердить просмотр. Повторите подключение в Green VPN.");
       }}
+    }}
+
+    button.addEventListener("click", () => {{
+      button.disabled = true;
+      {start_action}
     }});
   </script>
 </body>
-</html>"""
+</html>""",
+        headers=no_store_headers,
     )
 
 
@@ -30031,6 +30300,11 @@ def build_admin_analytics_summary() -> dict:
                 "healthEndpointsObserved": health_endpoints_observed,
                 "byStatus": db_group_counts(conn, "server_catalog_entries", "status"),
                 "byProtocol": db_group_counts(conn, "server_catalog_entries", "protocol"),
+                "byAccessTier": db_group_counts(
+                    conn,
+                    "server_catalog_entries",
+                    "access_tier",
+                ),
                 "healthByStatus": db_group_counts(conn, "server_health_observations", "status"),
             },
             "auth": {
@@ -30647,6 +30921,7 @@ def admin_server_catalog(
     status: Optional[str] = None,
     active: Optional[str] = None,
     public: Optional[str] = None,
+    accessTier: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
     x_admin_token: Optional[str] = Header(default=None),
@@ -30658,6 +30933,7 @@ def admin_server_catalog(
         status=status,
         active=active,
         public=public,
+        access_tier=accessTier,
         limit=limit,
         offset=offset,
     )

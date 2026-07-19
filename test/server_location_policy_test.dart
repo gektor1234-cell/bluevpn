@@ -71,6 +71,25 @@ void main() {
     expect(greenVpnPublicLatencyLabel(27), '27 мс');
   });
 
+  test('legacy catalog entries default to free while premium stays locked', () {
+    expect(greenVpnNormalizeServerAccessTier(null), 'free');
+    expect(greenVpnNormalizeServerAccessTier('PREMIUM'), 'premium');
+    expect(
+      greenVpnServerAllowedForSubscription(
+        rawTier: 'premium',
+        hasPaidSubscription: false,
+      ),
+      isFalse,
+    );
+    expect(
+      greenVpnServerAllowedForSubscription(
+        rawTier: 'premium',
+        hasPaidSubscription: true,
+      ),
+      isTrue,
+    );
+  });
+
   test('picker shows one ready representative per location', () {
     const candidates = <({String id, String location, bool auto, bool ready})>[
       (id: 'auto', location: 'auto', auto: true, ready: true),

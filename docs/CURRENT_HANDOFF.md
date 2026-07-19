@@ -20,9 +20,12 @@ This is the current operational entry point. Read it together with
 5. AWG2, Hysteria2, VLESS REALITY/XHTTP, Naive HTTPS and dnstt remain isolated
    to NL2 `5.129.216.42`. The rollout runbook is documentation, not permission
    to deploy them elsewhere.
-6. Rewarded ads are enabled for free Android 0.3.5 and newer connections. Paid
-   subscriptions and Windows are exempt. The forced VPN disconnect timer must
-   remain disabled unless the owner gives a new explicit instruction.
+6. Rewarded ads are enabled for free Android 0.3.5 and newer connections.
+   Paid-beta `0.3.9` additionally has a closed Windows `test_web` flow. Paid
+   subscriptions are exempt. Production Windows must remain exempt until a
+   real Yandex desktop Rewarded block is approved and physically verified. The
+   forced VPN disconnect timer must remain disabled unless the owner gives a
+   new explicit instruction.
 7. Billing has one writer: Timeweb. RUVDS serves failover reads/auth/config but
    must reject first-payment creation and must not run the renewal executor.
 8. Server maintenance is one node at a time after alternate control/data planes
@@ -66,6 +69,51 @@ This is the current operational entry point. Read it together with
 - Android 0.3.6 account-switch checkpoint: the commit containing this handoff.
 - Generated binaries belong in `C:\BlueVPN_Builds`, encrypted restore points in
   `C:\Users\gekto\GreenVPN_Checkpoints`, and secrets outside Git.
+
+## Current Freemium And Windows Ads Candidate, 2026-07-19
+
+- Production is deliberately unchanged: backend `0.9.129-final-audit.5`,
+  Android `0.3.7`, Windows `0.3.6`, Windows ads disabled.
+- Paid-beta on both Russian control planes is backend
+  `0.9.131-freemium.2`. Existing Netherlands and London locations are free;
+  future catalog drafts default to premium. Free accounts cannot use
+  `social_only`, and premium locations are rejected server-side even if an old
+  or modified client attempts to request them.
+- Paid-beta Android `0.3.9+2026071902` SHA-256:
+  `2B016FCB70A8C50DD6D5F86DD2B326CFB82D636AA9CB39D1FB8BC25B38A91AFC`.
+- Paid-beta Windows `0.3.9-paid-beta.1902` SHA-256:
+  `CE282C7BC56082F53DA030F047DA83F7FDD64315DD9C4FFE823B9C023BDBA8FC`.
+  It is installed at `C:\Program Files\Green VPN Beta`, its app and
+  `GreenVPNBetaService` are running, and the common desktop and Start menu
+  shortcuts exist. The app opened the preserved paid session without a crash.
+- Paid-beta ad policy is identical on both control planes:
+  `platforms=android,windows`, one rewarded view gives one connection,
+  session timer is off, Android uses its real Yandex Mobile Ads unit, and
+  Windows uses the explicit beta-only `test_web` provider. Production has no
+  test provider and still allows only Android.
+- `0.9.131` fixes the environment contract found during final verification:
+  both deploy and runtime use `GREENVPN_FREE_AD_TEST_WEB_ENABLED`; the old
+  `GREENVPN_AD_TEST_WEB_ENABLED` remains only as a compatibility fallback.
+  `/proc` inspection of both running paid-beta services confirms the canonical
+  flag is `1` and effective.
+- Current Windows beta account is paid, so live bootstrap correctly reports no
+  ad requirement. The free contract is covered without adding another live
+  account: 128 backend tests and 46 Flutter tests verify UI/server entitlement,
+  challenge completion and one-connect consumption.
+- Yandex site `api.greenvpn.pro`, id `19615469`, is in moderation. A support
+  request asks for desktop Web Rewarded access. Do not promote this candidate
+  to production until a real `R-A-N-N` block id is received and the real reward
+  callback passes in paid-beta.
+- Client rollback:
+  `/root/greenvpn-paid-beta-client-release-backups/20260719T103659Z-timeweb-0.3.9-paid-beta.1902-0.3.9-paid-beta.1902`
+  and
+  `/root/greenvpn-paid-beta-client-release-backups/20260719T103700Z-ruvds-0.3.9-paid-beta.1902-0.3.9-paid-beta.1902`.
+- Backend rollback:
+  `/root/greenvpn-paid-beta-backend-backups/20260719T125141Z-paid-beta-backend-freemium-20260719-r7`
+  on Timeweb and
+  `/root/greenvpn-paid-beta-backend-backups/20260719T124934Z-paid-beta-backend-freemium-20260719-r7`
+  on RUVDS Moscow. Bundle SHA-256:
+  `C1C5A1BEFA2610118B2BFE59474AF09E0A7CA253E6575FBA50DE9EB973877519`.
 
 ## Final audit checkpoint, 2026-07-19
 

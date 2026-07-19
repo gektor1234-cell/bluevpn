@@ -14,12 +14,17 @@
     [bool]$PublicProductBuild = $false,
     [ValidateSet('stable', 'paid-beta')]
     [string]$WindowsRuntimeScope = 'stable',
+    [string]$ProcessRouterRoot = $env:GREENVPN_PROCESS_ROUTER_ROOT,
     [switch]$SkipBuild,
     [switch]$OpenFolder
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrWhiteSpace($ProcessRouterRoot)) {
+    $ProcessRouterRoot = Join-Path $ProjectRoot 'third_party\windows\process_router'
+}
 
 if ([string]::IsNullOrWhiteSpace($WindowsBuildName)) {
     if ($AppVersion -notmatch '^(\d+)\.(\d+)\.(\d+)') {
@@ -426,6 +431,55 @@ if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
             -Destination (Join-Path $generatedToolsDir 'uninstall_greenvpn_beta.ps1') -Force
     }
 
+    $generatedProcessRouterDir = Join-Path $generatedToolsDir 'process-router'
+    New-Item -ItemType Directory -Force -Path $generatedProcessRouterDir | Out-Null
+    $processRouterHashes = [ordered]@{
+        'ProxyBridge_CLI.exe' = '71AE1A872B49F795BB9E341FF910C5B303AFCE0BAB1E54CFC5436032EB7E08C9'
+        'ProxyBridgeCore.dll' = '736B75A06AD748254D711446E0D4239189A991C7AABCE739EF7DD7B9CA7EBF7E'
+        'WinDivert.dll' = 'C1E060EE19444A259B2162F8AF0F3FE8C4428A1C6F694DCE20DE194AC8D7D9A2'
+        'WinDivert64.sys' = '8DA085332782708D8767BCACE5327A6EC7283C17CFB85E40B03CD2323A90DDC2'
+    }
+    foreach ($entry in $processRouterHashes.GetEnumerator()) {
+        $sourcePath = Join-Path $ProcessRouterRoot $entry.Key
+        if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+            throw "Process router payload is missing: $sourcePath"
+        }
+        $actualHash = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash
+        if ($actualHash -ne $entry.Value) {
+            throw "Process router payload hash mismatch: $($entry.Key)"
+        }
+        Copy-Item -LiteralPath $sourcePath -Destination (Join-Path $generatedProcessRouterDir $entry.Key) -Force
+    }
+
+    $driverSignature = Get-AuthenticodeSignature -LiteralPath (Join-Path $ProcessRouterRoot 'WinDivert64.sys')
+    if ([string]$driverSignature.Status -ne 'Valid') {
+        throw "WinDivert64.sys Authenticode signature is not valid: $($driverSignature.Status)"
+    }
+
+    $proxyBridgeLicense = Join-Path $ProcessRouterRoot 'PROXYBRIDGE_LICENSE.txt'
+    $winDivertLicense = Join-Path $ProcessRouterRoot 'WINDIVERT_LICENSE.txt'
+    $processRouterProvenance = Join-Path $ProcessRouterRoot 'PROVENANCE.md'
+    if (-not (Test-Path -LiteralPath $proxyBridgeLicense -PathType Leaf)) {
+        throw "ProxyBridge license is missing: $proxyBridgeLicense"
+    }
+    if (-not (Test-Path -LiteralPath $winDivertLicense -PathType Leaf)) {
+        throw "WinDivert license is missing: $winDivertLicense"
+    }
+    if (-not (Test-Path -LiteralPath $processRouterProvenance -PathType Leaf)) {
+        throw "Process router provenance is missing: $processRouterProvenance"
+    }
+    Copy-Item -LiteralPath $proxyBridgeLicense -Destination (Join-Path $generatedProcessRouterDir 'PROXYBRIDGE_LICENSE.txt') -Force
+    Copy-Item -LiteralPath $winDivertLicense -Destination (Join-Path $generatedProcessRouterDir 'WINDIVERT_LICENSE.txt') -Force
+    Copy-Item -LiteralPath $processRouterProvenance -Destination (Join-Path $generatedProcessRouterDir 'PROVENANCE.md') -Force
+    @'
+Green VPN Windows application routing uses:
+
+- ProxyBridge v3.2.0 (MIT License)
+- WinDivert v2.2.2-A (see WINDIVERT_LICENSE.txt)
+
+The corresponding license texts are distributed in this directory.
+'@ | Set-Content -LiteralPath (Join-Path $generatedProcessRouterDir 'THIRD_PARTY_NOTICES.txt') -Encoding UTF8
+
 @"
 Green VPN installer payload
 
@@ -642,6 +696,10 @@ function Test-GreenVpnInstalledRoot {
         (Join-Path $Root 'greenvpn.exe'),
         (Join-Path $Root 'greenvpn_service.exe'),
         (Join-Path $Root 'tools\greenvpn_vpn_task.ps1'),
+        (Join-Path $Root 'tools\process-router\ProxyBridge_CLI.exe'),
+        (Join-Path $Root 'tools\process-router\ProxyBridgeCore.dll'),
+        (Join-Path $Root 'tools\process-router\WinDivert.dll'),
+        (Join-Path $Root 'tools\process-router\WinDivert64.sys'),
         (Join-Path $Root 'uninstall_greenvpn.cmd')
     )) {
         if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
@@ -820,7 +878,13 @@ try {
     foreach ($requiredSource in @(
         (Join-Path $appSource 'greenvpn.exe'),
         (Join-Path $appSource 'greenvpn_service.exe'),
-        (Join-Path $tmp 'tools\greenvpn_vpn_task.ps1')
+        (Join-Path $tmp 'tools\greenvpn_vpn_task.ps1'),
+        (Join-Path $tmp 'tools\process-router\ProxyBridge_CLI.exe'),
+        (Join-Path $tmp 'tools\process-router\ProxyBridgeCore.dll'),
+        (Join-Path $tmp 'tools\process-router\WinDivert.dll'),
+        (Join-Path $tmp 'tools\process-router\WinDivert64.sys'),
+        (Join-Path $tmp 'tools\process-router\PROVENANCE.md'),
+        (Join-Path $tmp 'tools\process-router\THIRD_PARTY_NOTICES.txt')
     )) {
         if (-not (Test-Path -LiteralPath $requiredSource)) {
             throw "Invalid Green VPN package: required file is missing: $requiredSource"
@@ -857,7 +921,13 @@ try {
     foreach ($requiredStaged in @(
         (Join-Path $stagingRoot 'greenvpn.exe'),
         (Join-Path $stagingRoot 'greenvpn_service.exe'),
-        (Join-Path $stagingRoot 'tools\greenvpn_vpn_task.ps1')
+        (Join-Path $stagingRoot 'tools\greenvpn_vpn_task.ps1'),
+        (Join-Path $stagingRoot 'tools\process-router\ProxyBridge_CLI.exe'),
+        (Join-Path $stagingRoot 'tools\process-router\ProxyBridgeCore.dll'),
+        (Join-Path $stagingRoot 'tools\process-router\WinDivert.dll'),
+        (Join-Path $stagingRoot 'tools\process-router\WinDivert64.sys'),
+        (Join-Path $stagingRoot 'tools\process-router\PROVENANCE.md'),
+        (Join-Path $stagingRoot 'tools\process-router\THIRD_PARTY_NOTICES.txt')
     )) {
         if (-not (Test-Path -LiteralPath $requiredStaged)) {
             throw "Green VPN staging postcondition failed: $requiredStaged was not created."

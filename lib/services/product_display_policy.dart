@@ -1,5 +1,35 @@
 import 'dart:convert';
 
+const Set<String> greenVpnFreePlanCodes = <String>{
+  '',
+  'base',
+  'trial',
+  'free',
+  'free_start',
+  'support_trial',
+  'базовый',
+  'пробный период',
+};
+
+bool greenVpnHasPaidEntitlement({
+  required bool isActive,
+  String? planCode,
+  String? planName,
+  int? monthlyPriceRub,
+}) {
+  if (!isActive) return false;
+  final code =
+      (planCode?.trim().isNotEmpty == true ? planCode : planName)
+          ?.trim()
+          .toLowerCase() ??
+      '';
+  if (greenVpnFreePlanCodes.contains(code) || code.contains('trial')) {
+    return false;
+  }
+  if (monthlyPriceRub != null && monthlyPriceRub <= 0) return false;
+  return true;
+}
+
 String greenVpnPublicPlanTitle(String rawPlanName) {
   final raw = rawPlanName.trim();
   final code = raw.toLowerCase();
@@ -126,6 +156,12 @@ String greenVpnPublicErrorMessage({
   if (responseCode == 'paid_beta_client_required') {
     return 'Эта версия приложения устарела. Установите последнее обновление и повторите оплату.';
   }
+  if (responseCode == 'premium_feature_required') {
+    return 'Режим «Только для соцсетей» доступен по подписке.';
+  }
+  if (responseCode == 'premium_server_required') {
+    return 'Эта локация доступна по подписке.';
+  }
 
   if (statusCode == 401) return 'Сессия истекла. Войдите снова.';
   if (statusCode == 403) return 'Это действие сейчас недоступно.';
@@ -176,10 +212,15 @@ String greenVpnSocialOnlyStatusText({
   required bool allowed,
   required bool enabled,
   bool usesApplications = true,
+  bool usesMixedSelection = false,
 }) {
-  if (!allowed) return 'Функция временно недоступна для текущего режима.';
+  if (!allowed) {
+    return 'Доступно по подписке. Бесплатный режим работает с обычным подключением.';
+  }
   if (enabled) {
-    final selectedKind = usesApplications ? 'приложения' : 'сервисы';
+    final selectedKind = usesMixedSelection
+        ? 'сервисы, программы и сайты'
+        : (usesApplications ? 'приложения' : 'сервисы');
     return 'Функция активна. Выбранные $selectedKind пойдут через VPN, '
         'остальной трафик останется обычным.';
   }

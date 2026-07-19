@@ -18,10 +18,19 @@ param(
     [string]$ExpectedAndroidSha256 = "CAE9680C1BC0E59AD2046BEAC46779D782AD5F2D542EA6BB5847DBDBDDD96431",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestAndroidSha256 = "910D7C8D03E224484050EFB4AE845C0B2DD6FC592B85B7A3FF8B1475DE21E5C5",
+    [string]$ExpectedTestAndroidSha256 = "2B016FCB70A8C50DD6D5F86DD2B326CFB82D636AA9CB39D1FB8BC25B38A91AFC",
 
     [Parameter(Mandatory = $false)]
     [string]$ExpectedAndroidBuildNumber = "2026071902",
+
+    [Parameter(Mandatory = $false)]
+    [string]$ExpectedTestAndroidVersion = "0.3.9-paid-beta.1902",
+
+    [Parameter(Mandatory = $false)]
+    [string]$ExpectedTestAndroidBuildNumber = "2026071902",
+
+    [Parameter(Mandatory = $false)]
+    [bool]$ExpectedTestAndroidRequired = $false,
 
     [Parameter(Mandatory = $false)]
     [string]$ExpectedWindowsVersion = "0.3.6",
@@ -30,10 +39,16 @@ param(
     [string]$ExpectedWindowsSha256 = "0A9297141199C3F9C2F971FF2B98B3C48B9CB3C4D939249C4B1DF6AA52F063FA",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestWindowsVersion = "0.3.6-paid-beta.1808",
+    [string]$ExpectedTestWindowsVersion = "0.3.9-paid-beta.1902",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestWindowsSha256 = "19BCCFB0866CAC69F78B9F6A3BFBC8C9A0AFE293876D95E3091179FEEBAB2AF4",
+    [string]$ExpectedTestWindowsSha256 = "CE282C7BC56082F53DA030F047DA83F7FDD64315DD9C4FFE823B9C023BDBA8FC",
+
+    [Parameter(Mandatory = $false)]
+    [string]$ExpectedTestWindowsBuildNumber = "1902",
+
+    [Parameter(Mandatory = $false)]
+    [bool]$ExpectedTestWindowsRequired = $false,
 
     [Parameter(Mandatory = $false)]
     [int]$TimeoutSec = 20
@@ -172,26 +187,52 @@ function Get-PaidBetaStaticManifestCheck {
     try {
         $value = Invoke-RestMethod -Uri $Uri -TimeoutSec $TimeoutSec -ErrorAction Stop
         $android = @($value.artifacts | Where-Object { ([string]$_.platform) -eq "android" }) | Select-Object -First 1
-        $versionOk = ([string]$value.appVersion) -eq $ExpectedAndroidVersion -and
-            ([string]$android.version) -eq $ExpectedAndroidVersion
-        $buildOk = ([string]$android.buildNumber) -eq $ExpectedAndroidBuildNumber
-        $sha256Ok = ([string]$android.sha256).ToUpperInvariant() -eq $ExpectedTestAndroidSha256.ToUpperInvariant()
-        $sizeOk = [int64]$android.sizeBytes -gt 0
+        $windows = @($value.artifacts | Where-Object { ([string]$_.platform) -eq "windows" }) | Select-Object -First 1
+        $androidVersionOk = ([string]$value.appVersion) -eq $ExpectedTestAndroidVersion -and
+            ([string]$android.version) -eq $ExpectedTestAndroidVersion
+        $androidBuildOk = ([string]$android.buildNumber) -eq $ExpectedTestAndroidBuildNumber
+        $androidSha256Ok = ([string]$android.sha256).ToUpperInvariant() -eq $ExpectedTestAndroidSha256.ToUpperInvariant()
+        $androidSizeOk = [int64]$android.sizeBytes -gt 0
+        $windowsVersionOk = ([string]$value.windowsAppVersion) -eq $ExpectedTestWindowsVersion -and
+            ([string]$windows.version) -eq $ExpectedTestWindowsVersion
+        $windowsBuildOk = ([string]$windows.buildNumber) -eq $ExpectedTestWindowsBuildNumber
+        $windowsSha256Ok = ([string]$windows.sha256).ToUpperInvariant() -eq $ExpectedTestWindowsSha256.ToUpperInvariant()
+        $windowsSizeOk = [int64]$windows.sizeBytes -gt 0
         return [pscustomobject]@{
             name = $Name
-            ok = [bool]($versionOk -and $buildOk -and $sha256Ok -and $sizeOk)
+            ok = [bool](
+                $androidVersionOk -and
+                $androidBuildOk -and
+                $androidSha256Ok -and
+                $androidSizeOk -and
+                $windowsVersionOk -and
+                $windowsBuildOk -and
+                $windowsSha256Ok -and
+                $windowsSizeOk
+            )
             url = $Uri
-            appVersion = $value.appVersion
-            expectedVersion = $ExpectedAndroidVersion
-            versionOk = $versionOk
-            buildNumber = $android.buildNumber
-            expectedBuildNumber = $ExpectedAndroidBuildNumber
-            buildOk = $buildOk
-            sha256 = $android.sha256
-            expectedSha256 = $ExpectedTestAndroidSha256
-            sha256Ok = $sha256Ok
-            sizeBytes = $android.sizeBytes
-            sizeOk = $sizeOk
+            androidVersion = $value.appVersion
+            expectedAndroidVersion = $ExpectedTestAndroidVersion
+            androidVersionOk = $androidVersionOk
+            androidBuildNumber = $android.buildNumber
+            expectedAndroidBuildNumber = $ExpectedTestAndroidBuildNumber
+            androidBuildOk = $androidBuildOk
+            androidSha256 = $android.sha256
+            expectedAndroidSha256 = $ExpectedTestAndroidSha256
+            androidSha256Ok = $androidSha256Ok
+            androidSizeBytes = $android.sizeBytes
+            androidSizeOk = $androidSizeOk
+            windowsVersion = $value.windowsAppVersion
+            expectedWindowsVersion = $ExpectedTestWindowsVersion
+            windowsVersionOk = $windowsVersionOk
+            windowsBuildNumber = $windows.buildNumber
+            expectedWindowsBuildNumber = $ExpectedTestWindowsBuildNumber
+            windowsBuildOk = $windowsBuildOk
+            windowsSha256 = $windows.sha256
+            expectedWindowsSha256 = $ExpectedTestWindowsSha256
+            windowsSha256Ok = $windowsSha256Ok
+            windowsSizeBytes = $windows.sizeBytes
+            windowsSizeOk = $windowsSizeOk
         }
     } catch {
         return [pscustomobject]@{
@@ -233,18 +274,18 @@ $manifestChecks = @(
         -ExpectedPlatform "android" `
         -ExpectedExtension ".apk" `
         -ExpectedChannel "paid-beta" `
-        -ExpectedVersion $ExpectedAndroidVersion `
+        -ExpectedVersion $ExpectedTestAndroidVersion `
         -ExpectedSha256 $ExpectedTestAndroidSha256 `
-        -ExpectedRequired $true
+        -ExpectedRequired $ExpectedTestAndroidRequired
     Get-UpdateManifestCheck `
         -Name "android-test-fallback-manifest" `
         -Uri "$fallbackApi/paid-beta-api/api/v1/updates/manifest?platform=android&channel=paid-beta&currentVersion=0.0.0&clientId=ops-check-android-test-fallback" `
         -ExpectedPlatform "android" `
         -ExpectedExtension ".apk" `
         -ExpectedChannel "paid-beta" `
-        -ExpectedVersion $ExpectedAndroidVersion `
+        -ExpectedVersion $ExpectedTestAndroidVersion `
         -ExpectedSha256 $ExpectedTestAndroidSha256 `
-        -ExpectedRequired $true
+        -ExpectedRequired $ExpectedTestAndroidRequired
     Get-UpdateManifestCheck `
         -Name "windows-production-primary-manifest" `
         -Uri "$api/api/v1/updates/manifest?platform=windows&channel=stable&currentVersion=0.0.0&clientId=ops-check-windows-production-primary" `
@@ -271,7 +312,7 @@ $manifestChecks = @(
         -ExpectedChannel "paid-beta" `
         -ExpectedVersion $ExpectedTestWindowsVersion `
         -ExpectedSha256 $ExpectedTestWindowsSha256 `
-        -ExpectedRequired $false
+        -ExpectedRequired $ExpectedTestWindowsRequired
     Get-UpdateManifestCheck `
         -Name "windows-test-fallback-manifest" `
         -Uri "$fallbackApi/paid-beta-api/api/v1/updates/manifest?platform=windows&channel=paid-beta&currentVersion=0.0.0&clientId=ops-check-windows-test-fallback" `
@@ -280,7 +321,7 @@ $manifestChecks = @(
         -ExpectedChannel "paid-beta" `
         -ExpectedVersion $ExpectedTestWindowsVersion `
         -ExpectedSha256 $ExpectedTestWindowsSha256 `
-        -ExpectedRequired $false
+        -ExpectedRequired $ExpectedTestWindowsRequired
 )
 
 $downloadChecks = @(

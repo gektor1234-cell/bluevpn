@@ -55,6 +55,7 @@ if (-not (Test-Path -LiteralPath $ProjectRoot)) {
 }
 
 $mainPath = Join-Path $ProjectRoot "lib\main.dart"
+$windowsSelectiveRoutingPath = Join-Path $ProjectRoot "lib\services\windows_selective_routing_service.dart"
 $runtimeConfigPath = Join-Path $ProjectRoot "lib\runtime_config.dart"
 $backendPath = Join-Path $ProjectRoot "backend_live\app\main.py"
 $installerPath = Join-Path $ProjectRoot "scripts\windows\build_installer.ps1"
@@ -160,6 +161,7 @@ $releaseRollbackInstallerPath = Join-Path $ProjectRoot "scripts\server\configure
 $adminStaticInstallerPath = Join-Path $ProjectRoot "scripts\server\install_admin_app_release.sh"
 
 $main = Read-Text $mainPath
+$windowsSelectiveRouting = Read-Text $windowsSelectiveRoutingPath
 $runtimeConfig = Read-Text $runtimeConfigPath
 $backend = Read-Text $backendPath
 $installer = Read-Text $installerPath
@@ -523,6 +525,10 @@ $requiredBackendSafetyFragments = @(
     'public_download_trusted',
     'def build_advertising_readiness(',
     'PUBLIC_ADVERTISING_REQUIRED_CODES',
+    'GREENVPN_FREE_AD_TEST_WEB_ENABLED',
+    'legacy_name="GREENVPN_AD_TEST_WEB_ENABLED"',
+    'def free_ad_reward_provider_for_platform(',
+    'def yandex_web_rewarded_configured(',
     'def build_server_provisioning_readiness(',
     'clientConfigContract',
     'managed_public_entries_pass_gate',
@@ -1103,6 +1109,22 @@ else {
     Add-Error "Installer does not package check_windows_network_protection.ps1."
 }
 
+$processRouterInstallerFragments = @(
+    'tools\process-router\ProxyBridge_CLI.exe',
+    'ProxyBridgeCore.dll',
+    'WinDivert64.sys',
+    'THIRD_PARTY_NOTICES.txt',
+    'Get-AuthenticodeSignature'
+)
+foreach ($fragment in $processRouterInstallerFragments) {
+    if ($installer.Contains($fragment)) {
+        Add-Pass "Installer process-router marker present: $fragment"
+    }
+    else {
+        Add-Error "Installer process-router marker missing: $fragment"
+    }
+}
+
 Write-Section "WINDOWS LOCAL SERVICE CHECKS"
 $serviceFragments = @(
     'kLocalTokenPath',
@@ -1117,7 +1139,10 @@ $serviceFragments = @(
     'kHysteriaPidPath',
     'QueryPidFileProcessState',
     'QueryFullProcessImageNameW',
-    'GreenVPNHysteria2Preview'
+    'GreenVPNHysteria2Preview',
+    'ProcessRouterGuardThread',
+    'processRouterState',
+    'routingMode'
 )
 
 foreach ($fragment in $serviceFragments) {
@@ -1234,6 +1259,45 @@ foreach ($fragment in $vpnTaskKillSwitchFragments) {
     }
     else {
         Add-Error "Windows VPN task missing kill-switch marker: $fragment"
+    }
+}
+
+
+$vpnTaskApplicationRoutingFragments = @(
+    'Start-GreenProcessRouter',
+    'Ensure-GreenApplicationTunnelRoutes',
+    'Get-GreenRoutingPolicy',
+    'destinationCidrs',
+    'selective tunnel uses destination routes only; process router not required',
+    'routing_apps.json',
+    'ProxyBridge_CLI.exe',
+    'process-router.active',
+    'ApplicationProxyPort = 1080'
+)
+foreach ($fragment in $vpnTaskApplicationRoutingFragments) {
+    if ($vpnTaskScript.Contains($fragment)) {
+        Add-Pass "Windows VPN task application-routing marker present: $fragment"
+    }
+    else {
+        Add-Error "Windows VPN task application-routing marker missing: $fragment"
+    }
+}
+
+$windowsSelectiveUiFragments = @(
+    'SocialApp.vk',
+    'socialOnlyWindowsSites',
+    '_openWindowsInstalledAppsPicker',
+    '_openWindowsSitePicker',
+    'normalizeWindowsVpnSite',
+    'listWindowsLaunchableApps',
+    'resolveWindowsVpnSites'
+)
+foreach ($fragment in $windowsSelectiveUiFragments) {
+    if ($main.Contains($fragment) -or $windowsSelectiveRouting.Contains($fragment)) {
+        Add-Pass "Windows selective-routing UI marker present: $fragment"
+    }
+    else {
+        Add-Error "Windows selective-routing UI marker missing: $fragment"
     }
 }
 

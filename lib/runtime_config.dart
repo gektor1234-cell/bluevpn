@@ -64,6 +64,12 @@ String greenVpnBaseConfigPathSync() =>
 String greenVpnServiceTokenPathSync() =>
     '${greenVpnProgramDataRootSync()}\\service_token';
 
+String greenVpnWindowsRoutingModePathSync() =>
+    '${greenVpnProgramDataRootSync()}\\routing_mode';
+
+String greenVpnWindowsRoutingAppsPathSync() =>
+    '${greenVpnProgramDataRootSync()}\\routing_apps.json';
+
 String greenVpnBackendLogPathSync() =>
     '${greenVpnProgramDataRootSync()}\\backend.log';
 
