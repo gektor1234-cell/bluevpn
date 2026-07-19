@@ -72,8 +72,10 @@ This is the current operational entry point. Read it together with
 
 ## Current Freemium And Windows Ads Candidate, 2026-07-19
 
-- Production is deliberately unchanged: backend `0.9.129-final-audit.5`,
-  Android `0.3.7`, Windows `0.3.6`, Windows ads disabled.
+- Production clients remain unchanged at Android `0.3.7` and Windows `0.3.6`;
+  Windows ads remain disabled. The production backend is
+  `0.9.129-site-quality.1`, a landing-page-only revision based on the prior
+  production source rather than the newer paid-beta source.
 - Paid-beta on both Russian control planes is backend
   `0.9.131-freemium.2`. Existing Netherlands and London locations are free;
   future catalog drafts default to premium. Free accounts cannot use
@@ -98,12 +100,31 @@ This is the current operational entry point. Read it together with
   flag is `1` and effective.
 - Current Windows beta account is paid, so live bootstrap correctly reports no
   ad requirement. The free contract is covered without adding another live
-  account: 128 backend tests and 46 Flutter tests verify UI/server entitlement,
+  account: 130 backend tests and 46 Flutter tests verify UI/server entitlement,
   challenge completion and one-connect consumption.
-- Yandex site `api.greenvpn.pro`, id `19615469`, is in moderation. A support
-  request asks for desktop Web Rewarded access. Do not promote this candidate
-  to production until a real `R-A-N-N` block id is received and the real reward
-  callback passes in paid-beta.
+- Yandex site `api.greenvpn.pro`, id `19615469`, was rejected for site
+  quality/content rather than a stated categorical VPN prohibition. Yandex
+  support advised improving unique content, navigation and working controls;
+  the earliest permitted resubmission is 2026-08-18 12:55 MSK. A follow-up
+  confirmed that a compliant new site can be added and that Rewarded has no
+  minimum traffic threshold. Yandex promised a separate answer within 24 hours
+  on whether Windows WebView2 visits count as site traffic. Do not resubmit
+  early and do not promote Windows ads until `greenvpn.pro` passes moderation,
+  a real `R-A-N-N` block id exists and a real paid-beta callback smoke passes.
+- A concrete moderation defect was fixed: the API landing page Android button
+  returned 404. Production `0.9.129-site-quality.1` now uses
+  `/download/android`, exposes matching Windows and Android cards, and labels
+  the no-ad benefit accurately as paid-only. Both control planes pass database
+  and service checks, the browser-rendered page is correct, and the independent
+  public-surface probe is 31/31. Main SHA-256:
+  `A811BF8450E5DC003FEFA4BDF1FBF583EC1B1DF591C21699FC37A03ACCD26E7A`.
+- Alternative Rewarded inquiries were sent from the project mailbox to
+  MediaToday, Monetag, ayeT Studios, AppLixir and Adsterra. The decision order
+  is Yandex first; MediaToday if direct RUB payout plus Windows S2S verification
+  are confirmed; Monetag if non-Telegram Rewarded and WebMoney/USDT are
+  confirmed; ayeT if Russian payout is confirmed; AppLixir after its traffic
+  threshold is met; Adsterra only with explicit written approval for an
+  incentivized Rewarded flow. Google is not a Russian payout fallback.
 - Client rollback:
   `/root/greenvpn-paid-beta-client-release-backups/20260719T103659Z-timeweb-0.3.9-paid-beta.1902-0.3.9-paid-beta.1902`
   and
@@ -117,11 +138,12 @@ This is the current operational entry point. Read it together with
 
 ## Final audit checkpoint, 2026-07-19
 
-- Production and paid-beta on Timeweb and RUVDS Moscow run backend
-  `0.9.129-final-audit.5`; `main.py` SHA-256 is
+- At this original audit checkpoint, production and paid-beta on Timeweb and
+  RUVDS Moscow ran backend `0.9.129-final-audit.5`; `main.py` SHA-256 was
   `FB35FDA24856A64C3506107734CEAB8DCCC7B10B5B355950618784DB1661AFC8`.
   All four services are healthy, both databases on each node pass
-  `PRAGMA quick_check`, and explicit state sync converges without errors.
+  `PRAGMA quick_check`, and explicit state sync converges without errors. The
+  current production and paid-beta revisions are recorded in the section above.
 - Active-active identity merge preserves independently newer verified email and
   phone state. Admin identity login throttling applies across source IPs.
   Guarded operational-retention timers are active on both nodes and exclude
@@ -154,7 +176,7 @@ This is the current operational entry point. Read it together with
 - Operator URL: `https://admin.greenvpn.pro/`. Nginx Basic Auth is the outer
   gate; staff email/password, short-lived session, optional 2FA and backend RBAC
   remain the inner gate.
-- Production API version is `0.9.129-final-audit.5` on both Russian control planes.
+- Production API version is `0.9.129-site-quality.1` on both Russian control planes.
   Timeweb remains the only billing writer; RUVDS remains billing read-only.
 - One dashboard exposes users, devices, subscriptions, pending payments,
   support workload, incidents and the Android/Windows split. The analytics view
@@ -176,7 +198,8 @@ This is the current operational entry point. Read it together with
 - Validation: 122 backend tests; Python/JavaScript compile; 264 unique HTML ids;
   live health, database indexes, analytics, pagination, CSV and CORS passed on
   both control planes. Backend SHA-256 is
-  `FB35FDA24856A64C3506107734CEAB8DCCC7B10B5B355950618784DB1661AFC8`.
+  `A811BF8450E5DC003FEFA4BDF1FBF583EC1B1DF591C21699FC37A03ACCD26E7A`
+  after the site-only production revision; admin static assets are unchanged.
 - Rollback:
   - Timeweb backend: `/root/greenvpn-admin-release-backups/20260717T181919Z-timeweb-0.9.121-admin.1`;
   - RUVDS backend: `/root/greenvpn-admin-release-backups/20260717T181612Z-ruvds-0.9.121-admin.1`;
@@ -441,7 +464,7 @@ material. KZ is not in DNS, catalogs or assignment state.
 ## Stable public contour
 
 - Site/API: `https://greenvpn.pro`, `https://api.greenvpn.pro`.
-- Backend: `0.9.129-final-audit.5` on both RU control planes.
+- Backend: `0.9.129-site-quality.1` on both RU control planes.
 - Android: `0.3.7`, build `2026071902`, package `pro.greenvpn.app`, SHA-256
   `CAE9680C1BC0E59AD2046BEAC46779D782AD5F2D542EA6BB5847DBDBDDD96431`.
 - Android update is mandatory on Timeweb and RUVDS Moscow; both manifests report
@@ -458,7 +481,7 @@ material. KZ is not in DNS, catalogs or assignment state.
 ## Paid public candidate
 
 - Paths remain isolated at `/paid-beta` and `/paid-beta-api` until promotion.
-- Both control planes currently report backend `0.9.129-final-audit.5`.
+- Both paid-beta control planes currently report backend `0.9.131-freemium.2`.
 - Both SQLite databases pass `PRAGMA quick_check`.
 - The public-product client marker permits the final public candidate to create
   a 249 RUB order for accounts previously enrolled in the paid-beta cohort;
@@ -551,6 +574,9 @@ material. KZ is not in DNS, catalogs or assignment state.
 
 ## Restore points
 
+- Backend 0.9.129 site-quality production deployment directories:
+  - Timeweb: `/root/greenvpn-public-product-backups/20260719T141823Z-timeweb-0.9.129-site-quality.1`;
+  - RUVDS Moscow: `/root/greenvpn-public-product-backups/20260719T141622Z-ruvds-0.9.129-site-quality.1`.
 - Backend 0.9.129 production deployment directories:
   - Timeweb: `/root/greenvpn-public-product-backups/20260719T020158Z-timeweb-0.9.129-final-audit.5`;
   - RUVDS Moscow: `/root/greenvpn-public-product-backups/20260719T020119Z-ruvds-0.9.129-final-audit.5`.

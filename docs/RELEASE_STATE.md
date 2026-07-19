@@ -7,8 +7,8 @@ Updated: 2026-07-19.
 | Component | Version/state |
 | --- | --- |
 | Main site | `https://greenvpn.pro/`, healthy |
-| Primary API | `https://api.greenvpn.pro/`, backend `0.9.129-final-audit.5` |
-| Fallback API | RUVDS Moscow, backend `0.9.129-final-audit.5` |
+| Primary API | `https://api.greenvpn.pro/`, backend `0.9.129-site-quality.1` |
+| Fallback API | RUVDS Moscow, backend `0.9.129-site-quality.1` |
 | Android | `0.3.7+2026071902`, package `pro.greenvpn.app`, mandatory |
 | Android SHA-256 | `CAE9680C1BC0E59AD2046BEAC46779D782AD5F2D542EA6BB5847DBDBDDD96431` |
 | Windows | `0.3.6+1808`, mandatory, unsigned |
@@ -21,9 +21,10 @@ root-only deployment backups listed under Rollback.
 
 ## Freemium And Windows Rewarded Beta, 2026-07-19
 
-- Production remains unchanged at backend `0.9.129-final-audit.5`, Android
-  `0.3.7` and Windows `0.3.6`. Its rewarded-ad platform allow-list is still
-  exactly `android`; no test advertising path is enabled in production.
+- Production clients remain Android `0.3.7` and Windows `0.3.6`. The production
+  backend is `0.9.129-site-quality.1`, a site-only revision based on the prior
+  production source. Its rewarded-ad platform allow-list is still exactly
+  `android`; no test advertising path is enabled in production.
 - The isolated paid-beta contour runs backend `0.9.131-freemium.2` on Timeweb
   and RUVDS Moscow. Free accounts cannot request `social_only` configs; the
   client also routes the locked control to the tariff page. Existing logical
@@ -51,13 +52,30 @@ root-only deployment backups listed under Rollback.
 - The current Windows beta session belongs to an active paid 249 RUB plan, so
   its live bootstrap correctly bypasses ads and leaves social-only routing
   available. Free-user denial, provider selection, reward completion and
-  one-connect consumption are covered by the 128-test backend suite and 46
+  one-connect consumption are covered by the 130-test backend suite and 46
   Flutter tests; no disposable live account was created.
-- Real production Windows rewarded ads are externally blocked until Yandex
-  approves desktop Web Rewarded for site `api.greenvpn.pro` (site id
-  `19615469`) and supplies a block id matching `R-A-N-N`. The support request
-  is open. Production promotion must wait for that id and a real beta reward
-  callback smoke; a local or fake completion button is forbidden.
+- Yandex rejected site `api.greenvpn.pro` (id `19615469`) for site
+  quality/content and advised improving unique content, navigation and working
+  controls. The earliest permitted resubmission is 2026-08-18 12:55 MSK. A
+  follow-up confirmed that a compliant new site may be added and that Rewarded
+  has no minimum traffic threshold. Yandex promised a separate answer within
+  24 hours on whether Windows WebView2 visits count as site traffic. Production
+  promotion still requires `greenvpn.pro` moderation, a real `R-A-N-N` block id
+  and a real beta callback smoke; local or fake reward completion is forbidden.
+- One matching public defect was fixed in `0.9.129-site-quality.1`: the API
+  landing Android control returned 404. It now uses `/download/android`, shows
+  matching Windows and Android download cards, and states accurately that the
+  no-ad benefit belongs to paid subscriptions. Both nodes passed guarded deploy,
+  SQLite quick-check and browser inspection; the public-surface probe is 31/31.
+  Production `main.py` SHA-256:
+  `A811BF8450E5DC003FEFA4BDF1FBF583EC1B1DF591C21699FC37A03ACCD26E7A`.
+- Rewarded-provider inquiries are pending with MediaToday, Monetag, ayeT
+  Studios, AppLixir and Adsterra. Selection priority is Yandex, then MediaToday
+  for direct RUB payout, Monetag for confirmed non-Telegram Rewarded plus
+  WebMoney/USDT, ayeT for its stronger S2S-capable web SDK if Russian payout is
+  available, AppLixir after its audience threshold, and Adsterra only with an
+  explicit approved incentivized format. Google is not a viable Russian payout
+  fallback.
 - Paid-beta rollback directories:
   - backend Timeweb:
     `/root/greenvpn-paid-beta-backend-backups/20260719T125141Z-paid-beta-backend-freemium-20260719-r7`;
@@ -74,10 +92,11 @@ root-only deployment backups listed under Rollback.
 
 ## Final Full Audit, 2026-07-19
 
-- Production and paid-beta services on both Russian control planes run backend
-  `0.9.129-final-audit.5`. All four health endpoints are green, all databases
-  pass `PRAGMA quick_check`, and explicit production and paid-beta sync cycles
-  converge without conflicts or errors.
+- Production services on both Russian control planes run
+  `0.9.129-site-quality.1`; paid-beta services run `0.9.131-freemium.2`. All
+  four health endpoints are green, all databases pass `PRAGMA quick_check`,
+  and explicit production and paid-beta sync cycles converge without conflicts
+  or errors.
 - The active-active merger now preserves the newest verified email and phone
   state independently from unrelated profile updates. Admin identity login
   throttling is keyed by identity across source IPs, preventing an IP rotation
@@ -110,8 +129,8 @@ root-only deployment backups listed under Rollback.
 | Component | Version/state |
 | --- | --- |
 | URL | `https://admin.greenvpn.pro/`, Basic Auth plus staff session/RBAC |
-| Production backend | `0.9.129-final-audit.5` on Timeweb and RUVDS Moscow |
-| Backend SHA-256 | `FB35FDA24856A64C3506107734CEAB8DCCC7B10B5B355950618784DB1661AFC8` |
+| Production backend | `0.9.129-site-quality.1` on Timeweb and RUVDS Moscow |
+| Backend SHA-256 | `A811BF8450E5DC003FEFA4BDF1FBF583EC1B1DF591C21699FC37A03ACCD26E7A` |
 | Static index SHA-256 | `68E8081DDE9674CD3B11CC70E910AF68C998C7F54C3AC918CFE15A4F9AAEBF83` |
 | Static JavaScript SHA-256 | `A27BB2ABC8B8C908CC707DEF9A5D4B62F58CFE9630818E3CCB1157423BDBF528` |
 | Static CSS SHA-256 | `680AF9D1F48F8A042A0C592A987EB9077E8264EFE3C26AA7629ADD8CDB344A82` |
@@ -323,9 +342,9 @@ trusted: SmartScreen/reputation warnings remain expected until Authenticode.
 
 ## Verified
 
-- Both RU control planes run production and paid-beta backend
-  `0.9.129-final-audit.5` and pass health, schema, SQLite quick-check and
-  explicit bidirectional state synchronization.
+- Both RU control planes run production backend `0.9.129-site-quality.1` and
+  paid-beta backend `0.9.131-freemium.2`; health, schema, SQLite quick-check and
+  explicit bidirectional state synchronization pass.
 - Admin/backend validation: 122 backend unit tests, Python and JavaScript
   syntax, unique HTML ids, desktop/mobile UI, live analytics/pagination/CSV,
   retention controls and CORS.
@@ -411,6 +430,9 @@ London or Russian control-plane defect remains.
 
 ## Rollback
 
+- Backend 0.9.129 site-quality production deployment backups:
+  - Timeweb: `/root/greenvpn-public-product-backups/20260719T141823Z-timeweb-0.9.129-site-quality.1`;
+  - RUVDS Moscow: `/root/greenvpn-public-product-backups/20260719T141622Z-ruvds-0.9.129-site-quality.1`.
 - Backend 0.9.129 production deployment backups:
   - Timeweb: `/root/greenvpn-public-product-backups/20260719T020158Z-timeweb-0.9.129-final-audit.5`;
   - RUVDS Moscow: `/root/greenvpn-public-product-backups/20260719T020119Z-ruvds-0.9.129-final-audit.5`.

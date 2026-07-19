@@ -27808,6 +27808,7 @@ def _download_card(platform: str, title: str, text: str, href: str, ready: bool)
 
 def _public_download_cards() -> str:
     windows_ready = bool(_public_download_target(PUBLIC_WINDOWS_DOWNLOAD_URL))
+    android_ready = bool(_public_download_target(PUBLIC_ANDROID_DOWNLOAD_URL))
     return "".join(
         [
             _download_card(
@@ -27819,6 +27820,17 @@ def _public_download_cards() -> str:
                     else "Windows-приложение будет опубликовано на этой странице для первых пользователей."
                 ),
                 "/download/windows",
+                True,
+            ),
+            _download_card(
+                "Скачать для Android",
+                "Android",
+                (
+                    "Основное приложение Green VPN для телефона или планшета."
+                    if android_ready
+                    else "Android-приложение будет опубликовано на этой странице для первых пользователей."
+                ),
+                "/download/android",
                 True,
             ),
         ]
@@ -27837,12 +27849,12 @@ def public_landing_page():
         <span class="badge">Trial 3 дня</span>
         <span class="badge">От 249 ₽</span>
         <span class="badge">До 6 месяцев</span>
-        <span class="badge">Без рекламы</span>
+        <span class="badge">Платная подписка без рекламы</span>
         <span class="badge">Windows и Android</span>
       </div>
       <div class="actions">
         <a class="button" href="/download/windows">Скачать для Windows</a>
-        <a class="button secondary" href="/downloads/GreenVPN_Android.apk">Скачать для Android</a>
+        <a class="button secondary" href="/download/android">Скачать для Android</a>
         <a class="button secondary" href="/#setup">Как начать</a>
         <a class="button secondary" href="/#support">Поддержка</a>
       </div>

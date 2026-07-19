@@ -2140,6 +2140,14 @@ class OperationalReadinessRegressionTests(unittest.TestCase):
 
         self.assertTrue(expected.issubset(head_routes))
 
+    def test_public_landing_uses_working_download_routes(self) -> None:
+        html = main.public_landing_page()
+
+        self.assertGreaterEqual(html.count('href="/download/windows"'), 2)
+        self.assertGreaterEqual(html.count('href="/download/android"'), 2)
+        self.assertNotIn('href="/downloads/GreenVPN_Android.apk"', html)
+        self.assertIn("Платная подписка без рекламы", html)
+
     def test_admin_can_cancel_only_stale_order_without_payment_markers(self) -> None:
         order = main.create_billing_order_for_user(
             self.user_id,
