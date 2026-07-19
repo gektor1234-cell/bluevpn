@@ -60,6 +60,8 @@ required=(
   ops/greenvpn_db_sync_from_peer.sh
   ops/greenvpn_sqlite_snapshot_stdout.py
   ops/greenvpn_sqlite_state_sync.py
+  ops/greenvpn_prune_operational_history.py
+  ops/install_operational_retention_timer.sh
   backend-release-manifest.json
 )
 for relative in "${required[@]}"; do
@@ -196,12 +198,15 @@ install -m 644 "$BUNDLE_DIR/backend/requirements.txt" "$RELEASE_DIR/backend/requ
 install -m 755 "$BUNDLE_DIR/ops/greenvpn_db_sync_from_peer.sh" "$RELEASE_DIR/ops/greenvpn_db_sync_from_peer.sh"
 install -m 755 "$BUNDLE_DIR/ops/greenvpn_sqlite_snapshot_stdout.py" "$RELEASE_DIR/ops/greenvpn_sqlite_snapshot_stdout.py"
 install -m 755 "$BUNDLE_DIR/ops/greenvpn_sqlite_state_sync.py" "$RELEASE_DIR/ops/greenvpn_sqlite_state_sync.py"
+install -m 755 "$BUNDLE_DIR/ops/greenvpn_prune_operational_history.py" "$RELEASE_DIR/ops/greenvpn_prune_operational_history.py"
+install -m 755 "$BUNDLE_DIR/ops/install_operational_retention_timer.sh" "$RELEASE_DIR/ops/install_operational_retention_timer.sh"
 cp -a "$BUNDLE_DIR/backend-release-manifest.json" "$RELEASE_DIR/backend-release-manifest.json"
 
 python3 -m py_compile \
   "$RELEASE_DIR/backend/app/main.py" \
   "$RELEASE_DIR/ops/greenvpn_sqlite_snapshot_stdout.py" \
-  "$RELEASE_DIR/ops/greenvpn_sqlite_state_sync.py"
+  "$RELEASE_DIR/ops/greenvpn_sqlite_state_sync.py" \
+  "$RELEASE_DIR/ops/greenvpn_prune_operational_history.py"
 "$VENV_DIR/bin/pip" install --disable-pip-version-check -r "$RELEASE_DIR/backend/requirements.txt" >/dev/null
 
 python3 - "$ENV_FILE" "$BACKEND_VERSION" "$ROLE" "$NODE_ID_BASE" <<'PY'

@@ -505,7 +505,6 @@ def extract_youtube_media_url_with_ytdlp(watch_url: str, timeout: float) -> tupl
         "skip_download": True,
         "noplaylist": True,
         "socket_timeout": timeout,
-        "format": "bv*[height<=720]+ba/bestvideo[height<=720]+bestaudio/bv*+ba/best",
         "http_headers": {"User-Agent": USER_AGENT},
         "logger": SilentYtdlpLogger(),
     }

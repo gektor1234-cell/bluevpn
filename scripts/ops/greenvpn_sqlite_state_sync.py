@@ -36,6 +36,15 @@ NATURAL_KEYS: dict[str, tuple[str, ...]] = {
     "sms_outbox": ("phone", "body", "created_at"),
     "support_reports": ("report_code",),
     "support_report_comments": ("report_id", "author", "body", "created_at"),
+    "auth_events": ("email", "phone", "event_type", "status", "created_at"),
+    "admin_audit_log": ("actor", "action", "target_type", "target_id", "created_at"),
+    "admin_support_actions": ("user_id", "device_uid", "action", "created_at"),
+    "subscription_expiry_reviews": (
+        "subscription_id",
+        "user_id",
+        "status",
+        "created_at",
+    ),
     "promo_codes": ("code",),
     "promo_redemptions": ("code", "user_id", "order_public_id"),
     "beta_invites": ("public_id",),
@@ -60,11 +69,16 @@ NEVER_UPDATE_TABLES = {
     "email_outbox",
     "sms_outbox",
     "support_report_comments",
-    "admin_sessions",
+    "auth_events",
+    "admin_audit_log",
+    "admin_support_actions",
+    "subscription_expiry_reviews",
     "beta_funnel_events",
 }
 CHANGE_COLUMNS = (
     "updated_at",
+    "email_verified_at",
+    "phone_verified_at",
     "last_seen_at",
     "last_config_at",
     "consumed_at",
@@ -441,6 +455,170 @@ def _update_row(
     conn.execute(f"UPDATE {table} SET {set_sql} WHERE {where}", values)
 
 
+def _later_timestamp_value(first: Any, second: Any) -> Any:
+    first_dt = _parse_dt(first)
+    second_dt = _parse_dt(second)
+    if first_dt is None:
+        return second
+    if second_dt is None or first_dt >= second_dt:
+        return first
+    return second
+
+
+def _earlier_timestamp_value(first: Any, second: Any) -> Any:
+    first_dt = _parse_dt(first)
+    second_dt = _parse_dt(second)
+    if first_dt is None:
+        return second
+    if second_dt is None or first_dt <= second_dt:
+        return first
+    return second
+
+
+def _merge_user_row(
+    conn: sqlite3.Connection,
+    source_row: Mapping[str, Any],
+    target_row: sqlite3.Row,
+    columns: list[str],
+    keys: tuple[str, ...],
+    *,
+    apply: bool,
+) -> bool:
+    updates: dict[str, Any] = {}
+    contact_columns = {
+        "email_verified",
+        "email_verified_at",
+        "phone",
+        "phone_verified",
+        "phone_verified_at",
+    }
+    source_updated = _parse_dt(
+        source_row["updated_at"] if "updated_at" in columns else None
+    )
+    target_updated = _parse_dt(target_row["updated_at"] if "updated_at" in columns else None)
+
+    if source_updated is not None and (
+        target_updated is None or source_updated > target_updated
+    ):
+        updates = {
+            column: source_row[column]
+            for column in columns
+            if column not in keys and column != "id" and column not in contact_columns
+        }
+
+    if "email_verified_at" in columns:
+        latest_email_verification = _later_timestamp_value(
+            source_row["email_verified_at"],
+            target_row["email_verified_at"],
+        )
+        email_verified = int(
+            bool(source_row["email_verified"])
+            or bool(target_row["email_verified"])
+        )
+        if latest_email_verification != target_row["email_verified_at"]:
+            updates["email_verified_at"] = latest_email_verification
+        if (
+            "email_verified" in columns
+            and email_verified != int(bool(target_row["email_verified"]))
+        ):
+            updates["email_verified"] = email_verified
+
+    if "phone" in columns:
+        minimum = datetime.min.replace(tzinfo=timezone.utc)
+
+        def phone_rank(row: Mapping[str, Any]) -> tuple[int, datetime, datetime, str]:
+            verified_at = _parse_dt(
+                row["phone_verified_at"] if "phone_verified_at" in columns else None
+            )
+            verified = bool(
+                row["phone_verified"] if "phone_verified" in columns else False
+            )
+            updated_at = _parse_dt(row["updated_at"] if "updated_at" in columns else None)
+            verification_rank = 2 if verified_at is not None else (1 if verified else 0)
+            return (
+                verification_rank,
+                verified_at or minimum,
+                updated_at or minimum,
+                str(row["phone"] or ""),
+            )
+
+        if phone_rank(source_row) > phone_rank(target_row):
+            for column in ("phone", "phone_verified", "phone_verified_at"):
+                if column in columns and source_row[column] != target_row[column]:
+                    updates[column] = source_row[column]
+
+    if not updates:
+        return False
+    if apply:
+        assignments = ", ".join(f"{column} = ?" for column in updates)
+        where = _where_clause(keys)
+        conn.execute(
+            f"UPDATE users SET {assignments} WHERE {where}",
+            [*updates.values(), *[target_row[key] for key in keys]],
+        )
+    return True
+
+
+def _merge_admin_session(
+    conn: sqlite3.Connection,
+    source_row: Mapping[str, Any],
+    target_row: sqlite3.Row,
+    *,
+    apply: bool,
+) -> bool:
+    updates: dict[str, Any] = {}
+    latest_seen = _later_timestamp_value(
+        source_row["last_seen_at"],
+        target_row["last_seen_at"],
+    )
+    if latest_seen != target_row["last_seen_at"]:
+        updates["last_seen_at"] = latest_seen
+
+    earliest_revocation = _earlier_timestamp_value(
+        source_row["revoked_at"],
+        target_row["revoked_at"],
+    )
+    if earliest_revocation != target_row["revoked_at"]:
+        updates["revoked_at"] = earliest_revocation
+
+    if not updates:
+        return False
+    if apply:
+        assignments = ", ".join(f"{column} = ?" for column in updates)
+        conn.execute(
+            f"UPDATE admin_sessions SET {assignments} WHERE token_hash IS ?",
+            [*updates.values(), target_row["token_hash"]],
+        )
+    return True
+
+
+def _merge_outbox_delivery(
+    conn: sqlite3.Connection,
+    table: str,
+    source_row: Mapping[str, Any],
+    target_row: sqlite3.Row,
+    keys: tuple[str, ...],
+    *,
+    apply: bool,
+) -> bool:
+    source_sent = _parse_dt(source_row["sent_at"])
+    target_sent = _parse_dt(target_row["sent_at"])
+    if source_sent is None or target_sent is not None:
+        return False
+    if apply:
+        where = _where_clause(keys)
+        conn.execute(
+            f"UPDATE {table} SET status = ?, error = ?, sent_at = ? WHERE {where}",
+            [
+                source_row["status"],
+                source_row["error"],
+                source_row["sent_at"],
+                *[target_row[key] for key in keys],
+            ],
+        )
+    return True
+
+
 def _sync_table(
     source_conn: sqlite3.Connection,
     target_conn: sqlite3.Connection,
@@ -534,6 +712,43 @@ def _sync_table(
                 _insert_row(target_conn, table, source_row, columns)
             continue
 
+        if table == "users":
+            if _merge_user_row(
+                target_conn,
+                source_row,
+                target_row,
+                columns,
+                keys,
+                apply=apply,
+            ):
+                result.updated += 1
+            else:
+                result.skipped += 1
+            continue
+        if table == "admin_sessions":
+            if _merge_admin_session(
+                target_conn,
+                source_row,
+                target_row,
+                apply=apply,
+            ):
+                result.updated += 1
+            else:
+                result.skipped += 1
+            continue
+        if table in {"email_outbox", "sms_outbox"}:
+            if _merge_outbox_delivery(
+                target_conn,
+                table,
+                source_row,
+                target_row,
+                keys,
+                apply=apply,
+            ):
+                result.updated += 1
+            else:
+                result.skipped += 1
+            continue
         if table in NEVER_UPDATE_TABLES:
             result.skipped += 1
             continue

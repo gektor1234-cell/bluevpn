@@ -108,6 +108,23 @@ ts() {
     --source-db "$SNAPSHOT" \
     --target-db "$GREENVPN_DB_SYNC_TARGET_DB" \
     --summary-json "$SUMMARY" \
-    "${mode_args[@]}"
+    "${mode_args[@]}" >/dev/null
+  python3 - "$SUMMARY" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+totals = payload["totals"]
+print(
+    "summary "
+    f"inserted={totals['inserted']} "
+    f"updated={totals['updated']} "
+    f"deleted={totals['deleted']} "
+    f"skipped={totals['skipped']} "
+    f"conflicts={totals['conflicts']} "
+    f"errors={totals['errors']}"
+)
+PY
   echo "[$(ts)] done peer=${GREENVPN_DB_SYNC_PEER_NAME}"
 } >> "$LOG" 2>&1

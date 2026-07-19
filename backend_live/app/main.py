@@ -167,6 +167,22 @@ ADMIN_2FA_MAX_ATTEMPTS = max(
     1,
     int(os.getenv("GREENVPN_ADMIN_2FA_MAX_ATTEMPTS", "5")),
 )
+ADMIN_2FA_RESEND_COOLDOWN_SECONDS = max(
+    15,
+    int(os.getenv("GREENVPN_ADMIN_2FA_RESEND_COOLDOWN_SECONDS", "60")),
+)
+ADMIN_LOGIN_RATE_WINDOW_MINUTES = max(
+    1,
+    int(os.getenv("GREENVPN_ADMIN_LOGIN_RATE_WINDOW_MINUTES", "15")),
+)
+ADMIN_LOGIN_MAX_ATTEMPTS_PER_IDENTITY = max(
+    3,
+    int(os.getenv("GREENVPN_ADMIN_LOGIN_MAX_ATTEMPTS_PER_IDENTITY", "8")),
+)
+ADMIN_LOGIN_MAX_ATTEMPTS_PER_IP = max(
+    ADMIN_LOGIN_MAX_ATTEMPTS_PER_IDENTITY,
+    int(os.getenv("GREENVPN_ADMIN_LOGIN_MAX_ATTEMPTS_PER_IP", "30")),
+)
 
 BASE_DIR = Path(os.getenv("BLUEVPN_BASE_DIR", "/opt/bluevpn/backend")).resolve()
 DATA_DIR = Path(os.getenv("BLUEVPN_DATA_DIR", str(BASE_DIR / "data"))).resolve()
@@ -437,7 +453,7 @@ YOOKASSA_RETURN_URL = os.getenv(
 PUBLIC_BASE_URL = clean_base_url(os.getenv("GREENVPN_PUBLIC_BASE_URL", PUBLIC_API_BASE_URL))
 YOOKASSA_WEBHOOK_URL = os.getenv("YOOKASSA_WEBHOOK_URL", "").strip()
 PUBLIC_SITE_URL = clean_base_url(
-    os.getenv("GREENVPN_PUBLIC_SITE_URL", PUBLIC_API_BASE_URL)
+    os.getenv("GREENVPN_PUBLIC_SITE_URL", "https://greenvpn.pro")
 )
 PUBLIC_WINDOWS_DOWNLOAD_URL = os.getenv("GREENVPN_PUBLIC_WINDOWS_DOWNLOAD_URL", UPDATE_DOWNLOAD_URL).strip()
 PUBLIC_ANDROID_DOWNLOAD_URL = os.getenv("GREENVPN_PUBLIC_ANDROID_DOWNLOAD_URL", "").strip()
@@ -453,6 +469,19 @@ ANDROID_UPDATE_SHA256 = re.sub(
     r"\s+",
     "",
     os.getenv("GREENVPN_ANDROID_UPDATE_SHA256", "").strip(),
+).upper()
+ANDROID_UPDATE_ROLLBACK_VERSION = os.getenv(
+    "GREENVPN_ANDROID_ROLLBACK_VERSION",
+    "",
+).strip()
+ANDROID_UPDATE_ROLLBACK_URL = os.getenv(
+    "GREENVPN_ANDROID_ROLLBACK_URL",
+    "",
+).strip()
+ANDROID_UPDATE_ROLLBACK_SHA256 = re.sub(
+    r"\s+",
+    "",
+    os.getenv("GREENVPN_ANDROID_ROLLBACK_SHA256", "").strip(),
 ).upper()
 ANDROID_UPDATE_REQUIRED = (
     os.getenv("GREENVPN_ANDROID_UPDATE_REQUIRED", "").strip().lower()
@@ -533,6 +562,19 @@ PAID_BETA_UPDATE_CONFIG = {
             )
             if item.strip(" -")
         ],
+        "rollbackVersion": os.getenv(
+            "GREENVPN_ANDROID_PAID_BETA_ROLLBACK_VERSION",
+            "",
+        ).strip(),
+        "rollbackUrl": os.getenv(
+            "GREENVPN_ANDROID_PAID_BETA_ROLLBACK_URL",
+            "",
+        ).strip(),
+        "rollbackSha256": re.sub(
+            r"\s+",
+            "",
+            os.getenv("GREENVPN_ANDROID_PAID_BETA_ROLLBACK_SHA256", "").strip(),
+        ).upper(),
     },
     "windows": {
         "latestVersion": os.getenv("GREENVPN_WINDOWS_PAID_BETA_LATEST_VERSION", "").strip(),
@@ -561,6 +603,19 @@ PAID_BETA_UPDATE_CONFIG = {
             )
             if item.strip(" -")
         ],
+        "rollbackVersion": os.getenv(
+            "GREENVPN_WINDOWS_PAID_BETA_ROLLBACK_VERSION",
+            "",
+        ).strip(),
+        "rollbackUrl": os.getenv(
+            "GREENVPN_WINDOWS_PAID_BETA_ROLLBACK_URL",
+            "",
+        ).strip(),
+        "rollbackSha256": re.sub(
+            r"\s+",
+            "",
+            os.getenv("GREENVPN_WINDOWS_PAID_BETA_ROLLBACK_SHA256", "").strip(),
+        ).upper(),
     },
 }
 PUBLIC_IOS_DOWNLOAD_URL = os.getenv("GREENVPN_PUBLIC_IOS_DOWNLOAD_URL", "").strip()
@@ -1634,6 +1689,10 @@ class AdminPaidBetaInviteBatchIn(BaseModel):
 
 
 class AdminPaidBetaInviteDeactivateIn(BaseModel):
+    reason: str
+
+
+class AdminStaleBillingOrderCancelIn(BaseModel):
     reason: str
 
 
@@ -3435,6 +3494,18 @@ def init_db() -> None:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_admin_audit_action ON admin_audit_log(action, created_at DESC)"
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_admin_audit_login_identity
+            ON admin_audit_log(action, target_type, target_id, created_at DESC)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_admin_audit_login_ip
+            ON admin_audit_log(action, request_ip, created_at DESC)
+            """
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_auth_events_user_created ON auth_events(user_id, created_at DESC, id DESC)"
@@ -7098,7 +7169,27 @@ def infer_support_report_workflow(summary: str, report_code: str) -> dict:
 
 
 def request_ip_and_agent(request: Request) -> tuple[str, str]:
-    request_ip = request.client.host if request.client else ""
+    request_ip = clean_limited_text(request.client.host if request.client else "", 120).strip()
+    try:
+        direct_ip = ipaddress.ip_address(request_ip)
+    except ValueError:
+        direct_ip = None
+
+    # Nginx appends the socket address to X-Forwarded-For before proxying locally.
+    # Trust the header only when the direct peer is loopback, never on a public request.
+    if direct_ip is not None and direct_ip.is_loopback:
+        forwarded = clean_limited_text(request.headers.get("x-forwarded-for"), 500)
+        # proxy_add_x_forwarded_for appends the real socket address. Reading the
+        # last valid item prevents a client-supplied leading value from spoofing audit logs.
+        for candidate in reversed(forwarded.split(",")):
+            candidate = candidate.strip()
+            if not candidate:
+                continue
+            try:
+                request_ip = str(ipaddress.ip_address(candidate))
+                break
+            except ValueError:
+                continue
     user_agent = clean_limited_text(request.headers.get("user-agent"), 300)
     return request_ip, user_agent
 
@@ -7878,6 +7969,14 @@ def classify_sms_delivery_error(error: Optional[str]) -> Optional[dict]:
         return {
             "code": "balance_required",
             "message": "SMS.ru отклонил отправку: проверь баланс SMS.ru.",
+        }
+    if ("дневн" in lower and "лимит" in lower) or "status_code: 206" in lower:
+        return {
+            "code": "daily_limit_required",
+            "message": (
+                "SMS.ru отклонил отправку: дневной лимит равен нулю или исчерпан. "
+                "Установи положительный дневной лимит в кабинете SMS.ru."
+            ),
         }
     return {
         "code": "provider_delivery_failed",
@@ -11178,6 +11277,11 @@ def build_server_provisioning_readiness(
         for entry in managed_entries
         if str(entry.get("serverId") or "") in public_server_ids
     ]
+    unsafe_managed_visible_to_client = [
+        entry
+        for entry in managed_visible_to_client
+        if not entry.get("clientConfigReady") or not entry.get("publicEligible")
+    ]
     config_ready_managed = [
         entry for entry in managed_entries if entry.get("clientConfigReady")
     ]
@@ -11225,13 +11329,13 @@ def build_server_provisioning_readiness(
         "Клиентский /api/v1/client/config принимает только auto/default и serverId из публичного каталога.",
     )
     add_check(
-        "managed_entries_not_client_visible",
-        "Управляемые VPN-узлы не видны клиенту",
-        len(managed_visible_to_client) == 0,
+        "managed_public_entries_pass_gate",
+        "Публичные управляемые VPN-узлы прошли gate",
+        len(unsafe_managed_visible_to_client) == 0,
         (
-            "Управляемые записи отсутствуют в публичном каталоге."
-            if not managed_visible_to_client
-            else "Управляемые записи попали в публичный каталог и требуют ручной проверки."
+            "Все видимые managed-записи имеют готовый клиентский профиль и явный допуск к публикации."
+            if not unsafe_managed_visible_to_client
+            else "В публичный каталог попала managed-запись без готового профиля или publication gate."
         ),
     )
     add_check(
@@ -11266,7 +11370,7 @@ def build_server_provisioning_readiness(
     new_server_draft_gate_ready = (
         bool(default_server)
         and default_endpoint_matches
-        and len(managed_visible_to_client) == 0
+        and len(unsafe_managed_visible_to_client) == 0
     )
     add_check(
         "new_vps_internal_draft_gate",
@@ -11295,11 +11399,13 @@ def build_server_provisioning_readiness(
         },
         {
             "requestServerId": "current_wg0",
-            "allowed": False,
-            "selectedServerId": "",
+            "allowed": "current_wg0" in public_server_ids,
+            "selectedServerId": (
+                "current_wg0" if "current_wg0" in public_server_ids else ""
+            ),
             "reason": (
-                "managed_not_published"
-                if current_wg0
+                "explicit_public_catalog"
+                if "current_wg0" in public_server_ids
                 else "unknown_to_public_catalog"
             ),
         },
@@ -11330,17 +11436,23 @@ def build_server_provisioning_readiness(
         "generatedAt": utc_now_iso(),
         "safeForCurrentClient": safe_for_current_client,
         "currentEndpointConfigReady": current_wg0_ready,
-        "multiEndpointProvisioningReady": False,
+        "multiEndpointProvisioningReady": bool(
+            len(public_servers) > 1 and not unsafe_managed_visible_to_client
+        ),
         "newVpsOnboardingReady": bool(new_server_onboarding_plan["safeToCreateInternalDraft"]),
-        "publicCatalogUnchanged": True,
+        "publicCatalogUnchanged": not unsafe_managed_visible_to_client,
         "clientConfigContract": {
             "route": "/api/v1/client/config",
             "selectionPolicy": "public_catalog_only",
             "acceptedServerIds": ["auto", *public_server_ids],
             "defaultServerId": default_server_id,
-            "configProfile": "builtin_wg0",
+            "configProfile": "managed_public_catalog",
             "endpoint": expected_endpoint,
-            "managedCatalogClientVisible": False,
+            "managedCatalogClientVisible": bool(managed_visible_to_client),
+            "managedPublicServerIds": [
+                str(entry.get("serverId") or "")
+                for entry in managed_visible_to_client
+            ],
             "unknownManagedBehavior": "400 неизвестный serverId",
         },
         "summary": {
@@ -12559,6 +12671,7 @@ def server_health_external_probe_readiness(summary: dict) -> dict:
             for entry in managed_entries
             if entry.get("serverId")
             and entry.get("isActive")
+            and entry.get("isPublic")
             and entry.get("clientConfigReady")
         }
     )
@@ -16045,17 +16158,32 @@ def published_app_release_rollback_candidate(
     return snapshots[0] if snapshots else None
 
 
-def environment_rollback_candidate() -> Optional[dict]:
-    if not (UPDATE_ROLLBACK_VERSION or UPDATE_ROLLBACK_URL or UPDATE_ROLLBACK_SHA256):
+def environment_rollback_candidate(platform: str, channel: str) -> Optional[dict]:
+    normalized_platform = normalize_app_release_platform(platform, "windows")
+    normalized_channel = normalize_app_release_channel(channel, "stable")
+    if normalized_channel == "paid-beta":
+        config = PAID_BETA_UPDATE_CONFIG.get(normalized_platform) or {}
+        version = clean_limited_text(config.get("rollbackVersion"), 120).strip()
+        download_url = clean_limited_text(config.get("rollbackUrl"), 2048).strip()
+        sha256 = clean_limited_text(config.get("rollbackSha256"), 128).strip().upper()
+    elif normalized_platform == "android":
+        version = ANDROID_UPDATE_ROLLBACK_VERSION
+        download_url = ANDROID_UPDATE_ROLLBACK_URL
+        sha256 = ANDROID_UPDATE_ROLLBACK_SHA256
+    else:
+        version = UPDATE_ROLLBACK_VERSION
+        download_url = UPDATE_ROLLBACK_URL
+        sha256 = UPDATE_ROLLBACK_SHA256
+    if not (version or download_url or sha256):
         return None
     return {
         "id": None,
-        "platform": "windows",
-        "channel": "stable",
-        "version": UPDATE_ROLLBACK_VERSION,
+        "platform": normalized_platform,
+        "channel": normalized_channel,
+        "version": version,
         "buildNumber": "",
-        "downloadUrl": UPDATE_ROLLBACK_URL,
-        "sha256": UPDATE_ROLLBACK_SHA256,
+        "downloadUrl": download_url,
+        "sha256": sha256,
         "sizeBytes": None,
         "isRequired": False,
         "minSupportedVersion": "",
@@ -16112,7 +16240,7 @@ def app_release_rollback_readiness(release: dict) -> dict:
         "previous_published_release",
     )
     env_candidate = rollback_candidate_with_readiness(
-        environment_rollback_candidate(),
+        environment_rollback_candidate(platform, channel),
         "environment",
     )
     candidates = [item for item in [previous_candidate, env_candidate] if item]
@@ -16572,6 +16700,44 @@ def apply_update_artifact_guard(manifest: dict, configured_required: bool) -> di
     return manifest
 
 
+def node_local_update_artifact(
+    *,
+    platform: str,
+    channel: str,
+    version: str,
+    sha256: str,
+) -> Optional[dict]:
+    normalized_platform = normalize_app_release_platform(platform)
+    normalized_channel = normalize_app_release_channel(channel)
+    if normalized_channel == PAID_BETA_RELEASE_CHANNEL:
+        config = PAID_BETA_UPDATE_CONFIG.get(normalized_platform) or {}
+        local_version = clean_limited_text(config.get("latestVersion"), 120).strip()
+        local_url = clean_limited_text(config.get("downloadUrl"), 2048).strip()
+        local_sha256 = clean_limited_text(config.get("sha256"), 128).strip().upper()
+    elif normalized_platform == "android":
+        local_version = ANDROID_UPDATE_LATEST_VERSION
+        local_url = ANDROID_UPDATE_DOWNLOAD_URL
+        local_sha256 = ANDROID_UPDATE_SHA256
+    else:
+        local_version = UPDATE_LATEST_VERSION
+        local_url = UPDATE_DOWNLOAD_URL
+        local_sha256 = UPDATE_SHA256
+    release_sha256 = clean_limited_text(sha256, 128).strip().upper()
+    if not (
+        local_url
+        and local_version == clean_limited_text(version, 120).strip()
+        and local_sha256
+        and release_sha256
+        and hmac.compare_digest(local_sha256, release_sha256)
+    ):
+        return None
+    return {
+        "downloadUrl": local_url,
+        "sha256": local_sha256,
+        "version": local_version,
+    }
+
+
 def build_update_manifest(
     *,
     platform: str = "windows",
@@ -16586,6 +16752,12 @@ def build_update_manifest(
     row = latest_published_app_release(platform, channel)
     if row:
         release = app_release_payload(row)
+        local_artifact = node_local_update_artifact(
+            platform=platform,
+            channel=channel,
+            version=release.get("version") or "",
+            sha256=release.get("sha256") or "",
+        )
         min_supported = release.get("minSupportedVersion") or ""
         configured_required = bool(release.get("isRequired")) or (
             bool(current)
@@ -16606,7 +16778,11 @@ def build_update_manifest(
             "currentVersion": current,
             "latestVersion": release["version"],
             "buildNumber": release.get("buildNumber"),
-            "downloadUrl": release.get("downloadUrl") or "",
+            "downloadUrl": (
+                local_artifact.get("downloadUrl")
+                if local_artifact
+                else release.get("downloadUrl") or ""
+            ),
             "sha256": release.get("sha256") or "",
             "sizeBytes": release.get("sizeBytes"),
             "required": configured_required,
@@ -16616,7 +16792,8 @@ def build_update_manifest(
             **rollout,
             "releasedAt": release.get("publishedAt") or release.get("updatedAt") or "",
             "changelog": release.get("changelog") or [],
-            "source": "database",
+            "source": "database_node_mirror" if local_artifact else "database",
+            "nodeLocalMirror": bool(local_artifact),
         }
         return apply_update_artifact_guard(manifest, configured_required)
 
@@ -19447,6 +19624,54 @@ def billing_order_requires_attention(row, now: datetime) -> list[dict]:
             "Failed/canceled order has paid or activated markers and needs manual review.",
         )
     return issues
+
+
+def cancel_stale_uncreated_billing_order(public_id: str, reason: str) -> dict:
+    clean_reason = clean_limited_text(reason, 500).strip()
+    if len(clean_reason) < 8:
+        raise HTTPException(
+            status_code=400,
+            detail="Причина отмены должна содержать минимум 8 символов.",
+        )
+
+    row = get_billing_order_row(public_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
+    issue_codes = {
+        str(issue.get("code") or "")
+        for issue in billing_order_requires_attention(row, utc_now())
+    }
+    safe_issue_codes = {"stale_pending_order", "yookassa_payment_not_created"}
+    has_payment_markers = any(
+        bool(row[key])
+        for key in (
+            "payment_url",
+            "provider_payment_id",
+            "provider_payment_method_id",
+            "paid_at",
+            "activated_at",
+        )
+        if key in row.keys()
+    )
+    if (
+        str(row["status"] or "").strip().lower() != "pending"
+        or not safe_issue_codes.issubset(issue_codes)
+        or has_payment_markers
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Безопасная отмена разрешена только для pending-заказа старше 24 часов, "
+                "для которого YooKassa-платёж не создавался и нет признаков оплаты."
+            ),
+        )
+
+    result = mark_billing_order_canceled(public_id)
+    return {
+        "order": public_billing_order_status(result["order"]),
+        "reason": clean_reason,
+        "issueCodes": sorted(issue_codes),
+    }
 
 
 def billing_reconciliation_payload(limit: int = 25) -> dict:
@@ -26175,9 +26400,38 @@ def create_admin_2fa_challenge(row, request: Request, actor: Optional[str] = Non
             detail="Отправка email-кода администратора не настроена.",
         )
 
+    now = utc_now()
+    cooldown_cutoff = now - timedelta(seconds=ADMIN_2FA_RESEND_COOLDOWN_SECONDS)
+    with db() as conn:
+        recent = conn.execute(
+            """
+            SELECT created_at
+            FROM admin_2fa_challenges
+            WHERE staff_id = ?
+              AND sent_at IS NOT NULL
+              AND created_at >= ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (int(row["id"]), cooldown_cutoff.isoformat()),
+        ).fetchone()
+    if recent is not None:
+        write_admin_audit(
+            "admin_staff_2fa_rate_limited",
+            "admin_staff",
+            str(row["id"]),
+            {"email": row["email"], "cooldownSeconds": ADMIN_2FA_RESEND_COOLDOWN_SECONDS},
+            request=request,
+            actor=clean_limited_text(actor, 120).strip() or row["email"],
+        )
+        raise HTTPException(
+            status_code=429,
+            detail="Код уже отправлен. Подождите перед повторной отправкой.",
+            headers={"Retry-After": str(ADMIN_2FA_RESEND_COOLDOWN_SECONDS)},
+        )
+
     code = f"{secrets.randbelow(1000000):06d}"
     challenge_id = secrets.token_urlsafe(24)
-    now = utc_now()
     expires_at = now + timedelta(minutes=ADMIN_2FA_CODE_TTL_MINUTES)
     request_ip, user_agent = request_ip_and_agent(request)
     with db() as conn:
@@ -26370,11 +26624,72 @@ def verify_admin_2fa_challenge(payload: AdminTwoFactorVerifyIn, request: Request
     return issue_admin_staff_session(staff_row, request, payload.actor)
 
 
+def admin_login_rate_limit_state(email: str, request: Request) -> dict:
+    request_ip, _ = request_ip_and_agent(request)
+    cutoff = (utc_now() - timedelta(minutes=ADMIN_LOGIN_RATE_WINDOW_MINUTES)).isoformat()
+    with db() as conn:
+        identity_attempts = int(
+            conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM admin_audit_log
+                WHERE action = 'admin_staff_login_failed'
+                  AND target_type = 'admin_staff'
+                  AND target_id = ?
+                  AND created_at >= ?
+                """,
+                (email, cutoff),
+            ).fetchone()[0]
+        )
+        ip_attempts = int(
+            conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM admin_audit_log
+                WHERE action = 'admin_staff_login_failed'
+                  AND request_ip = ?
+                  AND created_at >= ?
+                """,
+                (request_ip, cutoff),
+            ).fetchone()[0]
+        )
+    return {
+        "blocked": (
+            identity_attempts >= ADMIN_LOGIN_MAX_ATTEMPTS_PER_IDENTITY
+            or ip_attempts >= ADMIN_LOGIN_MAX_ATTEMPTS_PER_IP
+        ),
+        "identityAttempts": identity_attempts,
+        "ipAttempts": ip_attempts,
+        "requestIp": request_ip,
+        "retryAfterSeconds": ADMIN_LOGIN_RATE_WINDOW_MINUTES * 60,
+    }
+
+
 def login_admin_staff(payload: AdminLoginIn, request: Request) -> dict:
     email = clean_limited_text(payload.email, 180).strip().lower()
     password = str(payload.password or "")
     if not email or not password:
         raise HTTPException(status_code=400, detail="Нужны email и пароль.")
+
+    rate_limit = admin_login_rate_limit_state(email, request)
+    if rate_limit["blocked"]:
+        write_admin_audit(
+            "admin_staff_login_rate_limited",
+            "admin_staff",
+            email,
+            {
+                "identityAttempts": rate_limit["identityAttempts"],
+                "ipAttempts": rate_limit["ipAttempts"],
+                "windowMinutes": ADMIN_LOGIN_RATE_WINDOW_MINUTES,
+            },
+            request=request,
+            actor=email or "unknown_admin_login",
+        )
+        raise HTTPException(
+            status_code=429,
+            detail="Слишком много попыток входа. Повторите позже.",
+            headers={"Retry-After": str(rate_limit["retryAfterSeconds"])},
+        )
 
     with db() as conn:
         row = conn.execute(
@@ -26863,6 +27178,7 @@ def on_startup() -> None:
     ADMIN_TOKEN = ensure_admin_token()
 
 
+@app.head("/healthz")
 @app.get("/healthz")
 def healthz():
     payment_ready = yookassa_payment_readiness()["productionReady"]
@@ -26973,6 +27289,7 @@ def windows_public_bootstrap(
     }
 
 
+@app.head("/payment/return", response_class=HTMLResponse)
 @app.get("/payment/return", response_class=HTMLResponse)
 def payment_return_page():
     return """
@@ -27315,6 +27632,7 @@ def _public_download_cards() -> str:
     )
 
 
+@app.head("/", response_class=HTMLResponse)
 @app.get("/", response_class=HTMLResponse)
 def public_landing_page():
     body = f"""
@@ -27411,6 +27729,7 @@ def _download_pending_page(title: str, body_text: str) -> HTMLResponse:
     )
 
 
+@app.head("/download/windows")
 @app.get("/download/windows")
 def download_windows_page():
     url = _public_download_target(PUBLIC_WINDOWS_DOWNLOAD_URL)
@@ -27422,6 +27741,7 @@ def download_windows_page():
     )
 
 
+@app.head("/download/android")
 @app.get("/download/android")
 def download_android_page():
     url = _public_download_target(PUBLIC_ANDROID_DOWNLOAD_URL)
@@ -27433,6 +27753,7 @@ def download_android_page():
     )
 
 
+@app.head("/download/ios")
 @app.get("/download/ios")
 def download_ios_page():
     url = _public_download_target(PUBLIC_IOS_DOWNLOAD_URL)
@@ -27444,6 +27765,7 @@ def download_ios_page():
     )
 
 
+@app.head("/legal/requisites", response_class=HTMLResponse)
 @app.get("/legal/requisites", response_class=HTMLResponse)
 def legal_requisites_page():
     owner = _legal_escape(LEGAL_OWNER_NAME)
@@ -27470,6 +27792,7 @@ def legal_requisites_page():
     return _legal_shell("Реквизиты", body, "Реквизиты Green VPN")
 
 
+@app.head("/legal/offer", response_class=HTMLResponse)
 @app.get("/legal/offer", response_class=HTMLResponse)
 def legal_offer_page():
     body = f"""
@@ -27495,6 +27818,7 @@ def legal_offer_page():
     return _legal_shell("Публичная оферта", body, "Публичная оферта Green VPN")
 
 
+@app.head("/legal/privacy", response_class=HTMLResponse)
 @app.get("/legal/privacy", response_class=HTMLResponse)
 def legal_privacy_page():
     body = f"""
@@ -27516,6 +27840,8 @@ def legal_privacy_page():
     </ul>
     <h2>Что не анализируется</h2>
     <p>Green VPN не использует содержимое передаваемого трафика для рекламы и не формирует историю посещенных страниц. Для работы сервиса могут обрабатываться технические счетчики объема трафика, время подключения, выбранный сервер и диагностические события.</p>
+    <h2>Реклама в бесплатном режиме Android</h2>
+    <p>Перед бесплатным подключением приложение Android может показать рекламный ролик через рекламного провайдера. Провайдер может обрабатывать рекламный идентификатор устройства, IP-адрес и технические сведения о показе в соответствии со своей политикой. Green VPN получает только техническое подтверждение завершенного просмотра и не передает провайдеру содержимое VPN-трафика или историю посещенных страниц. Платная подписка и приложение Windows работают без рекламного показа.</p>
     <h2>Платежи</h2>
     <p>Платежные данные обрабатываются YooKassa или другим подключенным платежным провайдером. Green VPN получает только статус платежа, сумму, валюту и технические идентификаторы, необходимые для активации тарифа.</p>
     <h2>Хранение и удаление</h2>
@@ -27527,6 +27853,7 @@ def legal_privacy_page():
     return _legal_shell("Политика конфиденциальности", body, "Политика конфиденциальности Green VPN")
 
 
+@app.head("/legal/acceptable-use", response_class=HTMLResponse)
 @app.get("/legal/acceptable-use", response_class=HTMLResponse)
 def legal_acceptable_use_page():
     body = """
@@ -27548,6 +27875,7 @@ def legal_acceptable_use_page():
     return _legal_shell("Правила использования", body, "Правила использования Green VPN")
 
 
+@app.head("/legal/refunds", response_class=HTMLResponse)
 @app.get("/legal/refunds", response_class=HTMLResponse)
 def legal_refunds_page():
     body = f"""
@@ -31047,20 +31375,6 @@ def admin_server_catalog_capacity_update(
 ):
     require_admin(x_admin_token, authorization, "servers.manage", request=request)
     entry = update_managed_server_capacity_entry(entry_id, payload)
-    write_admin_audit(
-        "server_catalog_capacity_updated",
-        "server_catalog_entry",
-        str(entry["id"]),
-        {
-            "serverId": entry["serverId"],
-            "capacityStatus": (entry.get("capacity") or {}).get("capacityStatus"),
-            "capacityScore": (entry.get("capacity") or {}).get("capacityScore"),
-            "currentLoadMbps": (entry.get("capacity") or {}).get("currentLoadMbps"),
-            "activeClients": (entry.get("capacity") or {}).get("activeClients"),
-            "assignedUsers": (entry.get("capacity") or {}).get("assignedUsers"),
-        },
-        request=request,
-    )
     public_catalog = build_server_catalog()
     managed_entries = list_managed_server_catalog_entries()
     return {
@@ -31086,21 +31400,6 @@ def admin_server_catalog_capacity_update_by_server_id(
 ):
     require_admin(x_admin_token, authorization, "servers.manage", request=request)
     entry = update_managed_server_capacity_by_server_id(server_id, payload)
-    write_admin_audit(
-        "server_catalog_capacity_updated",
-        "server_catalog_entry",
-        str(entry["id"]),
-        {
-            "serverId": entry["serverId"],
-            "capacityStatus": (entry.get("capacity") or {}).get("capacityStatus"),
-            "capacityScore": (entry.get("capacity") or {}).get("capacityScore"),
-            "currentLoadMbps": (entry.get("capacity") or {}).get("currentLoadMbps"),
-            "activeClients": (entry.get("capacity") or {}).get("activeClients"),
-            "assignedUsers": (entry.get("capacity") or {}).get("assignedUsers"),
-            "updatedBy": "server_id",
-        },
-        request=request,
-    )
     public_catalog = build_server_catalog()
     managed_entries = list_managed_server_catalog_entries()
     return {
@@ -31125,21 +31424,6 @@ def admin_wireguard_traffic_report(
 ):
     require_admin(x_admin_token, authorization, "servers.manage", request=request)
     result = apply_peer_traffic_report(payload)
-    write_admin_audit(
-        "wireguard_traffic_report_received",
-        "server",
-        result["serverId"],
-        {
-            "iface": result["iface"],
-            "periodKey": result["periodKey"],
-            "matchedPeers": result["matchedPeers"],
-            "unknownPeerCount": result["unknownPeerCount"],
-            "baselineOnlyPeers": result["baselineOnlyPeers"],
-            "deltaBytes": result["deltaBytes"],
-            "counterResets": result["counterResets"],
-        },
-        request=request,
-    )
     return result
 
 
@@ -31206,20 +31490,6 @@ def admin_server_health_observation_create(
 ):
     require_admin(x_admin_token, authorization, "monitoring.manage", request=request)
     observation = create_server_health_observation(payload)
-    write_admin_audit(
-        "server_health_observation_created",
-        "server_health_observation",
-        str(observation["id"]),
-        {
-            "endpointId": observation["endpointId"],
-            "probeId": observation["probeId"],
-            "probeRegion": observation["probeRegion"],
-            "status": observation["status"],
-            "latencyMs": observation["latencyMs"],
-            "target": observation["target"],
-        },
-        request=request,
-    )
     return {
         "ok": True,
         "version": APP_VERSION,
@@ -31462,19 +31732,6 @@ def admin_service_availability_observation_create(
 ):
     require_admin(x_admin_token, authorization, "monitoring.manage", request=request)
     observation = create_service_availability_observation(payload)
-    write_admin_audit(
-        "service_availability_observation_created",
-        "service_availability_observation",
-        str(observation["id"]),
-        {
-            "targetId": observation["targetId"],
-            "probeId": observation["probeId"],
-            "probeRegion": observation["probeRegion"],
-            "status": observation["status"],
-            "latencyMs": observation["latencyMs"],
-        },
-        request=request,
-    )
     return {
         "ok": True,
         "version": APP_VERSION,
@@ -31545,21 +31802,6 @@ def admin_resilience_route_observation_create(
 ):
     require_admin(x_admin_token, authorization, "monitoring.manage", request=request)
     observation = create_resilience_route_observation(payload)
-    write_admin_audit(
-        "resilience_route_observation_created",
-        "resilience_route_observation",
-        str(observation["id"]),
-        {
-            "endpointId": observation["endpointId"],
-            "protocol": observation["protocol"],
-            "targetId": observation["targetId"],
-            "probeId": observation["probeId"],
-            "probeRegion": observation["probeRegion"],
-            "status": observation["status"],
-            "latencyMs": observation["latencyMs"],
-        },
-        request=request,
-    )
     catalog = build_server_catalog()
     return {
         "ok": True,
@@ -33214,6 +33456,36 @@ def admin_mark_billing_order_paid(
     return {
         "ok": True,
         **result,
+    }
+
+
+@app.post("/api/v1/admin/billing/orders/{order_id}/cancel-stale")
+def admin_cancel_stale_billing_order(
+    order_id: str,
+    payload: AdminStaleBillingOrderCancelIn,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "billing.manage", request=request)
+    result = cancel_stale_uncreated_billing_order(order_id, payload.reason)
+    order = result["order"]
+    write_admin_audit(
+        "billing_stale_order_canceled",
+        "billing_order",
+        order_id,
+        {
+            "reason": result["reason"],
+            "issueCodes": result["issueCodes"],
+            "userId": order.get("userId"),
+            "amountRub": order.get("amountRub"),
+        },
+        request=request,
+    )
+    return {
+        "ok": True,
+        **result,
+        "reconciliation": billing_reconciliation_payload(),
     }
 
 

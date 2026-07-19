@@ -5969,6 +5969,34 @@ async function reviewSubscriptionExpiry(subscriptionId) {
   }
 }
 
+async function cancelStaleBillingOrder(orderId) {
+  if (!requirePermission('billing.manage', 'Отмена зависшего заказа')) return;
+  const reason = window.prompt(
+    'Причина отмены для журнала:',
+    'Закрытие старого неоплаченного заказа, для которого платёж у провайдера не создавался.',
+  );
+  if (reason === null) return;
+  if (reason.trim().length < 8) {
+    setNotice('Причина отмены должна содержать минимум 8 символов.', true);
+    return;
+  }
+  const confirmed = window.confirm(
+    'Отменить этот старый pending-заказ? Backend дополнительно проверит, что у него нет ссылки, идентификатора и признаков оплаты.',
+  );
+  if (!confirmed) return;
+  try {
+    const result = await apiPost(
+      `/api/v1/admin/billing/orders/${encodeURIComponent(orderId)}/cancel-stale`,
+      { reason: reason.trim() },
+    );
+    state.loaded.billingReconciliation = result.reconciliation || state.loaded.billingReconciliation;
+    await loadDashboardData();
+    setNotice('Старый неоплаченный заказ отменён и записан в аудит.');
+  } catch (error) {
+    setNotice(`Не удалось безопасно отменить заказ: ${error.message}`, true);
+  }
+}
+
 function renderPromoCodes() {
   const container = $('promoList');
   if (!container) return;
@@ -6066,6 +6094,20 @@ function renderOrdersTable() {
   const renewalSummary = renewals.summary || {};
   const renewalIssueCounts = renewals.issueCounts || {};
   const renewalCandidates = renewals.candidates || [];
+  const attentionByOrderId = new Map(
+    attentionOrders.map((order) => [String(order.orderId || ''), order]),
+  );
+  const orderActionHtml = (order) => {
+    const attention = attentionByOrderId.get(String(order.orderId || order.id || ''));
+    const issueCodes = new Set((attention?.issues || []).map((issue) => issue.code));
+    const canCancelSafely =
+      order.status === 'pending'
+      && issueCodes.has('stale_pending_order')
+      && issueCodes.has('yookassa_payment_not_created');
+    if (!canCancelSafely) return '<span class="muted">—</span>';
+    if (!can('billing.manage')) return readonlyActionsHtml('billing.manage');
+    return `<button class="small-button danger" type="button" data-order-cancel-stale="${escapeHtml(order.orderId || order.id)}">Отменить зависший</button>`;
+  };
   const issuePills = Object.entries(issueCounts)
     .map(([code, count]) => `<span class="status-pill ${count ? 'yellow' : 'muted'}">${escapeHtml(code)}: ${escapeHtml(count)}</span>`)
     .join('');
@@ -6226,10 +6268,11 @@ function renderOrdersTable() {
             <td><span class="status-pill muted">${escapeUi(order.status)}</span></td>
             <td>${escapeHtml(orderPlanLabel(order))}</td>
             <td>${escapeHtml(shortDate(order.createdAt))}</td>
+            <td>${orderActionHtml(order)}</td>
           </tr>
         `,
       )
-      .join('') || '<tr><td colspan="6">Заказов нет.</td></tr>';
+      .join('') || '<tr><td colspan="7">Заказов нет.</td></tr>';
   renderPagination('orders', 'ordersPagination');
 }
 
@@ -8105,6 +8148,11 @@ function bindEvents() {
     const expiryReviewButton = event.target.closest('[data-expiry-review]');
     if (expiryReviewButton) {
       reviewSubscriptionExpiry(expiryReviewButton.dataset.expiryReview);
+      return;
+    }
+    const cancelStaleOrderButton = event.target.closest('[data-order-cancel-stale]');
+    if (cancelStaleOrderButton) {
+      cancelStaleBillingOrder(cancelStaleOrderButton.dataset.orderCancelStale);
       return;
     }
     const openButton = event.target.closest('[data-report-open]');

@@ -58,6 +58,8 @@ $mainPath = Join-Path $ProjectRoot "lib\main.dart"
 $runtimeConfigPath = Join-Path $ProjectRoot "lib\runtime_config.dart"
 $backendPath = Join-Path $ProjectRoot "backend_live\app\main.py"
 $installerPath = Join-Path $ProjectRoot "scripts\windows\build_installer.ps1"
+$paidBetaWindowsInstallerPath = Join-Path $ProjectRoot "scripts\windows\install_paid_beta_side_by_side.ps1"
+$paidBetaWindowsUninstallerPath = Join-Path $ProjectRoot "scripts\windows\uninstall_paid_beta_side_by_side.ps1"
 $signScriptPath = Join-Path $ProjectRoot "scripts\windows\sign_release_artifacts.ps1"
 $servicePath = Join-Path $ProjectRoot "windows\green_vpn_service\main.cpp"
 $runnerPath = Join-Path $ProjectRoot "windows\runner\flutter_window.cpp"
@@ -154,11 +156,15 @@ $sqliteSnapshotPath = Join-Path $ProjectRoot "scripts\ops\greenvpn_sqlite_snapsh
 $dbSyncShellPath = Join-Path $ProjectRoot "scripts\ops\greenvpn_db_sync_from_peer.sh"
 $paidBetaBackendBundlePath = Join-Path $ProjectRoot "scripts\windows\prepare_paid_beta_backend_bundle.ps1"
 $paidBetaBackendInstallerPath = Join-Path $ProjectRoot "scripts\server\install_paid_beta_backend_release.sh"
+$releaseRollbackInstallerPath = Join-Path $ProjectRoot "scripts\server\configure_public_release_rollback.sh"
+$adminStaticInstallerPath = Join-Path $ProjectRoot "scripts\server\install_admin_app_release.sh"
 
 $main = Read-Text $mainPath
 $runtimeConfig = Read-Text $runtimeConfigPath
 $backend = Read-Text $backendPath
 $installer = Read-Text $installerPath
+$paidBetaWindowsInstaller = Read-Text $paidBetaWindowsInstallerPath
+$paidBetaWindowsUninstaller = Read-Text $paidBetaWindowsUninstallerPath
 $signScript = Read-Text $signScriptPath
 $serviceSource = Read-Text $servicePath
 $doctorScript = Read-Text $doctorPath
@@ -253,6 +259,8 @@ $sqliteSnapshotScript = Read-Text $sqliteSnapshotPath
 $dbSyncShellScript = Read-Text $dbSyncShellPath
 $paidBetaBackendBundleScript = Read-Text $paidBetaBackendBundlePath
 $paidBetaBackendInstallerScript = Read-Text $paidBetaBackendInstallerPath
+$releaseRollbackInstallerScript = Read-Text $releaseRollbackInstallerPath
+$adminStaticInstallerScript = Read-Text $adminStaticInstallerPath
 
 Write-Section "CLIENT SAFETY CHECKS"
 $forbiddenClientPatterns = @(
@@ -401,6 +409,7 @@ $requiredBackendFragments = @(
     '@app.post("/api/v1/subscription/auto-renew/cancel")',
     '@app.get("/api/v1/admin/launch/advertising-readiness")',
     '@app.get("/api/v1/admin/billing/readiness")',
+    '@app.post("/api/v1/admin/billing/orders/{order_id}/cancel-stale")',
     '@app.get("/api/v1/admin/billing/reconciliation")',
     '@app.get("/api/v1/admin/billing/promos/readiness")',
     '@app.post("/api/v1/admin/billing/promos/draft-start-campaign")',
@@ -498,11 +507,16 @@ $requiredBackendSafetyFragments = @(
     'def list_admin_alert_events(',
     'def app_release_publication_readiness(',
     'def app_release_rollback_readiness(',
+    'def node_local_update_artifact(',
+    'database_node_mirror',
     'releaseReadiness',
     'latestReleaseReadiness',
     'rollbackReadiness',
     'rollback_artifact_missing',
     'GREENVPN_ROLLBACK_URL',
+    'GREENVPN_ANDROID_ROLLBACK_URL',
+    'GREENVPN_ANDROID_PAID_BETA_ROLLBACK_URL',
+    'GREENVPN_WINDOWS_PAID_BETA_ROLLBACK_URL',
     'rollback_plan',
     'def windows_distribution_trust_readiness(',
     'GREENVPN_WINDOWS_CODE_SIGNING_PROVIDER',
@@ -511,7 +525,7 @@ $requiredBackendSafetyFragments = @(
     'PUBLIC_ADVERTISING_REQUIRED_CODES',
     'def build_server_provisioning_readiness(',
     'clientConfigContract',
-    'managed_entries_not_client_visible',
+    'managed_public_entries_pass_gate',
     'multiEndpointProvisioningReady',
     'def external_owner_setup_bundle(',
     'setupBundle',
@@ -951,6 +965,70 @@ foreach ($scriptPath in @($naiveHttpsBootstrapPath, $naiveHttpsReadinessPath, $n
 }
 
 Write-Section "INSTALLER CHECKS"
+$localizedWindowsPowerShellScripts = @(
+    $installerPath,
+    (Join-Path $ProjectRoot "scripts\bluevpn_social_only.ps1")
+)
+foreach ($localizedScriptPath in $localizedWindowsPowerShellScripts) {
+    if (-not (Test-Path -LiteralPath $localizedScriptPath)) {
+        Add-Error "Missing localized Windows PowerShell script: $localizedScriptPath"
+        continue
+    }
+    $localizedScriptBytes = [IO.File]::ReadAllBytes($localizedScriptPath)
+    $hasUtf8Bom = $localizedScriptBytes.Length -ge 3 -and
+        $localizedScriptBytes[0] -eq 0xEF -and
+        $localizedScriptBytes[1] -eq 0xBB -and
+        $localizedScriptBytes[2] -eq 0xBF
+    if ($hasUtf8Bom) {
+        Add-Pass "Localized Windows PowerShell script is UTF-8 BOM safe: $localizedScriptPath"
+    }
+    else {
+        Add-Error "Localized Windows PowerShell script must use UTF-8 BOM for Windows PowerShell 5.1: $localizedScriptPath"
+    }
+}
+
+$protectedInstallerContracts = [ordered]@{
+    'Production installer uses Program Files' = @($installer, '[string]$InstallDir = "$env:ProgramFiles\Green VPN"')
+    'Production installer creates common desktop shortcuts' = @($installer, "CommonDesktopDirectory")
+    'Production installer creates common Start Menu shortcuts' = @($installer, "CommonPrograms")
+    'Production installer protects machine binaries' = @($installer, "'*S-1-5-32-545:(OI)(CI)RX'")
+    'Production installer registers machine-wide uninstall' = @($installer, "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Green VPN")
+    'Production installer registers machine-wide startup' = @($installer, "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run")
+    'Production installer stages files before replacing the live installation' = @($installer, '$stagingRoot = "$installRoot.staging-$swapId"')
+    'Production installer restores the previous installation on failure' = @($installer, 'if (-not $installCompleted -and ($runtimeStopped -or $existingRootBackedUp -or $installSwapped))')
+    'Production installer launches in the original user context after UAC' = @($installer, '$launchAfterInstall = -not $NoLaunch')
+    'Beta installer uses Program Files' = @($paidBetaWindowsInstaller, '[string]$InstallDir = "$env:ProgramFiles\Green VPN Beta"')
+    'Beta installer creates common desktop shortcuts' = @($paidBetaWindowsInstaller, "CommonDesktopDirectory")
+    'Beta installer creates common Start Menu shortcuts' = @($paidBetaWindowsInstaller, "CommonPrograms")
+    'Beta installer protects machine binaries' = @($paidBetaWindowsInstaller, "'*S-1-5-32-545:(OI)(CI)RX'")
+    'Beta installer registers machine-wide uninstall' = @($paidBetaWindowsInstaller, "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Green VPN Beta")
+    'Beta installer stages files before replacing the live installation' = @($paidBetaWindowsInstaller, '$stagingRoot = "$installRoot.staging-$swapId"')
+    'Beta installer restores the previous installation on failure' = @($paidBetaWindowsInstaller, 'restoring the previous beta version')
+    'Beta installer launches in the original user context after UAC' = @($paidBetaWindowsInstaller, '$launchAfterInstall = -not $NoLaunch')
+    'Beta uninstaller accepts protected Program Files root' = @($paidBetaWindowsUninstaller, '$programFiles = [System.IO.Path]::GetFullPath($env:ProgramFiles)')
+}
+foreach ($contract in $protectedInstallerContracts.GetEnumerator()) {
+    if ($contract.Value[0].Contains($contract.Value[1])) {
+        Add-Pass $contract.Key
+    }
+    else {
+        Add-Error $contract.Key
+    }
+}
+
+foreach ($scriptContract in @(
+    [pscustomobject]@{ Name = 'Beta Windows installer'; Path = $paidBetaWindowsInstallerPath },
+    [pscustomobject]@{ Name = 'Beta Windows uninstaller'; Path = $paidBetaWindowsUninstallerPath }
+)) {
+    $parseErrors = $null
+    [Management.Automation.Language.Parser]::ParseFile($scriptContract.Path, [ref]$null, [ref]$parseErrors) | Out-Null
+    if (@($parseErrors).Count -eq 0) {
+        Add-Pass "$($scriptContract.Name) PowerShell parser check passed"
+    }
+    else {
+        Add-Error "$($scriptContract.Name) PowerShell parser check failed"
+    }
+}
 if ($installer.Contains("/uninstalltunnelservice BlueVPNDev1")) {
     Add-Pass "Installer/uninstaller stops only BlueVPNDev1 via WireGuard"
 }
@@ -1777,6 +1855,33 @@ foreach ($fragment in @(
     }
     else {
         Add-Error "Backend-only installer safety marker missing: $fragment"
+    }
+}
+foreach ($fragment in @(
+    'GREENVPN_ANDROID_ROLLBACK',
+    'GREENVPN_ANDROID_PAID_BETA_ROLLBACK',
+    'GREENVPN_WINDOWS_PAID_BETA_ROLLBACK',
+    'Public rollback SHA256 mismatch',
+    'rollback_on_error'
+)) {
+    if ($releaseRollbackInstallerScript.Contains($fragment)) {
+        Add-Pass "Public rollback installer safety marker present: $fragment"
+    }
+    else {
+        Add-Error "Public rollback installer safety marker missing: $fragment"
+    }
+}
+foreach ($fragment in @(
+    'greenvpn-admin-static-backups',
+    'cancelStaleBillingOrder',
+    'Protected admin surface returned HTTP',
+    'rollback_on_error'
+)) {
+    if ($adminStaticInstallerScript.Contains($fragment)) {
+        Add-Pass "Admin static installer safety marker present: $fragment"
+    }
+    else {
+        Add-Error "Admin static installer safety marker missing: $fragment"
     }
 }
 

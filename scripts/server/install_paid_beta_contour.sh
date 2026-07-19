@@ -631,8 +631,14 @@ location /paid-beta-api/ {
     proxy_send_timeout 60s;
     proxy_read_timeout 60s;
     client_max_body_size 1m;
+    # Green VPN API security headers
     add_header Cache-Control "no-store" always;
     add_header X-Content-Type-Options "nosniff" always;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Content-Security-Policy "default-src 'none'; base-uri 'none'; frame-ancestors 'none'" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
     add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
 }
 
@@ -646,9 +652,14 @@ location ^~ /yookassa-review-20260711/ {
     index index.html;
     try_files $uri $uri/ =404;
     autoindex off;
+    # Green VPN public security headers
     add_header Cache-Control "private, no-store" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
     add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
 }
 EOF
@@ -663,9 +674,14 @@ location /paid-beta/ {
     index index.html;
     try_files $uri $uri/ =404;
     autoindex off;
+    # Green VPN public security headers
     add_header Cache-Control "private, no-store" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Content-Security-Policy "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
     add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
 }
 EOF

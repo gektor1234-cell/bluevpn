@@ -30,6 +30,8 @@ $requiredSources = @(
     'scripts\ops\greenvpn_db_sync_from_peer.sh',
     'scripts\ops\greenvpn_sqlite_snapshot_stdout.py',
     'scripts\ops\greenvpn_sqlite_state_sync.py',
+    'scripts\ops\greenvpn_prune_operational_history.py',
+    'scripts\ops\install_operational_retention_timer.sh',
     'scripts\server\install_paid_beta_backend_release.sh'
 )
 foreach ($relative in $requiredSources) {
@@ -44,7 +46,9 @@ Copy-Item -LiteralPath (Join-Path $repo 'backend_live\requirements.txt') -Destin
 foreach ($name in @(
     'greenvpn_db_sync_from_peer.sh',
     'greenvpn_sqlite_snapshot_stdout.py',
-    'greenvpn_sqlite_state_sync.py'
+    'greenvpn_sqlite_state_sync.py',
+    'greenvpn_prune_operational_history.py',
+    'install_operational_retention_timer.sh'
 )) {
     Copy-Item -LiteralPath (Join-Path $repo "scripts\ops\$name") -Destination (Join-Path $stage "ops\$name")
 }
@@ -53,7 +57,8 @@ Copy-Item -LiteralPath (Join-Path $repo 'scripts\server\install_paid_beta_backen
 python -m py_compile `
     (Join-Path $stage 'backend\app\main.py') `
     (Join-Path $stage 'ops\greenvpn_sqlite_snapshot_stdout.py') `
-    (Join-Path $stage 'ops\greenvpn_sqlite_state_sync.py')
+    (Join-Path $stage 'ops\greenvpn_sqlite_state_sync.py') `
+    (Join-Path $stage 'ops\greenvpn_prune_operational_history.py')
 if ($LASTEXITCODE -ne 0) {
     throw 'Python validation failed for backend-only bundle.'
 }
@@ -71,6 +76,10 @@ try {
     & $bash -n scripts/ops/greenvpn_db_sync_from_peer.sh
     if ($LASTEXITCODE -ne 0) {
         throw 'DB sync shell validation failed for backend-only bundle.'
+    }
+    & $bash -n scripts/ops/install_operational_retention_timer.sh
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Retention installer shell validation failed for backend-only bundle.'
     }
     & $bash -n scripts/server/install_paid_beta_backend_release.sh
     if ($LASTEXITCODE -ne 0) {

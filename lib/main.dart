@@ -306,6 +306,12 @@ bool greenVpnIsAdRewardRequiredMessage(String? message) {
 bool greenVpnIsInvalidSessionMessage(String? message) {
   final raw = (message ?? '').toLowerCase();
   if (raw.isEmpty) return false;
+  if (raw.contains('session expired') ||
+      raw.contains('сессия истекла') ||
+      raw.contains('сессия недействительна') ||
+      raw.contains('некорректная сессия')) {
+    return true;
+  }
   final has401 =
       raw.contains('401') ||
       raw.contains('unauthorized') ||

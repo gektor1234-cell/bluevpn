@@ -12,28 +12,28 @@ param(
     [string]$FallbackSiteBaseUrl = "https://176-113-81-35.sslip.io",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedAndroidVersion = "0.3.6",
+    [string]$ExpectedAndroidVersion = "0.3.7",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedAndroidSha256 = "E8CF324C1EC9DE4EDB2B178973F5102E9A316F7DCF26C09D80E6949DE72BB61E",
+    [string]$ExpectedAndroidSha256 = "CAE9680C1BC0E59AD2046BEAC46779D782AD5F2D542EA6BB5847DBDBDDD96431",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestAndroidSha256 = "97461512A0B709D9BD4CF348B66C53EDC43F205722B4D0E749343E2CFA536706",
+    [string]$ExpectedTestAndroidSha256 = "910D7C8D03E224484050EFB4AE845C0B2DD6FC592B85B7A3FF8B1475DE21E5C5",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedAndroidBuildNumber = "2026071802",
+    [string]$ExpectedAndroidBuildNumber = "2026071902",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedWindowsVersion = "0.3.5",
+    [string]$ExpectedWindowsVersion = "0.3.6",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedWindowsSha256 = "70450F03F0B1DFE2DFDB5D5D1BBF017A44B3AAFD5752C684422A049C62344F3B",
+    [string]$ExpectedWindowsSha256 = "0A9297141199C3F9C2F971FF2B98B3C48B9CB3C4D939249C4B1DF6AA52F063FA",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestWindowsVersion = "0.3.5-paid-beta.1707",
+    [string]$ExpectedTestWindowsVersion = "0.3.6-paid-beta.1808",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestWindowsSha256 = "D5396C4A54ECBFE69750759AF0090E194BC4187397FE54DC5A3A11AF2700955E",
+    [string]$ExpectedTestWindowsSha256 = "19BCCFB0866CAC69F78B9F6A3BFBC8C9A0AFE293876D95E3091179FEEBAB2AF4",
 
     [Parameter(Mandatory = $false)]
     [int]$TimeoutSec = 20

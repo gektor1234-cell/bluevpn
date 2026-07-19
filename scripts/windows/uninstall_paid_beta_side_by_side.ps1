@@ -108,6 +108,7 @@ foreach ($runKey in @(
 )) {
     Remove-ItemProperty -Path $runKey -Name 'GreenVPNBeta' -Force -ErrorAction SilentlyContinue
 }
+Remove-Item -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Green VPN Beta' -Recurse -Force -ErrorAction SilentlyContinue
 
 $desktop = [Environment]::GetFolderPath('DesktopDirectory')
 $commonDesktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
@@ -119,10 +120,12 @@ Remove-Item -LiteralPath (Join-Path $programs 'Green VPN Beta') -Recurse -Force 
 Remove-Item -LiteralPath (Join-Path $commonPrograms 'Green VPN Beta') -Recurse -Force -ErrorAction SilentlyContinue
 
 $localPrograms = [System.IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Programs'))
+$programFiles = [System.IO.Path]::GetFullPath($env:ProgramFiles)
 $localAppData = [System.IO.Path]::GetFullPath($env:LOCALAPPDATA)
 $appData = [System.IO.Path]::GetFullPath($env:APPDATA)
 $programData = [System.IO.Path]::GetFullPath($env:ProgramData)
-Remove-PathSafe -Path $InstallRoot -AllowedRoots @($localPrograms)
+Remove-PathSafe -Path $InstallRoot -AllowedRoots @($localPrograms, $programFiles)
+Remove-PathSafe -Path (Join-Path $localPrograms 'Green VPN Beta') -AllowedRoots @($localPrograms)
 Remove-PathSafe -Path (Join-Path $localAppData 'GreenVPNBeta') -AllowedRoots @($localAppData)
 Remove-PathSafe -Path (Join-Path $appData 'GreenVPNBeta') -AllowedRoots @($appData)
 if (-not $KeepProgramData) {

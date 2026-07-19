@@ -312,6 +312,12 @@ footer {
   line-height: 1.62;
 }
 
+.intro h2 {
+  margin-bottom: 14px;
+  font-size: clamp(25px, 2.6vw, 34px);
+  line-height: 1.12;
+}
+
 .plans {
   display: grid;
   grid-template-columns: minmax(0, 0.88fr) minmax(360px, 1.12fr);

@@ -62,7 +62,9 @@ for relative in \
   backend/requirements.txt \
   ops/greenvpn_db_sync_from_peer.sh \
   ops/greenvpn_sqlite_snapshot_stdout.py \
-  ops/greenvpn_sqlite_state_sync.py; do
+  ops/greenvpn_sqlite_state_sync.py \
+  ops/greenvpn_prune_operational_history.py \
+  ops/install_operational_retention_timer.sh; do
   [[ -f "$BUNDLE_DIR/$relative" && ! -L "$BUNDLE_DIR/$relative" ]] || {
     echo "Required bundle file is missing or unsafe: $relative" >&2
     exit 2
@@ -158,6 +160,7 @@ install -m 755 "$BUNDLE_DIR/ops/greenvpn_db_sync_from_peer.sh" "$SYNC_SCRIPT"
 install -m 755 "$BUNDLE_DIR/ops/greenvpn_sqlite_snapshot_stdout.py" "$SYNC_SNAPSHOT_SCRIPT"
 install -m 755 "$BUNDLE_DIR/ops/greenvpn_sqlite_state_sync.py" "$SYNC_STATE_SCRIPT"
 python3 -m py_compile "$SYNC_SNAPSHOT_SCRIPT" "$SYNC_STATE_SCRIPT"
+python3 -m py_compile "$BUNDLE_DIR/ops/greenvpn_prune_operational_history.py"
 
 python3 - "$ENV_FILE" "$BETA_ENV_FILE" "$BACKEND_VERSION" "$BILLING_PRIMARY" <<'PY'
 import os
@@ -204,6 +207,7 @@ if missing:
 updates = {
     **source_values,
     "GREENVPN_BACKEND_VERSION": backend_version,
+    "GREENVPN_PUBLIC_SITE_URL": "https://greenvpn.pro",
     "GREENVPN_PUBLIC_PRODUCT_ENABLED": "1",
     "GREENVPN_PUBLIC_PRODUCT_CLIENT_MARKER": "green-vpn-public-product-v1",
     "GREENVPN_PUBLIC_PRODUCT_RELEASE_CHANNEL": "public-product",
@@ -269,6 +273,9 @@ print("subscriptions_present=true")
 PY
 
 if [[ $sync_was_active -eq 1 ]]; then systemctl restart "$SYNC_TIMER"; fi
+bash "$BUNDLE_DIR/ops/install_operational_retention_timer.sh" \
+  --source-script "$BUNDLE_DIR/ops/greenvpn_prune_operational_history.py" \
+  --apply
 trap - ERR
 echo "public_product_backend_status=ok"
 echo "backup_dir=$backup_dir"

@@ -36,7 +36,7 @@ internal object GreenVpnNetworkTransition {
         if (vpnNetworks.isEmpty()) {
             markInactive(appContext)
             false
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             vpnNetworks.any { it.ownerUid == appContext.applicationInfo.uid }
         } else {
             hasRecentActiveMarker(appContext)

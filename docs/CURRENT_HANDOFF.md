@@ -1,6 +1,6 @@
 # Green VPN Current Handoff
 
-Updated: 2026-07-18.
+Updated: 2026-07-19.
 
 This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
@@ -15,7 +15,7 @@ This is the current operational entry point. Read it together with
    client profiles.
 3. Never touch Friendly Linnet `5.129.237.163` without a new explicit owner
    instruction.
-4. Android 0.3.6 is already public and mandatory. Do not republish or roll it
+4. Android 0.3.7 is already public and mandatory. Do not republish or roll it
    back without a verified artifact, alternate-node health and an atomic backup.
 5. AWG2, Hysteria2, VLESS REALITY/XHTTP, Naive HTTPS and dnstt remain isolated
    to NL2 `5.129.216.42`. The rollout runbook is documentation, not permission
@@ -27,7 +27,7 @@ This is the current operational entry point. Read it together with
    must reject first-payment creation and must not run the renewal executor.
 8. Server maintenance is one node at a time after alternate control/data planes
    pass readiness. The owner Windows PC must not be rebooted by automation.
-9. Windows 0.3.5 is temporarily public and mandatory by explicit owner decision,
+9. Windows 0.3.6 is temporarily public and mandatory by explicit owner decision,
    but remains unsigned. Keep the `NotSigned` status visible in operations and
    expect Windows SmartScreen/reputation warnings until a signed successor is
    released.
@@ -67,12 +67,46 @@ This is the current operational entry point. Read it together with
 - Generated binaries belong in `C:\BlueVPN_Builds`, encrypted restore points in
   `C:\Users\gekto\GreenVPN_Checkpoints`, and secrets outside Git.
 
-## Published Admin Console, 2026-07-17
+## Final audit checkpoint, 2026-07-19
+
+- Production and paid-beta on Timeweb and RUVDS Moscow run backend
+  `0.9.129-final-audit.5`; `main.py` SHA-256 is
+  `FB35FDA24856A64C3506107734CEAB8DCCC7B10B5B355950618784DB1661AFC8`.
+  All four services are healthy, both databases on each node pass
+  `PRAGMA quick_check`, and explicit state sync converges without errors.
+- Active-active identity merge preserves independently newer verified email and
+  phone state. Admin identity login throttling applies across source IPs.
+  Guarded operational-retention timers are active on both nodes and exclude
+  accounts, subscriptions, billing, support and catalogs from pruning.
+- Production Android is `0.3.7+2026071902`, SHA-256
+  `CAE9680C1BC0E59AD2046BEAC46779D782AD5F2D542EA6BB5847DBDBDDD96431`.
+  Test Android is the same version, SHA-256
+  `910D7C8D03E224484050EFB4AE845C0B2DD6FC592B85B7A3FF8B1475DE21E5C5`.
+  Both are release signed, published on both mirrors and mandatory.
+- Production Windows is unsigned `0.3.6+1808`, SHA-256
+  `0A9297141199C3F9C2F971FF2B98B3C48B9CB3C4D939249C4B1DF6AA52F063FA`.
+  Paid-beta Windows is unsigned `0.3.6-paid-beta.1808`, SHA-256
+  `19BCCFB0866CAC69F78B9F6A3BFBC8C9A0AFE293876D95E3091179FEEBAB2AF4`.
+  Native bootstrap, browser MOTW, package contents and the complete prior
+  install/reinstall/uninstall/rollback matrix pass. The exact final public EXE
+  needs only an owner-approved UAC install on a target PC; automation must not
+  accept that elevation prompt.
+- Validation: 122 backend tests; 34 Flutter tests and two intentional skips;
+  clean Flutter analysis; Android unit tests and lint; no dependency findings;
+  90 PowerShell and 64 project-owned Bash syntax checks; JavaScript parse;
+  strict release gate; complete current/untracked/history secret scan.
+- Public verification is 31/31 surfaces, eight API manifests, two static
+  manifests and eight downloads. Main site, legal pages, admin assets and both
+  artifact mirrors match the expected hashes.
+- Lower dated sections are retained as historical evidence. The versions and
+  gates in this checkpoint and the Stable/Paid sections below are authoritative.
+
+## Published Admin Console, 2026-07-19
 
 - Operator URL: `https://admin.greenvpn.pro/`. Nginx Basic Auth is the outer
   gate; staff email/password, short-lived session, optional 2FA and backend RBAC
   remain the inner gate.
-- Production API version is `0.9.124-admin-cleanup.1` on both Russian control planes.
+- Production API version is `0.9.129-final-audit.5` on both Russian control planes.
   Timeweb remains the only billing writer; RUVDS remains billing read-only.
 - One dashboard exposes users, devices, subscriptions, pending payments,
   support workload, incidents and the Android/Windows split. The analytics view
@@ -91,43 +125,43 @@ This is the current operational entry point. Read it together with
 - Desktop and mobile layouts were physically rendered. Mobile navigation is a
   compact horizontal section bar; tables scroll inside their own container and
   the page has no horizontal overflow.
-- Validation: 101 backend tests; Python/JavaScript compile; 264 unique HTML ids;
+- Validation: 122 backend tests; Python/JavaScript compile; 264 unique HTML ids;
   live health, database indexes, analytics, pagination, CSV and CORS passed on
   both control planes. Backend SHA-256 is
-  `E51399F0C4A36BAF2DAA474B7207EFA771293ED133279EE0A25588FE66A8C551`.
+  `FB35FDA24856A64C3506107734CEAB8DCCC7B10B5B355950618784DB1661AFC8`.
 - Rollback:
   - Timeweb backend: `/root/greenvpn-admin-release-backups/20260717T181919Z-timeweb-0.9.121-admin.1`;
   - RUVDS backend: `/root/greenvpn-admin-release-backups/20260717T181612Z-ruvds-0.9.121-admin.1`;
   - Timeweb static: `/root/greenvpn-admin-static-backups/20260717T182028Z-admin-console`.
 
-## Published product releases, 2026-07-18
+## Published product releases, 2026-07-19
 
 - The customer server picker exposes logical locations only: `Авто`,
   `Нидерланды`, and `Лондон` when a healthy published London route exists.
   Physical nodes and transports stay internal. Every picker row, including
   `Авто`, has a numeric latency label; an unavailable measurement is displayed
   as `0 мс`.
-- Production Android `0.3.6+2026071802`, package `pro.greenvpn.app`:
-  `C:\BlueVPN_Builds\public_product_account_switch_20260718_r2\GreenVPN_Android_0.3.6_2026071802.apk`.
+- Production Android `0.3.7+2026071902`, package `pro.greenvpn.app`:
+  `C:\BlueVPN_Builds\public_product_final_audit_20260719_r2\GreenVPN_Android_0.3.7_2026071902.apk`.
   SHA-256:
-  `E8CF324C1EC9DE4EDB2B178973F5102E9A316F7DCF26C09D80E6949DE72BB61E`.
-- Test Android `0.3.6+2026071802`, package `pro.greenvpn.app.beta`:
-  `C:\BlueVPN_Builds\public_product_account_switch_20260718_r2_test\GreenVPN_Android_0.3.6_2026071802.apk`.
+  `CAE9680C1BC0E59AD2046BEAC46779D782AD5F2D542EA6BB5847DBDBDDD96431`.
+- Test Android `0.3.7+2026071902`, package `pro.greenvpn.app.beta`:
+  `C:\BlueVPN_Builds\public_product_final_audit_20260719_r2_test\GreenVPN_Android_0.3.7_2026071902.apk`.
   SHA-256:
-  `97461512A0B709D9BD4CF348B66C53EDC43F205722B4D0E749343E2CFA536706`.
+  `910D7C8D03E224484050EFB4AE845C0B2DD6FC592B85B7A3FF8B1475DE21E5C5`.
 - Both APKs are release signed, passed artifact verification and were published
   atomically on Timeweb and RUVDS Moscow. Stable and paid-beta Android manifests
   are mandatory and point to the matching hashes.
 - Published Windows production installer:
-  `C:\BlueVPN_Builds\green_vpn_windows_0.3.5_public_20260717_01\GreenVPN_Setup_0.3.5.exe`.
-  Product/build: `0.3.5+1707`; SHA-256:
-  `70450F03F0B1DFE2DFDB5D5D1BBF017A44B3AAFD5752C684422A049C62344F3B`.
+  `C:\BlueVPN_Builds\green_vpn_windows_0.3.6_final_20260719_r2\GreenVPN_Setup_0.3.6.exe`.
+  Product/build: `0.3.6+1808`; SHA-256:
+  `0A9297141199C3F9C2F971FF2B98B3C48B9CB3C4D939249C4B1DF6AA52F063FA`.
   It is unsigned and was published by explicit owner instruction to production
   as mandatory on both RU control planes.
 - Published Windows test installer:
-  `C:\BlueVPN_Builds\green_vpn_windows_0.3.5_paid_beta_20260717_01\GreenVPN_Beta_Setup_0.3.5-paid-beta.1707.exe`.
-  Version `0.3.5-paid-beta.1707`; SHA-256:
-  `D5396C4A54ECBFE69750759AF0090E194BC4187397FE54DC5A3A11AF2700955E`.
+  `C:\BlueVPN_Builds\green_vpn_windows_0.3.6_paid_beta_final_20260719_r2\GreenVPN_Beta_Setup_0.3.6-paid-beta.1808.exe`.
+  Version `0.3.6-paid-beta.1808`; SHA-256:
+  `19BCCFB0866CAC69F78B9F6A3BFBC8C9A0AFE293876D95E3091179FEEBAB2AF4`.
   It remains optional and uses the isolated paid-beta API contour.
 
 ## Rewarded ads, 2026-07-18
@@ -359,13 +393,13 @@ material. KZ is not in DNS, catalogs or assignment state.
 ## Stable public contour
 
 - Site/API: `https://greenvpn.pro`, `https://api.greenvpn.pro`.
-- Backend: `0.9.124-admin-cleanup.1` on both RU control planes.
-- Android: `0.3.6`, build `2026071802`, package `pro.greenvpn.app`, SHA-256
-  `E8CF324C1EC9DE4EDB2B178973F5102E9A316F7DCF26C09D80E6949DE72BB61E`.
+- Backend: `0.9.129-final-audit.5` on both RU control planes.
+- Android: `0.3.7`, build `2026071902`, package `pro.greenvpn.app`, SHA-256
+  `CAE9680C1BC0E59AD2046BEAC46779D782AD5F2D542EA6BB5847DBDBDDD96431`.
 - Android update is mandatory on Timeweb and RUVDS Moscow; both manifests report
   `required=true` and `fileReady=true`.
-- Windows: `0.3.5+1707`, mandatory, unsigned, SHA-256
-  `70450F03F0B1DFE2DFDB5D5D1BBF017A44B3AAFD5752C684422A049C62344F3B`.
+- Windows: `0.3.6+1808`, mandatory, unsigned, SHA-256
+  `0A9297141199C3F9C2F971FF2B98B3C48B9CB3C4D939249C4B1DF6AA52F063FA`.
 - Public catalog contains only stable client-compatible endpoints. Server/provider
   implementation details are not shown in the client.
 - Both production control planes publish the same three physical stable routes;
@@ -376,16 +410,16 @@ material. KZ is not in DNS, catalogs or assignment state.
 ## Paid public candidate
 
 - Paths remain isolated at `/paid-beta` and `/paid-beta-api` until promotion.
-- Both control planes currently report backend `0.9.124-admin-cleanup.1`.
+- Both control planes currently report backend `0.9.129-final-audit.5`.
 - Both SQLite databases pass `PRAGMA quick_check`.
 - The public-product client marker permits the final public candidate to create
   a 249 RUB order for accounts previously enrolled in the paid-beta cohort;
   unmarked legacy clients remain rejected.
-- Android test release: `0.3.6+2026071802`, package
+- Android test release: `0.3.7+2026071902`, package
   `pro.greenvpn.app.beta`, side-by-side with stable, SHA-256
-  `97461512A0B709D9BD4CF348B66C53EDC43F205722B4D0E749343E2CFA536706`.
-- Windows candidate: `0.3.5-paid-beta.1707`, SHA-256
-  `D5396C4A54ECBFE69750759AF0090E194BC4187397FE54DC5A3A11AF2700955E`.
+  `910D7C8D03E224484050EFB4AE845C0B2DD6FC592B85B7A3FF8B1475DE21E5C5`.
+- Windows candidate: `0.3.6-paid-beta.1808`, SHA-256
+  `19BCCFB0866CAC69F78B9F6A3BFBC8C9A0AFE293876D95E3091179FEEBAB2AF4`.
   It is published on both RU nodes, technically tested, unsigned and optional.
 - Product model: trial 3 days; 249/649/1099 RUB for 30/90/180 days; free Android
   connections require rewarded ads, paid plans have no ads, and there is no
@@ -456,12 +490,12 @@ material. KZ is not in DNS, catalogs or assignment state.
 
 ## Verified gates
 
-- Public surface probe: 31/31 targets green after Android 0.3.6 publication.
-- Backend tests: 102 passed.
+- Public surface probe: 31/31 targets green after the final release publication.
+- Backend tests: 122 passed.
 - `pip-audit`: no known vulnerabilities.
 - `flutter analyze`: no issues.
-- Flutter tests: 32 passed and 2 public-only tests skipped by design.
-- Android debug/profile/release unit-test tasks: 343 tasks successful.
+- Flutter tests: 34 passed and 2 public-only tests skipped by design.
+- Android application unit-test task and lint: successful.
 - Release gate: 0 warnings, 0 errors.
 - Secret scan: tracked, untracked and complete Git history passed.
 - Remaining build warnings are in third-party Pub packages (`file_picker` and
@@ -469,6 +503,21 @@ material. KZ is not in DNS, catalogs or assignment state.
 
 ## Restore points
 
+- Backend 0.9.129 production deployment directories:
+  - Timeweb: `/root/greenvpn-public-product-backups/20260719T020158Z-timeweb-0.9.129-final-audit.5`;
+  - RUVDS Moscow: `/root/greenvpn-public-product-backups/20260719T020119Z-ruvds-0.9.129-final-audit.5`.
+- Backend 0.9.129 paid-beta deployment directories:
+  - Timeweb: `/root/greenvpn-paid-beta-backend-backups/20260719T020213Z-backend-final-audit-20260719-r5`;
+  - RUVDS Moscow: `/root/greenvpn-paid-beta-backend-backups/20260719T020132Z-backend-final-audit-20260719-r5`.
+- Operational-retention installation directories:
+  - Timeweb: `/root/greenvpn-operational-retention-backups/20260719T020204Z`;
+  - RUVDS Moscow: `/root/greenvpn-operational-retention-backups/20260719T020123Z`.
+- Android 0.3.7 online rollback directories:
+  - Timeweb: `/root/greenvpn-apk-release-backups/20260719T013304Z-timeweb-0.3.7-2026071902`;
+  - RUVDS Moscow: `/root/greenvpn-apk-release-backups/20260719T013212Z-ruvds-0.3.7-2026071902`.
+- Windows 0.3.6 release-state rollback directories:
+  - Timeweb: `/root/greenvpn-windows-release-backups/20260719T014119Z-timeweb-0.3.6-1808`;
+  - RUVDS Moscow: `/root/greenvpn-windows-release-backups/20260719T014044Z-ruvds-0.3.6-1808`.
 - Android 0.3.6 online rollback directories:
   - Timeweb: `/root/greenvpn-apk-release-backups/20260718T170717Z-timeweb-0.3.6-2026071802`;
   - RUVDS Moscow: `/root/greenvpn-apk-release-backups/20260718T170502Z-ruvds-0.3.6-2026071802`.
@@ -548,10 +597,13 @@ material. KZ is not in DNS, catalogs or assignment state.
 
 1. Obtain an Authenticode code-signing certificate and build a higher-version
    signed Windows successor.
-2. Atomically replace the temporary unsigned release on main and test, verify
-   all manifests/downloads and retain deployment backups. Android, London and
-   server contours are already complete.
-3. In Yandex Partner, the owner must add the published application-store URL
+2. Approve one UAC prompt on an owner-controlled PC to perform the last physical
+   install/launch smoke of the exact public Windows 0.3.6 download.
+3. Raise the SMS.ru daily production limit and perform one positive login-code
+   delivery.
+4. Supply the Telegram monitoring bot token and destination chat id and perform
+   one alert-delivery smoke.
+5. In Yandex Partner, the owner must add the published application-store URL
    and complete the payout/legal profile before the displayed deadline. This
    requires personal bank, identity and tax data and cannot be automated.
 

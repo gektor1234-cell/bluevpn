@@ -17,6 +17,8 @@ TEST_DOWNLOADS="/var/www/paid-beta/downloads"
 TEST_STATIC_MANIFEST="${TEST_DOWNLOADS}/manifest.json"
 PRODUCTION_SERVICE="bluevpn-backend.service"
 TEST_SERVICE="greenvpn-paid-beta.service"
+PRODUCTION_DB="/opt/bluevpn/backend/data/bluevpn.db"
+TEST_DB="/opt/bluevpn-paid-beta/data/bluevpn.db"
 
 usage() {
   cat <<'EOF'
@@ -70,7 +72,7 @@ PRODUCTION_SHA256="${PRODUCTION_SHA256^^}"
 TEST_SHA256="${TEST_SHA256^^}"
 [[ "$PRODUCTION_SHA256" =~ ^[0-9A-F]{64}$ ]] || { echo "Invalid production SHA256" >&2; exit 2; }
 [[ "$TEST_SHA256" =~ ^[0-9A-F]{64}$ ]] || { echo "Invalid test SHA256" >&2; exit 2; }
-for path in "$PRODUCTION_APK" "$TEST_APK" "$PRODUCTION_ENV" "$TEST_ENV"; do
+for path in "$PRODUCTION_APK" "$TEST_APK" "$PRODUCTION_ENV" "$TEST_ENV" "$PRODUCTION_DB" "$TEST_DB"; do
   [[ -f "$path" && ! -L "$path" ]] || { echo "Missing or unsafe file: $path" >&2; exit 2; }
 done
 if [[ -e "$TEST_STATIC_MANIFEST" && ( ! -f "$TEST_STATIC_MANIFEST" || -L "$TEST_STATIC_MANIFEST" ) ]]; then
@@ -109,12 +111,60 @@ chmod 600 "$backup_dir"/*
 sha256sum "$backup_dir"/*.apk >"$backup_dir/previous-apk-sha256.txt"
 chmod 600 "$backup_dir/previous-apk-sha256.txt"
 
+python3 - "$PRODUCTION_DB" "$TEST_DB" "$backup_dir" <<'PY'
+import pathlib
+import sqlite3
+import sys
+
+production_db, test_db, backup_raw = sys.argv[1:]
+backup_dir = pathlib.Path(backup_raw)
+for source_raw, backup_name in (
+    (production_db, "production.db"),
+    (test_db, "paid-beta.db"),
+):
+    source = sqlite3.connect(source_raw, timeout=60)
+    target_path = backup_dir / backup_name
+    target = sqlite3.connect(target_path)
+    try:
+        if source.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            raise SystemExit(f"source quick_check failed: {source_raw}")
+        source.backup(target)
+        if target.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            raise SystemExit(f"backup quick_check failed: {target_path}")
+    finally:
+        target.close()
+        source.close()
+    target_path.chmod(0o600)
+PY
+
 aliases_switched=0
 env_modified=0
 static_manifest_modified=0
+db_modified=0
 rollback_on_error() {
   code=$?
   trap - ERR
+  if [[ $db_modified -eq 1 ]]; then
+    systemctl stop "$PRODUCTION_SERVICE" "$TEST_SERVICE" >/dev/null 2>&1 || true
+    python3 - "$backup_dir/production.db" "$PRODUCTION_DB" "$backup_dir/paid-beta.db" "$TEST_DB" <<'PY'
+import sqlite3
+import sys
+
+for source_raw, target_raw in (
+    (sys.argv[1], sys.argv[2]),
+    (sys.argv[3], sys.argv[4]),
+):
+    source = sqlite3.connect(f"file:{source_raw}?mode=ro", uri=True, timeout=60)
+    target = sqlite3.connect(target_raw, timeout=60)
+    try:
+        source.backup(target)
+        if target.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            raise SystemExit(f"database restore quick_check failed: {target_raw}")
+    finally:
+        target.close()
+        source.close()
+PY
+  fi
   if [[ $aliases_switched -eq 1 ]]; then
     install -m 644 "$backup_dir/GreenVPN_Android.production.previous.apk" "$PRODUCTION_DOWNLOADS/GreenVPN_Android.apk"
     install -m 644 "$backup_dir/GreenVPN_Android.test.previous.apk" "$TEST_DOWNLOADS/GreenVPN_Android.apk"
@@ -263,6 +313,102 @@ PY
 static_manifest_modified=1
 chown root:root "$TEST_STATIC_MANIFEST"
 chmod 644 "$TEST_STATIC_MANIFEST"
+
+db_modified=1
+python3 - \
+  "$PRODUCTION_DB" "$TEST_DB" "$VERSION" "$BUILD_NUMBER" \
+  "$PRODUCTION_URL" "$TEST_URL" "$PRODUCTION_SHA256" "$TEST_SHA256" \
+  "$PRODUCTION_APK" "$TEST_APK" "$released_at" <<'PY'
+import json
+import pathlib
+import sqlite3
+import sys
+
+(
+    production_db,
+    test_db,
+    version,
+    build_number,
+    production_url,
+    test_url,
+    production_sha,
+    test_sha,
+    production_apk,
+    test_apk,
+    released_at,
+) = sys.argv[1:]
+
+changelog = json.dumps(
+    [
+        "Исправлена обработка истекшей сессии.",
+        "Улучшена совместимость с Android 10 и новыми версиями Android.",
+    ],
+    ensure_ascii=False,
+)
+
+for db_raw, channel, url, sha256, artifact_raw in (
+    (production_db, "stable", production_url, production_sha, production_apk),
+    (test_db, "paid-beta", test_url, test_sha, test_apk),
+):
+    artifact = pathlib.Path(artifact_raw)
+    conn = sqlite3.connect(db_raw, timeout=60)
+    try:
+        if conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            raise SystemExit(f"pre-update quick_check failed: {db_raw}")
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            UPDATE app_releases
+            SET status = 'retired', retired_at = ?, updated_at = ?
+            WHERE platform = 'android' AND channel = ?
+              AND status = 'published' AND version <> ?
+            """,
+            (released_at, released_at, channel, version),
+        )
+        conn.execute(
+            """
+            INSERT INTO app_releases(
+                platform, channel, version, build_number, download_url, sha256,
+                size_bytes, is_required, min_supported_version, rollout_percent,
+                changelog_json, status, created_at, updated_at, published_at, retired_at
+            )
+            VALUES ('android', ?, ?, ?, ?, ?, ?, 1, '', 100, ?, 'published', ?, ?, ?, NULL)
+            ON CONFLICT(platform, channel, version) DO UPDATE SET
+                build_number = excluded.build_number,
+                download_url = excluded.download_url,
+                sha256 = excluded.sha256,
+                size_bytes = excluded.size_bytes,
+                is_required = 1,
+                min_supported_version = '',
+                rollout_percent = 100,
+                changelog_json = excluded.changelog_json,
+                status = 'published',
+                updated_at = excluded.updated_at,
+                published_at = excluded.published_at,
+                retired_at = NULL
+            """,
+            (
+                channel,
+                version,
+                build_number,
+                url,
+                sha256,
+                artifact.stat().st_size,
+                changelog,
+                released_at,
+                released_at,
+                released_at,
+            ),
+        )
+        conn.commit()
+        if conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            raise SystemExit(f"post-update quick_check failed: {db_raw}")
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+PY
 
 systemctl restart "$PRODUCTION_SERVICE"
 systemctl restart "$TEST_SERVICE"

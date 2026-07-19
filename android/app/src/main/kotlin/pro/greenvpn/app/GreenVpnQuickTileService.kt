@@ -1,5 +1,6 @@
 ﻿package pro.greenvpn.app
 
+import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
@@ -850,6 +851,7 @@ class GreenVpnQuickTileService : TileService() {
         }
     }
 
+    @SuppressLint("StartActivityAndCollapseDeprecated")
     private fun openApp(message: String) {
         showToast(message)
         val intent = Intent(this, MainActivity::class.java).apply {

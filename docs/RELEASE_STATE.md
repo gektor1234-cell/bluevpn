@@ -1,33 +1,66 @@
 # Green VPN Release State
 
-Updated: 2026-07-18.
+Updated: 2026-07-19.
 
 ## Stable Public
 
 | Component | Version/state |
 | --- | --- |
 | Main site | `https://greenvpn.pro/`, healthy |
-| Primary API | `https://api.greenvpn.pro/`, backend `0.9.124-admin-cleanup.1` |
-| Fallback API | RUVDS Moscow, backend `0.9.124-admin-cleanup.1` |
-| Android | `0.3.6+2026071802`, package `pro.greenvpn.app`, mandatory |
-| Android SHA-256 | `E8CF324C1EC9DE4EDB2B178973F5102E9A316F7DCF26C09D80E6949DE72BB61E` |
-| Windows | `0.3.5+1707`, mandatory, unsigned |
-| Windows SHA-256 | `70450F03F0B1DFE2DFDB5D5D1BBF017A44B3AAFD5752C684422A049C62344F3B` |
+| Primary API | `https://api.greenvpn.pro/`, backend `0.9.129-final-audit.5` |
+| Fallback API | RUVDS Moscow, backend `0.9.129-final-audit.5` |
+| Android | `0.3.7+2026071902`, package `pro.greenvpn.app`, mandatory |
+| Android SHA-256 | `CAE9680C1BC0E59AD2046BEAC46779D782AD5F2D542EA6BB5847DBDBDDD96431` |
+| Windows | `0.3.6+1808`, mandatory, unsigned |
+| Windows SHA-256 | `0A9297141199C3F9C2F971FF2B98B3C48B9CB3C4D939249C4B1DF6AA52F063FA` |
 | Ads/session timer | rewarded ads enabled for free Android connections; paid users exempt; forced disconnect timer disabled |
 
-Android 0.3.6 is published on Timeweb and RUVDS Moscow. Both stable manifests
+Android 0.3.7 is published on Timeweb and RUVDS Moscow. Both stable manifests
 have `required=true` and `fileReady=true`; the previous APK is retained in the
 root-only deployment backups listed under Rollback.
+
+## Final Full Audit, 2026-07-19
+
+- Production and paid-beta services on both Russian control planes run backend
+  `0.9.129-final-audit.5`. All four health endpoints are green, all databases
+  pass `PRAGMA quick_check`, and explicit production and paid-beta sync cycles
+  converge without conflicts or errors.
+- The active-active merger now preserves the newest verified email and phone
+  state independently from unrelated profile updates. Admin identity login
+  throttling is keyed by identity across source IPs, preventing an IP rotation
+  from bypassing the account-level limit.
+- Operational retention is bounded and installed as a guarded timer on both
+  nodes. It prunes only old operational telemetry after an online database
+  backup; account, subscription, billing, support and catalog data are outside
+  its deletion scope.
+- Validation passed: 122 backend tests, 34 Flutter tests plus two intentional
+  skips, clean Flutter analysis, Android unit tests and lint, dependency audit,
+  90 PowerShell syntax checks, 64 project-owned Bash syntax checks, JavaScript
+  parse, strict release gate, full current/untracked/history secret scan and
+  `git diff --check`.
+- Android production and test 0.3.7 were physically exercised on Android 9 and
+  Android 16 across login, idle, every primary screen, location selection,
+  connection, validated traffic, YouTube, background/task removal, restore and
+  disconnect. Crash buffers remained empty.
+- Windows 0.3.6 production and paid-beta packages passed complete package,
+  native-bootstrap and browser MOTW checks. The installation matrix also
+  proves clean install, reinstall while running, uninstall, rollback and
+  recovery without disturbing the owner's existing VPN or Internet. The exact
+  final public EXE still requires one owner-approved UAC run on the target PC;
+  automation does not accept that elevation prompt.
+- Public verification is green: 31/31 independent surface probes, eight API
+  manifests, two static manifests and eight downloads. Main site, legal pages,
+  admin static files and both mirrors match their expected hashes.
 
 ## Published Admin Console
 
 | Component | Version/state |
 | --- | --- |
 | URL | `https://admin.greenvpn.pro/`, Basic Auth plus staff session/RBAC |
-| Production backend | `0.9.124-admin-cleanup.1` on Timeweb and RUVDS Moscow |
-| Backend SHA-256 | `94E3879A429CF618CAC02817D2199736B9249BAED994E586222C63E673B1295E` |
-| Static index SHA-256 | `1CD3EAA8A027C13400417DD1E96CECA3C61553D806F7EEBD5EF75168EC59FCCB` |
-| Static JavaScript SHA-256 | `9A87CAA3EF2F5CAD1ADB9FC22E925E522D411FE0FC90EE715558BBEEAEB711F9` |
+| Production backend | `0.9.129-final-audit.5` on Timeweb and RUVDS Moscow |
+| Backend SHA-256 | `FB35FDA24856A64C3506107734CEAB8DCCC7B10B5B355950618784DB1661AFC8` |
+| Static index SHA-256 | `68E8081DDE9674CD3B11CC70E910AF68C998C7F54C3AC918CFE15A4F9AAEBF83` |
+| Static JavaScript SHA-256 | `A27BB2ABC8B8C908CC707DEF9A5D4B62F58CFE9630818E3CCB1157423BDBF528` |
 | Static CSS SHA-256 | `680AF9D1F48F8A042A0C592A987EB9077E8264EFE3C26AA7629ADD8CDB344A82` |
 
 The owner console now has a single operational dashboard, Android/Windows
@@ -49,11 +82,11 @@ staff authentication.
 
 | Component | Version/state |
 | --- | --- |
-| Primary/fallback backend | `0.9.124-admin-cleanup.1` |
-| Android | `0.3.6+2026071802`, package `pro.greenvpn.app.beta`, mandatory |
-| Android SHA-256 | `97461512A0B709D9BD4CF348B66C53EDC43F205722B4D0E749343E2CFA536706` |
-| Windows | `0.3.5-paid-beta.1707`, optional, unsigned |
-| Windows SHA-256 | `D5396C4A54ECBFE69750759AF0090E194BC4187397FE54DC5A3A11AF2700955E` |
+| Primary/fallback backend | `0.9.129-final-audit.5` |
+| Android | `0.3.7+2026071902`, package `pro.greenvpn.app.beta`, mandatory |
+| Android SHA-256 | `910D7C8D03E224484050EFB4AE845C0B2DD6FC592B85B7A3FF8B1475DE21E5C5` |
+| Windows | `0.3.6-paid-beta.1808`, optional, unsigned |
+| Windows SHA-256 | `19BCCFB0866CAC69F78B9F6A3BFBC8C9A0AFE293876D95E3091179FEEBAB2AF4` |
 | Plans | trial 3 days; 249/649/1099 RUB for 30/90/180 days |
 | Auto-renew | recurring card binding approved; real save-method and unlink smoke passed on both control planes |
 | Billing writer | Timeweb only |
@@ -70,20 +103,20 @@ until public promotion.
 | --- | --- |
 | Customer location model | one row per location; `Авто / Нидерланды / Лондон`; physical routes hidden |
 | Latency model | every picker row, including `Авто`, shows `N мс`; missing measurement becomes `0 мс` |
-| Source base | Android 0.3.5 rewarded-ad release plus account-switch recovery |
-| Android production | `0.3.6+2026071802`, package `pro.greenvpn.app`, release signed |
-| Android production SHA-256 | `E8CF324C1EC9DE4EDB2B178973F5102E9A316F7DCF26C09D80E6949DE72BB61E` |
-| Android test | `0.3.6+2026071802`, package `pro.greenvpn.app.beta`, release signed |
-| Android test SHA-256 | `97461512A0B709D9BD4CF348B66C53EDC43F205722B4D0E749343E2CFA536706` |
-| Windows production | `0.3.5+1707`, mandatory, unsigned |
-| Windows production SHA-256 | `70450F03F0B1DFE2DFDB5D5D1BBF017A44B3AAFD5752C684422A049C62344F3B` |
-| Windows test | `0.3.5-paid-beta.1707`, optional, unsigned |
-| Windows test SHA-256 | `D5396C4A54ECBFE69750759AF0090E194BC4187397FE54DC5A3A11AF2700955E` |
+| Source base | Android 0.3.6 account-switch release plus final lifecycle hardening |
+| Android production | `0.3.7+2026071902`, package `pro.greenvpn.app`, release signed |
+| Android production SHA-256 | `CAE9680C1BC0E59AD2046BEAC46779D782AD5F2D542EA6BB5847DBDBDDD96431` |
+| Android test | `0.3.7+2026071902`, package `pro.greenvpn.app.beta`, release signed |
+| Android test SHA-256 | `910D7C8D03E224484050EFB4AE845C0B2DD6FC592B85B7A3FF8B1475DE21E5C5` |
+| Windows production | `0.3.6+1808`, mandatory, unsigned |
+| Windows production SHA-256 | `0A9297141199C3F9C2F971FF2B98B3C48B9CB3C4D939249C4B1DF6AA52F063FA` |
+| Windows test | `0.3.6-paid-beta.1808`, optional, unsigned |
+| Windows test SHA-256 | `19BCCFB0866CAC69F78B9F6A3BFBC8C9A0AFE293876D95E3091179FEEBAB2AF4` |
 | YooKassa | real 249 RUB payment, saved-method verification and unlink smoke complete |
 | London | existing VPS `2584554` restored in place; production and paid-beta catalogs publish one logical `Лондон` location |
 
 Production and test APKs are published on both Russian control planes. The
-customer-facing stable and paid-beta update manifests force 0.3.6 and all four
+customer-facing stable and paid-beta update manifests force 0.3.7 and all four
 public APK aliases are ready.
 
 ## Confirmed Test-account Cleanup
@@ -237,20 +270,27 @@ trusted: SmartScreen/reputation warnings remain expected until Authenticode.
 
 ## Verified
 
-- Both RU control planes run production backend `0.9.124-admin-cleanup.1` and pass health,
-  schema and SQLite quick-check.
-- Admin/backend validation: 102 backend unit tests, Python and JavaScript syntax,
-  unique HTML ids, desktop/mobile UI, live analytics/pagination/CSV and CORS.
+- Both RU control planes run production and paid-beta backend
+  `0.9.129-final-audit.5` and pass health, schema, SQLite quick-check and
+  explicit bidirectional state synchronization.
+- Admin/backend validation: 122 backend unit tests, Python and JavaScript
+  syntax, unique HTML ids, desktop/mobile UI, live analytics/pagination/CSV,
+  retention controls and CORS.
 - Production and candidate sync timers are active. Latest explicit production
   cycles on both nodes: zero inserts/updates, zero conflicts/errors.
 - Public site, legal pages, downloads, manifests and all three API surfaces pass
-  the independent 31-target probe.
+  the independent 31-target probe. Eight API manifests, two static manifests
+  and eight artifact download checks match the final release hashes.
 - Login/bootstrap/config failover, session persistence, Android background and
   custom per-app routing were physically proven.
 - Windows side-by-side install, reboot persistence, VPN/DNS transition,
   competing-VPN restoration, uninstall recovery and clean reinstall were proven.
-- Android/Flutter/backend/native tests, analyzer, dependency audit, release gate
-  and full Git-history secret scan are green.
+- Android/Flutter/backend/native tests, analyzer, Android lint, dependency
+  audit, release gate and full current/untracked/Git-history secret scan are
+  green.
+- Final stable artifacts are Android `0.3.7+2026071902` and Windows
+  `0.3.6+1808`; candidate artifacts use the same Android build and Windows
+  `0.3.6-paid-beta.1808`.
 - Public-product auto-renew UI has passing Flutter tests. Physical Android 9
   QA confirms one Settings entry, a dedicated card/auto-renew page, no cancel
   action in Tariff, and no layout overlap.
@@ -298,10 +338,18 @@ trusted: SmartScreen/reputation warnings remain expected until Authenticode.
 ## Remaining Launch Gates
 
 1. Obtain an Authenticode code-signing certificate and build a higher-version
-   signed successor to the temporary public 0.3.5 release.
-2. Reverify the signed hash, then replace Windows atomically on main and test
-   with rollback backups and public probes.
-3. Complete the Yandex Partner payout/legal profile and add the published app
+   signed successor to the temporary public 0.3.6 release. Until then Windows
+   SmartScreen/reputation warnings remain expected.
+2. On one owner-controlled Windows PC, approve the UAC prompt for the exact
+   public 0.3.6 download and confirm its final desktop/Start-menu launch. All
+   autonomous package, MOTW, install/reinstall/uninstall/rollback checks are
+   already complete.
+3. Raise the SMS.ru production daily limit and perform one positive login-code
+   delivery. Negative-path and provider-readiness checks are complete.
+4. Supply the Telegram alert bot token and destination chat id, then run one
+   delivery smoke. Monitoring itself is active; only this external notification
+   channel lacks owner credentials.
+5. Complete the Yandex Partner payout/legal profile and add the published app
    store URL before the partner deadline. These fields require the owner's bank,
    identity, tax and store-account data and must not be submitted by automation.
 
@@ -310,6 +358,21 @@ London or Russian control-plane defect remains.
 
 ## Rollback
 
+- Backend 0.9.129 production deployment backups:
+  - Timeweb: `/root/greenvpn-public-product-backups/20260719T020158Z-timeweb-0.9.129-final-audit.5`;
+  - RUVDS Moscow: `/root/greenvpn-public-product-backups/20260719T020119Z-ruvds-0.9.129-final-audit.5`.
+- Backend 0.9.129 paid-beta deployment backups:
+  - Timeweb: `/root/greenvpn-paid-beta-backend-backups/20260719T020213Z-backend-final-audit-20260719-r5`;
+  - RUVDS Moscow: `/root/greenvpn-paid-beta-backend-backups/20260719T020132Z-backend-final-audit-20260719-r5`.
+- Operational-retention installation backups:
+  - Timeweb: `/root/greenvpn-operational-retention-backups/20260719T020204Z`;
+  - RUVDS Moscow: `/root/greenvpn-operational-retention-backups/20260719T020123Z`.
+- Android 0.3.7 deployment backups:
+  - Timeweb: `/root/greenvpn-apk-release-backups/20260719T013304Z-timeweb-0.3.7-2026071902`;
+  - RUVDS Moscow: `/root/greenvpn-apk-release-backups/20260719T013212Z-ruvds-0.3.7-2026071902`.
+- Windows 0.3.6 deployment backups after release-state synchronization:
+  - Timeweb: `/root/greenvpn-windows-release-backups/20260719T014119Z-timeweb-0.3.6-1808`;
+  - RUVDS Moscow: `/root/greenvpn-windows-release-backups/20260719T014044Z-ruvds-0.3.6-1808`.
 - Backend 0.9.124 production deployment backups:
   - Timeweb: `/root/greenvpn-public-product-backups/20260718T184055Z-timeweb-0.9.124-admin-cleanup.1`;
   - RUVDS Moscow: `/root/greenvpn-public-product-backups/20260718T184000Z-ruvds-0.9.124-admin-cleanup.1`.

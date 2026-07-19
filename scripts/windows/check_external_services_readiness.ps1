@@ -280,6 +280,9 @@ paths = [
     "/api/v1/admin/network/split-plan",
     "/api/v1/admin/auth/user-flow/readiness",
     "/api/v1/admin/auth/2fa/readiness",
+    "/api/v1/admin/email/readiness",
+    "/api/v1/admin/sms/readiness",
+    "/api/v1/admin/billing/readiness",
     "/api/v1/admin/external-actions",
     "/api/v1/admin/alerts/readiness",
     "/api/v1/admin/analytics/summary",
@@ -304,6 +307,18 @@ paths = [
 ]
 summary = {"ok": True, "checks": {}}
 first_staff_id = None
+
+def contains_forbidden_key(value, forbidden):
+    if isinstance(value, dict):
+        return any(
+            str(key).strip().lower() in forbidden
+            or contains_forbidden_key(item, forbidden)
+            for key, item in value.items()
+        )
+    if isinstance(value, list):
+        return any(contains_forbidden_key(item, forbidden) for item in value)
+    return False
+
 for path in paths:
     req = urllib.request.Request(base + path, headers={"X-Admin-Token": token})
     try:
@@ -439,6 +454,46 @@ for path in paths:
                 "tokensExposed": "accessToken" in payload_text or "refreshToken" in payload_text,
             })
             if item.get("codesExposed") or item.get("tokensExposed"):
+                summary["ok"] = False
+        elif path.endswith("/email/readiness"):
+            item.update({
+                "provider": data.get("provider"),
+                "required": data.get("required"),
+                "productionReady": data.get("productionReady"),
+                "checks": len(data.get("checks") or []),
+                "requiredActions": len(data.get("requiredActions") or []),
+            })
+        elif path.endswith("/sms/readiness"):
+            delivery_issue = data.get("lastDeliveryIssue") or {}
+            item.update({
+                "provider": data.get("provider"),
+                "deliveryReady": data.get("deliveryReady"),
+                "productionReady": data.get("productionReady"),
+                "testMode": data.get("testMode"),
+                "hasLastDeliveryIssue": bool(delivery_issue),
+                "lastDeliveryIssueCode": delivery_issue.get("code"),
+                "lastDeliveryIssueAt": delivery_issue.get("lastFailedAt"),
+                "checks": len(data.get("checks") or []),
+                "requiredActions": len(data.get("requiredActions") or []),
+            })
+        elif path.endswith("/billing/readiness"):
+            item.update({
+                "provider": data.get("provider"),
+                "productionReady": data.get("productionReady"),
+                "checks": len(data.get("checks") or []),
+                "requiredActions": len(data.get("requiredActions") or []),
+                "secretValuesExposed": contains_forbidden_key(
+                    data,
+                    {
+                        "secretkey",
+                        "secret_key",
+                        "paymentmethodid",
+                        "payment_method_id",
+                        "providerpaymentmethodid",
+                    },
+                ),
+            })
+            if item.get("secretValuesExposed"):
                 summary["ok"] = False
         elif path.endswith("/external-actions"):
             actions = data.get("actions", [])
@@ -812,12 +867,16 @@ try:
         "/api/v1/admin/launch/owner-packet",
         "/api/v1/admin/site/readiness",
         "/api/v1/admin/auth/user-flow/readiness",
+        "/api/v1/admin/email/readiness",
+        "/api/v1/admin/sms/readiness",
+        "/api/v1/admin/billing/readiness",
         "/api/v1/admin/server-catalog/provisioning-readiness",
         "/api/v1/admin/server-catalog/draft-from-plan",
         "/api/v1/admin/network/readiness",
         "/api/v1/admin/network/split-plan",
         "/api/v1/admin/support/reports/{report_id}/review",
         "/api/v1/admin/billing/payment-smoke/readiness",
+        "/api/v1/admin/billing/orders/{order_id}/cancel-stale",
         "/api/v1/admin/billing/promos/readiness",
         "/api/v1/admin/billing/promos/draft-start-campaign",
         "/api/v1/admin/billing/renewals/readiness",

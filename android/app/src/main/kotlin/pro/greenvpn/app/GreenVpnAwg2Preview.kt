@@ -139,6 +139,7 @@ object GreenVpnAwg2Preview {
         }
     }
 
+    @Suppress("DEPRECATION")
     private fun isAnyVpnNetworkActive(context: Context): Boolean {
         val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         return manager.allNetworks.any { network ->

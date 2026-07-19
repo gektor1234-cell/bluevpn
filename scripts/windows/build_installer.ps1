@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\.." )).Path,
     [string]$OutBase = "C:\BlueVPN_Builds",
     [string]$ReleaseZip = "",
@@ -455,13 +455,16 @@ $installBootstrapExe = Join-Path $payloadDir 'install_bootstrap.exe'
 @'
 param(
     [string]$PayloadZip = "",
-    [string]$InstallDir = "$env:LOCALAPPDATA\Programs\Green VPN",
+    [string]$InstallDir = "$env:ProgramFiles\Green VPN",
     [switch]$NoLaunch
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$productVersion = '__GREENVPN_APP_VERSION__'
 $installLog = Join-Path $env:TEMP 'GreenVPN_Setup.log'
+$installErrorLog = Join-Path $env:TEMP 'GreenVPN_Setup_error.log'
+Remove-Item -LiteralPath $installErrorLog -Force -ErrorAction SilentlyContinue
 try { Start-Transcript -Path $installLog -Append -Force | Out-Null } catch {}
 
 function Write-Step {
@@ -492,6 +495,29 @@ function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Remove-CallerLegacyInstall {
+    $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    foreach ($valueName in @('GreenVPN', 'Green VPN', 'BlueVPN', 'Blue VPN')) {
+        Remove-ItemProperty -Path $runKey -Name $valueName -Force -ErrorAction SilentlyContinue
+    }
+
+    foreach ($shortcut in @(
+        (Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'Green VPN.lnk'),
+        (Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'BlueVPN.lnk')
+    )) {
+        Remove-Item -LiteralPath $shortcut -Force -ErrorAction SilentlyContinue
+    }
+
+    foreach ($path in @(
+        (Join-Path ([Environment]::GetFolderPath('Programs')) 'Green VPN'),
+        (Join-Path ([Environment]::GetFolderPath('Programs')) 'BlueVPN'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\Green VPN'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\BlueVPN')
+    )) {
+        Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Ensure-GreenVpnProgramDataAcl {
@@ -605,6 +631,97 @@ function Install-GreenVpnService {
     throw "Green VPN service was created but did not reach Running state."
 }
 
+function Test-GreenVpnInstalledRoot {
+    param([Parameter(Mandatory=$true)][string]$Root)
+
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
+        return $false
+    }
+
+    foreach ($requiredPath in @(
+        (Join-Path $Root 'greenvpn.exe'),
+        (Join-Path $Root 'greenvpn_service.exe'),
+        (Join-Path $Root 'tools\greenvpn_vpn_task.ps1'),
+        (Join-Path $Root 'uninstall_greenvpn.cmd')
+    )) {
+        if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+            return $false
+        }
+    }
+
+    return Test-Path -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Green VPN'
+}
+
+function Remove-CorruptInstallRoot {
+    param([Parameter(Mandatory=$true)][string]$Root)
+
+    if (-not (Test-Path -LiteralPath $Root)) { return }
+
+    # Older installers could leave child files without an effective Administrators ACE.
+    & takeown.exe /F $Root /A /R /D Y | Out-Null
+    & icacls.exe $Root /inheritance:e /grant:r `
+        '*S-1-5-18:(OI)(CI)F' `
+        '*S-1-5-32-544:(OI)(CI)F' /T /C /Q | Out-Null
+    & icacls.exe $Root /reset /T /C /Q | Out-Null
+    Remove-Item -LiteralPath $Root -Recurse -Force
+    if (Test-Path -LiteralPath $Root) {
+        throw "Failed to remove an incomplete Green VPN installation: $Root"
+    }
+}
+
+function Move-DirectoryWithRetry {
+    param(
+        [Parameter(Mandatory=$true)][string]$Source,
+        [Parameter(Mandatory=$true)][string]$Destination,
+        [int]$Attempts = 30
+    )
+
+    $lastError = $null
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        try {
+            Move-Item -LiteralPath $Source -Destination $Destination -Force
+            return
+        } catch {
+            $lastError = $_
+            if ($attempt -lt $Attempts) {
+                Get-Process -Name 'greenvpn' -ErrorAction SilentlyContinue |
+                    Stop-Process -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Milliseconds 300
+            }
+        }
+    }
+    throw $lastError
+}
+
+function Test-FileAclAllows {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)][string]$Sid,
+        [Parameter(Mandatory=$true)][Security.AccessControl.FileSystemRights]$RequiredRights
+    )
+
+    $securityIdentifier = [Security.Principal.SecurityIdentifier]::new($Sid)
+    $rules = (Get-Acl -LiteralPath $Path).GetAccessRules(
+        $true,
+        $true,
+        [Security.Principal.SecurityIdentifier]
+    )
+    $allowed = [Security.AccessControl.FileSystemRights]0
+    foreach ($rule in $rules) {
+        if ($rule.IdentityReference.Value -ne $securityIdentifier.Value) { continue }
+        if (
+            $rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Deny -and
+            (($rule.FileSystemRights -band $RequiredRights) -ne 0)
+        ) {
+            return $false
+        }
+        if ($rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow) {
+            $allowed = $allowed -bor $rule.FileSystemRights
+        }
+    }
+    return (($allowed -band $RequiredRights) -eq $RequiredRights)
+}
+
 if ([string]::IsNullOrWhiteSpace($PayloadZip)) {
     $PayloadZip = Join-Path $PSScriptRoot 'GreenVPN_payload.zip'
 }
@@ -615,6 +732,7 @@ if (-not (Test-Path -LiteralPath $PayloadZip)) {
 
 if (-not (Test-IsAdministrator)) {
     Write-Step "Запрашиваем права администратора для установки Green VPN..."
+    $launchAfterInstall = -not $NoLaunch
     $argList = @(
         '-NoProfile',
         '-NonInteractive',
@@ -625,31 +743,133 @@ if (-not (Test-IsAdministrator)) {
         '-PayloadZip',
         "`"$PayloadZip`"",
         '-InstallDir',
-        "`"$InstallDir`""
+        "`"$InstallDir`"",
+        '-NoLaunch'
     )
-    if ($NoLaunch) {
-        $argList += '-NoLaunch'
-    }
     $p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList $argList
+    if ($p.ExitCode -eq 0) {
+        Remove-CallerLegacyInstall
+        if ($launchAfterInstall) {
+            $installedExe = Join-Path ([System.IO.Path]::GetFullPath($InstallDir)) 'greenvpn.exe'
+            if (-not (Test-Path -LiteralPath $installedExe)) {
+                throw "Green VPN installation succeeded but the application is missing: $installedExe"
+            }
+            Start-Process -FilePath $installedExe -WorkingDirectory (Split-Path -Parent $installedExe)
+        }
+    }
     exit $p.ExitCode
 }
 
 $installRoot = [System.IO.Path]::GetFullPath($InstallDir)
-$localPrograms = [System.IO.Path]::GetFullPath("$env:LOCALAPPDATA\Programs")
-if (-not $installRoot.StartsWith($localPrograms, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "InstallDir must stay under LocalAppData Programs: $localPrograms"
+$programFilesRoot = [System.IO.Path]::GetFullPath($env:ProgramFiles).TrimEnd('\') + '\'
+$installCandidate = $installRoot.TrimEnd('\') + '\'
+if (-not $installCandidate.StartsWith($programFilesRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "InstallDir must stay under Program Files: $programFilesRoot"
 }
 
-$legacyInstallRoot = Join-Path $localPrograms 'BlueVPN'
-$desktop = [Environment]::GetFolderPath('DesktopDirectory')
+$desktop = [Environment]::GetFolderPath('CommonDesktopDirectory')
 $legacyDesktopShortcut = Join-Path $desktop 'BlueVPN.lnk'
-$startPrograms = [Environment]::GetFolderPath('Programs')
+$startPrograms = [Environment]::GetFolderPath('CommonPrograms')
 $legacyStartMenuDir = Join-Path $startPrograms 'BlueVPN'
 
 $tmp = Join-Path $env:TEMP ("GreenVPNInstall_" + [System.Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+$swapId = [System.Guid]::NewGuid().ToString('N')
+$stagingRoot = "$installRoot.staging-$swapId"
+$backupRoot = "$installRoot.backup-$swapId"
+$installSwapped = $false
+$installCompleted = $false
+$runtimeStopped = $false
+$existingRootBackedUp = $false
+$existingInstallValid = Test-GreenVpnInstalledRoot -Root $installRoot
+$uninstallKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Green VPN'
+$runKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
+$previousUninstallValues = @{}
+$previousRunValue = $null
+if ($existingInstallValid) {
+    $existingUninstall = Get-ItemProperty -LiteralPath $uninstallKey -ErrorAction SilentlyContinue
+    foreach ($name in @(
+        'DisplayName',
+        'DisplayVersion',
+        'DisplayIcon',
+        'Publisher',
+        'InstallLocation',
+        'UninstallString',
+        'QuietUninstallString',
+        'URLInfoAbout',
+        'InstallDate',
+        'EstimatedSize',
+        'NoModify',
+        'NoRepair'
+    )) {
+        if ($null -ne $existingUninstall -and $null -ne $existingUninstall.$name) {
+            $previousUninstallValues[$name] = $existingUninstall.$name
+        }
+    }
+    $existingRun = Get-ItemProperty -LiteralPath $runKey -Name 'GreenVPN' -ErrorAction SilentlyContinue
+    if ($null -ne $existingRun -and $null -ne $existingRun.PSObject.Properties['GreenVPN']) {
+        $previousRunValue = [string]$existingRun.GreenVPN
+    }
+}
 
 try {
+    Write-Step "Распаковываем приложение..."
+    Expand-Archive -LiteralPath $PayloadZip -DestinationPath $tmp -Force
+
+    $appSource = Join-Path $tmp 'app'
+    foreach ($requiredSource in @(
+        (Join-Path $appSource 'greenvpn.exe'),
+        (Join-Path $appSource 'greenvpn_service.exe'),
+        (Join-Path $tmp 'tools\greenvpn_vpn_task.ps1')
+    )) {
+        if (-not (Test-Path -LiteralPath $requiredSource)) {
+            throw "Invalid Green VPN package: required file is missing: $requiredSource"
+        }
+    }
+
+    Write-Step "Подготавливаем проверенную копию Green VPN..."
+    New-Item -ItemType Directory -Force -Path $stagingRoot | Out-Null
+    Get-ChildItem -LiteralPath $appSource -Force |
+        Copy-Item -Destination $stagingRoot -Recurse -Force
+
+    $docsSource = Join-Path $tmp 'docs'
+    if (Test-Path -LiteralPath $docsSource) {
+        Copy-Item -LiteralPath $docsSource -Destination (Join-Path $stagingRoot 'docs') -Recurse -Force
+    }
+
+    $toolsSource = Join-Path $tmp 'tools'
+    if (Test-Path -LiteralPath $toolsSource) {
+        Copy-Item -LiteralPath $toolsSource -Destination (Join-Path $stagingRoot 'tools') -Recurse -Force
+    }
+
+    & icacls.exe $stagingRoot /inheritance:r /grant:r `
+        '*S-1-5-18:(OI)(CI)F' `
+        '*S-1-5-32-544:(OI)(CI)F' `
+        '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Failed to protect the Green VPN installation root.'
+    }
+    & icacls.exe (Join-Path $stagingRoot '*') /reset /T /C | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Failed to inherit Green VPN application and service file permissions.'
+    }
+
+    foreach ($requiredStaged in @(
+        (Join-Path $stagingRoot 'greenvpn.exe'),
+        (Join-Path $stagingRoot 'greenvpn_service.exe'),
+        (Join-Path $stagingRoot 'tools\greenvpn_vpn_task.ps1')
+    )) {
+        if (-not (Test-Path -LiteralPath $requiredStaged)) {
+            throw "Green VPN staging postcondition failed: $requiredStaged was not created."
+        }
+        if (-not (Test-FileAclAllows -Path $requiredStaged -Sid 'S-1-5-18' -RequiredRights ([Security.AccessControl.FileSystemRights]::FullControl))) {
+            throw "Green VPN staging ACL postcondition failed for SYSTEM: $requiredStaged"
+        }
+        if (-not (Test-FileAclAllows -Path $requiredStaged -Sid 'S-1-5-32-545' -RequiredRights ([Security.AccessControl.FileSystemRights]::ReadAndExecute))) {
+            throw "Green VPN staging ACL postcondition failed for Users: $requiredStaged"
+        }
+    }
+
     Write-Step "Останавливаем текущее подключение Green VPN..."
     Stop-BlueVpnTunnel
 
@@ -659,37 +879,19 @@ try {
     Write-Step "Закрываем предыдущую версию Green VPN..."
     Get-Process -Name 'bluevpn' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Get-Process -Name 'greenvpn' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    $runtimeStopped = $true
 
-    Write-Step "Обновляем ярлыки приложения..."
-    Remove-Item -LiteralPath $legacyDesktopShortcut -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $legacyStartMenuDir -Recurse -Force -ErrorAction SilentlyContinue
-    if (-not $legacyInstallRoot.Equals($installRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-        Remove-Item -LiteralPath $legacyInstallRoot -Recurse -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $installRoot) {
+        if ($existingInstallValid) {
+            Move-DirectoryWithRetry -Source $installRoot -Destination $backupRoot
+            $existingRootBackedUp = $true
+        } else {
+            Write-Step "Удаляем остатки незавершённой прежней установки..."
+            Remove-CorruptInstallRoot -Root $installRoot
+        }
     }
-
-    Write-Step "Распаковываем приложение..."
-    Expand-Archive -LiteralPath $PayloadZip -DestinationPath $tmp -Force
-
-    $appSource = Join-Path $tmp 'app'
-    if (-not (Test-Path -LiteralPath (Join-Path $appSource 'greenvpn.exe'))) {
-        throw "Invalid Green VPN package: app\greenvpn.exe not found."
-    }
-
-    Write-Step "Устанавливаем Green VPN..."
-    New-Item -ItemType Directory -Force -Path $installRoot | Out-Null
-    Get-ChildItem -LiteralPath $installRoot -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
-    Get-ChildItem -LiteralPath $appSource -Force |
-        Copy-Item -Destination $installRoot -Recurse -Force
-
-    $docsSource = Join-Path $tmp 'docs'
-    if (Test-Path -LiteralPath $docsSource) {
-        Copy-Item -LiteralPath $docsSource -Destination (Join-Path $installRoot 'docs') -Recurse -Force
-    }
-
-    $toolsSource = Join-Path $tmp 'tools'
-    if (Test-Path -LiteralPath $toolsSource) {
-        Copy-Item -LiteralPath $toolsSource -Destination (Join-Path $installRoot 'tools') -Recurse -Force
-    }
+    Move-Item -LiteralPath $stagingRoot -Destination $installRoot -Force
+    $installSwapped = $true
 
     $exe = Join-Path $installRoot 'greenvpn.exe'
     $taskScript = Join-Path $installRoot 'tools\greenvpn_vpn_task.ps1'
@@ -732,7 +934,7 @@ try {
     }
 
     Write-Step "Настраиваем запуск Green VPN в трее..."
-    $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    $runKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
     New-Item -Path $runKey -Force | Out-Null
     foreach ($valueName in @('GreenVPN', 'Green VPN', 'BlueVPN', 'Blue VPN')) {
         Remove-ItemProperty -Path $runKey -Name $valueName -Force -ErrorAction SilentlyContinue
@@ -925,15 +1127,21 @@ foreach (`$shortcutDir in @(
 
 Write-Step "Removing installed files and local state..."
 `$localPrograms = [System.IO.Path]::GetFullPath((Join-Path `$env:LOCALAPPDATA 'Programs'))
+`$programFiles = [System.IO.Path]::GetFullPath(`$env:ProgramFiles)
 `$localAppData = [System.IO.Path]::GetFullPath(`$env:LOCALAPPDATA)
 `$appData = [System.IO.Path]::GetFullPath(`$env:APPDATA)
 `$programData = [System.IO.Path]::GetFullPath(`$env:ProgramData)
 `$allowedUserRoots = @(`$localPrograms, `$localAppData, `$appData)
 foreach (`$path in @(
     `$InstallRoot,
-    "$legacyInstallRoot",
+    (Join-Path `$localPrograms 'Green VPN'),
+    (Join-Path `$localPrograms 'Blue VPN'),
     (Join-Path `$localPrograms 'GreenVPN'),
-    (Join-Path `$localPrograms 'BlueVPN'),
+    (Join-Path `$localPrograms 'BlueVPN')
+)) {
+    Remove-PathSafe -Path `$path -AllowedRoots @(`$localPrograms, `$programFiles) -Recurse
+}
+foreach (`$path in @(
     (Join-Path `$localAppData 'Green VPN'),
     (Join-Path `$localAppData 'GreenVPN'),
     (Join-Path `$localAppData 'BlueVPN'),
@@ -943,6 +1151,8 @@ foreach (`$path in @(
 )) {
     Remove-PathSafe -Path `$path -AllowedRoots `$allowedUserRoots -Recurse
 }
+
+Remove-Item -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Green VPN' -Recurse -Force -ErrorAction SilentlyContinue
 
 if (-not `$KeepProgramData) {
     Write-Step "Removing machine state in ProgramData..."
@@ -967,6 +1177,30 @@ popd >nul 2>nul
 exit /b %ERRORLEVEL%
 "@ | Set-Content -LiteralPath (Join-Path $installRoot 'uninstall_greenvpn.cmd') -Encoding ASCII
 
+    $uninstallKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Green VPN'
+    New-Item -Path $uninstallKey -Force | Out-Null
+    $uninstallCommand = '"' + (Join-Path $installRoot 'uninstall_greenvpn.cmd') + '"'
+    $estimatedSizeKb = [Math]::Max(1, [int]([Math]::Ceiling((
+        (Get-ChildItem -LiteralPath $installRoot -File -Recurse | Measure-Object -Property Length -Sum).Sum
+    ) / 1KB)))
+    $uninstallValues = [ordered]@{
+        DisplayName = 'Green VPN'
+        DisplayVersion = $productVersion
+        DisplayIcon = (Join-Path $installRoot 'greenvpn.exe')
+        Publisher = 'Green VPN'
+        InstallLocation = $installRoot
+        UninstallString = $uninstallCommand
+        QuietUninstallString = $uninstallCommand
+        URLInfoAbout = 'https://greenvpn.pro/'
+        InstallDate = (Get-Date -Format 'yyyyMMdd')
+    }
+    foreach ($entry in $uninstallValues.GetEnumerator()) {
+        New-ItemProperty -Path $uninstallKey -Name $entry.Key -PropertyType String -Value $entry.Value -Force | Out-Null
+    }
+    New-ItemProperty -Path $uninstallKey -Name 'EstimatedSize' -PropertyType DWord -Value $estimatedSizeKb -Force | Out-Null
+    New-ItemProperty -Path $uninstallKey -Name 'NoModify' -PropertyType DWord -Value 1 -Force | Out-Null
+    New-ItemProperty -Path $uninstallKey -Name 'NoRepair' -PropertyType DWord -Value 1 -Force | Out-Null
+
     $unShortcut = Join-Path $startMenuDir 'Удалить Green VPN.lnk'
     $shortcut = $wsh.CreateShortcut($unShortcut)
     $shortcut.TargetPath = Join-Path $installRoot 'uninstall_greenvpn.cmd'
@@ -982,15 +1216,69 @@ exit /b %ERRORLEVEL%
     Write-Step "Устанавливаем системную службу Green VPN..."
     Install-GreenVpnService -ServiceExe $serviceExe -TaskScript $taskScript
 
+    foreach ($requiredPath in @($exe, $desktopShortcut, $startShortcut, $uninstallKey)) {
+        if (-not (Test-Path -LiteralPath $requiredPath)) {
+            throw "Green VPN installation postcondition failed: $requiredPath was not created."
+        }
+    }
+
     Write-Step "Установка завершена."
+    $installCompleted = $true
+    Remove-Item -LiteralPath $installErrorLog -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $backupRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-CallerLegacyInstall
     if (-not $NoLaunch) {
         Write-Step "Запускаем Green VPN..."
         Start-Process -FilePath $exe -WorkingDirectory $installRoot
     }
+} catch {
+    $installError = $_
+    try {
+        $installError.Exception.ToString() | Set-Content -LiteralPath $installErrorLog -Encoding UTF8 -Force
+    } catch {
+    }
+    if (-not $installCompleted -and ($runtimeStopped -or $existingRootBackedUp -or $installSwapped)) {
+        Write-Step "Установка не завершилась; возвращаем предыдущую версию..."
+        try { Remove-GreenVpnService } catch {}
+        Get-Process -Name 'greenvpn' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        if ($installSwapped -or $existingRootBackedUp) {
+            try { Remove-CorruptInstallRoot -Root $installRoot } catch {}
+        }
+        if (Test-Path -LiteralPath $backupRoot) {
+            Move-DirectoryWithRetry -Source $backupRoot -Destination $installRoot
+        }
+        if ($existingInstallValid -and (Test-Path -LiteralPath $installRoot)) {
+            $oldServiceExe = Join-Path $installRoot 'greenvpn_service.exe'
+            $oldTaskScript = Join-Path $installRoot 'tools\greenvpn_vpn_task.ps1'
+            if ((Test-Path -LiteralPath $oldServiceExe) -and (Test-Path -LiteralPath $oldTaskScript)) {
+                try { Install-GreenVpnService -ServiceExe $oldServiceExe -TaskScript $oldTaskScript } catch {}
+            }
+            Remove-Item -LiteralPath $uninstallKey -Recurse -Force -ErrorAction SilentlyContinue
+            if ($previousUninstallValues.Count -gt 0) {
+                New-Item -Path $uninstallKey -Force | Out-Null
+                foreach ($entry in $previousUninstallValues.GetEnumerator()) {
+                    $propertyType = if ($entry.Key -in @('EstimatedSize', 'NoModify', 'NoRepair')) { 'DWord' } else { 'String' }
+                    New-ItemProperty -Path $uninstallKey -Name $entry.Key -PropertyType $propertyType -Value $entry.Value -Force | Out-Null
+                }
+            }
+            Remove-ItemProperty -Path $runKey -Name 'GreenVPN' -Force -ErrorAction SilentlyContinue
+            if (-not [string]::IsNullOrWhiteSpace([string]$previousRunValue)) {
+                New-Item -Path $runKey -Force | Out-Null
+                New-ItemProperty -Path $runKey -Name 'GreenVPN' -PropertyType String -Value $previousRunValue -Force | Out-Null
+            }
+        } else {
+            Remove-Item -LiteralPath (Join-Path $desktop 'Green VPN.lnk') -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath (Join-Path $startPrograms 'Green VPN') -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $uninstallKey -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-ItemProperty -Path $runKey -Name 'GreenVPN' -Force -ErrorAction SilentlyContinue
+        }
+    }
+    throw $installError
 }
 finally {
     try { Stop-Transcript | Out-Null } catch {}
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 '@ | Set-Content -LiteralPath $installPs1 -Encoding UTF8
 
@@ -998,6 +1286,10 @@ if ($WindowsRuntimeScope -eq 'paid-beta') {
     Copy-Item -LiteralPath (Join-Path $ProjectRoot 'scripts\windows\install_paid_beta_side_by_side.ps1') `
         -Destination $installPs1 -Force
 }
+
+$installScriptText = [IO.File]::ReadAllText($installPs1, [Text.UTF8Encoding]::new($true))
+$installScriptText = $installScriptText.Replace('__GREENVPN_APP_VERSION__', $AppVersion)
+[IO.File]::WriteAllText($installPs1, $installScriptText, [Text.UTF8Encoding]::new($true))
 
 @'
 Set-StrictMode -Version Latest

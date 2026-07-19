@@ -5,7 +5,7 @@ import tempfile
 import unittest
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import Event
 from unittest.mock import patch
 
@@ -945,6 +945,98 @@ class PaidBetaPolicyTests(unittest.TestCase):
             [(30, 249), (90, 649), (180, 1099)],
         )
 
+    def test_server_provisioning_allows_public_eligible_managed_entries(self) -> None:
+        catalog = {
+            "defaultServerId": "current_wg0",
+            "servers": [
+                {
+                    "id": "current_wg0",
+                    "endpoint": {
+                        "host": main.WG_ENDPOINT_HOST,
+                        "port": main.WG_ENDPOINT_PORT,
+                    },
+                },
+                {
+                    "id": "london-public",
+                    "endpoint": {"host": "203.0.113.20", "port": 443},
+                },
+            ],
+        }
+        entries = [
+            {
+                "serverId": "current_wg0",
+                "clientConfigReady": True,
+                "publicEligible": True,
+                "clientConfigProfile": "remote_ssh_wg0",
+            },
+            {
+                "serverId": "london-public",
+                "clientConfigReady": True,
+                "publicEligible": True,
+                "clientConfigProfile": "remote_ssh_wg0",
+            },
+            {
+                "serverId": "hidden-canary",
+                "clientConfigReady": True,
+                "publicEligible": False,
+                "clientConfigProfile": "static_hysteria2_canary",
+            },
+        ]
+
+        readiness = main.build_server_provisioning_readiness(catalog, entries)
+
+        self.assertTrue(readiness["safeForCurrentClient"])
+        self.assertTrue(readiness["multiEndpointProvisioningReady"])
+        self.assertTrue(readiness["clientConfigContract"]["managedCatalogClientVisible"])
+        current_case = next(
+            item
+            for item in readiness["selectionCases"]
+            if item["requestServerId"] == "current_wg0"
+        )
+        self.assertTrue(current_case["allowed"])
+
+    def test_server_provisioning_rejects_visible_managed_entry_without_gate(self) -> None:
+        catalog = {
+            "defaultServerId": "current_wg0",
+            "servers": [
+                {
+                    "id": "current_wg0",
+                    "endpoint": {
+                        "host": main.WG_ENDPOINT_HOST,
+                        "port": main.WG_ENDPOINT_PORT,
+                    },
+                },
+                {
+                    "id": "unsafe-public",
+                    "endpoint": {"host": "203.0.113.30", "port": 443},
+                },
+            ],
+        }
+        entries = [
+            {
+                "serverId": "current_wg0",
+                "clientConfigReady": True,
+                "publicEligible": True,
+                "clientConfigProfile": "remote_ssh_wg0",
+            },
+            {
+                "serverId": "unsafe-public",
+                "clientConfigReady": False,
+                "publicEligible": False,
+                "clientConfigProfile": "none",
+            },
+        ]
+
+        readiness = main.build_server_provisioning_readiness(catalog, entries)
+
+        self.assertFalse(readiness["safeForCurrentClient"])
+        failed = {
+            item["code"]: item
+            for item in readiness["checks"]
+            if not item["ok"]
+        }
+        self.assertIn("managed_public_entries_pass_gate", failed)
+
     def test_public_product_allows_ad_gate_but_paid_beta_stays_ad_free(self) -> None:
         user = main.get_user_access_row(self.user_id)
         sub = main.subscription_status(main.get_subscription_row(self.user_id))
@@ -1670,6 +1762,463 @@ class PaidBetaPolicyTests(unittest.TestCase):
         with self.assertRaises(main.HTTPException) as raised_missing:
             main.upsert_subscription_for_user(999999999, missing_user)
         self.assertEqual(raised_missing.exception.status_code, 404)
+
+
+class AppReleaseRollbackRegressionTests(unittest.TestCase):
+    def test_environment_rollback_is_platform_and_channel_specific(self) -> None:
+        paid_beta_config = {
+            "android": {
+                "rollbackVersion": "0.3.4",
+                "rollbackUrl": "https://example.test/beta/android.apk",
+                "rollbackSha256": "C" * 64,
+            },
+            "windows": {
+                "rollbackVersion": "0.3.4",
+                "rollbackUrl": "https://example.test/beta/windows.exe",
+                "rollbackSha256": "D" * 64,
+            },
+        }
+        with patch.object(main, "UPDATE_ROLLBACK_VERSION", "0.3.5"), patch.object(
+            main,
+            "UPDATE_ROLLBACK_URL",
+            "https://example.test/stable/windows.exe",
+        ), patch.object(main, "UPDATE_ROLLBACK_SHA256", "A" * 64), patch.object(
+            main,
+            "ANDROID_UPDATE_ROLLBACK_VERSION",
+            "0.3.5",
+        ), patch.object(
+            main,
+            "ANDROID_UPDATE_ROLLBACK_URL",
+            "https://example.test/stable/android.apk",
+        ), patch.object(
+            main,
+            "ANDROID_UPDATE_ROLLBACK_SHA256",
+            "B" * 64,
+        ), patch.object(main, "PAID_BETA_UPDATE_CONFIG", paid_beta_config):
+            windows = main.environment_rollback_candidate("windows", "stable")
+            android = main.environment_rollback_candidate("android", "stable")
+            beta_android = main.environment_rollback_candidate("android", "paid-beta")
+
+        self.assertEqual(windows["downloadUrl"], "https://example.test/stable/windows.exe")
+        self.assertEqual(android["downloadUrl"], "https://example.test/stable/android.apk")
+        self.assertEqual(beta_android["downloadUrl"], "https://example.test/beta/android.apk")
+        self.assertEqual(windows["platform"], "windows")
+        self.assertEqual(android["platform"], "android")
+        self.assertEqual(beta_android["channel"], "paid-beta")
+
+    def test_android_rollback_does_not_fall_back_to_windows_artifact(self) -> None:
+        with patch.object(main, "UPDATE_ROLLBACK_VERSION", "0.3.5"), patch.object(
+            main,
+            "UPDATE_ROLLBACK_URL",
+            "https://example.test/stable/windows.exe",
+        ), patch.object(main, "UPDATE_ROLLBACK_SHA256", "A" * 64), patch.object(
+            main,
+            "ANDROID_UPDATE_ROLLBACK_VERSION",
+            "",
+        ), patch.object(main, "ANDROID_UPDATE_ROLLBACK_URL", ""), patch.object(
+            main,
+            "ANDROID_UPDATE_ROLLBACK_SHA256",
+            "",
+        ):
+            candidate = main.environment_rollback_candidate("android", "stable")
+
+        self.assertIsNone(candidate)
+
+    def test_node_local_download_mirror_requires_exact_version_and_hash(self) -> None:
+        with patch.object(main, "ANDROID_UPDATE_LATEST_VERSION", "0.3.6"), patch.object(
+            main,
+            "ANDROID_UPDATE_DOWNLOAD_URL",
+            "https://fallback.example.test/downloads/GreenVPN_Android.apk",
+        ), patch.object(main, "ANDROID_UPDATE_SHA256", "A" * 64):
+            matching = main.node_local_update_artifact(
+                platform="android",
+                channel="stable",
+                version="0.3.6",
+                sha256="a" * 64,
+            )
+            wrong_hash = main.node_local_update_artifact(
+                platform="android",
+                channel="stable",
+                version="0.3.6",
+                sha256="B" * 64,
+            )
+            wrong_version = main.node_local_update_artifact(
+                platform="android",
+                channel="stable",
+                version="0.3.7",
+                sha256="A" * 64,
+            )
+
+        self.assertEqual(
+            matching["downloadUrl"],
+            "https://fallback.example.test/downloads/GreenVPN_Android.apk",
+        )
+        self.assertIsNone(wrong_hash)
+        self.assertIsNone(wrong_version)
+
+
+class OperationalReadinessRegressionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        main.init_db()
+
+    def setUp(self) -> None:
+        main.PAID_BETA_ENABLED = True
+        main.PAID_BETA_BILLING_PRIMARY = True
+        with main.db() as conn:
+            conn.execute("DELETE FROM admin_audit_log")
+            conn.execute("DELETE FROM beta_invite_redemptions")
+            conn.execute("DELETE FROM beta_invites")
+            conn.execute("DELETE FROM billing_orders")
+            conn.execute("DELETE FROM subscriptions")
+            conn.execute("DELETE FROM tokens")
+            conn.execute("DELETE FROM devices")
+            conn.execute("DELETE FROM users")
+            conn.execute(
+                "INSERT INTO users(email, password_hash, created_at) VALUES (?, ?, ?)",
+                (
+                    "operations@example.test",
+                    main.hash_password("test-password"),
+                    main.utc_now_iso(),
+                ),
+            )
+            self.user_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+            main.create_trial_subscription(conn, self.user_id)
+            conn.commit()
+        main.set_user_paid_beta_cohort(
+            self.user_id,
+            enabled=True,
+            source="test-suite",
+        )
+
+    def test_sms_daily_limit_error_is_actionable(self) -> None:
+        issue = main.classify_sms_delivery_error(
+            "Будет превышен или уже превышен дневной лимит на отправку сообщений"
+        )
+
+        self.assertEqual(issue["code"], "daily_limit_required")
+        self.assertIn("дневной лимит", issue["message"])
+
+    def test_public_health_and_legal_routes_support_head(self) -> None:
+        expected = {
+            "/healthz",
+            "/",
+            "/payment/return",
+            "/download/windows",
+            "/download/android",
+            "/download/ios",
+            "/legal/requisites",
+            "/legal/offer",
+            "/legal/privacy",
+            "/legal/acceptable-use",
+            "/legal/refunds",
+        }
+        head_routes = {
+            route.path
+            for route in main.app.routes
+            if "HEAD" in (getattr(route, "methods", set()) or set())
+        }
+
+        self.assertTrue(expected.issubset(head_routes))
+
+    def test_admin_can_cancel_only_stale_order_without_payment_markers(self) -> None:
+        order = main.create_billing_order_for_user(
+            self.user_id,
+            main.TariffSelectionIn(
+                trafficPack="gb20",
+                trafficGb=20,
+                unlimitedApps=[],
+                devices=1,
+                dedicatedIp=False,
+                autoRenew=True,
+                releaseChannel="paid-beta",
+                clientMarker="green-vpn-paid-beta-v1",
+            ),
+        )
+        stale_at = (main.utc_now() - timedelta(days=3)).isoformat()
+        with main.db() as conn:
+            conn.execute(
+                """
+                UPDATE billing_orders
+                SET provider = 'yookassa', created_at = ?, updated_at = ?,
+                    payment_url = NULL, provider_payment_id = NULL,
+                    provider_payment_method_id = NULL, paid_at = NULL, activated_at = NULL
+                WHERE public_id = ?
+                """,
+                (stale_at, stale_at, order["orderId"]),
+            )
+            conn.commit()
+
+        with patch.object(main, "require_admin", return_value={"actor": "test-suite"}), patch.object(
+            main,
+            "yookassa_configured",
+            return_value=True,
+        ):
+            result = main.admin_cancel_stale_billing_order(
+                order["orderId"],
+                main.AdminStaleBillingOrderCancelIn(
+                    reason="Cleanup of an abandoned pre-provider test order",
+                ),
+                request=None,
+                x_admin_token="test-token",
+            )
+
+        self.assertEqual(result["order"]["status"], "canceled")
+        self.assertEqual(result["reconciliation"]["summary"]["ordersWithAttention"], 0)
+        with main.db() as conn:
+            audit = conn.execute(
+                "SELECT action FROM admin_audit_log ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertEqual(audit["action"], "billing_stale_order_canceled")
+
+
+class AdminAuthSecurityTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        main.init_db()
+
+    def setUp(self) -> None:
+        with main.db() as conn:
+            conn.execute("DELETE FROM admin_2fa_challenges")
+            conn.execute("DELETE FROM admin_sessions")
+            conn.execute("DELETE FROM admin_staff")
+            conn.execute("DELETE FROM admin_audit_log")
+            now = main.utc_now_iso()
+            conn.execute(
+                """
+                INSERT INTO admin_staff(
+                    email, display_name, role, is_active, created_at, updated_at,
+                    password_hash, password_set_at, two_factor_enabled,
+                    two_factor_method, two_factor_set_at
+                )
+                VALUES (?, ?, 'owner', 1, ?, ?, ?, ?, 0, 'email', NULL)
+                """,
+                (
+                    "owner@example.test",
+                    "Test owner",
+                    now,
+                    now,
+                    main.admin_password_hash("correct-password"),
+                    now,
+                ),
+            )
+            conn.commit()
+
+    @staticmethod
+    def request(peer: str, forwarded_for: str = ""):
+        headers = [(b"user-agent", b"GreenVPN auth test")]
+        if forwarded_for:
+            headers.append((b"x-forwarded-for", forwarded_for.encode("ascii")))
+        return main.Request(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "https",
+                "path": "/api/v1/admin/auth/login",
+                "raw_path": b"/api/v1/admin/auth/login",
+                "query_string": b"",
+                "headers": headers,
+                "client": (peer, 43210),
+                "server": ("api.greenvpn.pro", 443),
+                "root_path": "",
+            }
+        )
+
+    def test_request_ip_uses_forwarded_address_only_from_loopback_proxy(self) -> None:
+        proxied = self.request("127.0.0.1", "203.0.113.250, 198.51.100.42")
+        direct = self.request("203.0.113.8", "198.51.100.99")
+        invalid = self.request("127.0.0.1", "not-an-ip, 198.51.100.7")
+
+        self.assertEqual(main.request_ip_and_agent(proxied)[0], "198.51.100.42")
+        self.assertEqual(main.request_ip_and_agent(direct)[0], "203.0.113.8")
+        self.assertEqual(main.request_ip_and_agent(invalid)[0], "198.51.100.7")
+
+    def test_admin_password_login_is_rate_limited_per_identity_and_ip(self) -> None:
+        request = self.request("127.0.0.1", "198.51.100.55")
+        payload = main.AdminLoginIn(
+            email="owner@example.test",
+            password="-".join(("wrong", "password")),
+            actor="owner@example.test",
+        )
+        with patch.object(main, "ADMIN_LOGIN_MAX_ATTEMPTS_PER_IDENTITY", 2), patch.object(
+            main,
+            "ADMIN_LOGIN_MAX_ATTEMPTS_PER_IP",
+            50,
+        ):
+            for _ in range(2):
+                with self.assertRaises(main.HTTPException) as failed:
+                    main.login_admin_staff(payload, request)
+                self.assertEqual(failed.exception.status_code, 401)
+
+            with self.assertRaises(main.HTTPException) as limited:
+                main.login_admin_staff(payload, request)
+
+        self.assertEqual(limited.exception.status_code, 429)
+        self.assertEqual(limited.exception.headers.get("Retry-After"), "900")
+        with main.db() as conn:
+            actions = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT action FROM admin_audit_log ORDER BY id"
+                ).fetchall()
+            ]
+            request_ips = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT request_ip FROM admin_audit_log"
+                ).fetchall()
+            }
+        self.assertEqual(
+            actions,
+            [
+                "admin_staff_login_failed",
+                "admin_staff_login_failed",
+                "admin_staff_login_rate_limited",
+            ],
+        )
+        self.assertEqual(request_ips, {"198.51.100.55"})
+
+    def test_admin_identity_rate_limit_cannot_be_bypassed_by_changing_ip(self) -> None:
+        payload = main.AdminLoginIn(
+            email="owner@example.test",
+            password="<test-only-placeholder>",
+            actor="owner@example.test",
+        )
+        with patch.object(main, "ADMIN_LOGIN_MAX_ATTEMPTS_PER_IDENTITY", 2), patch.object(
+            main,
+            "ADMIN_LOGIN_MAX_ATTEMPTS_PER_IP",
+            50,
+        ):
+            for forwarded_for in ("198.51.100.10", "198.51.100.11"):
+                with self.assertRaises(main.HTTPException) as failed:
+                    main.login_admin_staff(
+                        payload,
+                        self.request("127.0.0.1", forwarded_for),
+                    )
+                self.assertEqual(failed.exception.status_code, 401)
+
+            with self.assertRaises(main.HTTPException) as limited:
+                main.login_admin_staff(
+                    payload,
+                    self.request("127.0.0.1", "198.51.100.12"),
+                )
+
+        self.assertEqual(limited.exception.status_code, 429)
+        with main.db() as conn:
+            failed_attempts = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM admin_audit_log
+                WHERE action = 'admin_staff_login_failed'
+                """
+            ).fetchone()[0]
+        self.assertEqual(failed_attempts, 2)
+
+    def test_admin_2fa_email_resend_has_a_cooldown(self) -> None:
+        with main.db() as conn:
+            conn.execute("UPDATE admin_staff SET two_factor_enabled = 1")
+            row = conn.execute("SELECT * FROM admin_staff LIMIT 1").fetchone()
+            conn.commit()
+        request = self.request("127.0.0.1", "198.51.100.77")
+
+        with patch.object(main, "admin_2fa_email_configured", return_value=True), patch.object(
+            main,
+            "send_smtp_email",
+            return_value=None,
+        ):
+            first = main.create_admin_2fa_challenge(row, request, "Test owner")
+            with self.assertRaises(main.HTTPException) as limited:
+                main.create_admin_2fa_challenge(row, request, "Test owner")
+
+        self.assertTrue(first["twoFactorRequired"])
+        self.assertEqual(limited.exception.status_code, 429)
+        self.assertEqual(
+            limited.exception.headers.get("Retry-After"),
+            str(main.ADMIN_2FA_RESEND_COOLDOWN_SECONDS),
+        )
+
+
+class ServerHealthReadinessPolicyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        main.init_db()
+
+    def setUp(self) -> None:
+        with main.db() as conn:
+            conn.execute("DELETE FROM server_health_observations")
+            conn.commit()
+
+    def test_private_transport_previews_do_not_block_public_health_readiness(self) -> None:
+        now = main.utc_now_iso()
+        with main.db() as conn:
+            conn.execute(
+                """
+                INSERT INTO server_health_observations(
+                    endpoint_id, probe_id, probe_region, protocol, transport,
+                    target, ok, status, latency_ms, packet_loss_percent,
+                    error_code, message, details_json, observed_at, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "public-nl",
+                    "external-smoke",
+                    "outside",
+                    "wireguard_udp",
+                    "udp",
+                    "public-nl.example.test",
+                    1,
+                    "healthy",
+                    25,
+                    0.0,
+                    "",
+                    "healthy",
+                    '{"score": 100}',
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+
+        managed_entries = [
+            {
+                "serverId": "public-nl",
+                "isActive": True,
+                "isPublic": True,
+                "clientConfigReady": True,
+            },
+            {
+                "serverId": "private-preview",
+                "isActive": True,
+                "isPublic": False,
+                "clientConfigReady": True,
+            },
+        ]
+        summary = {
+            "serverHealthProbeAgents": [
+                {
+                    "probeId": "external-smoke",
+                    "isExternal": True,
+                    "isStale": False,
+                    "problems24h": 0,
+                    "lastStatus": "healthy",
+                }
+            ]
+        }
+
+        with patch.object(
+            main,
+            "list_managed_server_catalog_entries",
+            return_value=managed_entries,
+        ):
+            readiness = main.server_health_external_probe_readiness(summary)
+
+        self.assertTrue(readiness["productionReady"])
+        self.assertEqual(readiness["requiredEndpointIds"], ["public-nl"])
+        self.assertEqual(readiness["coveredEndpointIds"], ["public-nl"])
+        self.assertEqual(readiness["missingEndpointIds"], [])
 
 
 if __name__ == "__main__":

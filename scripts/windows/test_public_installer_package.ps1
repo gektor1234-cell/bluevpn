@@ -1,0 +1,192 @@
+param(
+    [Parameter(Mandatory=$true)][string]$InstallerPath,
+    [ValidateSet('production', 'paid-beta')][string]$Channel = 'production',
+    [string]$ReportPath = '',
+    [string]$KeepExtractedPath = ''
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+function Test-Utf8Bom {
+    param([Parameter(Mandatory=$true)][string]$Path)
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    return $bytes.Length -ge 3 -and
+        $bytes[0] -eq 0xEF -and
+        $bytes[1] -eq 0xBB -and
+        $bytes[2] -eq 0xBF
+}
+
+function New-UnicodeString {
+    param([Parameter(Mandatory=$true)][int[]]$CodePoints)
+    return -join @($CodePoints | ForEach-Object { [char]$_ })
+}
+
+$resolvedInstaller = (Resolve-Path -LiteralPath $InstallerPath).Path
+$root = Join-Path $env:TEMP ("GreenVpnPackageAudit_" + [guid]::NewGuid().ToString('N'))
+$errors = New-Object System.Collections.Generic.List[string]
+
+try {
+    New-Item -ItemType Directory -Force -Path $root | Out-Null
+    $process = Start-Process -FilePath $resolvedInstaller -ArgumentList @('/Q', "/T:$root", '/C') -PassThru
+    if (-not $process.WaitForExit(30000)) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        throw 'IExpress extraction did not finish within 30 seconds.'
+    }
+    if ($process.ExitCode -ne 0) {
+        throw "IExpress extraction failed with exit code $($process.ExitCode)."
+    }
+
+    $requiredFiles = @(
+        'install_bootstrap.exe',
+        'install_ui.ps1',
+        'install_greenvpn.ps1',
+        'GreenVPN_payload.zip',
+        'app_icon.ico'
+    )
+    foreach ($name in $requiredFiles) {
+        if (-not (Test-Path -LiteralPath (Join-Path $root $name))) {
+            $errors.Add("Missing extracted installer file: $name") | Out-Null
+        }
+    }
+
+    $uiPath = Join-Path $root 'install_ui.ps1'
+    $installPath = Join-Path $root 'install_greenvpn.ps1'
+    foreach ($scriptPath in @($uiPath, $installPath)) {
+        if ((Test-Path -LiteralPath $scriptPath) -and -not (Test-Utf8Bom -Path $scriptPath)) {
+            $errors.Add("Installer script is not UTF-8 BOM safe: $([IO.Path]::GetFileName($scriptPath))") | Out-Null
+        }
+    }
+
+    if ((Test-Path -LiteralPath $uiPath) -and (Test-Path -LiteralPath $installPath)) {
+        $ui = [IO.File]::ReadAllText($uiPath, [Text.UTF8Encoding]::new($true))
+        $install = [IO.File]::ReadAllText($installPath, [Text.UTF8Encoding]::new($true))
+        $mojibakeMarkers = @(
+            (New-UnicodeString -CodePoints @(0x0420, 0x0408)),
+            (New-UnicodeString -CodePoints @(0x0420, 0x2014)),
+            (New-UnicodeString -CodePoints @(0x0421, 0x0453))
+        )
+        foreach ($marker in $mojibakeMarkers) {
+            if ($ui.Contains($marker) -or $install.Contains($marker)) {
+                $errors.Add('Installer contains corrupted localized text.') | Out-Null
+                break
+            }
+        }
+
+        if ($Channel -eq 'production') {
+            foreach ($fragment in @(
+                '[string]$InstallDir = "$env:ProgramFiles\Green VPN"',
+                'CommonDesktopDirectory',
+                'CommonPrograms',
+                "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Green VPN",
+                "'*S-1-5-32-545:(OI)(CI)RX'",
+                "(Join-Path `$stagingRoot '*') /reset /T /C",
+                'Test-FileAclAllows',
+                'function Remove-CorruptInstallRoot',
+                'takeown.exe /F $Root /A /R /D Y',
+                'Remove-CorruptInstallRoot -Root $installRoot',
+                'function Move-DirectoryWithRetry',
+                '$runtimeStopped = $true',
+                '$existingRootBackedUp = $true',
+                'Green VPN installation postcondition failed',
+                '$stagingRoot = "$installRoot.staging-$swapId"',
+                '$existingInstallValid = Test-GreenVpnInstalledRoot -Root $installRoot',
+                'if (-not $installCompleted -and ($runtimeStopped -or $existingRootBackedUp -or $installSwapped))',
+                "`$installErrorLog = Join-Path `$env:TEMP 'GreenVPN_Setup_error.log'",
+                '$launchAfterInstall = -not $NoLaunch'
+            )) {
+                if (-not $install.Contains($fragment)) {
+                    $errors.Add("Production install contract missing: $fragment") | Out-Null
+                }
+            }
+            foreach ($forbiddenFragment in @('$legacyInstallRoot', '$legacyGreenInstallRoot')) {
+                if ($install.Contains($forbiddenFragment)) {
+                    $errors.Add("Production install contract contains an undefined legacy path: $forbiddenFragment") | Out-Null
+                }
+            }
+        }
+        else {
+            foreach ($fragment in @(
+                '[string]$InstallDir = "$env:ProgramFiles\Green VPN Beta"',
+                'CommonDesktopDirectory',
+                'CommonPrograms',
+                "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Green VPN Beta",
+                "'*S-1-5-32-545:(OI)(CI)RX'",
+                "(Join-Path `$stagingRoot '*') /reset /T /C",
+                'Test-FileAclAllows',
+                'function Remove-CorruptInstallRoot',
+                'takeown.exe /F $Root /A /R /D Y',
+                'Remove-CorruptInstallRoot -Root $installRoot',
+                'function Move-DirectoryWithRetry',
+                '$runtimeStopped = $true',
+                '$existingRootBackedUp = $true',
+                '$legacyInstallValid',
+                'Green VPN Beta installation postcondition failed',
+                '$stagingRoot = "$installRoot.staging-$swapId"',
+                '$existingInstallValid = Test-BetaInstalledRoot -Root $installRoot',
+                'if (-not $installCompleted -and ($runtimeStopped -or $existingRootBackedUp -or $installSwapped))',
+                'restoring the previous beta version',
+                "`$installErrorLog = Join-Path `$env:TEMP 'GreenVPN_Beta_Setup_error.log'",
+                '$launchAfterInstall = -not $NoLaunch'
+            )) {
+                if (-not $install.Contains($fragment)) {
+                    $errors.Add("Beta install contract missing: $fragment") | Out-Null
+                }
+            }
+        }
+    }
+
+    $payloadPath = Join-Path $root 'GreenVPN_payload.zip'
+    $entryNames = @()
+    if (Test-Path -LiteralPath $payloadPath) {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [IO.Compression.ZipFile]::OpenRead($payloadPath)
+        try {
+            $entryNames = @($zip.Entries | ForEach-Object { $_.FullName.Replace('\', '/').ToLowerInvariant() })
+        }
+        finally {
+            $zip.Dispose()
+        }
+        $requiredPayload = if ($Channel -eq 'production') {
+            @('app/greenvpn.exe', 'app/greenvpn_service.exe', 'tools/greenvpn_vpn_task.ps1')
+        }
+        else {
+            @('app/greenvpn_beta.exe', 'app/greenvpn_beta_service.exe', 'tools/greenvpn_vpn_task.ps1', 'tools/uninstall_greenvpn_beta.ps1')
+        }
+        foreach ($entry in $requiredPayload) {
+            if ($entryNames -notcontains $entry) {
+                $errors.Add("Payload entry missing: $entry") | Out-Null
+            }
+        }
+    }
+
+    $report = [ordered]@{
+        generatedAtUtc = [DateTime]::UtcNow.ToString('o')
+        success = $errors.Count -eq 0
+        channel = $Channel
+        installerSha256 = (Get-FileHash -LiteralPath $resolvedInstaller -Algorithm SHA256).Hash
+        installerSizeBytes = (Get-Item -LiteralPath $resolvedInstaller).Length
+        extractedFileCount = @(Get-ChildItem -LiteralPath $root -File).Count
+        payloadEntryCount = $entryNames.Count
+        errors = @($errors)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ReportPath)) {
+        $parent = Split-Path -Parent $ReportPath
+        if (-not [string]::IsNullOrWhiteSpace($parent)) {
+            New-Item -ItemType Directory -Force -Path $parent | Out-Null
+        }
+        $report | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $ReportPath -Encoding UTF8
+    }
+    if (-not [string]::IsNullOrWhiteSpace($KeepExtractedPath)) {
+        Remove-Item -LiteralPath $KeepExtractedPath -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Path $KeepExtractedPath -Force | Out-Null
+        Get-ChildItem -LiteralPath $root -Force | Copy-Item -Destination $KeepExtractedPath -Recurse -Force
+    }
+    $report | ConvertTo-Json -Depth 5
+    if ($errors.Count -gt 0) {
+        throw "Public installer package audit failed with $($errors.Count) error(s)."
+    }
+}
+finally {
+    Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+}

@@ -105,6 +105,289 @@ class DbStateSyncTests(unittest.TestCase):
                 ).fetchone()
             self.assertEqual(row, ("paid_beta_v1", "invite-alpha"))
 
+    def test_email_verification_timestamp_converges_without_updated_at_change(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="greenvpn-email-verified-sync-",
+            ignore_cleanup_errors=True,
+        ) as root:
+            source_db = Path(root) / "source.sqlite"
+            target_db = Path(root) / "target.sqlite"
+            schema = """
+                CREATE TABLE users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT NOT NULL UNIQUE,
+                    email_verified INTEGER NOT NULL,
+                    email_verified_at TEXT,
+                    access_cohort TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT
+                );
+            """
+            for path, verified_at, cohort in [
+                (source_db, "2026-07-18T10:00:00+00:00", "stable"),
+                (target_db, "2026-07-01T10:00:00+00:00", "paid_beta_v1"),
+            ]:
+                with sqlite3.connect(path) as conn:
+                    conn.executescript(schema)
+                    conn.execute(
+                        """
+                        INSERT INTO users(
+                            email, email_verified, email_verified_at,
+                            access_cohort, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            "verified@example.test",
+                            1,
+                            verified_at,
+                            cohort,
+                            "2026-06-01T00:00:00+00:00",
+                            "2026-07-10T00:00:00+00:00",
+                        ),
+                    )
+                    conn.commit()
+
+            result = self.run_sync(source_db, target_db)
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            with sqlite3.connect(target_db) as conn:
+                row = conn.execute(
+                    "SELECT email_verified_at, access_cohort FROM users"
+                ).fetchone()
+            self.assertEqual(
+                row,
+                ("2026-07-18T10:00:00+00:00", "paid_beta_v1"),
+            )
+
+    def test_newer_general_update_cannot_regress_verified_contacts(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="greenvpn-contact-state-sync-",
+            ignore_cleanup_errors=True,
+        ) as root:
+            source_db = Path(root) / "source.sqlite"
+            target_db = Path(root) / "target.sqlite"
+            schema = """
+                CREATE TABLE users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT NOT NULL UNIQUE,
+                    email_verified INTEGER NOT NULL,
+                    email_verified_at TEXT,
+                    phone TEXT,
+                    phone_verified INTEGER NOT NULL,
+                    phone_verified_at TEXT,
+                    access_cohort TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT
+                );
+            """
+            rows = (
+                (
+                    source_db,
+                    "2026-07-10T10:00:00+00:00",
+                    "+70000000001",
+                    0,
+                    None,
+                    "paid_beta_v1",
+                    "2026-07-19T10:00:00+00:00",
+                ),
+                (
+                    target_db,
+                    "2026-07-18T10:00:00+00:00",
+                    "+70000000002",
+                    1,
+                    "2026-07-18T11:00:00+00:00",
+                    "stable",
+                    "2026-07-18T12:00:00+00:00",
+                ),
+            )
+            for (
+                path,
+                email_verified_at,
+                phone,
+                phone_verified,
+                phone_verified_at,
+                cohort,
+                updated_at,
+            ) in rows:
+                with sqlite3.connect(path) as conn:
+                    conn.executescript(schema)
+                    conn.execute(
+                        """
+                        INSERT INTO users(
+                            email, email_verified, email_verified_at,
+                            phone, phone_verified, phone_verified_at,
+                            access_cohort, created_at, updated_at
+                        ) VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            "verified@example.test",
+                            email_verified_at,
+                            phone,
+                            phone_verified,
+                            phone_verified_at,
+                            cohort,
+                            "2026-06-01T00:00:00+00:00",
+                            updated_at,
+                        ),
+                    )
+                    conn.commit()
+
+            result = self.run_sync(source_db, target_db)
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            with sqlite3.connect(target_db) as conn:
+                row = conn.execute(
+                    """
+                    SELECT email_verified, email_verified_at, phone,
+                           phone_verified, phone_verified_at, access_cohort
+                    FROM users
+                    """
+                ).fetchone()
+            self.assertEqual(
+                row,
+                (
+                    1,
+                    "2026-07-18T10:00:00+00:00",
+                    "+70000000002",
+                    1,
+                    "2026-07-18T11:00:00+00:00",
+                    "paid_beta_v1",
+                ),
+            )
+
+    def test_admin_session_revocation_and_last_seen_merge_monotonically(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="greenvpn-admin-session-sync-",
+            ignore_cleanup_errors=True,
+        ) as root:
+            source_db = Path(root) / "source.sqlite"
+            target_db = Path(root) / "target.sqlite"
+            schema = """
+                CREATE TABLE admin_sessions (
+                    token_hash TEXT PRIMARY KEY,
+                    staff_id INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    last_seen_at TEXT,
+                    revoked_at TEXT,
+                    request_ip TEXT,
+                    user_agent TEXT
+                );
+            """
+            for path, last_seen, revoked_at in [
+                (
+                    source_db,
+                    "2026-07-18T10:00:00+00:00",
+                    "2026-07-18T10:05:00+00:00",
+                ),
+                (target_db, "2026-07-18T10:10:00+00:00", None),
+            ]:
+                with sqlite3.connect(path) as conn:
+                    conn.executescript(schema)
+                    conn.execute(
+                        """
+                        INSERT INTO admin_sessions(
+                            token_hash, staff_id, created_at, expires_at,
+                            last_seen_at, revoked_at, request_ip, user_agent
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            "session-hash",
+                            1,
+                            "2026-07-18T09:00:00+00:00",
+                            "2026-07-19T09:00:00+00:00",
+                            last_seen,
+                            revoked_at,
+                            "127.0.0.1",
+                            "test",
+                        ),
+                    )
+                    conn.commit()
+
+            result = self.run_sync(
+                source_db,
+                target_db,
+                tables=["admin_sessions"],
+            )
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            with sqlite3.connect(target_db) as conn:
+                row = conn.execute(
+                    "SELECT last_seen_at, revoked_at FROM admin_sessions"
+                ).fetchone()
+            self.assertEqual(
+                row,
+                (
+                    "2026-07-18T10:10:00+00:00",
+                    "2026-07-18T10:05:00+00:00",
+                ),
+            )
+
+    def test_sent_outbox_state_reaches_pending_peer_and_cannot_revert(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="greenvpn-outbox-sync-",
+            ignore_cleanup_errors=True,
+        ) as root:
+            sent_db = Path(root) / "sent.sqlite"
+            pending_db = Path(root) / "pending.sqlite"
+            schema = """
+                CREATE TABLE email_outbox (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    email TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    error TEXT,
+                    created_at TEXT NOT NULL,
+                    sent_at TEXT
+                );
+            """
+            for path, status, sent_at in [
+                (sent_db, "sent", "2026-07-18T10:05:00+00:00"),
+                (pending_db, "pending", None),
+            ]:
+                with sqlite3.connect(path) as conn:
+                    conn.executescript(schema)
+                    conn.execute(
+                        """
+                        INSERT INTO email_outbox(
+                            user_id, email, subject, body, status,
+                            error, created_at, sent_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            1,
+                            "mail@example.test",
+                            "Login code",
+                            "masked",
+                            status,
+                            None,
+                            "2026-07-18T10:00:00+00:00",
+                            sent_at,
+                        ),
+                    )
+                    conn.commit()
+
+            result = self.run_sync(
+                sent_db,
+                pending_db,
+                tables=["email_outbox"],
+            )
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            reverse = self.run_sync(
+                pending_db,
+                sent_db,
+                tables=["email_outbox"],
+            )
+            self.assertEqual(reverse.returncode, 0, reverse.stderr or reverse.stdout)
+            for path in (sent_db, pending_db):
+                with sqlite3.connect(path) as conn:
+                    row = conn.execute(
+                        "SELECT status, sent_at FROM email_outbox"
+                    ).fetchone()
+                self.assertEqual(
+                    row,
+                    ("sent", "2026-07-18T10:05:00+00:00"),
+                )
+
     def test_optional_table_missing_on_both_nodes_is_not_an_error(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="greenvpn-optional-table-absent-",
@@ -844,6 +1127,176 @@ class DbStateSyncTests(unittest.TestCase):
                 ).fetchone()[0]
             self.assertEqual(subscription_count, 0)
             self.assertEqual(tombstone_key, '{"user_id":1}')
+
+    def test_admin_audit_log_converges_without_primary_key_collisions(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="greenvpn-admin-audit-sync-",
+            ignore_cleanup_errors=True,
+        ) as root:
+            source_db = Path(root) / "source.sqlite"
+            target_db = Path(root) / "target.sqlite"
+            schema = """
+                CREATE TABLE admin_audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    actor TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    target_type TEXT,
+                    target_id TEXT,
+                    details_json TEXT,
+                    request_ip TEXT,
+                    user_agent TEXT,
+                    created_at TEXT NOT NULL
+                );
+            """
+            for path in (source_db, target_db):
+                with sqlite3.connect(path) as conn:
+                    conn.executescript(schema)
+                    conn.commit()
+            with sqlite3.connect(source_db) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO admin_audit_log(
+                        id, actor, action, target_type, target_id, details_json,
+                        request_ip, user_agent, created_at
+                    ) VALUES (1, ?, ?, ?, ?, '{}', '', '', ?)
+                    """,
+                    (
+                        "owner",
+                        "support_report_status_updated",
+                        "support_report",
+                        "9",
+                        "2026-07-18T20:52:19+00:00",
+                    ),
+                )
+                conn.commit()
+            with sqlite3.connect(target_db) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO admin_audit_log(
+                        id, actor, action, target_type, target_id, details_json,
+                        request_ip, user_agent, created_at
+                    ) VALUES (1, ?, ?, ?, ?, '{}', '', '', ?)
+                    """,
+                    (
+                        "fallback-owner",
+                        "admin_staff_login_succeeded",
+                        "admin_staff",
+                        "1",
+                        "2026-07-18T20:50:00+00:00",
+                    ),
+                )
+                conn.commit()
+
+            first = self.run_sync(
+                source_db,
+                target_db,
+                tables=["admin_audit_log"],
+            )
+            reverse = self.run_sync(
+                target_db,
+                source_db,
+                tables=["admin_audit_log"],
+            )
+
+            self.assertEqual(first.returncode, 0, first.stderr or first.stdout)
+            self.assertEqual(reverse.returncode, 0, reverse.stderr or reverse.stdout)
+            for path in (source_db, target_db):
+                with sqlite3.connect(path) as conn:
+                    rows = conn.execute(
+                        "SELECT actor, action, target_id FROM admin_audit_log ORDER BY action"
+                    ).fetchall()
+                self.assertEqual(
+                    rows,
+                    [
+                        ("fallback-owner", "admin_staff_login_succeeded", "1"),
+                        ("owner", "support_report_status_updated", "9"),
+                    ],
+                )
+
+    def test_app_release_registry_converges_by_platform_channel_and_version(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="greenvpn-app-release-sync-",
+            ignore_cleanup_errors=True,
+        ) as root:
+            source_db = Path(root) / "source.sqlite"
+            target_db = Path(root) / "target.sqlite"
+            schema = """
+                CREATE TABLE app_releases (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    platform TEXT NOT NULL,
+                    channel TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    build_number TEXT,
+                    download_url TEXT,
+                    sha256 TEXT,
+                    size_bytes INTEGER,
+                    is_required INTEGER NOT NULL DEFAULT 0,
+                    min_supported_version TEXT,
+                    rollout_percent INTEGER NOT NULL DEFAULT 100,
+                    changelog_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    published_at TEXT,
+                    retired_at TEXT,
+                    UNIQUE(platform, channel, version)
+                );
+            """
+            for path, status, updated_at in (
+                (source_db, "published", "2026-07-18T21:00:00+00:00"),
+                (target_db, "draft", "2026-07-18T20:00:00+00:00"),
+            ):
+                with sqlite3.connect(path) as conn:
+                    conn.executescript(schema)
+                    conn.execute(
+                        """
+                        INSERT INTO app_releases(
+                            platform, channel, version, build_number,
+                            download_url, sha256, size_bytes, is_required,
+                            min_supported_version, rollout_percent,
+                            changelog_json, status, created_at, updated_at,
+                            published_at, retired_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                        """,
+                        (
+                            "android",
+                            "stable",
+                            "0.3.6",
+                            "2026071802",
+                            "https://example.test/GreenVPN_Android.apk",
+                            "A" * 64,
+                            100,
+                            1,
+                            "0.3.6",
+                            100,
+                            "[]",
+                            status,
+                            "2026-07-18T19:00:00+00:00",
+                            updated_at,
+                            updated_at if status == "published" else None,
+                        ),
+                    )
+                    conn.commit()
+
+            result = self.run_sync(
+                source_db,
+                target_db,
+                tables=["app_releases"],
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            with sqlite3.connect(target_db) as conn:
+                row = conn.execute(
+                    """
+                    SELECT status, is_required, rollout_percent, published_at
+                    FROM app_releases
+                    WHERE platform = 'android' AND channel = 'stable' AND version = '0.3.6'
+                    """
+                ).fetchone()
+            self.assertEqual(
+                row,
+                ("published", 1, 100, "2026-07-18T21:00:00+00:00"),
+            )
 
 
 if __name__ == "__main__":
