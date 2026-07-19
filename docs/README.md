@@ -44,6 +44,8 @@ stale document. Never copy secrets from an old checkpoint or report.
 - `INSTALLER_TRUST_AND_AV_FALSE_POSITIVE_RU.md` - Windows signing and trust.
 - `MOBILE_APP_ANDROID_MVP_RU.md` - Android build and device operations.
 - `EXTERNAL_SERVICES_CHECKLIST_RU.md` - external accounts and dependencies.
+- `PROJECT_EXTERNAL_SITES_RU.md` - safe inventory of every confirmed project
+  website, provider panel, technical source and one-off research domain.
 
 ## Product and launch
 
