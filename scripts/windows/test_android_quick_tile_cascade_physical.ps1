@@ -1,9 +1,8 @@
 param(
     [string]$Adb = "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe",
-    [string]$Serial = 'R9WT10CDC2J',
+    [string]$Serial = '',
     [string]$Package = 'pro.greenvpn.app.transportpreview',
     [string]$ProbePackage = 'pro.greenvpn.transportprobe',
-    [string]$ExpectedCanaryEgress = '5.129.216.42',
     [ValidateRange(1, 6)][int]$StartStage = 1,
     [ValidateRange(1, 6)][int]$EndStage = 6,
     [ValidateRange(1, 5)][int]$ProbeAttempts = 3,
@@ -18,12 +17,24 @@ $tileSetting = "custom($tileComponent)"
 $resultFile = 'files/greenvpn-transport-contract-debug-result.json'
 
 $transportCandidates = @(
-    [pscustomobject]@{ serverId = 'nl2-awg2-canary'; protocol = 'amneziawg' },
-    [pscustomobject]@{ serverId = 'nl2-hysteria2-canary'; protocol = 'hysteria2' },
-    [pscustomobject]@{ serverId = 'nl2-vless-reality-xhttp-canary'; protocol = 'vless_reality' },
-    [pscustomobject]@{ serverId = 'nl2-naive-https-canary'; protocol = 'naive_https' },
-    [pscustomobject]@{ serverId = 'nl2-dnstt-canary'; protocol = 'dnstt' }
+    [pscustomobject]@{ serverId = 'current_wg0'; protocol = 'wireguard_udp'; egress = '37.220.85.211' },
+    [pscustomobject]@{ serverId = 'ruvds-2584554-ld8'; protocol = 'wireguard_udp'; egress = '88.218.250.86' },
+    [pscustomobject]@{ serverId = 'tw-7879598-nl1'; protocol = 'wireguard_udp'; egress = '5.129.216.42' },
+    [pscustomobject]@{ serverId = 'gb1-awg2-canary'; protocol = 'amneziawg'; egress = '88.218.250.86' },
+    [pscustomobject]@{ serverId = 'nl1-awg2-canary'; protocol = 'amneziawg'; egress = '37.220.85.211' },
+    [pscustomobject]@{ serverId = 'nl2-awg2-canary'; protocol = 'amneziawg'; egress = '5.129.216.42' },
+    [pscustomobject]@{ serverId = 'gb1-hysteria2-canary'; protocol = 'hysteria2'; egress = '88.218.250.86' },
+    [pscustomobject]@{ serverId = 'nl1-hysteria2-canary'; protocol = 'hysteria2'; egress = '37.220.85.211' },
+    [pscustomobject]@{ serverId = 'nl2-hysteria2-canary'; protocol = 'hysteria2'; egress = '5.129.216.42' },
+    [pscustomobject]@{ serverId = 'gb1-vless-reality-xhttp-canary'; protocol = 'vless_reality'; egress = '88.218.250.86' },
+    [pscustomobject]@{ serverId = 'nl1-vless-reality-xhttp-canary'; protocol = 'vless_reality'; egress = '37.220.85.211' },
+    [pscustomobject]@{ serverId = 'nl2-vless-reality-xhttp-canary'; protocol = 'vless_reality'; egress = '5.129.216.42' },
+    [pscustomobject]@{ serverId = 'gb1-naive-https-canary'; protocol = 'naive_https'; egress = '88.218.250.86' },
+    [pscustomobject]@{ serverId = 'nl1-naive-https-canary'; protocol = 'naive_https'; egress = '37.220.85.211' },
+    [pscustomobject]@{ serverId = 'nl2-naive-https-canary'; protocol = 'naive_https'; egress = '5.129.216.42' },
+    [pscustomobject]@{ serverId = 'nl2-dnstt-canary'; protocol = 'dnstt'; egress = '5.129.216.42' }
 )
+$protocolOrder = @('wireguard_udp', 'amneziawg', 'hysteria2', 'vless_reality', 'naive_https', 'dnstt')
 
 function Invoke-Adb {
     param([Parameter(Mandatory = $true)][string[]]$Arguments)
@@ -107,11 +118,11 @@ function Invoke-ExternalProbe {
 }
 
 function Assert-ExternalProbe {
-    param([Parameter(Mandatory = $true)]$Probe, [string]$ExpectedEgress = '')
+    param([Parameter(Mandatory = $true)]$Probe, [string[]]$ExpectedEgresses = @())
     if ($Probe.egressStatus -ne 200 -or [string]::IsNullOrWhiteSpace([string]$Probe.egress)) {
         throw "Route egress probe failed: status=$($Probe.egressStatus) error=$($Probe.egressError)"
     }
-    if ($ExpectedEgress -and $Probe.egress -ne $ExpectedEgress) {
+    if ($ExpectedEgresses.Count -gt 0 -and $Probe.egress -notin $ExpectedEgresses) {
         throw "Unexpected canary egress: $($Probe.egress)"
     }
     foreach ($property in @('productionApiStatus', 'paidBetaPrimaryStatus', 'paidBetaFallbackStatus')) {
@@ -120,6 +131,20 @@ function Assert-ExternalProbe {
     if ([int]$Probe.youtubeStatus -notin @(200, 204)) {
         throw "Route YouTube probe failed: status=$($Probe.youtubeStatus) error=$($Probe.youtubeError)"
     }
+}
+
+function Get-VpnRecordCount {
+    return @(
+        Invoke-Adb -Arguments @('shell', 'dumpsys', 'connectivity') |
+            Select-String -Pattern 'type: VPN\[\], state: CONNECTED/CONNECTED'
+    ).Count
+}
+
+function Get-TransportEngineProcessCount {
+    return @(
+        Invoke-Adb -Arguments @('shell', 'ps', '-A', '-o', 'PID,PPID,NAME,ARGS') |
+            Select-String -Pattern 'libhysteria\.so|libxray\.so|libnaive\.so|libdnstt_client\.so'
+    ).Count
 }
 
 function Set-TileList {
@@ -149,9 +174,11 @@ function Wait-Route {
         $lastRouteProperty = $snapshot.lastRouteSuccess.PSObject.Properties['protocol']
         $lastProtocol = if ($null -ne $lastRouteProperty) { [string]$lastRouteProperty.Value } else { '' }
         $activeMatches = if ($ExpectedProtocol -eq 'wireguard_udp') {
-            $active.Count -eq 0 -or ($active.Count -eq 1 -and $active[0] -eq 'amneziawg')
+            $active.Count -eq 0 -and (Get-VpnRecordCount) -eq 1
         } else {
-            $active.Count -eq 1 -and $active[0] -eq $ExpectedProtocol
+            $active.Count -eq 1 -and
+                $active[0] -eq $ExpectedProtocol -and
+                (Get-VpnRecordCount) -eq 1
         }
         if ($lastProtocol -eq $ExpectedProtocol -and $activeMatches) { return $snapshot }
         Start-Sleep -Milliseconds 750
@@ -170,7 +197,14 @@ function Wait-Down {
         $snapshot = Invoke-DebugCommand -Command 'snapshot'
         $lastRouteProperty = $snapshot.lastRouteSuccess.PSObject.Properties['protocol']
         $lastProtocol = if ($null -ne $lastRouteProperty) { [string]$lastRouteProperty.Value } else { '' }
-        if (@($snapshot.activeProtocols).Count -eq 0 -and -not $lastProtocol) { return $snapshot }
+        if (
+            @($snapshot.activeProtocols).Count -eq 0 -and
+            -not $lastProtocol -and
+            (Get-VpnRecordCount) -eq 0 -and
+            (Get-TransportEngineProcessCount) -eq 0
+        ) {
+            return $snapshot
+        }
         Start-Sleep -Milliseconds 500
     } while ((Get-Date) -lt $deadline)
     $active = @($snapshot.activeProtocols) -join ','
@@ -198,6 +232,17 @@ function Disconnect-ThroughTile {
 }
 
 if (-not (Test-Path -LiteralPath $Adb -PathType Leaf)) { throw "adb is missing: $Adb" }
+if ([string]::IsNullOrWhiteSpace($Serial)) {
+    $connectedSerials = @(
+        & $Adb devices |
+            Select-String -Pattern '^\S+\s+device$' |
+            ForEach-Object { ($_.Line -split '\s+')[0] }
+    )
+    if ($connectedSerials.Count -ne 1) {
+        throw "Expected exactly one ready Android device, found $($connectedSerials.Count)."
+    }
+    $Serial = $connectedSerials[0]
+}
 if (((Invoke-Adb -Arguments @('get-state')) -join '').Trim() -ne 'device') { throw "Android device is not ready: $Serial" }
 if ($StartStage -gt $EndStage) { throw 'StartStage must be less than or equal to EndStage.' }
 if (-not ((Invoke-Adb -Arguments @('shell', 'pm', 'path', $ProbePackage)) -join '').Contains('package:')) {
@@ -210,9 +255,10 @@ $stageReports = [System.Collections.Generic.List[object]]::new()
 $report = [ordered]@{
     startedAt = (Get-Date).ToUniversalTime().ToString('o')
     finishedAt = ''
-    serial = $Serial
+    device = 'selected-android-device'
     package = $Package
     versionCode = ''
+    strictOrder = $protocolOrder
     tileWasPresent = $tileWasPresent
     selectionMethod = 'physical_quick_tile_with_persisted_cooldown'
     stages = @()
@@ -252,29 +298,41 @@ try {
         Start-Sleep -Seconds 2
     }
 
-    $expectedProtocols = @('amneziawg', 'hysteria2', 'vless_reality', 'naive_https', 'dnstt', 'wireguard_udp')
     for ($stageIndex = $StartStage - 1; $stageIndex -lt $EndStage; $stageIndex++) {
         Invoke-DebugCommand -Command 'disconnect_all' | Out-Null
         Clear-Cooldown
         Wait-Down | Out-Null
 
-        $cooldownCount = [Math]::Min($stageIndex, $transportCandidates.Count)
-        for ($candidateIndex = 0; $candidateIndex -lt $cooldownCount; $candidateIndex++) {
-            Set-Cooldown -Candidate $transportCandidates[$candidateIndex]
+        $cooledCandidates = @(
+            $transportCandidates |
+                Where-Object {
+                    [array]::IndexOf($protocolOrder, [string]$_.protocol) -lt $stageIndex
+                }
+        )
+        foreach ($candidate in $cooledCandidates) {
+            Set-Cooldown -Candidate $candidate
         }
 
-        $expectedProtocol = $expectedProtocols[$stageIndex]
+        $expectedProtocol = $protocolOrder[$stageIndex]
         Click-Tile
         $snapshot = Wait-Route -ExpectedProtocol $expectedProtocol
         $probe = Invoke-ExternalProbe
-        Assert-ExternalProbe -Probe $probe -ExpectedEgress $(if ($expectedProtocol -eq 'wireguard_udp') { '' } else { $ExpectedCanaryEgress })
+        $selectedCandidate = @(
+            $transportCandidates |
+                Where-Object { $_.serverId -eq [string]$snapshot.lastRouteSuccess.serverId }
+        ) | Select-Object -First 1
+        if ($null -eq $selectedCandidate -or $selectedCandidate.protocol -ne $expectedProtocol) {
+            throw "Quick tile selected an unknown or misordered route: $($snapshot.lastRouteSuccess.serverId)"
+        }
+        Assert-ExternalProbe -Probe $probe -ExpectedEgresses @([string]$selectedCandidate.egress)
 
         $stageReports.Add([ordered]@{
             index = $stageIndex + 1
             expectedProtocol = $expectedProtocol
             selectedProtocol = [string]$snapshot.lastRouteSuccess.protocol
             selectedServerId = [string]$snapshot.lastRouteSuccess.serverId
-            cooledProtocols = @($transportCandidates | Select-Object -First $cooldownCount | ForEach-Object { $_.protocol })
+            cooledProtocols = @($cooledCandidates | ForEach-Object { $_.protocol } | Select-Object -Unique)
+            cooledRouteCount = $cooledCandidates.Count
             activeProtocols = @($snapshot.activeProtocols)
             egress = [string]$probe.egress
             egressStatus = [int]$probe.egressStatus
@@ -295,9 +353,16 @@ try {
 
     Clear-Cooldown
     Click-Tile
-    $restored = Wait-Route -ExpectedProtocol 'amneziawg'
+    $restored = Wait-Route -ExpectedProtocol 'wireguard_udp'
     $restoredProbe = Invoke-ExternalProbe
-    Assert-ExternalProbe -Probe $restoredProbe -ExpectedEgress $ExpectedCanaryEgress
+    $restoredCandidate = @(
+        $transportCandidates |
+            Where-Object { $_.serverId -eq [string]$restored.lastRouteSuccess.serverId }
+    ) | Select-Object -First 1
+    if ($null -eq $restoredCandidate -or $restoredCandidate.protocol -ne 'wireguard_udp') {
+        throw "Cooldown clear did not restore the first route: $($restored.lastRouteSuccess.serverId)"
+    }
+    Assert-ExternalProbe -Probe $restoredProbe -ExpectedEgresses @([string]$restoredCandidate.egress)
     $report.restoredFirstRoute = [ordered]@{
         protocol = [string]$restored.lastRouteSuccess.protocol
         serverId = [string]$restored.lastRouteSuccess.serverId
@@ -331,5 +396,5 @@ try {
 
 if (-not $report.success) { throw "Android quick tile cascade failed: $($report.error)" }
 Write-Host "Android six-stage quick tile cascade passed: $ReportPath"
-Write-Host 'Order: amneziawg -> hysteria2 -> vless_reality -> naive_https -> dnstt -> wireguard_udp'
-Write-Host 'Cooldown clear restored: amneziawg'
+Write-Host 'Order: wireguard_udp -> amneziawg -> hysteria2 -> vless_reality -> naive_https -> dnstt'
+Write-Host 'Cooldown clear restored: wireguard_udp'

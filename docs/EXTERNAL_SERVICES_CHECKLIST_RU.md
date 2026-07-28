@@ -1,29 +1,50 @@
 # Green VPN External Services Checklist
 
-Последнее обновление: 2026-05-07
+Последнее обновление: 2026-07-27
 
 Этот файл нужен, чтобы внешние сервисы подключались одним коротким циклом: ты оформляешь сервис, берёшь нужные значения, передаёшь их Codex, а backend/UI уже готовы их принять. Секреты, пароли, API-ключи и токены в этот файл не писать.
+
+## Текущее состояние, имеющее приоритет
+
+- Production API/site разделены с VPN endpoints и работают через Timeweb
+  Moscow `72.56.32.197` с RUVDS Moscow `176.113.81.35` как fallback.
+  Упоминания ниже о production backend на `37.220.85.211` являются
+  исторической setup-справкой: сейчас это NL1 VPN-узел.
+- DNS/HTTPS, Yandex 360 SMTP/email code, YooKassa manual payment flow,
+  guest-first auth и внешний monitoring production-ready.
+- Телефон/SMS исключён из продуктового контракта.
+- Android `0.3.14` опубликован и проверен на обоих зеркалах.
+- Реально не закрыты только Telegram alert credentials и Windows code
+  signing. Публичный rollback Windows `0.3.12` уже настроен и readiness green.
+  Rewarded provider также не выбран, поэтому реклама выключена.
+- Автосписания, hard expiry, промо и реклама не включаются этой памяткой:
+  каждое действие требует отдельного решения владельца.
 
 ## Главное Правило
 
 - В репозиторий нельзя писать пароли, токены, `admin_token`, SMTP-пароли, SMS API keys, YooKassa secret key, SSH-пароли и WireGuard private keys.
-- Все реальные секреты должны попадать только на сервер в `/etc/bluevpn/backend.env`.
+- Все реальные секреты должны попадать только в root-owned env нужного
+  control plane. Не отправлять их в чат, документацию или Git.
 - Для безопасной загрузки секретов на сервер используй:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\bluevpn\scripts\windows\configure_backend_env_wsl.ps1
 ```
 
-Скрипт спросит значения интерактивно, отправит их по SSH на `37.220.85.211`, подключит `/etc/bluevpn/backend.env` к systemd и перезапустит `bluevpn-backend`.
+Скрипт допустимо использовать только после проверки его текущих target-hosts:
+production control plane сейчас не `37.220.85.211`. Изменения применяются по
+одному control plane с проверкой fallback и rollback.
 
 ## Уже Куплено / Настроено
 
 - Домен: `greenvpn.pro`.
 - API-домен: `api.greenvpn.pro`.
-- Текущий backend/VPN сервер: `37.220.85.211`.
-- Сейчас `api.greenvpn.pro` ещё указывает на `37.220.85.211`; это рабочий dev/prod-вариант, но не финальная production-схема.
-- Для публичного запуска API/сайт должны жить на отдельном публичном IP, который не совпадает с VPN endpoint `37.220.85.211`. Иначе клиент с full-tunnel VPN может заблокировать доступ браузера к собственному сайту/API.
-- DNS для домена и `www` сейчас указывает на `95.163.244.138`; это можно использовать как отдельный сайт/лендинг или заменить будущим reverse proxy.
+- Primary API/site control plane: Timeweb Moscow `72.56.32.197`.
+- Fallback API/site control plane: RUVDS Moscow `176.113.81.35`.
+- VPN data-plane: London `88.218.250.86`, NL1 `37.220.85.211`, NL2
+  `5.129.216.42`; API/site endpoints с ними не совпадают.
+- `api.greenvpn.pro`, `greenvpn.pro` и fallback HTTPS проверены внешними
+  probe; public-surface проверка проходит `31/31`.
 - Yandex 360 организация: `Green VPN`.
 - Yandex 360 domain ownership TXT уже был добавлен: `yandex-verification:5583d6225f64e34e`.
 - MX уже был добавлен: `@ -> mx.yandex.net.`, priority `10`.
@@ -107,46 +128,32 @@ GREENVPN_EMAIL_CONFIRMATION_TTL_HOURS=24
 - [Yandex 360 для бизнеса](https://360.yandex.ru/business/)
 - [Yandex Mail clients / SMTP](https://yandex.ru/support/mail/mail-clients/others.html)
 
-## 2. Phone / SMS Auth
+## 2. Guest-first Auth
 
-Цель: пользователь сможет добавить телефон, получить SMS-код и позже входить/восстанавливать доступ через телефон. В публичном UI телефон показывается одной простой строкой без дубля `Привязать телефон`.
+Решение: телефон и SMS не входят в целевой пользовательский сценарий.
 
-Что уже готово в коде:
+- Бесплатный пользователь получает анонимную серверную сессию автоматически.
+- Регистрация и экран входа до первого подключения не показываются.
+- Перед созданием платёжного заказа приложение запрашивает email и проверяет
+  одноразовый код из письма.
+- Новый email привязывается к текущему гостевому профилю.
+- Уже существующий email восстанавливает соответствующий аккаунт и подписку.
+- Чек, подтверждение оплаты, уведомления о продлении и восстановление доступа
+  используют подтверждённый email.
+- Публичных `/api/v1/auth/phone/*` endpoints и телефонного UI нет.
+- Старые SMS-адаптеры и колонки базы не являются продуктовым контрактом и
+  сохраняются только как инертная совместимость миграций до отдельной
+  безопасной очистки.
 
-- Backend env/readiness для SMS.
-- Backend tables: `phone_confirmations`, `sms_outbox`.
-- Backend endpoints: `/api/v1/auth/phone/status`, `/api/v1/auth/phone/start`, `/api/v1/auth/phone/verify`.
-- Client UI: Settings -> Account показывает телефон одной строкой; диалог кода остаётся подготовленным внутри приложения.
-- SMS-коды в базе хранятся хешем, не открытым текстом.
-- `sms_outbox` не сохраняет реальный код в теле SMS, только маску `******`.
-- Без SMS-провайдера приложение не ломается: режим `manual_mvp` / `not_configured`.
+Перед production необходим физический smoke на Windows и Android:
 
-Первый поддержанный провайдер: `SMS.ru`.
-
-Что нужно сделать вручную:
-
-1. Зарегистрируйся или войди в SMS.ru.
-2. Пополни баланс минимально для теста.
-3. Получи `api_id`.
-4. Если хочешь красивое имя отправителя, отдельно согласуй sender name, например `GreenVPN`. Если sender name ещё не согласован, оставь поле пустым.
-5. Запусти env-скрипт и выбери `Configure SMS.ru phone confirmation now?`.
-
-Что скрипт пропишет на сервер:
-
-```text
-GREENVPN_SMS_PROVIDER=smsru
-GREENVPN_SMS_RU_API_ID=<секрет, только на сервере>
-GREENVPN_SMS_FROM=<опционально, только если sender name согласован>
-GREENVPN_SMS_RU_TEST_MODE=0
-GREENVPN_SMS_CODE_PEPPER=<длинный случайный секрет, только на сервере>
-GREENVPN_SMS_CONFIRMATION_TTL_MINUTES=10
-GREENVPN_SMS_RESEND_COOLDOWN_SECONDS=60
-```
-
-Официальные ссылки:
-
-- [SMS.ru API](https://sms.ru/api)
-- [SMS.ru](https://sms.ru/)
+1. Чистая установка открывает бесплатный режим без формы регистрации.
+2. Нажатие `Оплатить` открывает запрос email.
+3. Реальное письмо приходит, неверный код отклоняется.
+4. Верный код продолжает оплату; гостевой заказ без подтверждённого email
+   backend отклоняет.
+5. Повторная установка и вход по тому же email восстанавливают оплаченный
+   доступ.
 
 ## 3. Production Payments / YooKassa
 
@@ -413,12 +420,6 @@ Email readiness:
 wsl bash -lc "curl -fsS -H 'X-Admin-Token: <admin_token>' https://api.greenvpn.pro/api/v1/admin/email/readiness"
 ```
 
-SMS readiness:
-
-```powershell
-wsl bash -lc "curl -fsS -H 'X-Admin-Token: <admin_token>' https://api.greenvpn.pro/api/v1/admin/sms/readiness"
-```
-
 YooKassa readiness:
 
 ```powershell
@@ -454,7 +455,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\blue
 - YooKassa остаётся в manual MVP billing mode.
 - Telegram alerts остаются в manual MVP mode.
 - Monitoring probe можно не ставить, пока нет отдельного VPS.
-- Final update/rollback artifacts можно не публиковать до финального installer; backend/admin уже блокируют опасный full/required rollout без rollback.
+- Текущий Windows update/rollback опубликован и readiness green. Для каждого
+  следующего full/required rollout backend/admin по-прежнему блокирует
+  публикацию без нового пригодного rollback.
 - UI/backend продолжают развиваться.
 
 То есть отсутствие внешнего сервиса не должно стопорить разработку. Мы пишем код заранее, а реальные секреты подключаем одним коротким env-деплоем, когда они готовы.

@@ -1,4 +1,6 @@
 param(
+    [ValidateSet('PaidBeta', 'Production')]
+    [string]$DeploymentContour = 'PaidBeta',
     [string]$AmneziaServiceName = 'AmneziaWGTunnel$device20_full',
     [string]$GreenServiceName = 'GreenVPNBetaService',
     [string]$GreenTunnelName = 'GreenVPNBeta',
@@ -11,15 +13,44 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$programDataRoot = Join-Path $env:ProgramData 'BlueVPNBeta'
+$isProduction = $DeploymentContour -eq 'Production'
+$programDataRoot = Join-Path $env:ProgramData $(if ($isProduction) { 'BlueVPN' } else { 'BlueVPNBeta' })
 $tokenPath = Join-Path $programDataRoot 'service_token'
 $configPath = Join-Path $programDataRoot "$GreenTunnelName.conf"
 $greenTunnelServiceName = "WireGuardTunnel`$$GreenTunnelName"
 $wireGuardWg = Join-Path $env:ProgramFiles 'WireGuard\wg.exe'
 $sourceNetworkCheck = Join-Path $PSScriptRoot 'check_windows_network_protection.ps1'
-$installedNetworkCheck = Join-Path $env:LOCALAPPDATA 'Programs\Green VPN Beta\tools\check_windows_network_protection.ps1'
+$installedNetworkCheck = if ($isProduction) {
+    Join-Path $env:ProgramFiles 'Green VPN\tools\check_windows_network_protection.ps1'
+} else {
+    Join-Path $env:LOCALAPPDATA 'Programs\Green VPN Beta\tools\check_windows_network_protection.ps1'
+}
 $networkCheck = if (Test-Path -LiteralPath $sourceNetworkCheck) { $sourceNetworkCheck } else { $installedNetworkCheck }
-$failSafeTaskName = 'GreenVPNBetaNetworkSmokeFailsafe'
+$failSafeTaskName = if ($isProduction) { 'GreenVPNProductionNetworkSmokeFailsafe' } else { 'GreenVPNBetaNetworkSmokeFailsafe' }
+$probeUrls = if ($isProduction) {
+    @(
+        'https://api.greenvpn.pro/healthz',
+        'https://176-113-81-35.sslip.io/healthz',
+        'https://www.youtube.com/generate_204'
+    )
+} else {
+    @(
+        'https://api.greenvpn.pro/paid-beta-api/healthz',
+        'https://176-113-81-35.sslip.io/paid-beta-api/healthz',
+        'https://www.youtube.com/generate_204'
+    )
+}
+$restoreProbeUrls = if ($isProduction) {
+    @(
+        'https://api.greenvpn.pro/healthz',
+        'https://176-113-81-35.sslip.io/healthz'
+    )
+} else {
+    @(
+        'https://api.greenvpn.pro/paid-beta-api/healthz',
+        'https://176-113-81-35.sslip.io/paid-beta-api/healthz'
+    )
+}
 $reportDirectory = Split-Path -Parent $ReportPath
 $logDirectory = Split-Path -Parent $LogPath
 
@@ -49,6 +80,8 @@ if (-not (Test-IsAdministrator)) {
         'RemoteSigned',
         '-File',
         ('"' + $PSCommandPath + '"'),
+        '-DeploymentContour',
+        $DeploymentContour,
         '-AmneziaServiceName',
         ('"' + $AmneziaServiceName + '"'),
         '-GreenServiceName',
@@ -283,6 +316,7 @@ $report = [ordered]@{
     failure = $null
     amneziaBefore = Get-ServiceSnapshot -Name $AmneziaServiceName
     greenBefore = Get-GreenRuntimeEvidence
+    deploymentContour = $DeploymentContour
     connectResponse = $null
     greenConnected = $null
     externalProbes = @()
@@ -361,11 +395,6 @@ try {
     }
     $report.dnsLeakProbe = Invoke-DirectDnsLeakProbe -TunnelName $GreenTunnelName
 
-    $probeUrls = @(
-        'https://api.greenvpn.pro/paid-beta-api/healthz',
-        'https://176-113-81-35.sslip.io/paid-beta-api/healthz',
-        'https://www.youtube.com/generate_204'
-    )
     $report.externalProbes = @($probeUrls | ForEach-Object { Invoke-ExternalProbe -Url $_ })
 
     if (Test-Path -LiteralPath $networkCheck) {
@@ -456,10 +485,7 @@ try {
 
     Start-Sleep -Seconds 3
     $report.amneziaAfter = Get-ServiceSnapshot -Name $AmneziaServiceName
-    $report.restoredConnectivity = @(
-        Invoke-ExternalProbe -Url 'https://api.greenvpn.pro/paid-beta-api/healthz'
-        Invoke-ExternalProbe -Url 'https://176-113-81-35.sslip.io/paid-beta-api/healthz'
-    )
+    $report.restoredConnectivity = @($restoreProbeUrls | ForEach-Object { Invoke-ExternalProbe -Url $_ })
     $restoreProbesOk = @($report.restoredConnectivity | Where-Object { $_.ok }).Count -eq $report.restoredConnectivity.Count
     if ($report.amneziaAfter.state -ne 'Running' -or -not $restoreProbesOk) {
         $restoreVerificationFailure = 'Amnezia or external connectivity was not restored to the pre-smoke baseline.'

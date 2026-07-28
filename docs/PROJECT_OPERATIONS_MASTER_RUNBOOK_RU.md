@@ -6,9 +6,12 @@
 контекста из старых чатов. Он покрывает checkpoint, deploy, rollback, новый
 сервер, обновление каталога, платежи и транспортный контур.
 
-Текущая политика: пять обходных транспортов остаются только на NL2. Этот
-документ описывает будущий перенос, но не разрешает его выполнять без отдельной
-команды владельца.
+Текущая public-product политика: клиент знает строгий каскад
+`WireGuard UDP -> AmneziaWG -> Hysteria2 -> VLESS REALITY/XHTTP -> Naive HTTPS
+-> dnstt`. Первые пять групп опубликованы на NL1, London и NL2; dnstt остаётся
+последним резервом только на NL2. Новые узлы и изменение порядка требуют
+guarded rollout, но уже опубликованная server-side конфигурация не требует
+новой сборки клиента.
 
 ## 2. Неподвижные правила
 
@@ -188,8 +191,10 @@ Android release signing, SSH-доступ и локальный secret store. С
 5. dnstt с отдельной authoritative DNS delegation.
 
 Каждый следующий этап начинается только после green proof и rollback предыдущего.
-Клиентский порядок остаётся `AWG2 -> H2 -> VLESS -> Naive -> dnstt`, cooldown
-`1/3/10/30` минут.
+Клиентский порядок: `WireGuard UDP -> AWG2 -> H2 -> VLESS -> Naive -> dnstt`.
+Перед переходом к следующему маршруту клиент обязан остановить предыдущий и
+подтвердить отсутствие его процесса, интерфейса и управляемых маршрутов.
+Cooldown для неудачного маршрута: `1/3/10/30` минут.
 
 ### 5.3 Proof contract для каждого этапа
 
@@ -294,12 +299,19 @@ Admin mark-paid никогда не считается provider smoke.
 - Installer проверяется на чистой VM и при upgrade существующей версии.
 - Публичный installer требует Authenticode code-signing certificate.
 - Update manifest не становится mandatory до проверки signature и rollback.
+- `finalize_windows_trusted_release.ps1` в режиме `-Apply` автоматически
+  выбирает валидный Code Signing EKU certificate с private key, подписывает
+  собственные app/service EXE до архивации, bootstrap и финальный installer
+  после resource updates, затем сохраняет JSON signature reports.
+- `install_windows_public_product_release.sh` получает оба signature report,
+  сверяет их с точными SHA-256 и одной publisher/thumbprint identity. Без
+  доказательства он не публикует trusted metadata.
 
 ### Воспроизводимый локальный финальный кандидат
 
-После всех проверок сначала зафиксировать исходники коммитом и убедиться, что
-`git status --porcelain` пуст. Затем одной командой собрать отдельные Android и
-Windows артефакты без публикации:
+Для обычного чистого release candidate после всех проверок сначала зафиксировать
+исходники коммитом и убедиться, что `git status --porcelain` пуст. Затем одной
+командой собрать отдельные Android и Windows артефакты без публикации:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File `
@@ -317,10 +329,14 @@ SHA-256 обоих артефактов. Эти файлы нельзя публ
 
 ## 10. Публичный сайт
 
-- Единственная текущая модель: trial 3 дня, 249/649/1099 RUB.
+- Бесплатный доступ и его лимиты задаются сервером. Сайт не обещает
+  фиксированные `3 дня`, если этот срок не включён в текущем tariff catalog.
+- Платные варианты: 249/649/1099 RUB за 1/3/6 месяцев; цены и доступность
+  считаются authoritative только после ответа production API.
 - Конструктор, 149/299 и «два устройства» не публикуются.
 - Сайт содержит оферту, политику, реквизиты, возвраты и поддержку.
-- Auto-renew описывается только после одобрения YooKassa.
+- Auto-renew выключен по умолчанию и описывается только после явного opt-in и
+  отдельного production-разрешения.
 - Main-domain routes не должны fallback-ить на landing вместо legal page.
 - Маршрутизация main-domain legal устанавливается idempotent-скриптом
   `scripts/server/install_main_site_legal_proxy.sh`; dry-run обязателен перед

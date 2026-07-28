@@ -19,6 +19,11 @@ PROTECTED_HOST_IPS=(
   "176.113.81.35"
   "5.129.237.163"
 )
+APPROVED_DATA_PLANE_IPS=(
+  "37.220.85.211"
+  "5.129.216.42"
+  "88.218.250.86"
+)
 
 usage() {
   cat <<'USAGE'
@@ -28,7 +33,7 @@ Usage:
   check_transport_canary_readiness.sh --protocol PROTOCOL [--service-name NAME]
       [--binary PATH] [--config-file PATH] [--listen-port PORT]
       [--endpoint-id ID] [--transport TRANSPORT] [--json]
-      [--approved-existing-host 5.129.216.42]
+      [--approved-existing-host EXACT_DATA_PLANE_IP]
 
 Supported protocols:
   wireguard_tcp
@@ -191,30 +196,32 @@ host_has_protected_ip() {
 }
 
 if host_has_protected_ip; then
-  approved_nl2_awg=0
-  approved_nl2_hysteria=0
-  approved_nl2_vless=0
-  if [[ "$APPROVED_EXISTING_HOST" == "5.129.216.42" \
-    && "$PROTOCOL" == "amneziawg" \
-    && "$SERVICE_NAME" == "greenvpn-amneziawg-canary" \
-    && "$CONFIG_FILE" == "/etc/greenvpn-transport/awgcanary0.conf" ]]; then
-    approved_nl2_awg=1
+  public_ip="$(curl -fsS --max-time 5 https://api.ipify.org || true)"
+  approved_data_plane=0
+  for approved_ip in "${APPROVED_DATA_PLANE_IPS[@]}"; do
+    [[ "${public_ip}" == "${approved_ip}" ]] && approved_data_plane=1
+  done
+  approved_tuple=0
+  if [[ "${APPROVED_EXISTING_HOST}" == "${public_ip}" ]]; then
+    case "${PROTOCOL}" in
+      amneziawg)
+        [[ "${SERVICE_NAME}" == "greenvpn-amneziawg-canary" \
+          && "${CONFIG_FILE}" == "/etc/greenvpn-transport/awgcanary0.conf" ]] \
+          && approved_tuple=1
+        ;;
+      hysteria2)
+        [[ "${SERVICE_NAME}" == "greenvpn-hysteria2-canary" \
+          && "${CONFIG_FILE}" == "/etc/greenvpn-transport/hysteria2-canary.yaml" ]] \
+          && approved_tuple=1
+        ;;
+      vless_reality)
+        [[ "${SERVICE_NAME}" == "greenvpn-vless-reality-canary" \
+          && "${CONFIG_FILE}" == "/etc/greenvpn-transport/vless-reality-xhttp-canary.json" ]] \
+          && approved_tuple=1
+        ;;
+    esac
   fi
-  if [[ "$APPROVED_EXISTING_HOST" == "5.129.216.42" \
-    && "$PROTOCOL" == "hysteria2" \
-    && "$SERVICE_NAME" == "greenvpn-hysteria2-canary" \
-    && "$CONFIG_FILE" == "/etc/greenvpn-transport/hysteria2-canary.yaml" ]]; then
-    approved_nl2_hysteria=1
-  fi
-  if [[ "$APPROVED_EXISTING_HOST" == "5.129.216.42" \
-    && "$PROTOCOL" == "vless_reality" \
-    && "$SERVICE_NAME" == "greenvpn-vless-reality-canary" \
-    && "$CONFIG_FILE" == "/etc/greenvpn-transport/vless-reality-xhttp-canary.json" ]]; then
-    approved_nl2_vless=1
-  fi
-  if [[ "$approved_nl2_awg" -ne 1 \
-    && "$approved_nl2_hysteria" -ne 1 \
-    && "$approved_nl2_vless" -ne 1 ]]; then
+  if [[ "${approved_data_plane}" -ne 1 || "${approved_tuple}" -ne 1 ]]; then
     add_blocker "protected_production_host_refused"
   fi
 fi

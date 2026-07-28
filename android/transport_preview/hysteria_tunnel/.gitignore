@@ -1,4 +1,2 @@
-src/main/jni/hev-socks5-tunnel/
-src/main/jniLibs/*/libhysteria.so
 .cxx/
 build/

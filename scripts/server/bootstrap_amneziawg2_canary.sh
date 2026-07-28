@@ -26,12 +26,13 @@ AWG_TOOLS_SHA256="9f645117ba1aa536c8358e2c682a54cc3949e65b9efb86d8495d4343dcee99
 
 usage() {
   cat <<'USAGE'
-Green VPN pinned AmneziaWG 2 canary bootstrap for the owner-approved NL2 host.
+Green VPN pinned AmneziaWG 2 canary bootstrap for an approved VPN data plane.
 
 Usage:
   bootstrap_amneziawg2_canary.sh --client-public-key KEY \
-      --expected-public-ip 5.129.216.42 \
-      --approved-existing-host 5.129.216.42 [--apply]
+      --canary-host EXACT_DATA_PLANE_IP \
+      --expected-public-ip EXACT_DATA_PLANE_IP \
+      --approved-existing-host EXACT_DATA_PLANE_IP [--apply]
 
 Default mode is dry-run. This script never starts the canary and never edits wg0,
 the public catalog, DNS, nginx, backend env, databases or existing WireGuard rules.
@@ -54,6 +55,10 @@ while [[ $# -gt 0 ]]; do
       APPROVED_EXISTING_HOST="${2:?missing approved existing host}"
       shift 2
       ;;
+    --canary-host)
+      CANARY_HOST="${2:?missing canary host}"
+      shift 2
+      ;;
     --client-public-key)
       CLIENT_PUBLIC_KEY="${2:?missing client public key}"
       shift 2
@@ -71,9 +76,30 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$EUID" -ne 0 ]]; then
-  echo "Run as root on the approved NL2 host." >&2
+  echo "Run as root on the approved VPN data plane." >&2
   exit 1
 fi
+case "${CANARY_HOST}" in
+  "5.129.216.42")
+    CANARY_SUBNET="10.202.0.0/24"
+    CANARY_SERVER_ADDRESS="10.202.0.1/24"
+    CANARY_CLIENT_ADDRESS="10.202.0.2/32"
+    ;;
+  "37.220.85.211")
+    CANARY_SUBNET="10.203.0.0/24"
+    CANARY_SERVER_ADDRESS="10.203.0.1/24"
+    CANARY_CLIENT_ADDRESS="10.203.0.2/32"
+    ;;
+  "88.218.250.86")
+    CANARY_SUBNET="10.204.0.0/24"
+    CANARY_SERVER_ADDRESS="10.204.0.1/24"
+    CANARY_CLIENT_ADDRESS="10.204.0.2/32"
+    ;;
+  *)
+    echo "Unsupported Green VPN data-plane passport: ${CANARY_HOST}." >&2
+    exit 1
+    ;;
+esac
 if [[ "$EXPECTED_PUBLIC_IP" != "$CANARY_HOST" || "$APPROVED_EXISTING_HOST" != "$CANARY_HOST" ]]; then
   echo "Both host confirmations must equal ${CANARY_HOST}." >&2
   exit 1

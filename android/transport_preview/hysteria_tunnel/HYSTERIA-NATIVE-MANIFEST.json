@@ -1,0 +1,44 @@
+{
+    "schemaVersion":  1,
+    "hysteriaVersion":  "app/v2.9.3",
+    "sourceCommit":  "2d973f9513ef661d1922d6d14acb37945caef47d",
+    "goVersion":  "go1.25.1",
+    "ndkRevision":  "28.2.13676358",
+    "androidApi":  26,
+    "pageSizeBytes":  16384,
+    "reproducibilityPasses":  2,
+    "linkerFlags":  [
+                        "-Wl,-z,max-page-size=16384",
+                        "-Wl,-z,common-page-size=16384"
+                    ],
+    "files":  [
+                  {
+                      "asset":  "arm64",
+                      "abi":  "arm64-v8a",
+                      "file":  "libhysteria.so",
+                      "sha256":  "FD76F39D5475AE36C7807EF04BCAABDF8D4178B64AFB1A674C07598175C94C54",
+                      "sizeBytes":  18186208
+                  },
+                  {
+                      "asset":  "armv7",
+                      "abi":  "armeabi-v7a",
+                      "file":  "libhysteria.so",
+                      "sha256":  "D343D751FD7A627624F705F6C832E8C93D51D27F44811739AE7334D8310AC87B",
+                      "sizeBytes":  17396764
+                  },
+                  {
+                      "asset":  "x86",
+                      "abi":  "x86",
+                      "file":  "libhysteria.so",
+                      "sha256":  "DEF4EA916508D903DFC7CD865E24D81E3F252334D3ABAB3C0188ED0953306614",
+                      "sizeBytes":  17675484
+                  },
+                  {
+                      "asset":  "amd64",
+                      "abi":  "x86_64",
+                      "file":  "libhysteria.so",
+                      "sha256":  "DC4192CF3C3A1613003A1734A8B046530B7B3E8DB9C446955341123DF58D0DF9",
+                      "sizeBytes":  19537088
+                  }
+              ]
+}

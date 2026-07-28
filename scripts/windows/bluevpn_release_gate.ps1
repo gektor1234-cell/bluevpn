@@ -55,6 +55,12 @@ if (-not (Test-Path -LiteralPath $ProjectRoot)) {
 }
 
 $mainPath = Join-Path $ProjectRoot "lib\main.dart"
+$releaseContractPath = Join-Path $ProjectRoot "release_contract.json"
+$pubspecPath = Join-Path $ProjectRoot "pubspec.yaml"
+$versionFilePath = Join-Path $ProjectRoot "VERSION.txt"
+$finalCandidateBuildPath = Join-Path $ProjectRoot "scripts\windows\build_final_release_candidate.ps1"
+$publicProductBuildPath = Join-Path $ProjectRoot "scripts\windows\build_public_product.ps1"
+$paidBetaBuildPath = Join-Path $ProjectRoot "scripts\windows\build_paid_beta.ps1"
 $windowsSelectiveRoutingPath = Join-Path $ProjectRoot "lib\services\windows_selective_routing_service.dart"
 $runtimeConfigPath = Join-Path $ProjectRoot "lib\runtime_config.dart"
 $backendPath = Join-Path $ProjectRoot "backend_live\app\main.py"
@@ -62,6 +68,8 @@ $installerPath = Join-Path $ProjectRoot "scripts\windows\build_installer.ps1"
 $paidBetaWindowsInstallerPath = Join-Path $ProjectRoot "scripts\windows\install_paid_beta_side_by_side.ps1"
 $paidBetaWindowsUninstallerPath = Join-Path $ProjectRoot "scripts\windows\uninstall_paid_beta_side_by_side.ps1"
 $signScriptPath = Join-Path $ProjectRoot "scripts\windows\sign_release_artifacts.ps1"
+$trustedWindowsFinalizerPath = Join-Path $ProjectRoot "scripts\windows\finalize_windows_trusted_release.ps1"
+$windowsPublicReleaseInstallerPath = Join-Path $ProjectRoot "scripts\server\install_windows_public_product_release.sh"
 $servicePath = Join-Path $ProjectRoot "windows\green_vpn_service\main.cpp"
 $runnerPath = Join-Path $ProjectRoot "windows\runner\flutter_window.cpp"
 $doctorPath = Join-Path $ProjectRoot "scripts\windows\doctor_bluevpn.ps1"
@@ -70,6 +78,11 @@ $networkProtectionPath = Join-Path $ProjectRoot "scripts\windows\check_windows_n
 $networkTransitionSmokePath = Join-Path $ProjectRoot "scripts\windows\run_paid_beta_network_transition_smoke.ps1"
 $vpnTaskPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_vpn_task.ps1"
 $transportPreviewVpnTaskPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_transport_preview_vpn_task.ps1"
+$transportSelectiveRoutingPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_selective_routing.ps1"
+$transportSelectiveRoutingTestPath = Join-Path $ProjectRoot "scripts\windows\test_windows_selective_routing_policy.ps1"
+$windowsRuntimeFailoverPhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_windows_public_runtime_failover_physical.ps1"
+$transportCascadeStagePath = Join-Path $ProjectRoot "scripts\windows\stage_windows_transport_cascade.ps1"
+$publicInstallerAuditPath = Join-Path $ProjectRoot "scripts\windows\test_public_installer_package.ps1"
 $transportPreviewInstallPath = Join-Path $ProjectRoot "scripts\windows\install_windows_transport_preview.ps1"
 $transportPreviewUninstallPath = Join-Path $ProjectRoot "scripts\windows\uninstall_windows_transport_preview.ps1"
 $transportPreviewBuildPath = Join-Path $ProjectRoot "scripts\windows\build_windows_awg2_preview.ps1"
@@ -101,9 +114,12 @@ $androidHysteriaConfigTestPath = Join-Path $ProjectRoot "android\transport_previ
 $androidBuildScriptPath = Join-Path $ProjectRoot "scripts\windows\build_android_apk.ps1"
 $androidReleaseSignerPath = Join-Path $ProjectRoot "android\release_signer_sha256.txt"
 $androidHysteriaPreparePath = Join-Path $ProjectRoot "scripts\windows\prepare_android_hysteria2_preview.ps1"
+$androidHysteriaNativeBuildPath = Join-Path $ProjectRoot "scripts\windows\build_android_hysteria2_native.ps1"
+$androidHysteriaNativeManifestPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\HYSTERIA-NATIVE-MANIFEST.json"
 $androidHysteriaPhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_android_hysteria2_preview_physical.ps1"
 $androidHysteriaApkVerifyPath = Join-Path $ProjectRoot "scripts\windows\verify_android_hysteria2_preview_apk.ps1"
 $androidStableIsolationVerifyPath = Join-Path $ProjectRoot "scripts\windows\verify_android_stable_transport_isolation.ps1"
+$androidTransportProbeReceiverPath = Join-Path $ProjectRoot "android\transport_probe\src\main\kotlin\pro\greenvpn\transportprobe\TransportProbeReceiver.kt"
 $androidVlessConfigPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\main\kotlin\pro\greenvpn\vless\VlessRealityConfig.kt"
 $androidVlessControllerPath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\main\kotlin\pro\greenvpn\vless\VlessRealityController.kt"
 $androidVlessServicePath = Join-Path $ProjectRoot "android\transport_preview\hysteria_tunnel\src\main\kotlin\pro\greenvpn\vless\VlessRealityVpnService.kt"
@@ -139,6 +155,8 @@ $hysteria2ContractDeployPath = Join-Path $ProjectRoot "scripts\server\deploy_pai
 $naiveHttpsBootstrapPath = Join-Path $ProjectRoot "scripts\server\bootstrap_naive_https_canary.sh"
 $naiveHttpsReadinessPath = Join-Path $ProjectRoot "scripts\server\check_naive_https_canary_readiness.sh"
 $naiveHttpsRollbackPath = Join-Path $ProjectRoot "scripts\server\remove_naive_https_canary.sh"
+$naiveCertificateSyncPath = Join-Path $ProjectRoot "scripts\server\greenvpn_sync_naive_certificate.sh"
+$naiveCertificateSyncInstallerPath = Join-Path $ProjectRoot "scripts\server\install_naive_certificate_sync.sh"
 $dnsttBootstrapPath = Join-Path $ProjectRoot "scripts\server\bootstrap_dnstt_canary.sh"
 $dnsttDnsFrontendBootstrapPath = Join-Path $ProjectRoot "scripts\server\bootstrap_dnstt_dns_frontend.sh"
 $dnsttDnsFrontendRollbackPath = Join-Path $ProjectRoot "scripts\server\remove_dnstt_dns_frontend.sh"
@@ -155,12 +173,20 @@ $repositorySecretScannerPath = Join-Path $ProjectRoot "scripts\security\scan_tra
 $sqliteStateSyncPath = Join-Path $ProjectRoot "scripts\ops\greenvpn_sqlite_state_sync.py"
 $sqliteSnapshotPath = Join-Path $ProjectRoot "scripts\ops\greenvpn_sqlite_snapshot_stdout.py"
 $dbSyncShellPath = Join-Path $ProjectRoot "scripts\ops\greenvpn_db_sync_from_peer.sh"
+$paidBetaTransportCatalogSyncPath = Join-Path $ProjectRoot "scripts\ops\sync_paid_beta_transport_catalog.py"
+$paidBetaTransportParityPath = Join-Path $ProjectRoot "scripts\server\configure_paid_beta_transport_parity.sh"
 $paidBetaBackendBundlePath = Join-Path $ProjectRoot "scripts\windows\prepare_paid_beta_backend_bundle.ps1"
 $paidBetaBackendInstallerPath = Join-Path $ProjectRoot "scripts\server\install_paid_beta_backend_release.sh"
 $releaseRollbackInstallerPath = Join-Path $ProjectRoot "scripts\server\configure_public_release_rollback.sh"
 $adminStaticInstallerPath = Join-Path $ProjectRoot "scripts\server\install_admin_app_release.sh"
 
 $main = Read-Text $mainPath
+$releaseContractText = Read-Text $releaseContractPath
+$pubspec = Read-Text $pubspecPath
+$versionFile = Read-Text $versionFilePath
+$finalCandidateBuildScript = Read-Text $finalCandidateBuildPath
+$publicProductBuildScript = Read-Text $publicProductBuildPath
+$paidBetaBuildScript = Read-Text $paidBetaBuildPath
 $windowsSelectiveRouting = Read-Text $windowsSelectiveRoutingPath
 $runtimeConfig = Read-Text $runtimeConfigPath
 $backend = Read-Text $backendPath
@@ -168,12 +194,19 @@ $installer = Read-Text $installerPath
 $paidBetaWindowsInstaller = Read-Text $paidBetaWindowsInstallerPath
 $paidBetaWindowsUninstaller = Read-Text $paidBetaWindowsUninstallerPath
 $signScript = Read-Text $signScriptPath
+$trustedWindowsFinalizer = Read-Text $trustedWindowsFinalizerPath
+$windowsPublicReleaseInstaller = Read-Text $windowsPublicReleaseInstallerPath
 $serviceSource = Read-Text $servicePath
 $doctorScript = Read-Text $doctorPath
 $networkProtectionScript = Read-Text $networkProtectionPath
 $networkTransitionSmokeScript = Read-Text $networkTransitionSmokePath
 $vpnTaskScript = Read-Text $vpnTaskPath
 $transportPreviewVpnTaskScript = Read-Text $transportPreviewVpnTaskPath
+$transportSelectiveRoutingScript = Read-Text $transportSelectiveRoutingPath
+$transportSelectiveRoutingTestScript = Read-Text $transportSelectiveRoutingTestPath
+$windowsRuntimeFailoverPhysicalTestScript = Read-Text $windowsRuntimeFailoverPhysicalTestPath
+$transportCascadeStageScript = Read-Text $transportCascadeStagePath
+$publicInstallerAuditScript = Read-Text $publicInstallerAuditPath
 $transportPreviewInstallScript = Read-Text $transportPreviewInstallPath
 $transportPreviewUninstallScript = Read-Text $transportPreviewUninstallPath
 $transportPreviewBuildScript = Read-Text $transportPreviewBuildPath
@@ -205,9 +238,12 @@ $androidHysteriaConfigTest = Read-Text $androidHysteriaConfigTestPath
 $androidBuildScript = Read-Text $androidBuildScriptPath
 $androidReleaseSigner = (Read-Text $androidReleaseSignerPath).Trim().ToLowerInvariant()
 $androidHysteriaPrepareScript = Read-Text $androidHysteriaPreparePath
+$androidHysteriaNativeBuildScript = Read-Text $androidHysteriaNativeBuildPath
+$androidHysteriaNativeManifestText = Read-Text $androidHysteriaNativeManifestPath
 $androidHysteriaPhysicalTestScript = Read-Text $androidHysteriaPhysicalTestPath
 $androidHysteriaApkVerifyScript = Read-Text $androidHysteriaApkVerifyPath
 $androidStableIsolationVerifyScript = Read-Text $androidStableIsolationVerifyPath
+$androidTransportProbeReceiver = Read-Text $androidTransportProbeReceiverPath
 $androidVlessConfig = Read-Text $androidVlessConfigPath
 $androidVlessController = Read-Text $androidVlessControllerPath
 $androidVlessService = Read-Text $androidVlessServicePath
@@ -243,6 +279,8 @@ $hysteria2ContractDeployScript = Read-Text $hysteria2ContractDeployPath
 $naiveHttpsBootstrapScript = Read-Text $naiveHttpsBootstrapPath
 $naiveHttpsReadinessScript = Read-Text $naiveHttpsReadinessPath
 $naiveHttpsRollbackScript = Read-Text $naiveHttpsRollbackPath
+$naiveCertificateSyncScript = Read-Text $naiveCertificateSyncPath
+$naiveCertificateSyncInstallerScript = Read-Text $naiveCertificateSyncInstallerPath
 $dnsttBootstrapScript = Read-Text $dnsttBootstrapPath
 $dnsttDnsFrontendBootstrapScript = Read-Text $dnsttDnsFrontendBootstrapPath
 $dnsttDnsFrontendRollbackScript = Read-Text $dnsttDnsFrontendRollbackPath
@@ -259,10 +297,152 @@ $repositorySecretScanner = Read-Text $repositorySecretScannerPath
 $sqliteStateSyncScript = Read-Text $sqliteStateSyncPath
 $sqliteSnapshotScript = Read-Text $sqliteSnapshotPath
 $dbSyncShellScript = Read-Text $dbSyncShellPath
+$paidBetaTransportCatalogSyncScript = Read-Text $paidBetaTransportCatalogSyncPath
+$paidBetaTransportParityScript = Read-Text $paidBetaTransportParityPath
 $paidBetaBackendBundleScript = Read-Text $paidBetaBackendBundlePath
 $paidBetaBackendInstallerScript = Read-Text $paidBetaBackendInstallerPath
 $releaseRollbackInstallerScript = Read-Text $releaseRollbackInstallerPath
 $adminStaticInstallerScript = Read-Text $adminStaticInstallerPath
+
+Write-Section "RELEASE IDENTITY AND REPRODUCIBILITY CHECKS"
+$releaseContract = $null
+try {
+    $releaseContract = $releaseContractText | ConvertFrom-Json
+}
+catch {
+    Add-Error "release_contract.json is not valid JSON: $($_.Exception.Message)"
+}
+if ($null -ne $releaseContract) {
+    $requiredContractProperties = @(
+        'schema',
+        'appVersion',
+        'androidBuildNumber',
+        'windowsBuildNumber',
+        'backendVersion',
+        'api',
+        'billing',
+        'publication'
+    )
+    $missingContractProperties = @(
+        $requiredContractProperties |
+            Where-Object { $releaseContract.PSObject.Properties.Name -notcontains $_ }
+    )
+    if ($missingContractProperties.Count -gt 0) {
+        Add-Error "Release contract is incomplete: $($missingContractProperties -join ', ')"
+    }
+    else {
+        if ([int]$releaseContract.schema -eq 1) {
+            Add-Pass 'Release contract schema is supported'
+        }
+        else {
+            Add-Error "Unsupported release contract schema: $($releaseContract.schema)"
+        }
+
+        $appVersion = [string]$releaseContract.appVersion
+        $androidBuildNumber = [string]$releaseContract.androidBuildNumber
+        $windowsBuildNumber = [int]$releaseContract.windowsBuildNumber
+        $backendVersion = [string]$releaseContract.backendVersion
+        $paidBetaVersion = "$appVersion-paid-beta.1"
+
+        $releaseIdentityChecks = [ordered]@{
+            'pubspec version' = @($pubspec, "version: $appVersion+$androidBuildNumber")
+            'VERSION product version' = @($versionFile, "Green VPN $appVersion")
+            'VERSION Android build' = @($versionFile, "Android build: $androidBuildNumber")
+            'VERSION Windows build' = @($versionFile, "Windows build: $windowsBuildNumber")
+            'VERSION backend source' = @($versionFile, "Source backend: $backendVersion")
+            'Backend source default' = @($backend, "`"$backendVersion`"")
+            'Final candidate app version' = @($finalCandidateBuildScript, "[string]`$AppVersion = '$appVersion'")
+            'Final candidate Android build' = @($finalCandidateBuildScript, "[string]`$AndroidBuildNumber = '$androidBuildNumber'")
+            'Final candidate Windows build' = @($finalCandidateBuildScript, "[int]`$WindowsBuildNumber = $windowsBuildNumber")
+            'Public product app version' = @($publicProductBuildScript, "[string]`$AppVersion = `"$appVersion`"")
+            'Public product Windows app version' = @($publicProductBuildScript, "[string]`$WindowsAppVersion = `"$appVersion`"")
+            'Public product Android build' = @($publicProductBuildScript, "[string]`$AndroidBuildNumber = `"$androidBuildNumber`"")
+            'Public product Windows build' = @($publicProductBuildScript, "[int]`$WindowsBuildNumber = $windowsBuildNumber")
+            'Paid-beta app version' = @($paidBetaBuildScript, "[string]`$AppVersion = `"$paidBetaVersion`"")
+            'Paid-beta Windows app version' = @($paidBetaBuildScript, "[string]`$WindowsAppVersion = `"$paidBetaVersion`"")
+            'Paid-beta Android build' = @($paidBetaBuildScript, "[string]`$AndroidBuildNumber = `"$androidBuildNumber`"")
+            'Paid-beta Windows build' = @($paidBetaBuildScript, "[int]`$WindowsBuildNumber = $windowsBuildNumber")
+            'Trusted Windows finalizer build' = @($trustedWindowsFinalizer, "[int]`$WindowsBuildNumber = $windowsBuildNumber")
+        }
+        foreach ($check in $releaseIdentityChecks.GetEnumerator()) {
+            if (([string]$check.Value[0]).Contains([string]$check.Value[1])) {
+                Add-Pass "$($check.Key) matches the release contract"
+            }
+            else {
+                Add-Error "$($check.Key) does not match the release contract"
+            }
+        }
+
+        if (
+            $releaseContract.api.primary -eq 'https://api.greenvpn.pro' -and
+            @($releaseContract.api.fallbacks).Count -eq 1 -and
+            @($releaseContract.api.fallbacks)[0] -eq 'https://176-113-81-35.sslip.io' -and
+            $releaseContract.api.paidBetaPath -eq '/paid-beta-api'
+        ) {
+            Add-Pass 'Release API roots match the canonical dual-control-plane contract'
+        }
+        else {
+            Add-Error 'Release API roots do not match the canonical dual-control-plane contract'
+        }
+
+        if (
+            $releaseContract.billing.paidSalesEnabled -eq $false -and
+            $releaseContract.billing.refundExecutionEnabled -eq $false -and
+            $releaseContract.billing.autoRenewEnabled -eq $false -and
+            $releaseContract.billing.rewardedAdsEnabled -eq $false -and
+            $releaseContract.publication.productionPublished -eq $false -and
+            $releaseContract.publication.ownerApprovalRequired -eq $true
+        ) {
+            Add-Pass 'Release contract remains fail-closed for money, ads, and publication'
+        }
+        else {
+            Add-Error 'Release contract must remain fail-closed until explicit owner approval'
+        }
+    }
+}
+
+$androidHysteriaNativeManifest = $null
+try {
+    $androidHysteriaNativeManifest = $androidHysteriaNativeManifestText |
+        ConvertFrom-Json
+}
+catch {
+    Add-Error "Hysteria2 native manifest is not valid JSON: $($_.Exception.Message)"
+}
+if ($null -ne $androidHysteriaNativeManifest) {
+    if (
+        $androidHysteriaNativeManifest.hysteriaVersion -eq 'app/v2.9.3' -and
+        $androidHysteriaNativeManifest.sourceCommit -eq '2d973f9513ef661d1922d6d14acb37945caef47d' -and
+        $androidHysteriaNativeManifest.goVersion -eq 'go1.25.1' -and
+        $androidHysteriaNativeManifest.ndkRevision -eq '28.2.13676358' -and
+        [int]$androidHysteriaNativeManifest.androidApi -eq 26 -and
+        [int]$androidHysteriaNativeManifest.pageSizeBytes -eq 16384 -and
+        [int]$androidHysteriaNativeManifest.reproducibilityPasses -ge 2
+    ) {
+        Add-Pass 'Hysteria2 native manifest satisfies the pinned 16 KB reproducibility contract'
+    }
+    else {
+        Add-Error 'Hysteria2 native manifest violates the pinned 16 KB reproducibility contract'
+    }
+
+    foreach ($row in @($androidHysteriaNativeManifest.files)) {
+        $binaryPath = Join-Path $ProjectRoot (
+            "android\transport_preview\hysteria_tunnel\src\main\jniLibs\" +
+            "$($row.abi)\$($row.file)"
+        )
+        if (-not (Test-Path -LiteralPath $binaryPath -PathType Leaf)) {
+            Add-Error "Tracked Hysteria2 binary is missing: $binaryPath"
+            continue
+        }
+        $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $binaryPath).Hash
+        if ($actualHash -eq ([string]$row.sha256).ToUpperInvariant()) {
+            Add-Pass "Hysteria2 tracked binary hash matches: $($row.abi)"
+        }
+        else {
+            Add-Error "Hysteria2 tracked binary hash mismatch: $($row.abi)"
+        }
+    }
+}
 
 Write-Section "CLIENT SAFETY CHECKS"
 $forbiddenClientPatterns = @(
@@ -385,14 +565,14 @@ Write-Section "BACKEND API CHECKS"
 $requiredBackendFragments = @(
     '@app.post("/api/v1/auth/register")',
     '@app.post("/api/v1/auth/login")',
+    '@app.post("/api/v1/auth/guest")',
     '@app.post("/api/v1/auth/challenge/start")',
     '@app.post("/api/v1/auth/challenge/verify")',
+    '@app.post("/api/v1/auth/checkout/email/start")',
+    '@app.post("/api/v1/auth/checkout/email/verify")',
     '@app.get("/api/v1/auth/email/status")',
     '@app.post("/api/v1/auth/email/resend")',
     '@app.get("/api/v1/auth/email/verify"',
-    '@app.get("/api/v1/auth/phone/status")',
-    '@app.post("/api/v1/auth/phone/start")',
-    '@app.post("/api/v1/auth/phone/verify")',
     '@app.post("/api/v1/client/bootstrap")',
     '@app.post("/api/v1/client/config")',
     '@app.post("/api/v1/support/reports")',
@@ -419,7 +599,6 @@ $requiredBackendFragments = @(
     '@app.post("/api/v1/admin/billing/renewals/run")',
     '@app.get("/api/v1/admin/subscriptions/expiry-readiness")',
     '@app.get("/api/v1/admin/email/readiness")',
-    '@app.get("/api/v1/admin/sms/readiness")',
     '@app.get("/api/v1/admin/auth/events")',
     '@app.get("/api/v1/admin/server-catalog")',
     '@app.get("/api/v1/admin/server-catalog/publication-readiness")',
@@ -573,6 +752,11 @@ $requiredBackendSafetyFragments = @(
     '"pricingModel": "fixed_term_plans"',
     'GREENVPN_AUTO_RENEWAL_CHARGES_ENABLED',
     'def execute_due_auto_renewals(',
+    'GREENVPN_REFUND_EXECUTION_ENABLED',
+    'GREENVPN_REFUND_BILLING_PRIMARY',
+    'def execute_full_refund_for_order(',
+    'refund_entitlement_snapshot_missing',
+    '/api/v1/admin/billing/refunds/readiness',
     'order_kind',
     'renewal_key',
     'def billing_order_requires_attention(',
@@ -633,6 +817,7 @@ $requiredBackendSafetyFragments = @(
     'GREENVPN_HYSTERIA2_CLIENT_CONFIG_ENABLED',
     'GREENVPN_HYSTERIA2_CANARY_SERVER_IDS',
     'GREENVPN_HYSTERIA2_CANARY_SNI',
+    'GREENVPN_HYSTERIA2_CANARY_SNIS',
     'static_hysteria2_canary',
     'def hysteria2_client_config_check(',
     'hysteria2_config_not_root_owned',
@@ -640,6 +825,8 @@ $requiredBackendSafetyFragments = @(
     'hysteria2_config_symlink_refused',
     'hysteria2_insecure_tls_refused',
     'hysteria2_base_config_contains_local_mode',
+    'GREENVPN_NAIVE_HTTPS_CANARY_ENDPOINTS',
+    'naive_https_endpoint_ip_not_allowlisted',
     'configFormat": "hysteria2-yaml"',
     'def server_protocol_preference_rank(',
     'SERVER_PROTOCOL_ROLLOUT_ORDER.index(protocol)'
@@ -762,7 +949,7 @@ $requiredTransportCanaryFragments = @(
     '--allow-current-vpn-host',
     '--expected-public-ip',
     'Refusing to install canary service on protected Green VPN host',
-    'Owner-approved narrow NL2 ${PROTOCOL} canary exception accepted',
+    'Owner-approved data-plane ${PROTOCOL} canary tuple accepted.',
     'greenvpn-hysteria2-canary',
     '/etc/greenvpn-transport/hysteria2-canary.yaml',
     'SERVICE_TYPE="oneshot"',
@@ -820,7 +1007,7 @@ $requiredTransportCanaryRollbackFragments = @(
     'Green VPN guarded transport canary rollback',
     '--expected-public-ip',
     'Refusing canary rollback mutation on protected Green VPN host',
-    'Owner-approved narrow NL2 ${PROTOCOL} rollback exception accepted',
+    'Owner-approved data-plane ${PROTOCOL} rollback tuple accepted.',
     'greenvpn-hysteria2-canary',
     'Refusing non-canary service name',
     'config_keys_binaries=preserved',
@@ -883,7 +1070,7 @@ foreach ($fragment in $requiredAmneziaWg2PeerAddressFragments) {
 }
 
 $requiredHysteria2BootstrapFragments = @(
-    'Bootstrap the owner-approved Hysteria2 canary on Green VPN NL2',
+    'Bootstrap the owner-approved Hysteria2 canary on a Green VPN data plane.',
     'CANARY_HOST="5.129.216.42"',
     'CANARY_DOMAIN="nl2.vpn.greenvpn.pro"',
     'CANARY_PORT="2443"',
@@ -944,6 +1131,8 @@ $naiveHttpsChecks = [ordered]@{
     'Naive HTTPS guarded bootstrap' = @($naiveHttpsBootstrapScript, 'CANARY_HOST="5.129.216.42"', 'CANARY_PORT="8443"', 'CADDY_VERSION="v2.11.4"', 'XCADDY_VERSION="v0.4.5"', 'FORWARDPROXY_COMMIT="d62c80d3dd2c706b6b87579844d2397bddd18317"', 'NAIVE_VERSION="v150.0.7871.63-1"', 'pinned_binaries=reused_after_build_metadata_verification', 'stable_transports=verified_unchanged')
     'Naive HTTPS secret-safe readiness' = @($naiveHttpsReadinessScript, 'ready=true', 'credentials=not_printed', 'tls_camouflage_http=404', 'egress=', 'unexpected_udp_listener')
     'Naive HTTPS exact-host rollback' = @($naiveHttpsRollbackScript, 'Refusing Naive HTTPS rollback outside exact NL2 host', '--approved-existing-host', 'rm -rf -- "${CONFIG_FILE}" "${INSTALL_ROOT}"', 'stable_transports=active', 'Dry-run only')
+    'Naive certificate synchronization is guarded and reversible' = @($naiveCertificateSyncScript, 'EXPECTED_HOST="5.129.216.42"', 'openssl x509 -in "${certificate}" -noout -checkend 604800', 'copy_needed=', 'rollback_on_error', 'greenvpn-naive-https-canary.service', 'entries[4:]', 'secrets_printed=false')
+    'Naive certificate synchronization timer is isolated' = @($naiveCertificateSyncInstallerScript, 'Default mode validates', 'greenvpn-naive-certificate-sync.timer', 'ReadWritePaths=/etc/greenvpn-naive-https-canary /var/lib/greenvpn-naive-cert-sync', 'rollback_on_error', 'systemctl is-active --quiet greenvpn-naive-https-canary.service')
 }
 foreach ($check in $naiveHttpsChecks.GetEnumerator()) {
     $source = [string]$check.Value[0]
@@ -956,7 +1145,13 @@ foreach ($check in $naiveHttpsChecks.GetEnumerator()) {
     }
 }
 
-foreach ($scriptPath in @($naiveHttpsBootstrapPath, $naiveHttpsReadinessPath, $naiveHttpsRollbackPath)) {
+foreach ($scriptPath in @(
+    $naiveHttpsBootstrapPath,
+    $naiveHttpsReadinessPath,
+    $naiveHttpsRollbackPath,
+    $naiveCertificateSyncPath,
+    $naiveCertificateSyncInstallerPath
+)) {
     if (Test-Path -LiteralPath $scriptPath) {
         $gitBash = Join-Path $env:ProgramFiles 'Git\bin\bash.exe'
         $bashCommand = if (Test-Path -LiteralPath $gitBash) { $gitBash } else { 'bash' }
@@ -1085,12 +1280,35 @@ else {
     Add-Pass "Installer elevation paths do not request a visible PowerShell window"
 }
 
+if ($installer.Contains('<requestedExecutionLevel level="asInvoker"') -and
+    $installer.Contains('Set-ExeAsInvoker')) {
+    Add-Pass 'Installer captures the original user before the privileged install stage'
+}
+else {
+    Add-Error 'Installer must run its UI asInvoker and elevate only the inner install stage.'
+}
+
+foreach ($fragment in @(
+    'GREENVPN_INSTALLER_AUTOCLOSE_SUCCESS',
+    'GREENVPN_INSTALLER_SKIP_APP_LAUNCH',
+    '$form.Close()'
+)) {
+    if ($installer.Contains($fragment)) {
+        Add-Pass "Installer physical-smoke UI marker present: $fragment"
+    }
+    else {
+        Add-Error "Installer physical-smoke UI marker missing: $fragment"
+    }
+}
+
 $installerTokenFragments = @(
     'function Ensure-GreenVpnServiceToken',
     'service_token',
     'RandomNumberGenerator',
-    '*S-1-5-11:R',
-    'Ensure-GreenVpnServiceToken'
+    'Resolve-InstallingUserSid',
+    '-OwnerSid',
+    "('*' + `$UserSid + ':R')",
+    "Ensure-GreenVpnServiceToken -UserSid `$installingUserSid"
 )
 
 foreach ($fragment in $installerTokenFragments) {
@@ -1099,6 +1317,36 @@ foreach ($fragment in $installerTokenFragments) {
     }
     else {
         Add-Error "Installer missing local service token setup marker: $fragment"
+    }
+}
+
+foreach ($check in @(
+    [pscustomobject]@{ Name = 'production'; Source = $installer },
+    [pscustomobject]@{ Name = 'paid-beta'; Source = $paidBetaWindowsInstaller }
+)) {
+    foreach ($forbidden in @(
+        "'*S-1-5-11:(OI)(CI)M'",
+        "'*S-1-5-11:R'"
+    )) {
+        if ($check.Source.Contains($forbidden)) {
+            Add-Error "$($check.Name) installer still grants broad ProgramData access: $forbidden"
+        }
+        else {
+            Add-Pass "$($check.Name) installer excludes broad ProgramData marker: $forbidden"
+        }
+    }
+    foreach ($required in @(
+        'Resolve-InstallingUserSid',
+        '-OwnerSid',
+        "/remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' /T /C",
+        "('*' + `$UserSid + ':(OI)(CI)M')"
+    )) {
+        if ($check.Source.Contains($required)) {
+            Add-Pass "$($check.Name) protected ProgramData marker present: $required"
+        }
+        else {
+            Add-Error "$($check.Name) protected ProgramData marker missing: $required"
+        }
     }
 }
 
@@ -1344,12 +1592,19 @@ $transportPreviewRouteFragments = @(
     'Assert-NaiveRuntime',
     '$NaiveRouteMetric = 42734',
     '$NaiveSocksPort = 1982',
-    '$NaiveCanaryHost = ''nl2.vpn.greenvpn.pro''',
-    '$NaiveCanaryIp = ''5.129.216.42''',
+    '$NaiveCanaryPort = 8443',
+    '$guardedEndpoints = @{',
+    '''nl1.vpn.greenvpn.pro'' = ''37.220.85.211''',
+    '''88-218-250-86.sslip.io'' = ''88.218.250.86''',
+    '$root.PSObject.Properties.Remove(''endpointIp'')',
     'host-resolver-rules',
     "mapdns:",
     "udp: 'tcp'",
     'greenvpn_naive_https_watchdog.ps1'
+    'greenvpn_selective_routing.ps1'
+    'Stop-GreenProcessRouter'
+    'Selective application routing is not supported by $protocol.'
+    'guard disconnecting application-only tunnel because process router stopped'
 )
 
 foreach ($fragment in $transportPreviewRouteFragments) {
@@ -1361,6 +1616,177 @@ foreach ($fragment in $transportPreviewRouteFragments) {
     }
 }
 
+$transportSelectiveRoutingChecks = [ordered]@{
+    'Windows cascade selective helper' = @(
+        $transportSelectiveRoutingScript,
+        'Get-GreenRoutingPolicy',
+        'Get-GreenDestinationCidrs',
+        'Ensure-GreenApplicationTunnelRoutes',
+        'Start-GreenProcessRouter',
+        'Application-only config unexpectedly contains a default route.'
+    )
+    'Windows cascade stages selective helper' = @(
+        $transportCascadeStageScript,
+        'greenvpn_selective_routing.ps1'
+    )
+    'Windows public installer audits selective helper' = @(
+        $publicInstallerAuditScript,
+        'tools/greenvpn_selective_routing.ps1',
+        'Selective application routing is not supported by `$protocol.'
+    )
+    'Windows selective policy test is bounded and fail-closed' = @(
+        $transportSelectiveRoutingTestScript,
+        'GreenVpnSelectiveRoutingTest_',
+        'Unsafe selective-routing test path',
+        'privateCidrRejected',
+        'defaultRoutesRemoved'
+    )
+}
+foreach ($check in $transportSelectiveRoutingChecks.GetEnumerator()) {
+    $source = [string]$check.Value[0]
+    $missing = @(
+        $check.Value[1..($check.Value.Count - 1)] |
+            Where-Object { -not $source.Contains([string]$_) }
+    )
+    if ($missing.Count -eq 0) {
+        Add-Pass "$($check.Key) markers present"
+    }
+    else {
+        Add-Error "$($check.Key) missing marker(s): $($missing -join ', ')"
+    }
+}
+
+foreach ($scriptPath in @(
+    $transportPreviewVpnTaskPath,
+    $transportSelectiveRoutingPath,
+    $transportSelectiveRoutingTestPath,
+    $transportCascadeStagePath,
+    $publicInstallerAuditPath
+)) {
+    $tokens = $null
+    $parseErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile(
+        $scriptPath,
+        [ref]$tokens,
+        [ref]$parseErrors
+    ) | Out-Null
+    if ($parseErrors -and $parseErrors.Count -gt 0) {
+        Add-Error "Windows cascade parser errors in ${scriptPath}: $($parseErrors[0].ToString())"
+    }
+    else {
+        Add-Pass "Windows cascade parser check passed: $scriptPath"
+    }
+}
+
+$windowsRuntimeFailoverChecks = [ordered]@{
+    'Windows runtime failover policy' = @(
+        $transportPreviewPolicy,
+        'greenVpnRuntimeFailoverFailureThreshold = 2',
+        '(isAndroid || isWindows)',
+        'greenVpnNextRuntimeFailoverFailureCount',
+        'greenVpnShouldTriggerRuntimeFailover'
+    )
+    'Windows runtime failover tests' = @(
+        $transportPreviewPolicyTest,
+        'runtime failover requires two consecutive unhealthy checks',
+        'persisted runtime route ids are strictly normalized',
+        'isWindows: true'
+    )
+    'Windows runtime failover lifecycle' = @(
+        $main,
+        '_pollWindowsRuntimeFailover',
+        'windows runtime failover clean-down confirmed',
+        'disconnectResult?.ok == true && !stillConnected',
+        '_disarmWindowsRuntimeFailover(reason: ''user_disconnect'')',
+        'starting ordered reconnect'
+    )
+    'Windows runtime failover restart restore' = @(
+        $main,
+        'writeManagedRouteId',
+        'readManagedRouteId',
+        '_restoreWindowsRuntimeFailoverIfPossible',
+        'missing_route_metadata',
+        '_socialOnlyPreferenceRequested'
+    )
+    'Windows cached fallback keeps route metadata aligned' = @(
+        $main,
+        'await _cfg.writeManagedProtocol(effectiveServer.protocolCode)',
+        'effectiveServer.isAuto ? '''' : effectiveServer.id'
+    )
+    'Windows all-transport clean-down' = @(
+        $main,
+        '_waitForServiceCleanDown',
+        'dnsttClientState',
+        'componentStateKeys'
+    )
+    'Windows status exposes every managed transport' = @(
+        $serviceSource,
+        'hysteriaClientState',
+        'vlessClientState',
+        'naiveClientState',
+        'dnsttClientState',
+        'processRouterState'
+    )
+    'Windows runtime failover physical proof is reversible' = @(
+        $windowsRuntimeFailoverPhysicalTestScript,
+        'GreenVPNPublicRuntimeFailoverSmokeFailsafe',
+        'Test-InstalledPayload',
+        'UseExistingExactInstall',
+        "tools\greenvpn_vpn_task.ps1",
+        'windows runtime failover restored source=',
+        'Stop-ActiveTransportEngine',
+        'Wait-AllGreenComponentsStopped',
+        'processRouterState',
+        'AfterLine',
+        'Test-ExpectedRouteEgress',
+        'Get-RouteProtectionEvidence',
+        'Invoke-DirectDnsLeakProbe',
+        'Get-ProtectedProgramDataEvidence',
+        'Test-NoBroadAcl',
+        'protectedProgramData',
+        'overlapObserved',
+        'originalEgressRestored',
+        'finally'
+    )
+    'Windows dnstt service status' = @(
+        $serviceSource,
+        'kDnsttPidPath',
+        'tools\\dnstt\\dnstt-client-windows-amd64.exe',
+        'managed_protocol == "dnstt"',
+        'dnsttClientState',
+        'dnsttTunState'
+    )
+}
+foreach ($check in $windowsRuntimeFailoverChecks.GetEnumerator()) {
+    $source = [string]$check.Value[0]
+    $missing = @(
+        $check.Value[1..($check.Value.Count - 1)] |
+            Where-Object { -not $source.Contains([string]$_) }
+    )
+    if ($missing.Count -eq 0) {
+        Add-Pass "$($check.Key) markers present"
+    }
+    else {
+        Add-Error "$($check.Key) missing marker(s): $($missing -join ', ')"
+    }
+}
+
+if (Test-Path -LiteralPath $windowsRuntimeFailoverPhysicalTestPath) {
+    $tokens = $null
+    $parseErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile(
+        $windowsRuntimeFailoverPhysicalTestPath,
+        [ref]$tokens,
+        [ref]$parseErrors
+    ) | Out-Null
+    if ($parseErrors -and $parseErrors.Count -gt 0) {
+        Add-Error "Windows runtime failover physical test has parser errors: $($parseErrors[0].ToString())"
+    }
+    else {
+        Add-Pass 'Windows runtime failover physical test PowerShell parser check passed'
+    }
+}
+
 if ($transportPreviewVpnTaskScript.Contains("'*S-1-5-11:(OI)(CI)M'")) {
     Add-Error 'Windows transport preview task must not grant broad Authenticated Users write access'
 }
@@ -1369,17 +1795,46 @@ else {
 }
 
 foreach ($fragment in @(
-    "greenVpnWindowsRuntimeScope == 'transport-preview'",
+    '$RoutingModePath',
+    '$RoutingAppsPath'
+)) {
+    if ($transportPreviewVpnTaskScript.Contains($fragment)) {
+        Add-Pass "Windows privileged routing input ACL marker present: $fragment"
+    }
+    else {
+        Add-Error "Windows privileged routing input ACL marker missing: $fragment"
+    }
+}
+
+foreach ($forbidden in @(
+    "'*S-1-5-11:(OI)(CI)(M)'",
+    "'*S-1-5-11:(M)'",
+    "'*S-1-5-11:(OI)(CI)M'",
+    "'*S-1-5-11:M'"
+)) {
+    if ($main.Contains($forbidden)) {
+        Add-Error "Windows client still grants broad shared-state write access: $forbidden"
+    }
+    else {
+        Add-Pass "Windows client excludes broad shared-state write marker: $forbidden"
+    }
+}
+
+foreach ($fragment in @(
+    '_prepareProtectedSharedPath',
+    "'*S-1-1-0'",
+    "'*S-1-5-11'",
+    "'*S-1-5-32-545'",
     "'*`$userSid:(OI)(CI)M'",
-    "'*`$userSid:F'",
+    "'*`$userSid:M'",
     "WindowsLocalSecurity.prepareSharedConfigDirectory(f.parent.path)",
     "WindowsLocalSecurity.prepareSharedConfigFile(f.path)"
 )) {
     if ($main.Contains($fragment)) {
-        Add-Pass "Windows transport preview client ACL marker present: $fragment"
+        Add-Pass "Windows protected client ACL marker present: $fragment"
     }
     else {
-        Add-Error "Windows transport preview client ACL marker missing: $fragment"
+        Add-Error "Windows protected client ACL marker missing: $fragment"
     }
 }
 
@@ -1498,7 +1953,7 @@ foreach ($fragment in @(
     'Test-ExactProcess',
     '$RouteMetric = 42734',
     '$EndpointRouteMetric = 42731',
-    "[string]`$state.endpoint -eq '5.129.216.42'",
+    "[string]`$state.endpoint -match '^\d{1,3}(?:\.\d{1,3}){3}$'",
     'Remove-ManagedRoutes',
     'Remove-ManagedEndpointRoute',
     'naive-https-client.runtime.json',
@@ -1590,10 +2045,12 @@ $androidHysteriaSourceChecks = [ordered]@{
     'Android Hysteria2 clean down wait' = @($androidHysteriaController, 'Hysteria2VpnService.requestDisconnect(context)', 'state == "error" && expected != "down"')
     'Android Hysteria2 FD protection bridge' = @($androidHysteriaBridge, 'SCM_RIGHTS', 'FD_CLOEXEC', 'chmod(path, 0600)', 'protectSocket')
     'Android Hysteria2 config unit tests' = @($androidHysteriaConfigTest, 'base config cannot define any local listener', 'insecure TLS is rejected', 'yaml aliases are rejected')
-    'Android Hysteria2 audited dependency preparation' = @($androidHysteriaPrepareScript, 'build-manifest.json', '2d973f9513ef661d1922d6d14acb37945caef47d', '4A974DE310E7EE1D523D2FCEDB114BA5FA75408C98EB3652023E55CCF3FA7CAB', '0A019366C970C5298835E155A2923E35A42E7C72505EFC93F9D3F21D2D8C9454', '4d6c334dbfb68a79d1970c2744e62d09f71df12f')
+    'Android Hysteria2 audited dependency preparation' = @($androidHysteriaPrepareScript, 'HYSTERIA-NATIVE-MANIFEST.json', 'build_android_hysteria2_native.ps1', '$arguments.VerifyOnly = $true')
+    'Android Hysteria2 reproducible native builder' = @($androidHysteriaNativeBuildScript, '$PinnedVersion = "app/v2.9.3"', '$PinnedCommit = "2d973f9513ef661d1922d6d14acb37945caef47d"', '$PinnedGoVersion = "go1.25.1"', '$PinnedNdkVersion = "28.2.13676358"', '"-Wl,-z,max-page-size=16384"', 'reproducibilityPasses = $ReproducibilityPasses')
     'Android Hysteria2 isolated build flag' = @($androidBuildScript, 'EnableHysteria2Preview', 'GREENVPN_ANDROID_HYSTERIA2_PREVIEW_ENABLED', 'GREENVPN_HYSTERIA2_PREVIEW_ENABLED=true')
     'Android Hysteria2 physical watchdog smoke' = @($androidHysteriaPhysicalTestScript, "ExpectedEgress = '5.129.216.42'", 'watchdogState', 'finalState', 'plaintextConfigRemoved')
-    'Android Hysteria2 APK verifier' = @($androidHysteriaApkVerifyScript, 'lib/arm64-v8a/libhysteria.so', 'GREENVPN_HYSTERIA2_PREVIEW_ENABLED:Z = true', 'zipalign', 'apksigner')
+    'Android Hysteria2 APK verifier' = @($androidHysteriaApkVerifyScript, 'HYSTERIA-NATIVE-MANIFEST.json', '$packagedAbis = @(''arm64-v8a'', ''x86_64'')', 'GREENVPN_HYSTERIA2_PREVIEW_ENABLED:Z = true', 'zipalign', 'apksigner')
+    'Android post-transition probe binds active network' = @($androidTransportProbeReceiver, 'connectivity.activeNetwork', 'network.openConnection(URL(uri))', 'connection.disconnect()')
     'Android stable transport isolation verifier' = @($androidStableIsolationVerifyScript, 'Stable APK contains transport preview payload', 'GREENVPN_HYSTERIA2_PREVIEW_ENABLED', 'pro.greenvpn.hysteria.Hysteria2VpnService')
 }
 foreach ($check in $androidHysteriaSourceChecks.GetEnumerator()) {
@@ -1617,6 +2074,7 @@ else {
 foreach ($scriptPath in @(
     $androidBuildScriptPath,
     $androidHysteriaPreparePath,
+    $androidHysteriaNativeBuildPath,
     $androidHysteriaPhysicalTestPath,
     $androidHysteriaApkVerifyPath,
     $androidStableIsolationVerifyPath
@@ -1636,10 +2094,10 @@ foreach ($scriptPath in @(
 
 Write-Section "ANDROID VLESS REALITY PREVIEW AND FALLBACK CHECKS"
 $androidVlessSourceChecks = [ordered]@{
-    'Android VLESS guarded config' = @($androidVlessConfig, 'CANARY_HOST = "5.129.216.42"', 'stream-up', 'maxConnections', 'https://1.1.1.1/dns-query', 'outboundTag", "dns-out"')
+    'Android VLESS guarded config' = @($androidVlessConfig, 'guardedEndpoints = mapOf(', '"37.220.85.211" to 443', '"88.218.250.86" to 9443', 'stream-up', 'maxConnections', 'https://1.1.1.1/dns-query', 'outboundTag", "dns-out"')
     'Android VLESS persistent fail-closed state' = @($androidVlessService, 'context.noBackupFilesDir', 'STATE_FILE = "state.json"', 'fun prepareForConnect(context: Context)', 'VPN service stopped unexpectedly', 'process.destroyForcibly()', 'cleanup("down", "")')
     'Android VLESS reconnect state reset' = @($androidVlessController, 'VlessRealityVpnService.prepareForConnect(context)', 'waitForState(context, "up", 30_000L)', 'state == "error" && expected != "down"')
-    'Android VLESS config tests' = @($androidVlessConfigTest, 'rejectsServerPrivateMaterial', 'rejectsEndpointDrift', 'rejectsSniDrift')
+    'Android VLESS config tests' = @($androidVlessConfigTest, 'rejectsServerPrivateMaterial', 'rejectsUnknownEndpoint', 'rejectsGuardedEndpointOnWrongPort', 'rejectsSniDrift')
     'Android VLESS pinned preparation' = @($androidVlessPrepareScript, 'v26.7.11', 'EA227CFB125FA093257F1A8227B5C6E30D93301D05F2E6AB8B79152F7AFF8CDB', 'source notice is bundled from docs/licenses')
     'Android VLESS physical watchdog and reconnect' = @($androidVlessPhysicalTestScript, "ExpectedEgress = '5.129.216.42'", 'watchdogState', 'reconnectState', 'reconnectEgress', 'plaintextConfigRemoved')
     'Canary-only route cooldown' = @($main, 'kTransportPreviewFallbackEnabled', '_recordRouteFailure', '_recordRouteSuccess', 'greenVpnCompareTransportPreviewCandidates(', '_routeFailureCooldown.coolingUntil(')
@@ -1675,8 +2133,8 @@ foreach ($scriptPath in @($androidVlessPreparePath, $androidVlessPhysicalTestPat
 
 Write-Section "ANDROID NAIVE HTTPS PREVIEW CHECKS"
 $androidNaiveSourceChecks = [ordered]@{
-    'Android Naive guarded config' = @($androidNaiveConfig, 'CANARY_HOST = "nl2.vpn.greenvpn.pro"', 'CANARY_IP = "5.129.216.42"', 'CANARY_PORT = 8443', 'host-resolver-rules', 'allowedKeys')
-    'Android Naive mapdns full tunnel' = @($androidNaiveService, '.addDnsServer("198.18.2.2")', 'mapdns:', "udp: 'tcp'", 'Ipv4RouteExclusions.routesExcluding(NaiveHttpsConfig.routeExclusions())', 'builder.addRoute(route.address, route.prefixLength)')
+    'Android Naive guarded config' = @($androidNaiveConfig, 'guardedEndpoints = mapOf(', '"nl1.vpn.greenvpn.pro" to "37.220.85.211"', '"88-218-250-86.sslip.io" to "88.218.250.86"', 'CANARY_PORT = 8443', 'host-resolver-rules', 'allowedKeys', 'endpointIp')
+    'Android Naive mapdns full tunnel' = @($androidNaiveService, '.addDnsServer("198.18.2.2")', 'mapdns:', "udp: 'tcp'", 'val routeExclusions = NaiveHttpsConfig.routeExclusions(baseConfig)', 'Ipv4RouteExclusions.routesExcluding(routeExclusions)', 'builder.addRoute(route.address, route.prefixLength)')
     'Android Naive persistent fail-closed state' = @($androidNaiveService, 'context.noBackupFilesDir', 'STATE_FILE = "state.json"', 'fun prepareForConnect(context: Context)', 'process.destroyForcibly()', 'cleanup("down", "")')
     'Android Naive reconnect state reset' = @($androidNaiveController, 'NaiveHttpsVpnService.prepareForConnect(context)', 'waitForState(context, "up", 30_000L)', 'state == "error" && expected != "down"')
     'Android Naive config tests' = @($androidNaiveConfigTest, 'rejectsWrongEndpoint', 'rejectsPlainHttp', 'rejectsMissingCredentials', 'rejectsLoggingFields')
@@ -1720,8 +2178,8 @@ $androidDnsttSourceChecks = [ordered]@{
     'dnstt rollback is host-guarded' = @($dnsttRollbackScript, 'EXPECTED_PUBLIC_IP', 'APPROVED_EXISTING_HOST', 'registrar_dns=not_changed', 'stable_transports=active')
     'Reusable server security contour runbook' = @($serverSecurityRunbook, 'change_id:', 'stable.before.sha256', 'base64 -d | bash -s --', 'clientConfigReady=true', 'payment data', 'Git bundle')
     'Stable APK isolation covers all preview engines' = @($androidStableIsolationVerifyScript, 'libdnstt_client', 'pro.greenvpn.dnstt.DnsttVpnService', 'GREENVPN_DNSTT_PREVIEW_ENABLED', 'GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED', 'GREENVPN_VLESS_REALITY_PREVIEW_ENABLED')
-    'Five-stage preview cascade policy' = @($transportPreviewPolicy, "'amneziawg'", "'hysteria2'", "'vless_reality'", "'naive_https'", "'dnstt'", 'greenVpnTransportPreviewRank', 'greenVpnTransportRequiresFullTunnel')
-    'Five-stage preview cascade tests' = @($transportPreviewPolicyTest, 'preview cascade keeps the guarded transport order', 'proxy transports are restricted to full-tunnel mode', 'cooldown demotes a failed route without changing cascade order', "'wireguard_udp'")
+    'Six-stage preview cascade policy' = @($transportPreviewPolicy, "'wireguard_udp'", "'amneziawg'", "'hysteria2'", "'vless_reality'", "'naive_https'", "'dnstt'", 'greenVpnTransportPreviewRank', 'greenVpnTransportRequiresFullTunnel')
+    'Six-stage preview cascade tests' = @($transportPreviewPolicyTest, 'preview cascade keeps the guarded transport order', 'proxy transports are restricted to full-tunnel mode', 'cooldown demotes a failed route without changing cascade order', "'wireguard_udp'")
     'Dart selector advertises and orders dnstt' = @($main, 'kDnsttPreviewEnabled', "if (kDnsttPreviewEnabled) 'dnstt'", 'greenVpnCompareTransportPreviewCandidates(', 'greenVpnTransportRequiresFullTunnel(')
     'Android app lifecycle integrates dnstt' = @($androidMainActivity, 'protocol == "dnstt"', 'GreenVpnDnsttPreview.validateConfig', 'GreenVpnDnsttPreview.connect', 'GreenVpnDnsttPreview.disconnect', 'BuildConfig.GREENVPN_DNSTT_PREVIEW_ENABLED')
     'Android quick tile integrates dnstt' = @($androidQuickTile, 'BuildConfig.GREENVPN_DNSTT_PREVIEW_ENABLED', 'GreenVpnDnsttPreview.validateConfig', 'GreenVpnDnsttPreview.connect', 'GreenVpnDnsttPreview.disconnect')
@@ -1730,16 +2188,24 @@ $androidDnsttSourceChecks = [ordered]@{
     'Android proxy route probe follows local SOCKS data plane' = @($androidRouteProbe, '"hysteria2" -> 1980', '"vless_reality" -> 1981', '"naive_https" -> 1982', '"dnstt" -> 1983', 'probeHttpsViaSocks(', 'endpointIdentificationAlgorithm = "HTTPS"')
     'Android proxy route probe has protocol mapping tests' = @($androidRouteProbeTest, 'proxyTransportsRequireTheirDedicatedLoopbackSocksPortsAfterSystemRoute', 'tunnelProtocolsUseTheSystemVpnRoute')
     'Flutter Android post-connect probe uses native route' = @($main, "invokeMethod<Object?>('probeConnectedRoute'", "'protocol': server.protocolCode")
-    'Android quick tile cascade policy is strict and bounded' = @($androidQuickTilePolicy, '"amneziawg"', '"hysteria2"', '"vless_reality"', '"naive_https"', '"dnstt"', '"wireguard_udp"', '60_000L', '1_800_000L')
+    'Android quick tile cascade policy is strict and bounded' = @($androidQuickTilePolicy, 'listOf(', '"wireguard_udp"', '"amneziawg"', '"hysteria2"', '"vless_reality"', '"naive_https"', '"dnstt"', '60_000L', '1_800_000L')
     'Android quick tile cascade tests cover order and cooldown' = @($androidQuickTilePolicyTest, 'strictTransportOrderIsPreserved', 'coolingCandidateIsDemotedWithoutChangingBaseOrder', 'cooldownScheduleIsBounded')
-    'Android quick tile physical proof is reversible' = @($androidQuickTilePhysicalTest, "'amneziawg', 'hysteria2', 'vless_reality', 'naive_https', 'dnstt', 'wireguard_udp'", "Wait-Route -ExpectedProtocol 'amneziawg'", 'Invoke-ExternalProbe', 'youtubeProbeRequiredBeforeSuccessMarker', 'Set-TileList -Value $originalTiles', "Invoke-DebugCommand -Command 'disconnect_all'", "Invoke-DebugCommand -Command 'clear_tile_cooldown'")
+    'Android quick tile physical proof is reversible' = @($androidQuickTilePhysicalTest, "'wireguard_udp', 'amneziawg', 'hysteria2', 'vless_reality', 'naive_https', 'dnstt'", "Wait-Route -ExpectedProtocol 'wireguard_udp'", 'cooledRouteCount', 'Get-VpnRecordCount', 'Get-TransportEngineProcessCount', 'Invoke-ExternalProbe', 'youtubeProbeRequiredBeforeSuccessMarker', 'Set-TileList -Value $originalTiles', "Invoke-DebugCommand -Command 'disconnect_all'", "Invoke-DebugCommand -Command 'clear_tile_cooldown'")
     'Android quick tile debug controls stay sanitized' = @($androidTransportContractService, '"set_tile_cooldown"', '"clear_tile_cooldown"', '"disconnect_all"', 'lastRouteSuccess', 'activeProtocols')
     'Android preview build binds native paid-beta identity' = @($androidAppBuild, 'GREENVPN_ANDROID_RELEASE_CHANNEL', 'GREENVPN_ANDROID_CLIENT_MARKER', 'GREENVPN_RELEASE_CHANNEL', 'GREENVPN_CLIENT_MARKER')
-    'Android preview build script sets paid-beta identity' = @($androidBuildScript, "GREENVPN_ANDROID_RELEASE_CHANNEL = 'paid-beta'", "GREENVPN_ANDROID_CLIENT_MARKER = 'green-vpn-paid-beta-v1'")
+    'Android build script binds the requested native release identity' = @(
+        $androidBuildScript,
+        "GREENVPN_ANDROID_RELEASE_CHANNEL = if (`$PublicProductCandidate) { 'public-product' } else { 'paid-beta' }",
+        "GREENVPN_ANDROID_CLIENT_MARKER = if (`$PublicProductCandidate)",
+        "'green-vpn-public-product-v1'",
+        "'green-vpn-paid-beta-v1'",
+        'Public product candidate primary API must not use /paid-beta-api.',
+        'AWG2 preview primary API must use /paid-beta-api.'
+    )
     'Backend guarded Naive and dnstt contracts' = @($backend, 'static_naive_https_canary', 'static_dnstt_canary', 'guarded_json_client_profile_file(', 'load_naive_https_client_config(', 'load_dnstt_client_config(', 'GREENVPN_DNSTT_CLIENT_CONFIG_ENABLED', 'GREENVPN_NAIVE_HTTPS_CLIENT_CONFIG_ENABLED')
     'Paid-beta Naive/dnstt deploy is atomic and isolated' = @($naiveDnsttContractDeployScript, 'EXPECTED_CURRENT_RELEASE="paid-beta-0.3.0-paid-beta.6-2026071106-r17-vless-contract"', 'production_changed=false', 'stable_catalog_changed=false', 'bluevpn.db.before.sqlite', 'rollback_on_error', 'legacy_naive_dnstt_count=0', 'preview_naive_dnstt_count=2')
     'Android ten-contract debug probe' = @($androidTransportContractService, 'TransportContractDebugService', 'nl2-awg2-canary', 'nl2-hysteria2-canary', 'nl2-vless-reality-xhttp-canary', 'nl2-naive-https-canary', 'nl2-dnstt-canary', '"primary"', '"fallback"', 'checks.length() == bases.size * CANDIDATES.size')
-    'Android contract probe report is sanitized' = @($androidTransportContractProbe, 'checks = @($report.checks)', 'checks.Count -ne 10', 'run-as $Package rm -f $resultFile')
+    'Android contract probe report is sanitized' = @($androidTransportContractProbe, 'checks = @($report.checks)', 'checks.Count -ne $ExpectedCheckCount', 'run-as $Package rm -f $resultFile')
 }
 foreach ($check in $androidDnsttSourceChecks.GetEnumerator()) {
     $source = [string]$check.Value[0]
@@ -1891,6 +2357,60 @@ foreach ($fragment in @(
     }
     else {
         Add-Error "DB sync compressed-transfer marker missing: $fragment"
+    }
+}
+foreach ($fragment in @(
+    'TRANSPORT_SERVER_IDS = (',
+    'EXPECTED_ROUTE_PASSPORTS = {',
+    'BUSINESS_TABLES = ("users", "subscriptions", "billing_orders")',
+    'apply mode requires an explicit backup path',
+    '_create_online_backup(',
+    'ON CONFLICT(server_id) DO UPDATE SET',
+    'businessCountsUnchanged',
+    '"secretsPrinted": False'
+)) {
+    if ($paidBetaTransportCatalogSyncScript.Contains($fragment)) {
+        Add-Pass "Paid-beta transport catalog sync safety marker present: $fragment"
+    }
+    else {
+        Add-Error "Paid-beta transport catalog sync safety marker missing: $fragment"
+    }
+}
+foreach ($fragment in @(
+    'TRANSPORT_SERVER_IDS="nl1-awg2-canary',
+    'dangerous_gates_enabled=false',
+    'GREENVPN_PREVIEW_SERVER_IDS',
+    'GREENVPN_SERVER_CATALOG_VERSION',
+    'rollback_on_error',
+    'catalog_routes=16',
+    'client_artifacts_changed=false',
+    'production_contour_changed=false'
+)) {
+    if ($paidBetaTransportParityScript.Contains($fragment)) {
+        Add-Pass "Paid-beta transport parity safety marker present: $fragment"
+    }
+    else {
+        Add-Error "Paid-beta transport parity safety marker missing: $fragment"
+    }
+}
+if (Test-Path -LiteralPath $paidBetaTransportCatalogSyncPath) {
+    & python -c "import ast,pathlib,sys; ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8'))" $paidBetaTransportCatalogSyncPath
+    if ($LASTEXITCODE -eq 0) {
+        Add-Pass 'Paid-beta transport catalog sync Python parser check passed'
+    }
+    else {
+        Add-Error 'Paid-beta transport catalog sync Python parser check failed'
+    }
+}
+if (Test-Path -LiteralPath $paidBetaTransportParityPath) {
+    $gitBash = Join-Path $env:ProgramFiles 'Git\bin\bash.exe'
+    $bashCommand = if (Test-Path -LiteralPath $gitBash) { $gitBash } else { 'bash' }
+    & $bashCommand -n $paidBetaTransportParityPath
+    if ($LASTEXITCODE -eq 0) {
+        Add-Pass 'Paid-beta transport parity Bash parser check passed'
+    }
+    else {
+        Add-Error 'Paid-beta transport parity Bash parser check failed'
     }
 }
 foreach ($fragment in @(
@@ -2122,6 +2642,77 @@ if (Test-Path -LiteralPath $signScriptPath) {
     }
     else {
         Add-Pass "Signing script PowerShell parser check passed"
+    }
+}
+
+$trustedWindowsSigningChecks = [ordered]@{
+    'Installer signs owned payload before archive and final EXE after resource updates' = @(
+        $installer,
+        'Invoke-CodeSigningStage',
+        '$ownedPayloadBinaries',
+        '-payload.json',
+        '-bootstrap.json',
+        '-installer.json',
+        'RequireCodeSigning'
+    )
+    'Trusted Windows finalizer auto-detects a valid local signing identity' = @(
+        $trustedWindowsFinalizer,
+        '1.3.6.1.5.5.7.3.3',
+        'Get-CodeSigningCertificates',
+        'HasPrivateKey',
+        'RequireWindowsCodeSigning',
+        'readyForPhysicalSmoke',
+        'ownerActions = @()'
+    )
+    'Windows publication binds signature reports to exact installer hashes' = @(
+        $windowsPublicReleaseInstaller,
+        '--production-signature-report',
+        '--test-signature-report',
+        'signature report does not match the exact trusted artifact',
+        'GREENVPN_WINDOWS_CODE_SIGNING_PROVIDER',
+        'GREENVPN_WINDOWS_SIGNED_INSTALLER_SHA256',
+        '"signed": signed_release == "1"'
+    )
+}
+foreach ($check in $trustedWindowsSigningChecks.GetEnumerator()) {
+    $source = [string]$check.Value[0]
+    $missing = @(
+        $check.Value[1..($check.Value.Count - 1)] |
+            Where-Object { -not $source.Contains([string]$_) }
+    )
+    if ($missing.Count -eq 0) {
+        Add-Pass "$($check.Key) markers present"
+    }
+    else {
+        Add-Error "$($check.Key) missing marker(s): $($missing -join ', ')"
+    }
+}
+
+if (Test-Path -LiteralPath $trustedWindowsFinalizerPath) {
+    $tokens = $null
+    $parseErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile(
+        $trustedWindowsFinalizerPath,
+        [ref]$tokens,
+        [ref]$parseErrors
+    ) | Out-Null
+    if ($parseErrors -and $parseErrors.Count -gt 0) {
+        Add-Error "Trusted Windows finalizer has PowerShell parser errors: $($parseErrors[0].ToString())"
+    }
+    else {
+        Add-Pass 'Trusted Windows finalizer PowerShell parser check passed'
+    }
+}
+
+if (Test-Path -LiteralPath $windowsPublicReleaseInstallerPath) {
+    $gitBash = Join-Path $env:ProgramFiles 'Git\bin\bash.exe'
+    $bashCommand = if (Test-Path -LiteralPath $gitBash) { $gitBash } else { 'bash' }
+    & $bashCommand -n $windowsPublicReleaseInstallerPath
+    if ($LASTEXITCODE -eq 0) {
+        Add-Pass 'Windows signed publication Bash parser check passed'
+    }
+    else {
+        Add-Error 'Windows signed publication Bash parser check failed'
     }
 }
 

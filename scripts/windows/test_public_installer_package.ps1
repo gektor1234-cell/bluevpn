@@ -72,6 +72,18 @@ try {
                 break
             }
         }
+        foreach ($fragment in @(
+            'GREENVPN_INSTALLER_AUTOCLOSE_SUCCESS',
+            '$form.Close()'
+        )) {
+            if (-not $ui.Contains($fragment)) {
+                $errors.Add("Installer UI smoke contract missing: $fragment") | Out-Null
+            }
+        }
+        if (-not $install.Contains('GREENVPN_INSTALLER_SKIP_APP_LAUNCH')) {
+            $errors.Add('Installer execution smoke contract missing: GREENVPN_INSTALLER_SKIP_APP_LAUNCH') |
+                Out-Null
+        }
 
         if ($Channel -eq 'production') {
             foreach ($fragment in @(
@@ -93,7 +105,13 @@ try {
                 '$existingInstallValid = Test-GreenVpnInstalledRoot -Root $installRoot',
                 'if (-not $installCompleted -and ($runtimeStopped -or $existingRootBackedUp -or $installSwapped))',
                 "`$installErrorLog = Join-Path `$env:TEMP 'GreenVPN_Setup_error.log'",
-                '$launchAfterInstall = -not $NoLaunch'
+                '$launchAfterInstall = -not $NoLaunch',
+                'Resolve-InstallingUserSid',
+                '[string]$OwnerSid = ""',
+                '-OwnerSid',
+                "/remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' /T /C",
+                "Ensure-GreenVpnProgramDataAcl -UserSid `$installingUserSid",
+                "Ensure-GreenVpnServiceToken -UserSid `$installingUserSid"
             )) {
                 if (-not $install.Contains($fragment)) {
                     $errors.Add("Production install contract missing: $fragment") | Out-Null
@@ -127,11 +145,24 @@ try {
                 'if (-not $installCompleted -and ($runtimeStopped -or $existingRootBackedUp -or $installSwapped))',
                 'restoring the previous beta version',
                 "`$installErrorLog = Join-Path `$env:TEMP 'GreenVPN_Beta_Setup_error.log'",
-                '$launchAfterInstall = -not $NoLaunch'
+                '$launchAfterInstall = -not $NoLaunch',
+                'Resolve-InstallingUserSid',
+                '[string]$OwnerSid = ""',
+                '-OwnerSid',
+                "/remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' /T /C",
+                "Ensure-BetaProgramData -UserSid `$installingUserSid"
             )) {
                 if (-not $install.Contains($fragment)) {
                     $errors.Add("Beta install contract missing: $fragment") | Out-Null
                 }
+            }
+        }
+        foreach ($forbiddenFragment in @(
+            "'*S-1-5-11:(OI)(CI)M'",
+            "'*S-1-5-11:R'"
+        )) {
+            if ($install.Contains($forbiddenFragment)) {
+                $errors.Add("Installer grants broad machine-state access: $forbiddenFragment") | Out-Null
             }
         }
     }
@@ -158,10 +189,21 @@ try {
             'tools/process-router/windivert_license.txt'
         )
         $requiredPayload = if ($Channel -eq 'production') {
-            @('app/greenvpn.exe', 'app/greenvpn_service.exe', 'tools/greenvpn_vpn_task.ps1') + $processRouterPayload
+            @(
+                'app/greenvpn.exe',
+                'app/greenvpn_service.exe',
+                'tools/greenvpn_vpn_task.ps1',
+                'tools/greenvpn_selective_routing.ps1'
+            ) + $processRouterPayload
         }
         else {
-            @('app/greenvpn_beta.exe', 'app/greenvpn_beta_service.exe', 'tools/greenvpn_vpn_task.ps1', 'tools/uninstall_greenvpn_beta.ps1') + $processRouterPayload
+            @(
+                'app/greenvpn_beta.exe',
+                'app/greenvpn_beta_service.exe',
+                'tools/greenvpn_vpn_task.ps1',
+                'tools/greenvpn_selective_routing.ps1',
+                'tools/uninstall_greenvpn_beta.ps1'
+            ) + $processRouterPayload
         }
         foreach ($entry in $requiredPayload) {
             if ($entryNames -notcontains $entry) {
@@ -185,13 +227,29 @@ try {
                 finally {
                     $reader.Dispose()
                 }
+                $selectiveEntry = $zip.Entries | Where-Object {
+                    $_.FullName.Replace('\', '/').ToLowerInvariant() -eq 'tools/greenvpn_selective_routing.ps1'
+                } | Select-Object -First 1
+                $selectiveText = ''
+                if ($null -ne $selectiveEntry) {
+                    $selectiveReader = [IO.StreamReader]::new($selectiveEntry.Open())
+                    try {
+                        $selectiveText = $selectiveReader.ReadToEnd()
+                    }
+                    finally {
+                        $selectiveReader.Dispose()
+                    }
+                }
+                $combinedTaskText = $vpnTaskText + "`n" + $selectiveText
                 foreach ($marker in @(
+                    'greenvpn_selective_routing.ps1',
                     'Get-GreenRoutingPolicy',
                     'destinationCidrs',
                     'Get-GreenDestinationCidrs',
-                    'process router not required'
+                    'process router not required',
+                    "Selective application routing is not supported by `$protocol."
                 )) {
-                    if (-not $vpnTaskText.Contains($marker)) {
+                    if (-not $combinedTaskText.Contains($marker)) {
                         $errors.Add("Packaged Windows VPN task marker missing: $marker") | Out-Null
                     }
                 }

@@ -5,11 +5,21 @@ const Set<String> greenVpnFreePlanCodes = <String>{
   'base',
   'trial',
   'free',
+  'free_quota',
   'free_start',
   'support_trial',
   'базовый',
+  'бесплатный',
   'пробный период',
 };
+
+enum GreenVpnExpiredSessionAction { refreshGuest, requireAccountSignIn }
+
+GreenVpnExpiredSessionAction greenVpnExpiredSessionAction({
+  required bool isGuest,
+}) => isGuest
+    ? GreenVpnExpiredSessionAction.refreshGuest
+    : GreenVpnExpiredSessionAction.requireAccountSignIn;
 
 bool greenVpnHasPaidEntitlement({
   required bool isActive,
@@ -28,6 +38,59 @@ bool greenVpnHasPaidEntitlement({
   }
   if (monthlyPriceRub != null && monthlyPriceRub <= 0) return false;
   return true;
+}
+
+bool greenVpnIsFreeTierSubscription(
+  Map<String, dynamic> profile, {
+  Object? subscription,
+}) {
+  final sub = subscription is Map
+      ? Map<String, dynamic>.from(subscription)
+      : const <String, dynamic>{};
+  final planCode = (profile['planCode'] ?? sub['planCode'] ?? '')
+      .toString()
+      .trim()
+      .toLowerCase();
+  return profile['isFreeTier'] == true ||
+      sub['isFreeTier'] == true ||
+      planCode == 'free_quota';
+}
+
+bool greenVpnIsFreeQuotaExhaustedMessage(String? message) {
+  final raw = (message ?? '').trim().toLowerCase();
+  return raw.contains('free_quota_exhausted') ||
+      (raw.contains('бесплатн') &&
+          raw.contains('лимит') &&
+          raw.contains('исчерпан'));
+}
+
+double? greenVpnTrafficUsageProgress(Map<String, dynamic> usage) {
+  final used = double.tryParse((usage['usedGb'] ?? '').toString());
+  final limit = double.tryParse((usage['trafficLimitGb'] ?? '').toString());
+  if (used == null || limit == null || limit <= 0) return null;
+  return (used / limit).clamp(0.0, 1.0);
+}
+
+String greenVpnTrafficUsageSummary(Map<String, dynamic> usage) {
+  String formatGb(Object? raw) {
+    final value = double.tryParse((raw ?? '').toString()) ?? 0;
+    if ((value - value.round()).abs() < 0.05) {
+      return value.round().toString();
+    }
+    return value.toStringAsFixed(1);
+  }
+
+  final used = formatGb(usage['usedGb']);
+  final limitRaw = usage['trafficLimitGb'];
+  if (limitRaw == null || limitRaw.toString().trim().isEmpty) {
+    return 'Использовано $used ГБ • лимит временно отключён';
+  }
+  final limit = formatGb(limitRaw);
+  if (usage['overLimit'] == true) {
+    return 'Лимит исчерпан • $used из $limit ГБ';
+  }
+  final remaining = formatGb(usage['remainingGb']);
+  return '$used из $limit ГБ • осталось $remaining ГБ';
 }
 
 String greenVpnPublicPlanTitle(String rawPlanName) {
@@ -102,6 +165,23 @@ const List<String> greenVpnFixedPublicBillingPlanCodes = <String>[
   'green_180d',
 ];
 
+List<String> greenVpnFixedBillingPlanCodesFromCatalog(
+  Map<String, dynamic>? catalog,
+) {
+  final rawPlans = catalog?['plans'];
+  if (rawPlans is! List) return const <String>[];
+
+  return rawPlans
+      .whereType<Map>()
+      .map((plan) => (plan['code'] ?? '').toString().trim())
+      .where(greenVpnFixedPublicBillingPlanCodes.contains)
+      .toSet()
+      .toList(growable: false);
+}
+
+bool greenVpnCatalogHasFixedBillingPlans(Map<String, dynamic>? catalog) =>
+    greenVpnFixedBillingPlanCodesFromCatalog(catalog).isNotEmpty;
+
 String greenVpnPublicBillingPeriodTitle(String rawPlanCode, int periodDays) {
   switch (rawPlanCode.trim()) {
     case 'green_30d':
@@ -126,6 +206,14 @@ String greenVpnNormalizePublicBillingPlanCode(
 
   final requested = rawCode.trim();
   return available.contains(requested) ? requested : available.first;
+}
+
+bool greenVpnSelectionAutoRenewEnabled(
+  Map<String, dynamic> selection, {
+  required bool paidBetaBuild,
+}) {
+  if (paidBetaBuild) return false;
+  return selection['autoRenew'] == true;
 }
 
 String greenVpnPublicErrorMessage({
@@ -161,6 +249,9 @@ String greenVpnPublicErrorMessage({
   }
   if (responseCode == 'premium_server_required') {
     return 'Эта локация доступна по подписке.';
+  }
+  if (responseCode == 'free_quota_exhausted') {
+    return 'Бесплатный лимит на этот месяц исчерпан. Откройте тариф или дождитесь нового месяца.';
   }
 
   if (statusCode == 401) return 'Сессия истекла. Войдите снова.';

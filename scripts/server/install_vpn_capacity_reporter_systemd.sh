@@ -3,6 +3,7 @@ set -euo pipefail
 
 APPLY="0"
 IFACE="wg0"
+WG_TOOL="wg"
 SERVER_ID="current_wg0"
 API_BASE="https://api.greenvpn.pro"
 TOKEN_FILE="/etc/greenvpn-monitoring/admin_token"
@@ -22,8 +23,10 @@ Options:
   --apply              Install and start the systemd timer. Default is dry-run.
   --token-file PATH    Root-only admin token file used by the reporter.
   --script-path PATH   Where to install report_vpn_capacity.sh.
+  --unit-name NAME     systemd unit prefix, default greenvpn-vpn-capacity-report.
   --server-id ID       Managed server_catalog serverId, default current_wg0.
   --iface IFACE        WireGuard interface, default wg0.
+  --wg-tool PATH       WireGuard-compatible CLI used by the interface.
   --api-base URL       Backend API base, default https://api.greenvpn.pro.
   --interval-seconds N Timer interval, default 60.
   --planned-mbps N     Optional planned link bandwidth sent by reporter.
@@ -50,12 +53,20 @@ while [[ $# -gt 0 ]]; do
       SCRIPT_PATH="${2:-}"
       shift 2
       ;;
+    --unit-name)
+      UNIT_NAME="${2:-}"
+      shift 2
+      ;;
     --server-id)
       SERVER_ID="${2:-}"
       shift 2
       ;;
     --iface)
       IFACE="${2:-}"
+      shift 2
+      ;;
+    --wg-tool)
+      WG_TOOL="${2:-}"
       shift 2
       ;;
     --api-base)
@@ -94,6 +105,10 @@ if ! [[ "$INTERVAL_SECONDS" =~ ^[0-9]+$ ]] || [[ "$INTERVAL_SECONDS" -lt 30 ]]; 
   echo "--interval-seconds must be an integer >= 30." >&2
   exit 2
 fi
+if ! [[ "$UNIT_NAME" =~ ^[A-Za-z0-9_.@-]+$ ]]; then
+  echo "--unit-name contains unsafe characters." >&2
+  exit 2
+fi
 
 source_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/report_vpn_capacity.sh"
 if [[ ! -f "$source_script" ]]; then
@@ -120,6 +135,7 @@ exec_start=(
   --token-file "$TOKEN_FILE"
   --server-id "$SERVER_ID"
   --iface "$IFACE"
+  --wg-tool "$WG_TOOL"
   --api-base "$API_BASE"
 )
 exec_start+=("${extra_args[@]}")

@@ -12,7 +12,7 @@ BUNDLE_DIR=""
 SEED_ENV=""
 PEER_HOST=""
 PEER_NAME=""
-SYNC_INTERVAL=10
+SYNC_CALENDAR=""
 
 INSTALL_ROOT="/opt/bluevpn-paid-beta"
 RELEASES_ROOT="${INSTALL_ROOT}/releases"
@@ -43,7 +43,7 @@ Usage:
     --peer-host HOST \
     --peer-name NAME \
     [--seed-env PATH] [--replace-env] [--remove-seed-env] \
-    [--sync-interval SECONDS] [--configure-nginx] \
+    [--configure-nginx] \
     [--start-sync|--stop-sync] [--apply]
 
 The bundle must contain backend/, ops/, site/ and bundle-manifest.json.
@@ -106,10 +106,6 @@ while [[ $# -gt 0 ]]; do
       PEER_NAME="${2:?missing peer name}"
       shift 2
       ;;
-    --sync-interval)
-      SYNC_INTERVAL="${2:?missing sync interval}"
-      shift 2
-      ;;
     -h|--help)
       usage
       exit 0
@@ -123,7 +119,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "${ROLE}" in
-  timeweb|ruvds) ;;
+  timeweb) SYNC_CALENDAR="*-*-* *:02,32:00 UTC" ;;
+  ruvds) SYNC_CALENDAR="*-*-* *:17,47:00 UTC" ;;
   *) echo "--role must be timeweb or ruvds" >&2; exit 2 ;;
 esac
 
@@ -137,10 +134,6 @@ if [[ ! "${PEER_HOST}" =~ ^[A-Za-z0-9.-]+$ ]]; then
 fi
 if [[ ! "${PEER_NAME}" =~ ^[a-z0-9][a-z0-9_-]{1,63}$ ]]; then
   echo "Unsafe --peer-name" >&2
-  exit 2
-fi
-if [[ ! "${SYNC_INTERVAL}" =~ ^[0-9]+$ ]] || (( SYNC_INTERVAL < 5 || SYNC_INTERVAL > 300 )); then
-  echo "--sync-interval must be 5..300 seconds" >&2
   exit 2
 fi
 if [[ "${START_SYNC}" -eq 1 && "${STOP_SYNC}" -eq 1 ]]; then
@@ -239,7 +232,7 @@ echo "site_link=${SITE_LINK}"
 echo "api_path=/paid-beta-api/"
 echo "site_path=/paid-beta/"
 echo "peer=${PEER_NAME}@${PEER_HOST}"
-echo "sync_interval=${SYNC_INTERVAL}"
+echo "sync_calendar=${SYNC_CALENDAR}"
 echo "configure_nginx=${CONFIGURE_NGINX}"
 echo "start_sync=${START_SYNC}"
 echo "stop_sync=${STOP_SYNC}"
@@ -408,6 +401,31 @@ download_base = (
     else "https://176-113-81-35.sslip.io/paid-beta/downloads"
 )
 released_at = str(manifest.get("generatedAt") or "").strip()
+assignment = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
+existing = {}
+for raw in env_path.read_text(encoding="utf-8").splitlines():
+    match = assignment.match(raw.strip())
+    if match:
+        existing[match.group(1)] = match.group(2).strip().strip("\"'")
+
+free_tier_defaults = {
+    "GREENVPN_FREE_TIER_ENABLED": "1",
+    "GREENVPN_FREE_TIER_QUOTA_ENFORCED": "0",
+    "GREENVPN_FREE_TIER_RATE_LIMIT_ENFORCED": "0",
+    "GREENVPN_FREE_TIER_MONTHLY_LIMIT_GB": "3",
+    "GREENVPN_FREE_TIER_MAX_DEVICES": "1",
+    "GREENVPN_FREE_TIER_SPEED_MBPS": "10",
+    "GREENVPN_FREE_TIER_BURST_MBPS": "20",
+    "GREENVPN_PAID_SALES_ENABLED": "0",
+    "GREENVPN_TAX_RECEIPT_MODE": "disabled",
+    "GREENVPN_TAX_RECEIPT_WORKFLOW_CONFIRMED": "0",
+    "GREENVPN_TAX_RECEIPT_VAT_CODE": "0",
+    "GREENVPN_REFUND_WORKFLOW_CONFIRMED": "0",
+    "GREENVPN_REFUND_EXECUTION_ENABLED": "0",
+    "GREENVPN_REFUND_BILLING_PRIMARY": "0",
+    "GREENVPN_AUTO_RENEWAL_CHARGES_ENABLED": "0",
+    "GREENVPN_AUTO_RENEWAL_BILLING_PRIMARY": "0",
+}
 updates = {
     "GREENVPN_PAID_BETA_BILLING_PRIMARY": "1" if role == "timeweb" else "0",
     "GREENVPN_REPLICATION_NODE_ID": role,
@@ -428,6 +446,10 @@ updates = {
     "GREENVPN_WINDOWS_PAID_BETA_UPDATE_CHANGELOG": (
         "Закрытая paid beta: персональные инвайты и фиксированный тариф."
     ),
+    **{
+        key: existing.get(key, default)
+        for key, default in free_tier_defaults.items()
+    },
 }
 
 assignment = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
@@ -525,6 +547,26 @@ expected = {
 }
 bad = [key for key, expected_value in expected.items() if values.get(key) != expected_value]
 for key in (
+    "GREENVPN_FREE_TIER_ENABLED",
+    "GREENVPN_FREE_TIER_QUOTA_ENFORCED",
+    "GREENVPN_FREE_TIER_RATE_LIMIT_ENFORCED",
+):
+    if values.get(key) not in {"0", "1"}:
+        bad.append(key)
+for key, minimum, maximum in (
+    ("GREENVPN_FREE_TIER_MONTHLY_LIMIT_GB", 1, 10000),
+    ("GREENVPN_FREE_TIER_MAX_DEVICES", 1, 5),
+    ("GREENVPN_FREE_TIER_SPEED_MBPS", 1, 1000),
+    ("GREENVPN_FREE_TIER_BURST_MBPS", 1, 2000),
+):
+    try:
+        parsed = int(values.get(key, ""))
+    except ValueError:
+        bad.append(key)
+        continue
+    if parsed < minimum or parsed > maximum:
+        bad.append(key)
+for key in (
     "GREENVPN_AUTH_CODE_PEPPER",
     "GREENVPN_PAID_BETA_INVITE_PEPPER",
     "GREENVPN_ADMIN_2FA_CODE_PEPPER",
@@ -534,7 +576,12 @@ for key in (
 if bad:
     print("Invalid beta env keys: " + ", ".join(sorted(set(bad))), file=sys.stderr)
     raise SystemExit(2)
-print("beta env validation: ok")
+print(
+    "beta env validation: ok "
+    f"free_tier={values['GREENVPN_FREE_TIER_ENABLED']} "
+    f"quota={values['GREENVPN_FREE_TIER_QUOTA_ENFORCED']} "
+    f"limit_gb={values['GREENVPN_FREE_TIER_MONTHLY_LIMIT_GB']}"
+)
 PY
 
 ln -sfn "${release_dir}" "${CURRENT_LINK}"
@@ -589,18 +636,18 @@ ExecStart=${CURRENT_LINK}/ops/greenvpn_db_sync_from_peer.sh
 Nice=5
 IOSchedulingClass=best-effort
 IOSchedulingPriority=6
+TimeoutStartSec=5min
 PrivateTmp=true
 NoNewPrivileges=true
 EOF
 
 cat > "/etc/systemd/system/${SYNC_SERVICE_NAME}.timer" <<EOF
 [Unit]
-Description=Run Green VPN paid beta DB sync every ${SYNC_INTERVAL} seconds
+Description=Run staggered Green VPN paid beta DB sync every thirty minutes
 
 [Timer]
-OnBootSec=30s
-OnUnitActiveSec=${SYNC_INTERVAL}s
-AccuracySec=2s
+OnCalendar=${SYNC_CALENDAR}
+AccuracySec=1s
 Unit=${SYNC_SERVICE_NAME}.service
 Persistent=false
 

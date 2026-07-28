@@ -205,7 +205,9 @@ class NaiveHttpsVpnService : VpnService() {
 
             val runtimeConfig = File(root, "runtime.json")
             val hevConfig = File(root, "hev.yaml")
-            runtimeConfig.writeText(NaiveHttpsConfig.renderRuntime(source.readText(Charsets.UTF_8)), Charsets.UTF_8)
+            val baseConfig = source.readText(Charsets.UTF_8)
+            val routeExclusions = NaiveHttpsConfig.routeExclusions(baseConfig)
+            runtimeConfig.writeText(NaiveHttpsConfig.renderRuntime(baseConfig), Charsets.UTF_8)
             source.delete()
             hevConfig.writeText(hevConfigText(), Charsets.UTF_8)
             for (file in listOf(runtimeConfig, hevConfig)) {
@@ -228,7 +230,7 @@ class NaiveHttpsVpnService : VpnService() {
                 .addDnsServer("198.18.2.2")
                 .apply { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) setMetered(false) }
                 .also { builder ->
-                    Ipv4RouteExclusions.routesExcluding(NaiveHttpsConfig.routeExclusions()).forEach { route ->
+                    Ipv4RouteExclusions.routesExcluding(routeExclusions).forEach { route ->
                         builder.addRoute(route.address, route.prefixLength)
                     }
                 }

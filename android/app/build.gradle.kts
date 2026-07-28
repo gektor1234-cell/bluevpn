@@ -47,9 +47,16 @@ fun environmentValue(name: String, defaultValue: String): String {
     return (System.getenv(name) ?: defaultValue).trim().ifEmpty { defaultValue }
 }
 
-val greenVpnAppVersion = (System.getenv("GREENVPN_APP_VERSION") ?: "0.2.44")
+val pubspecVersion =
+    rootProject.file("../pubspec.yaml").useLines { lines ->
+        lines.firstOrNull { it.trimStart().startsWith("version:") }
+            ?.substringAfter("version:")
+            ?.trim()
+            ?.substringBefore("+")
+    } ?: throw GradleException("Unable to read the application version from pubspec.yaml")
+val greenVpnAppVersion = (System.getenv("GREENVPN_APP_VERSION") ?: pubspecVersion)
     .trim()
-    .ifEmpty { "0.2.44" }
+    .ifEmpty { pubspecVersion }
 val greenVpnApplicationId = environmentValue("GREENVPN_ANDROID_APPLICATION_ID", "pro.greenvpn.app")
 val greenVpnAppLabel = environmentValue("GREENVPN_ANDROID_APP_LABEL", "Green VPN")
 val greenVpnApiBaseUrl = environmentValue("GREENVPN_ANDROID_API_BASE_URL", "https://api.greenvpn.pro")
@@ -95,6 +102,10 @@ android {
     }
 
     packaging {
+        jniLibs.excludes += setOf(
+            "lib/armeabi-v7a/**",
+            "lib/x86/**",
+        )
         jniLibs.keepDebugSymbols += setOf("**/libhysteria.so")
         jniLibs.keepDebugSymbols += setOf("**/libxray.so")
         jniLibs.keepDebugSymbols += setOf("**/libnaive.so")
@@ -108,10 +119,13 @@ android {
         applicationId = greenVpnApplicationId
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = 24
+        minSdk = 26
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
         manifestPlaceholders["greenVpnApplicationLabel"] = greenVpnAppLabel
         buildConfigField("String", "GREENVPN_APP_VERSION", quotedBuildConfig(greenVpnAppVersion))
         buildConfigField("String", "GREENVPN_APP_LABEL", quotedBuildConfig(greenVpnAppLabel))

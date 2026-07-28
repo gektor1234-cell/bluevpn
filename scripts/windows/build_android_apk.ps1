@@ -48,11 +48,20 @@ if ($EnableAwg2Preview -or $EnableHysteria2Preview -or $EnableVlessRealityPrevie
     if (-not $PublicProductCandidate -and -not $Awg2PreviewAppVersion.ToLowerInvariant().Contains('preview')) {
         throw 'Transport preview app version must contain the preview marker.'
     }
-    if (-not $Awg2PreviewApiBaseUrl.Contains('/paid-beta-api')) {
-        throw 'AWG2 preview primary API must use /paid-beta-api.'
-    }
-    if (-not $Awg2PreviewApiFallbackBaseUrls.Contains('/paid-beta-api')) {
-        throw 'AWG2 preview fallback API must use /paid-beta-api.'
+    if ($PublicProductCandidate) {
+        if ($Awg2PreviewApiBaseUrl.Contains('/paid-beta-api')) {
+            throw 'Public product candidate primary API must not use /paid-beta-api.'
+        }
+        if ($Awg2PreviewApiFallbackBaseUrls.Contains('/paid-beta-api')) {
+            throw 'Public product candidate fallback API must not use /paid-beta-api.'
+        }
+    } else {
+        if (-not $Awg2PreviewApiBaseUrl.Contains('/paid-beta-api')) {
+            throw 'AWG2 preview primary API must use /paid-beta-api.'
+        }
+        if (-not $Awg2PreviewApiFallbackBaseUrls.Contains('/paid-beta-api')) {
+            throw 'AWG2 preview fallback API must use /paid-beta-api.'
+        }
     }
     if ($Awg2PreviewApplicationId -eq 'pro.greenvpn.app') {
         throw 'AWG2 preview must not replace the production Android package.'
@@ -69,37 +78,63 @@ if ($EnableAwg2Preview -or $EnableHysteria2Preview -or $EnableVlessRealityPrevie
     $env:GREENVPN_ANDROID_APP_LABEL = $Awg2PreviewAppLabel
     $env:GREENVPN_ANDROID_API_BASE_URL = $Awg2PreviewApiBaseUrl
     $env:GREENVPN_ANDROID_API_FALLBACK_BASE_URLS = $Awg2PreviewApiFallbackBaseUrls
-    $env:GREENVPN_ANDROID_RELEASE_CHANNEL = 'paid-beta'
-    $env:GREENVPN_ANDROID_CLIENT_MARKER = 'green-vpn-paid-beta-v1'
+    $env:GREENVPN_ANDROID_RELEASE_CHANNEL = if ($PublicProductCandidate) { 'public-product' } else { 'paid-beta' }
+    $env:GREENVPN_ANDROID_CLIENT_MARKER = if ($PublicProductCandidate) {
+        'green-vpn-public-product-v1'
+    } else {
+        'green-vpn-paid-beta-v1'
+    }
     $env:GREENVPN_APP_VERSION = $Awg2PreviewAppVersion
 }
 if ($EnableAwg2Preview) {
-    & (Join-Path $PSScriptRoot 'prepare_android_awg2_preview.ps1')
+    & (Join-Path $PSScriptRoot 'build_android_awg2_native.ps1') -VerifyOnly | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "Pinned AWG2 native verification failed with exit code $LASTEXITCODE."
+    }
 }
 if ($EnableHysteria2Preview) {
-    & (Join-Path $PSScriptRoot 'prepare_android_hysteria2_preview.ps1')
+    & (Join-Path $PSScriptRoot 'build_android_hysteria2_native.ps1') -VerifyOnly |
+        Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "Pinned Hysteria native verification failed with exit code $LASTEXITCODE."
+    }
 }
 if ($EnableVlessRealityPreview) {
-    if (-not $EnableHysteria2Preview) {
-        & (Join-Path $PSScriptRoot 'prepare_android_hysteria2_preview.ps1')
-    }
     & (Join-Path $PSScriptRoot 'prepare_android_vless_reality_preview.ps1')
 }
 if ($EnableNaiveHttpsPreview) {
-    if (-not $EnableHysteria2Preview -and -not $EnableVlessRealityPreview) {
-        & (Join-Path $PSScriptRoot 'prepare_android_hysteria2_preview.ps1')
-    }
     & (Join-Path $PSScriptRoot 'prepare_android_naive_https_preview.ps1')
 }
 if ($EnableDnsttPreview) {
-    if (-not $EnableHysteria2Preview -and -not $EnableVlessRealityPreview -and -not $EnableNaiveHttpsPreview) {
-        & (Join-Path $PSScriptRoot 'prepare_android_hysteria2_preview.ps1')
-    }
     & (Join-Path $PSScriptRoot 'prepare_android_dnstt_preview.ps1')
 }
 
 flutter config --android-sdk $androidSdk | Out-Host
 flutter config --jdk-dir $jdkDir | Out-Host
+
+function Repair-AndroidLocalPropertiesEscaping {
+    $localProperties = Join-Path $repo "android\local.properties"
+    if (-not (Test-Path -LiteralPath $localProperties -PathType Leaf)) {
+        throw "Android local.properties was not generated: $localProperties"
+    }
+    $lines = Get-Content -LiteralPath $localProperties
+    $repaired = foreach ($line in $lines) {
+        if ($line -match "^(flutter\.sdk|sdk\.dir)=(.+)$") {
+            $key = $Matches[1]
+            $value = $Matches[2] -replace "(?<!\\):", "\:"
+            "$key=$value"
+        } else {
+            $line
+        }
+    }
+    [IO.File]::WriteAllLines(
+        $localProperties,
+        [string[]]$repaired,
+        [Text.UTF8Encoding]::new($false)
+    )
+}
+
+Repair-AndroidLocalPropertiesEscaping
 
 try {
     flutter config --no-enable-windows-desktop --no-enable-linux-desktop --no-enable-macos-desktop | Out-Host
@@ -109,17 +144,58 @@ finally {
     flutter config --enable-windows-desktop --enable-linux-desktop --enable-macos-desktop | Out-Host
 }
 
+Repair-AndroidLocalPropertiesEscaping
+
 flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings | Out-Host
+if ($LASTEXITCODE -ne 0) {
+    throw "Flutter analyze failed with exit code $LASTEXITCODE."
+}
 flutter test --no-pub | Out-Host
+if ($LASTEXITCODE -ne 0) {
+    throw "Flutter tests failed with exit code $LASTEXITCODE."
+}
+
+$gradleTasks = @()
+if ($Mode -eq "release" -or $Mode -eq "both") {
+    $gradleTasks += ":app:lintRelease"
+} else {
+    $gradleTasks += ":app:lintDebug"
+}
+if ($EnableAwg2Preview) {
+    $gradleTasks += ":awg_tunnel_preview:lint"
+}
+if ($EnableHysteria2Preview -or $EnableVlessRealityPreview -or $EnableNaiveHttpsPreview -or $EnableDnsttPreview) {
+    $gradleTasks += ":hysteria_tunnel_preview:lint"
+}
+Push-Location "android"
+try {
+    & ".\gradlew.bat" @gradleTasks "--rerun-tasks" "--stacktrace" | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "Android Gradle lint failed with exit code $LASTEXITCODE."
+    }
+} finally {
+    Pop-Location
+}
 
 $builds = @()
 $paidBetaBuildDefine = if ($PublicProductCandidate) { 'false' } else { 'true' }
 $publicProductBuildDefine = if ($PublicProductCandidate) { 'true' } else { 'false' }
-$releaseAppVersion = "0.2.44"
-$releaseBuildName = "0.2.44"
-$releaseBuildNumber = "2026070504"
+$pubspecVersionLine = Select-String -LiteralPath "pubspec.yaml" -Pattern "^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\+([0-9]+)\s*$" |
+    Select-Object -First 1
+if (-not $pubspecVersionLine) {
+    throw "pubspec.yaml must contain a numeric version and build number."
+}
+$releaseAppVersion = $pubspecVersionLine.Matches[0].Groups[1].Value
+$releaseBuildName = $releaseAppVersion
+$releaseBuildNumber = $pubspecVersionLine.Matches[0].Groups[2].Value
 if ($Mode -eq "debug" -or $Mode -eq "both") {
-    $debugArgs = @('build', 'apk', '--debug', '--no-pub')
+    $debugArgs = @(
+        'build',
+        'apk',
+        '--debug',
+        '--no-pub',
+        '--target-platform=android-arm64,android-x64'
+    )
     if ($EnableAwg2Preview) {
         $debugArgs += '--dart-define=GREENVPN_AWG2_PREVIEW_ENABLED=true'
         $debugArgs += "--dart-define=GREENVPN_APP_VERSION=$Awg2PreviewAppVersion"
@@ -196,7 +272,13 @@ if ($Mode -eq "debug" -or $Mode -eq "both") {
     $builds += "build\app\outputs\flutter-apk\app-debug.apk"
 }
 if ($Mode -eq "release" -or $Mode -eq "both") {
-    $releaseArgs = @("build", "apk", "--release", "--no-pub")
+    $releaseArgs = @(
+        "build",
+        "apk",
+        "--release",
+        "--no-pub",
+        "--target-platform=android-arm64,android-x64"
+    )
     $releaseArgs += "--dart-define=GREENVPN_APP_VERSION=$releaseAppVersion"
     $releaseArgs += "--build-name=$releaseBuildName"
     $releaseArgs += "--build-number=$releaseBuildNumber"
@@ -204,9 +286,9 @@ if ($Mode -eq "release" -or $Mode -eq "both") {
         $releaseAppVersion = $Awg2PreviewAppVersion
         $releaseBuildName = $Awg2PreviewBuildName
         $releaseBuildNumber = $Awg2PreviewBuildNumber
-        $releaseArgs[4] = "--dart-define=GREENVPN_APP_VERSION=$releaseAppVersion"
-        $releaseArgs[5] = "--build-name=$releaseBuildName"
-        $releaseArgs[6] = "--build-number=$releaseBuildNumber"
+        $releaseArgs[5] = "--dart-define=GREENVPN_APP_VERSION=$releaseAppVersion"
+        $releaseArgs[6] = "--build-name=$releaseBuildName"
+        $releaseArgs[7] = "--build-number=$releaseBuildNumber"
         $releaseArgs += "--dart-define=GREENVPN_YANDEX_REWARDED_ADS_ENABLED=$($EnableYandexRewardedAds.ToString().ToLowerInvariant())"
         $releaseArgs += "--dart-define=GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=false"
         $releaseArgs += "--dart-define=BLUEVPN_API_BASE_URLS=https://176-113-81-35.sslip.io"
@@ -315,6 +397,11 @@ foreach ($apk in $builds) {
             throw "Unexpected Android release signer for $($item.FullName)."
         }
         Write-Host "Signer SHA256: $actualSigner"
+    }
+    & (Join-Path $PSScriptRoot "verify_android_16kb_compatibility.ps1") `
+        -ApkPath $item.FullName | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "Android 16 KB verification failed: $($item.FullName)"
     }
 }
 

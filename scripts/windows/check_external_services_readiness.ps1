@@ -281,7 +281,6 @@ paths = [
     "/api/v1/admin/auth/user-flow/readiness",
     "/api/v1/admin/auth/2fa/readiness",
     "/api/v1/admin/email/readiness",
-    "/api/v1/admin/sms/readiness",
     "/api/v1/admin/billing/readiness",
     "/api/v1/admin/external-actions",
     "/api/v1/admin/alerts/readiness",
@@ -291,6 +290,7 @@ paths = [
     "/api/v1/admin/monitoring/readiness",
     "/api/v1/admin/billing/reconciliation",
     "/api/v1/admin/billing/payment-smoke/readiness",
+    "/api/v1/admin/billing/refunds/readiness",
     "/api/v1/admin/billing/promos/readiness",
     "/api/v1/admin/billing/renewals/readiness",
     "/api/v1/admin/subscriptions/expiry-readiness",
@@ -668,6 +668,17 @@ for path in paths:
             })
             if item.get("methodIdsExposed"):
                 summary["ok"] = False
+        elif path.endswith("/billing/refunds/readiness"):
+            refund_policy = data.get("policy") or {}
+            item.update({
+                "productionReady": data.get("productionReady"),
+                "mode": data.get("mode"),
+                "executionEnabled": refund_policy.get("executionEnabled"),
+                "billingPrimary": refund_policy.get("billingPrimary"),
+                "workflowConfirmed": refund_policy.get("workflowConfirmed"),
+                "checks": len(data.get("checks") or []),
+                "requiredActions": len(data.get("requiredActions") or []),
+            })
         elif path.endswith("/billing/promos/readiness"):
             promo_summary = data.get("summary") or {}
             policy = data.get("policy") or {}
@@ -868,7 +879,6 @@ try:
         "/api/v1/admin/site/readiness",
         "/api/v1/admin/auth/user-flow/readiness",
         "/api/v1/admin/email/readiness",
-        "/api/v1/admin/sms/readiness",
         "/api/v1/admin/billing/readiness",
         "/api/v1/admin/server-catalog/provisioning-readiness",
         "/api/v1/admin/server-catalog/draft-from-plan",
@@ -876,6 +886,8 @@ try:
         "/api/v1/admin/network/split-plan",
         "/api/v1/admin/support/reports/{report_id}/review",
         "/api/v1/admin/billing/payment-smoke/readiness",
+        "/api/v1/admin/billing/refunds/readiness",
+        "/api/v1/admin/billing/orders/{order_id}/refund-full",
         "/api/v1/admin/billing/orders/{order_id}/cancel-stale",
         "/api/v1/admin/billing/promos/readiness",
         "/api/v1/admin/billing/promos/draft-start-campaign",
@@ -996,10 +1008,10 @@ if ($AdminToken) {
     "/api/v1/admin/staff",
     "/api/v1/admin/auth/events?limit=1",
     "/api/v1/admin/email/readiness",
-    "/api/v1/admin/sms/readiness",
     "/api/v1/admin/billing/readiness",
     "/api/v1/admin/billing/reconciliation",
     "/api/v1/admin/billing/payment-smoke/readiness",
+    "/api/v1/admin/billing/refunds/readiness",
     "/api/v1/admin/billing/promos/readiness",
     "/api/v1/admin/billing/renewals/readiness",
     "/api/v1/admin/subscriptions/expiry-readiness",

@@ -16,7 +16,7 @@ class GreenVpnQuickTileCascadePolicyTest {
         )
 
         assertEquals(
-            listOf("awg", "h2", "vless", "naive", "dns", "wg"),
+            listOf("wg", "awg", "h2", "vless", "naive", "dns"),
             GreenVpnQuickTileCascadePolicy.sort(candidates, nowMs = 1_000L).map { it.serverId },
         )
     }

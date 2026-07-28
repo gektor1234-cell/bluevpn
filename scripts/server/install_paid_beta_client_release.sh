@@ -8,6 +8,8 @@ ANDROID_APK=""
 WINDOWS_EXE=""
 ANDROID_VERSION=""
 ANDROID_BUILD_NUMBER=""
+ANDROID_APPLICATION_ID=""
+ANDROID_APP_LABEL=""
 WINDOWS_VERSION=""
 WINDOWS_BUILD_NUMBER=""
 ANDROID_SHA256=""
@@ -33,6 +35,8 @@ Required arguments:
   --windows-exe PATH
   --android-version VERSION
   --android-build-number NUMBER
+  --android-application-id APPLICATION_ID
+  --android-app-label LABEL
   --windows-version VERSION
   --windows-build-number NUMBER
   --android-sha256 SHA256
@@ -56,6 +60,8 @@ while [[ $# -gt 0 ]]; do
     --windows-exe) WINDOWS_EXE="${2:?missing Windows EXE}"; shift 2 ;;
     --android-version) ANDROID_VERSION="${2:?missing Android version}"; shift 2 ;;
     --android-build-number) ANDROID_BUILD_NUMBER="${2:?missing Android build number}"; shift 2 ;;
+    --android-application-id) ANDROID_APPLICATION_ID="${2:?missing Android application ID}"; shift 2 ;;
+    --android-app-label) ANDROID_APP_LABEL="${2:?missing Android app label}"; shift 2 ;;
     --windows-version) WINDOWS_VERSION="${2:?missing Windows version}"; shift 2 ;;
     --windows-build-number) WINDOWS_BUILD_NUMBER="${2:?missing Windows build number}"; shift 2 ;;
     --android-sha256) ANDROID_SHA256="${2:?missing Android SHA256}"; shift 2 ;;
@@ -84,6 +90,18 @@ done
 for number in "$ANDROID_BUILD_NUMBER" "$WINDOWS_BUILD_NUMBER"; do
   [[ "$number" =~ ^[0-9]+$ ]] || { echo "Invalid build number" >&2; exit 2; }
 done
+[[ "$ANDROID_APPLICATION_ID" =~ ^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$ ]] || {
+  echo "Invalid Android application ID" >&2
+  exit 2
+}
+[[ "$ANDROID_APPLICATION_ID" != "pro.greenvpn.app" ]] || {
+  echo "Production Android application ID is forbidden in paid-beta" >&2
+  exit 2
+}
+[[ -n "${ANDROID_APP_LABEL//[[:space:]]/}" ]] || {
+  echo "Android app label must not be blank" >&2
+  exit 2
+}
 for flag in "$ANDROID_REQUIRED" "$WINDOWS_REQUIRED"; do
   [[ "$flag" =~ ^[01]$ ]] || { echo "Required flags must be 0 or 1" >&2; exit 2; }
 done
@@ -105,6 +123,8 @@ echo "mode=$([[ $APPLY -eq 1 ]] && echo apply || echo dry-run)"
 echo "role=$ROLE"
 echo "android_version=$ANDROID_VERSION"
 echo "android_build_number=$ANDROID_BUILD_NUMBER"
+echo "android_application_id=$ANDROID_APPLICATION_ID"
+echo "android_app_label=$ANDROID_APP_LABEL"
 echo "windows_version=$WINDOWS_VERSION"
 echo "windows_build_number=$WINDOWS_BUILD_NUMBER"
 echo "android_sha256=$ANDROID_SHA256"
@@ -206,7 +226,8 @@ state_modified=1
 python3 - \
   "$ENV_FILE" "$STATIC_MANIFEST" "$DB_FILE" \
   "$ANDROID_APK" "$WINDOWS_EXE" \
-  "$ANDROID_VERSION" "$ANDROID_BUILD_NUMBER" "$ANDROID_SHA256" "$ANDROID_REQUIRED" \
+  "$ANDROID_VERSION" "$ANDROID_BUILD_NUMBER" "$ANDROID_APPLICATION_ID" "$ANDROID_APP_LABEL" \
+  "$ANDROID_SHA256" "$ANDROID_REQUIRED" \
   "$WINDOWS_VERSION" "$WINDOWS_BUILD_NUMBER" "$WINDOWS_SHA256" "$WINDOWS_REQUIRED" \
   "$DOWNLOAD_BASE" "$released_at" <<'PY'
 import json
@@ -224,6 +245,8 @@ import sys
     windows_raw,
     android_version,
     android_build,
+    android_application_id,
+    android_app_label,
     android_sha,
     android_required,
     windows_version,
@@ -241,9 +264,9 @@ windows_path = pathlib.Path(windows_raw)
 assignment = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
 changelog = json.dumps(
     [
-        "Бесплатный режим с рекламой и платные функции разделены на сервере.",
-        "Режим для выбранных приложений доступен по подписке.",
-        "Каталог локаций поддерживает бесплатный и платный доступ.",
+        "Бесплатный режим открывается без регистрации; email подтверждается перед оплатой.",
+        "Бесплатный режим временно работает без лимита трафика.",
+        "Восстановлен выбор подписки на 1, 3 или 6 месяцев.",
     ],
     ensure_ascii=False,
 )
@@ -307,8 +330,8 @@ payload.update(
         "isolated": True,
         "productionPublished": False,
         "appVersion": android_version,
-        "androidApplicationId": "pro.greenvpn.app.beta",
-        "androidAppLabel": "Green VPN Beta",
+        "androidApplicationId": android_application_id,
+        "androidAppLabel": android_app_label,
         "windowsAppVersion": windows_version,
         "generatedAt": released_at,
         "artifacts": [existing["android"], existing["windows"]],
@@ -413,7 +436,8 @@ android_manifest="$(curl -fsS --max-time 20 'http://127.0.0.1:8010/api/v1/update
 windows_manifest="$(curl -fsS --max-time 20 'http://127.0.0.1:8010/api/v1/updates/manifest?platform=windows&channel=paid-beta&currentVersion=0.0.0&clientId=paid-beta-client-release')"
 python3 - \
   "$STATIC_MANIFEST" \
-  "$ANDROID_VERSION" "$ANDROID_BUILD_NUMBER" "$ANDROID_SHA256" "$ANDROID_REQUIRED" \
+  "$ANDROID_VERSION" "$ANDROID_BUILD_NUMBER" "$ANDROID_APPLICATION_ID" "$ANDROID_APP_LABEL" \
+  "$ANDROID_SHA256" "$ANDROID_REQUIRED" \
   "$WINDOWS_VERSION" "$WINDOWS_BUILD_NUMBER" "$WINDOWS_SHA256" "$WINDOWS_REQUIRED" \
   "$android_manifest" "$windows_manifest" <<'PY'
 import json
@@ -424,6 +448,8 @@ import sys
     static_raw,
     android_version,
     android_build,
+    android_application_id,
+    android_app_label,
     android_sha,
     android_required,
     windows_version,
@@ -449,6 +475,10 @@ for platform, (version, build, sha, required, raw) in expected.items():
         raise SystemExit(f"{platform} API manifest readiness mismatch")
 
 static = json.loads(pathlib.Path(static_raw).read_text(encoding="utf-8-sig"))
+if static.get("androidApplicationId") != android_application_id:
+    raise SystemExit("Android static manifest application ID mismatch")
+if static.get("androidAppLabel") != android_app_label:
+    raise SystemExit("Android static manifest app label mismatch")
 artifacts = {
     str(item.get("platform") or "").lower(): item
     for item in (static.get("artifacts") or [])

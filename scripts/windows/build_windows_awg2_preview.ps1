@@ -4,11 +4,14 @@ param(
     [string]$HevRoot = 'C:\Users\gekto\GreenVPN_Checkpoints\third_party\hev-socks5-tunnel-2.14.4-release\extracted\hev-socks5-tunnel',
     [string]$XrayRoot = 'C:\Users\gekto\GreenVPN_Checkpoints\third_party\xray-core-v26.7.11\windows-64',
     [string]$NaiveRoot = 'C:\Users\gekto\GreenVPN_Checkpoints\naiveproxy_v150.0.7871.63-1\win-extract\naiveproxy-v150.0.7871.63-1-win-x64',
+    [string]$DnsttRoot = 'C:\Users\gekto\GreenVPN_Checkpoints\transport_canary_dnstt_20260712',
     [string]$OutDir = 'C:\BlueVPN_Builds\windows_transport_preview_20260712_naive',
     [string]$AppVersion = '0.3.0-transport-preview.3',
     [string]$WindowsBuildName = '0.3.0',
     [ValidateRange(0, 65535)]
     [int]$WindowsBuildNumber = 1511,
+    [string]$ApiBaseUrl = 'https://api.greenvpn.pro/paid-beta-api',
+    [string]$ApiFallbackBaseUrls = 'https://176-113-81-35.sslip.io/paid-beta-api',
     [switch]$PublicProductCandidate,
     [switch]$SkipChecks
 )
@@ -20,6 +23,13 @@ $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 if ($WindowsBuildName -notmatch '^\d+\.\d+\.\d+$') {
     throw "WindowsBuildName must be a numeric x.y.z version: $WindowsBuildName"
 }
+if ($PublicProductCandidate) {
+    if ($ApiBaseUrl.Contains('/paid-beta-api') -or $ApiFallbackBaseUrls.Contains('/paid-beta-api')) {
+        throw 'Public-product candidate must use production API roots.'
+    }
+} elseif (-not $ApiBaseUrl.Contains('/paid-beta-api') -or -not $ApiFallbackBaseUrls.Contains('/paid-beta-api')) {
+    throw 'Transport preview must use the isolated paid-beta API roots.'
+}
 $licensePath = Join-Path $repo 'docs\licenses\AMNEZIAWG_WINDOWS_CLIENT_MIT.txt'
 $hysteriaLicensePath = Join-Path $repo 'docs\licenses\HYSTERIA_APP_MIT.txt'
 $hevLicensePath = Join-Path $repo 'docs\licenses\HEV_SOCKS5_TUNNEL_MIT.txt'
@@ -28,6 +38,7 @@ $hevWintunLicensePath = Join-Path $repo 'docs\licenses\HEV_WINTUN_PREBUILT_BINAR
 $xraySourceNoticePath = Join-Path $repo 'docs\licenses\XRAY_CORE_MPL_SOURCE_NOTICE.txt'
 $xrayLicensePath = Join-Path $XrayRoot 'LICENSE'
 $naiveLicensePath = Join-Path $repo 'docs\licenses\NAIVEPROXY_BSD_3_CLAUSE.txt'
+$dnsttLicensePath = Join-Path $repo 'docs\licenses\DNSTT_PUBLIC_DOMAIN_COPYING.txt'
 $expectedHashes = @{
     'amneziawg.exe' = '5B00905ED02619FE149CEAFC898E79993D4455A0CDFA92072B3BB9AEE7B2D537'
     'awg.exe' = '26AC0BE14A8353EACF2F933736F6F7912F89EC7C59C4190CC990492934C74537'
@@ -51,6 +62,12 @@ $expectedNaiveHashes = @{
     'msys-2.0.dll' = '6C0DE43EFC0F14D871CC9F3FA803B9BD1E74802F45B3C8AFFE3DACC21B2EEA18'
     'wintun.dll' = 'E5DA8447DC2C320EDC0FC52FA01885C103DE8C118481F683643CACC3220DAFCE'
 }
+$expectedDnsttHashes = @{
+    'dnstt-client-windows-amd64.exe' = '282995EA68FD13514AC033BC953193AD11CF01F83BB6E3F97929089E5BD85A99'
+    'hev-socks5-tunnel.exe' = '46167DBA51A2C3DD5F2E3478B0D8A30CAD03392D388DC1330D55246492F48C1E'
+    'msys-2.0.dll' = '6C0DE43EFC0F14D871CC9F3FA803B9BD1E74802F45B3C8AFFE3DACC21B2EEA18'
+    'wintun.dll' = 'E5DA8447DC2C320EDC0FC52FA01885C103DE8C118481F683643CACC3220DAFCE'
+}
 
 if (-not (Test-Path -LiteralPath $licensePath)) {
     throw "Missing AmneziaWG Windows license notice: $licensePath"
@@ -63,6 +80,9 @@ foreach ($notice in @($xraySourceNoticePath, $xrayLicensePath)) {
 }
 if (-not (Test-Path -LiteralPath $naiveLicensePath)) {
     throw "Missing Naive HTTPS preview license notice: $naiveLicensePath"
+}
+if (-not (Test-Path -LiteralPath $dnsttLicensePath)) {
+    throw "Missing dnstt license notice: $dnsttLicensePath"
 }
 
 foreach ($name in $expectedHashes.Keys) {
@@ -116,6 +136,19 @@ foreach ($name in $expectedNaiveHashes.Keys) {
         throw "Naive HTTPS preview runtime hash mismatch: $name"
     }
 }
+$dnsttRuntimeSources = @{
+    'dnstt-client-windows-amd64.exe' = (Join-Path $DnsttRoot 'dnstt-client-windows-amd64.exe')
+    'hev-socks5-tunnel.exe' = (Join-Path $HevRoot 'hev-socks5-tunnel.exe')
+    'msys-2.0.dll' = (Join-Path $HevRoot 'msys-2.0.dll')
+    'wintun.dll' = (Join-Path $HevRoot 'wintun.dll')
+}
+foreach ($name in $expectedDnsttHashes.Keys) {
+    $path = $dnsttRuntimeSources[$name]
+    if (-not (Test-Path -LiteralPath $path)) { throw "Missing official dnstt preview runtime: $path" }
+    if ((Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash -ne $expectedDnsttHashes[$name]) {
+        throw "dnstt preview runtime hash mismatch: $name"
+    }
+}
 
 Set-Location $repo
 if (-not $SkipChecks) {
@@ -166,6 +199,7 @@ try {
         --dart-define="GREENVPN_HYSTERIA2_PREVIEW_ENABLED=true" `
         --dart-define="GREENVPN_VLESS_REALITY_PREVIEW_ENABLED=true" `
         --dart-define="GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED=true" `
+        --dart-define="GREENVPN_DNSTT_PREVIEW_ENABLED=true" `
         --dart-define="GREENVPN_WINDOWS_RUNTIME_SCOPE=$($runtime.GREENVPN_WINDOWS_RUNTIME_SCOPE)" `
         --dart-define="GREENVPN_WINDOWS_TUNNEL_NAME=$($runtime.GREENVPN_WINDOWS_TUNNEL_NAME)" `
         --dart-define="GREENVPN_WINDOWS_SERVICE_NAME=$($runtime.GREENVPN_WINDOWS_SERVICE_NAME)" `
@@ -174,8 +208,8 @@ try {
         --dart-define="GREENVPN_WINDOWS_LOCAL_SERVICE_PORT=$($runtime.GREENVPN_WINDOWS_LOCAL_SERVICE_PORT)" `
         --dart-define="GREENVPN_PRODUCT_NAME=$($runtime.GREENVPN_PRODUCT_NAME)" `
         --dart-define="GREENVPN_YANDEX_REWARDED_ADS_ENABLED=false" `
-        --dart-define="BLUEVPN_API_BASE_URL=https://api.greenvpn.pro/paid-beta-api" `
-        --dart-define="BLUEVPN_API_BASE_URLS=https://176-113-81-35.sslip.io/paid-beta-api"
+        --dart-define="BLUEVPN_API_BASE_URL=$ApiBaseUrl" `
+        --dart-define="BLUEVPN_API_BASE_URLS=$ApiFallbackBaseUrls"
     if ($LASTEXITCODE -ne 0) { throw 'Windows transport preview build failed' }
 } finally {
     foreach ($name in $runtime.Keys) {
@@ -205,18 +239,22 @@ $awgDir = Join-Path $toolsDir 'amneziawg2'
 $hysteriaDir = Join-Path $toolsDir 'hysteria2'
 $vlessDir = Join-Path $toolsDir 'vless-reality'
 $naiveDir = Join-Path $toolsDir 'naive-https'
+$dnsttDir = Join-Path $toolsDir 'dnstt'
 New-Item -ItemType Directory -Force -Path $awgDir | Out-Null
 New-Item -ItemType Directory -Force -Path $hysteriaDir | Out-Null
 New-Item -ItemType Directory -Force -Path $vlessDir | Out-Null
 New-Item -ItemType Directory -Force -Path $naiveDir | Out-Null
+New-Item -ItemType Directory -Force -Path $dnsttDir | Out-Null
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\greenvpn_transport_preview_vpn_task.ps1') -Destination $toolsDir -Force
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\greenvpn_hysteria2_watchdog.ps1') -Destination $toolsDir -Force
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\greenvpn_vless_reality_watchdog.ps1') -Destination $toolsDir -Force
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\greenvpn_naive_https_watchdog.ps1') -Destination $toolsDir -Force
+Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\greenvpn_dnstt_watchdog.ps1') -Destination $toolsDir -Force
 foreach ($name in $expectedHashes.Keys) { Copy-Item -LiteralPath (Join-Path $ThirdPartyRoot $name) -Destination $awgDir -Force }
 foreach ($name in $expectedHysteriaHashes.Keys) { Copy-Item -LiteralPath $hysteriaRuntimeSources[$name] -Destination $hysteriaDir -Force }
 foreach ($name in $expectedVlessHashes.Keys) { Copy-Item -LiteralPath $vlessRuntimeSources[$name] -Destination $vlessDir -Force }
 foreach ($name in $expectedNaiveHashes.Keys) { Copy-Item -LiteralPath $naiveRuntimeSources[$name] -Destination $naiveDir -Force }
+foreach ($name in $expectedDnsttHashes.Keys) { Copy-Item -LiteralPath $dnsttRuntimeSources[$name] -Destination $dnsttDir -Force }
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\install_windows_transport_preview.ps1') -Destination $OutDir -Force
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\uninstall_windows_transport_preview.ps1') -Destination $OutDir -Force
 Copy-Item -LiteralPath (Join-Path $repo 'docs\THIRD_PARTY_AWG2_WINDOWS_PREVIEW.md') -Destination $OutDir -Force
@@ -229,6 +267,7 @@ Copy-Item -LiteralPath $hevWintunLicensePath -Destination (Join-Path $OutDir 'HE
 Copy-Item -LiteralPath $xrayLicensePath -Destination (Join-Path $OutDir 'XRAY_CORE_MPL_2_0_LICENSE.txt') -Force
 Copy-Item -LiteralPath $xraySourceNoticePath -Destination (Join-Path $OutDir 'XRAY_CORE_MPL_SOURCE_NOTICE.txt') -Force
 Copy-Item -LiteralPath $naiveLicensePath -Destination (Join-Path $OutDir 'NAIVEPROXY_BSD_3_CLAUSE.txt') -Force
+Copy-Item -LiteralPath $dnsttLicensePath -Destination (Join-Path $OutDir 'DNSTT_PUBLIC_DOMAIN_COPYING.txt') -Force
 
 $artifactRows = Get-ChildItem -LiteralPath $OutDir -Recurse -File | ForEach-Object {
     [pscustomobject]@{ path = $_.FullName.Substring($OutDir.Length).TrimStart('\'); size = $_.Length; sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash }
@@ -248,15 +287,17 @@ $manifest = [ordered]@{
     hevSource = 'https://github.com/heiher/hev-socks5-tunnel/releases/tag/2.14.4'
     xraySource = 'https://github.com/XTLS/Xray-core/tree/v26.7.11'
     naiveSource = 'https://github.com/klzgrad/naiveproxy/releases/tag/v150.0.7871.63-1'
+    dnsttSource = 'https://www.bamsoftware.com/software/dnstt/'
     createdAt = (Get-Date).ToUniversalTime().ToString('o')
     files = @($artifactRows)
 }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $OutDir 'manifest.json') -Encoding UTF8
 
+$safeAppVersion = $AppVersion -replace '[^A-Za-z0-9._-]', '_'
 $zipName = if ($PublicProductCandidate) {
-    'GreenVPN_Windows_0.3.0_final_candidate.zip'
+    "GreenVPN_Windows_${safeAppVersion}_final_candidate.zip"
 } else {
-    'GreenVPN_Windows_Transport_Preview_0.3.0-preview3.zip'
+    "GreenVPN_Windows_Transport_Preview_${safeAppVersion}.zip"
 }
 $zip = Join-Path $OutDir $zipName
 if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
@@ -274,6 +315,7 @@ $packagePaths = @(
     (Join-Path $OutDir 'XRAY_CORE_MPL_2_0_LICENSE.txt'),
     (Join-Path $OutDir 'XRAY_CORE_MPL_SOURCE_NOTICE.txt'),
     (Join-Path $OutDir 'NAIVEPROXY_BSD_3_CLAUSE.txt'),
+    (Join-Path $OutDir 'DNSTT_PUBLIC_DOMAIN_COPYING.txt'),
     (Join-Path $OutDir 'manifest.json')
 )
 Compress-Archive -Path $packagePaths -DestinationPath $zip -Force

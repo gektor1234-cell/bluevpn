@@ -153,7 +153,13 @@ def line_number(text: str, offset: int) -> int:
 
 def value_looks_safe(value: str) -> bool:
     normalized = value.strip().strip("'\"").lower()
-    if not normalized or normalized in {"none", "null", "true", "false"}:
+    if not normalized or normalized in {
+        "none",
+        "null",
+        "true",
+        "false",
+        "password",
+    }:
         return True
     if normalized.startswith(("$", "${", "$(", "{{")):
         return True

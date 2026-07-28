@@ -10,12 +10,12 @@ internal data class GreenVpnTileRouteCandidate(
 
 internal object GreenVpnQuickTileCascadePolicy {
     private val transportOrder = listOf(
+        "wireguard_udp",
         "amneziawg",
         "hysteria2",
         "vless_reality",
         "naive_https",
         "dnstt",
-        "wireguard_udp",
     )
     private val cooldownScheduleMs = longArrayOf(60_000L, 180_000L, 600_000L, 1_800_000L)
     private val routeProbeDelaysMs = longArrayOf(750L, 900L, 1_400L)

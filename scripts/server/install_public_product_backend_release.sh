@@ -178,6 +178,7 @@ transport_keys = {
     "GREENVPN_AMNEZIAWG_CLIENT_CONFIG_ENABLED",
     "GREENVPN_HYSTERIA2_CANARY_SERVER_IDS",
     "GREENVPN_HYSTERIA2_CANARY_SNI",
+    "GREENVPN_HYSTERIA2_CANARY_SNIS",
     "GREENVPN_HYSTERIA2_CLIENT_CONFIG_ENABLED",
     "GREENVPN_HYSTERIA2_CLIENT_CONFIG_ROOT",
     "GREENVPN_VLESS_REALITY_CANARY_SERVER_IDS",
@@ -186,6 +187,7 @@ transport_keys = {
     "GREENVPN_VLESS_REALITY_CLIENT_CONFIG_ROOT",
     "GREENVPN_NAIVE_HTTPS_CANARY_HOST",
     "GREENVPN_NAIVE_HTTPS_CANARY_IP",
+    "GREENVPN_NAIVE_HTTPS_CANARY_ENDPOINTS",
     "GREENVPN_NAIVE_HTTPS_CANARY_SERVER_IDS",
     "GREENVPN_NAIVE_HTTPS_CLIENT_CONFIG_ENABLED",
     "GREENVPN_NAIVE_HTTPS_CLIENT_CONFIG_ROOT",
@@ -204,8 +206,37 @@ missing = sorted(transport_keys.difference(source_values))
 if missing:
     raise SystemExit("paid-beta env lacks required transport keys: " + ",".join(missing))
 
+target_values = {}
+for raw in target_path.read_text(encoding="utf-8").splitlines():
+    match = assignment.match(raw.strip())
+    if match:
+        target_values[match.group(1)] = match.group(2).strip().strip("\"'")
+
+policy_defaults = {
+    "GREENVPN_FREE_TIER_ENABLED": "1",
+    "GREENVPN_FREE_TIER_QUOTA_ENFORCED": "0",
+    "GREENVPN_FREE_TIER_RATE_LIMIT_ENFORCED": "0",
+    "GREENVPN_FREE_TIER_MONTHLY_LIMIT_GB": "3",
+    "GREENVPN_FREE_TIER_MAX_DEVICES": "1",
+    "GREENVPN_FREE_TIER_SPEED_MBPS": "10",
+    "GREENVPN_FREE_TIER_BURST_MBPS": "20",
+    "GREENVPN_PAID_SALES_ENABLED": "0",
+    "GREENVPN_TAX_RECEIPT_MODE": "disabled",
+    "GREENVPN_TAX_RECEIPT_WORKFLOW_CONFIRMED": "0",
+    "GREENVPN_TAX_RECEIPT_VAT_CODE": "0",
+    "GREENVPN_REFUND_WORKFLOW_CONFIRMED": "0",
+    "GREENVPN_REFUND_EXECUTION_ENABLED": "0",
+    "GREENVPN_REFUND_BILLING_PRIMARY": "0",
+    "GREENVPN_AUTO_RENEWAL_CHARGES_ENABLED": "0",
+    "GREENVPN_AUTO_RENEWAL_BILLING_PRIMARY": "0",
+}
+
 updates = {
     **source_values,
+    **{
+        key: target_values.get(key, default)
+        for key, default in policy_defaults.items()
+    },
     "GREENVPN_BACKEND_VERSION": backend_version,
     "GREENVPN_PUBLIC_SITE_URL": "https://greenvpn.pro",
     "GREENVPN_PUBLIC_PRODUCT_ENABLED": "1",
@@ -213,8 +244,11 @@ updates = {
     "GREENVPN_PUBLIC_PRODUCT_RELEASE_CHANNEL": "public-product",
     "GREENVPN_PUBLIC_PRODUCT_BILLING_PRIMARY": billing_primary,
     "GREENVPN_PUBLIC_PRODUCT_TRANSPORT_SERVER_IDS": (
-        "nl2-awg2-canary,nl2-hysteria2-canary,nl2-vless-reality-xhttp-canary,"
-        "nl2-naive-https-canary,nl2-dnstt-canary"
+        "nl1-awg2-canary,nl1-hysteria2-canary,nl1-vless-reality-xhttp-canary,"
+        "nl1-naive-https-canary,nl2-awg2-canary,nl2-hysteria2-canary,"
+        "nl2-vless-reality-xhttp-canary,nl2-naive-https-canary,nl2-dnstt-canary,"
+        "gb1-awg2-canary,gb1-hysteria2-canary,"
+        "gb1-vless-reality-xhttp-canary,gb1-naive-https-canary"
     ),
 }
 out = []
@@ -235,7 +269,7 @@ chown root:root "$ENV_FILE"
 chmod 600 "$ENV_FILE"
 
 systemctl restart "$SERVICE"
-for _ in $(seq 1 45); do
+for _ in $(seq 1 90); do
   curl -fsS --max-time 3 http://127.0.0.1:8000/healthz >/dev/null && break
   sleep 1
 done
@@ -248,10 +282,15 @@ expected_version, expected_writer, raw = sys.argv[1:]
 value = json.loads(raw)
 if value.get("ok") is not True or value.get("version") != expected_version:
     raise SystemExit("health version mismatch")
-if value.get("paymentsProductionReady") is not True:
-    raise SystemExit("payments are not production ready")
+if value.get("paidSalesEnabled") is True:
+    if value.get("paymentsProductionReady") is not True:
+        raise SystemExit("enabled paid sales are not production ready")
+else:
+    if value.get("paymentsProductionReady") is not False:
+        raise SystemExit("disabled paid sales unexpectedly report ready")
 print("health_ok=true")
 print("backend_version=" + str(value.get("version")))
+print("paid_sales_enabled=" + str(value.get("paidSalesEnabled")).lower())
 PY
 
 python3 - "$DATA_DIR/bluevpn.db" <<'PY'

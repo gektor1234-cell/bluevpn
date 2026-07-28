@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   test('preview cascade keeps the guarded transport order', () {
     expect(greenVpnTransportPreviewCascade, const <String>[
+      'wireguard_udp',
       'amneziawg',
       'hysteria2',
       'vless_reality',
@@ -25,10 +26,7 @@ void main() {
           ).compareTo(greenVpnTransportPreviewRank(right)),
         );
 
-    expect(shuffled, <String>[
-      ...greenVpnTransportPreviewCascade,
-      'wireguard_udp',
-    ]);
+    expect(shuffled, <String>[...greenVpnTransportPreviewCascade]);
   });
 
   test('proxy transports are restricted to full-tunnel mode', () {
@@ -49,6 +47,7 @@ void main() {
       greenVpnShouldArmRuntimeFailover(
         previewEnabled: true,
         isAndroid: true,
+        isWindows: false,
         serverIsAuto: false,
         socialOnlyEnabled: false,
       ),
@@ -58,10 +57,73 @@ void main() {
       greenVpnShouldArmRuntimeFailover(
         previewEnabled: true,
         isAndroid: true,
+        isWindows: false,
         serverIsAuto: false,
         socialOnlyEnabled: true,
       ),
       isFalse,
+    );
+    expect(
+      greenVpnShouldArmRuntimeFailover(
+        previewEnabled: true,
+        isAndroid: false,
+        isWindows: true,
+        serverIsAuto: false,
+        socialOnlyEnabled: false,
+      ),
+      isTrue,
+    );
+    expect(
+      greenVpnShouldArmRuntimeFailover(
+        previewEnabled: true,
+        isAndroid: false,
+        isWindows: false,
+        serverIsAuto: false,
+        socialOnlyEnabled: false,
+      ),
+      isFalse,
+    );
+  });
+
+  test('runtime failover requires two consecutive unhealthy checks', () {
+    var failures = greenVpnNextRuntimeFailoverFailureCount(
+      currentFailureCount: 0,
+      routeHealthy: false,
+    );
+    expect(failures, 1);
+    expect(greenVpnShouldTriggerRuntimeFailover(failures), isFalse);
+
+    failures = greenVpnNextRuntimeFailoverFailureCount(
+      currentFailureCount: failures,
+      routeHealthy: true,
+    );
+    expect(failures, 0);
+
+    failures = greenVpnNextRuntimeFailoverFailureCount(
+      currentFailureCount: failures,
+      routeHealthy: false,
+    );
+    failures = greenVpnNextRuntimeFailoverFailureCount(
+      currentFailureCount: failures,
+      routeHealthy: false,
+    );
+    expect(failures, greenVpnRuntimeFailoverFailureThreshold);
+    expect(greenVpnShouldTriggerRuntimeFailover(failures), isTrue);
+  });
+
+  test('persisted runtime route ids are strictly normalized', () {
+    expect(
+      greenVpnNormalizeManagedRouteId('  nl2-amneziawg.public:1  '),
+      'nl2-amneziawg.public:1',
+    );
+    expect(greenVpnNormalizeManagedRouteId(''), isEmpty);
+    expect(greenVpnNormalizeManagedRouteId('../route'), isEmpty);
+    expect(greenVpnNormalizeManagedRouteId('route with spaces'), isEmpty);
+    expect(
+      greenVpnNormalizeManagedRouteId(
+        'r' * (greenVpnManagedRouteIdMaxLength + 1),
+      ),
+      isEmpty,
     );
   });
 
@@ -167,11 +229,11 @@ void main() {
           );
 
     expect(candidates.map((candidate) => candidate.protocol), <String>[
+      'wireguard_udp',
       'hysteria2',
       'vless_reality',
       'naive_https',
       'dnstt',
-      'wireguard_udp',
       'amneziawg',
     ]);
   });

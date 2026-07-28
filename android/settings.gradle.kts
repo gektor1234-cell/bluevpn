@@ -41,7 +41,7 @@ val awg2PreviewEnabled =
 if (awg2PreviewEnabled) {
     val awg2ModuleDir = file("transport_preview/awg_tunnel")
     require(awg2ModuleDir.isDirectory) {
-        "AWG2 preview module is missing. Run scripts/windows/prepare_android_awg2_preview.ps1 first."
+        "The pinned AWG2 module is missing from the source tree."
     }
     include(":awg_tunnel_preview")
     project(":awg_tunnel_preview").projectDir = awg2ModuleDir

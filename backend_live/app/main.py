@@ -35,7 +35,10 @@ from pydantic import BaseModel
 
 
 APP_TITLE = "Green VPN Backend"
-APP_VERSION = os.getenv("GREENVPN_BACKEND_VERSION", "0.9.105").strip() or "0.9.105"
+APP_VERSION = (
+    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.151-source-anchor.1").strip()
+    or "0.9.151-source-anchor.1"
+)
 DEFAULT_PUBLIC_API_BASE_URL = "https://api.greenvpn.pro"
 
 
@@ -45,6 +48,17 @@ def split_env_list(value: str) -> list[str]:
         for item in re.split(r"\r?\n|\s*;\s*|,\s*", value or "")
         if item.strip()
     ]
+
+
+def parse_env_mapping(value: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for item in split_env_list(value):
+        key, separator, mapped = item.partition("=")
+        key = key.strip().lower()
+        mapped = mapped.strip()
+        if separator and key and mapped:
+            result[key] = mapped
+    return result
 
 
 def clean_base_url(value: str) -> str:
@@ -58,6 +72,24 @@ def env_float(name: str, default: float, min_value: Optional[float] = None) -> f
         value = default
     if min_value is not None:
         value = max(min_value, value)
+    return value
+
+
+def env_int(
+    name: str,
+    default: int,
+    *,
+    min_value: Optional[int] = None,
+    max_value: Optional[int] = None,
+) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = int(default)
+    if min_value is not None:
+        value = max(int(min_value), value)
+    if max_value is not None:
+        value = min(int(max_value), value)
     return value
 
 
@@ -109,7 +141,7 @@ WINDOWS_DEFENDER_SUBMISSION_ID = os.getenv("GREENVPN_DEFENDER_SUBMISSION_ID", ""
 WINDOWS_YANDEX_SUBMISSION_ID = os.getenv("GREENVPN_YANDEX_AV_SUBMISSION_ID", "").strip()
 SERVER_CATALOG_VERSION = os.getenv(
     "GREENVPN_SERVER_CATALOG_VERSION",
-    "2026-04-30-dev1",
+    "2026-07-28-public-transport-v1",
 ).strip()
 SERVER_CATALOG_API_BASE_URLS = split_env_list(
     os.getenv("GREENVPN_API_BASE_URLS", PUBLIC_API_BASE_URL)
@@ -198,6 +230,11 @@ HYSTERIA2_CANARY_SERVER_IDS = {
     if item.strip()
 }
 HYSTERIA2_CANARY_SNI = os.getenv("GREENVPN_HYSTERIA2_CANARY_SNI", "").strip().lower()
+HYSTERIA2_CANARY_SNIS = {
+    item.strip().lower()
+    for item in split_env_list(os.getenv("GREENVPN_HYSTERIA2_CANARY_SNIS", ""))
+    if item.strip()
+}
 VLESS_REALITY_CLIENT_CONFIG_ROOT = Path(
     os.getenv(
         "GREENVPN_VLESS_REALITY_CLIENT_CONFIG_ROOT",
@@ -229,6 +266,9 @@ NAIVE_HTTPS_CANARY_HOST = os.getenv(
 NAIVE_HTTPS_CANARY_IP = os.getenv(
     "GREENVPN_NAIVE_HTTPS_CANARY_IP", ""
 ).strip()
+NAIVE_HTTPS_CANARY_ENDPOINTS = parse_env_mapping(
+    os.getenv("GREENVPN_NAIVE_HTTPS_CANARY_ENDPOINTS", "")
+)
 DNSTT_CLIENT_CONFIG_ROOT = Path(
     os.getenv(
         "GREENVPN_DNSTT_CLIENT_CONFIG_ROOT",
@@ -403,6 +443,45 @@ PAID_BETA_INVITE_PRICE_RUB = 149
 PAID_BETA_MAX_DEVICES = 2
 PAID_BETA_TRIAL_DAYS = 3
 PAID_BETA_PERIOD_DAYS = 30
+FREE_TIER_POLICY_VERSION = "2026-07-28-public-free-tier-v2"
+FREE_TIER_PLAN_CODE = "free_quota"
+FREE_TIER_PLAN_NAME = "Бесплатный"
+FREE_TIER_ENABLED = (
+    os.getenv("GREENVPN_FREE_TIER_ENABLED", "1").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+FREE_TIER_QUOTA_ENFORCED = (
+    os.getenv("GREENVPN_FREE_TIER_QUOTA_ENFORCED", "0").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+FREE_TIER_MONTHLY_LIMIT_GB = env_int(
+    "GREENVPN_FREE_TIER_MONTHLY_LIMIT_GB",
+    3,
+    min_value=1,
+    max_value=10000,
+)
+FREE_TIER_MAX_DEVICES = env_int(
+    "GREENVPN_FREE_TIER_MAX_DEVICES",
+    1,
+    min_value=1,
+    max_value=5,
+)
+FREE_TIER_SPEED_MBPS = env_int(
+    "GREENVPN_FREE_TIER_SPEED_MBPS",
+    10,
+    min_value=1,
+    max_value=1000,
+)
+FREE_TIER_BURST_MBPS = env_int(
+    "GREENVPN_FREE_TIER_BURST_MBPS",
+    20,
+    min_value=1,
+    max_value=2000,
+)
+FREE_TIER_RATE_LIMIT_ENFORCED = (
+    os.getenv("GREENVPN_FREE_TIER_RATE_LIMIT_ENFORCED", "0").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
 FREE_AD_GATE_ENABLED = (
     os.getenv("GREENVPN_FREE_AD_GATE_ENABLED", "").strip().lower()
     in {"1", "true", "yes", "on"}
@@ -472,6 +551,37 @@ YOOKASSA_RETURN_URL = os.getenv(
 ).strip()
 PUBLIC_BASE_URL = clean_base_url(os.getenv("GREENVPN_PUBLIC_BASE_URL", PUBLIC_API_BASE_URL))
 YOOKASSA_WEBHOOK_URL = os.getenv("YOOKASSA_WEBHOOK_URL", "").strip()
+PAID_SALES_ENABLED = environment_flag("GREENVPN_PAID_SALES_ENABLED")
+TAX_RECEIPT_MODE = os.getenv(
+    "GREENVPN_TAX_RECEIPT_MODE",
+    "disabled",
+).strip().lower()
+TAX_RECEIPT_WORKFLOW_CONFIRMED = environment_flag(
+    "GREENVPN_TAX_RECEIPT_WORKFLOW_CONFIRMED"
+)
+TAX_RECEIPT_VAT_CODE = env_int(
+    "GREENVPN_TAX_RECEIPT_VAT_CODE",
+    0,
+    min_value=0,
+    max_value=12,
+)
+TAX_RECEIPT_PAYMENT_SUBJECT = os.getenv(
+    "GREENVPN_TAX_RECEIPT_PAYMENT_SUBJECT",
+    "service",
+).strip().lower()
+TAX_RECEIPT_PAYMENT_MODE = os.getenv(
+    "GREENVPN_TAX_RECEIPT_PAYMENT_MODE",
+    "full_payment",
+).strip().lower()
+REFUND_WORKFLOW_CONFIRMED = environment_flag(
+    "GREENVPN_REFUND_WORKFLOW_CONFIRMED"
+)
+REFUND_EXECUTION_ENABLED = environment_flag(
+    "GREENVPN_REFUND_EXECUTION_ENABLED"
+)
+REFUND_BILLING_PRIMARY = environment_flag(
+    "GREENVPN_REFUND_BILLING_PRIMARY"
+)
 PUBLIC_SITE_URL = clean_base_url(
     os.getenv("GREENVPN_PUBLIC_SITE_URL", "https://greenvpn.pro")
 )
@@ -733,6 +843,12 @@ SMTP_USE_TLS = (
     os.getenv("GREENVPN_SMTP_USE_TLS", "1").strip().lower()
     in {"1", "true", "yes", "on"}
 )
+ADMIN_ALERT_EMAIL = (
+    os.getenv("GREENVPN_ADMIN_ALERT_EMAIL", "").strip()
+    or LEGAL_CONTACT_EMAIL
+    or SMTP_USERNAME
+    or SMTP_FROM
+)
 SMS_PROVIDER = os.getenv("GREENVPN_SMS_PROVIDER", "manual_mvp").strip().lower()
 SMS_CONFIRMATION_TTL_MINUTES = int(os.getenv("GREENVPN_SMS_CONFIRMATION_TTL_MINUTES", "10"))
 SMS_RESEND_COOLDOWN_SECONDS = int(os.getenv("GREENVPN_SMS_RESEND_COOLDOWN_SECONDS", "60"))
@@ -742,6 +858,13 @@ SMS_RU_API_ID = os.getenv("GREENVPN_SMS_RU_API_ID", "").strip()
 SMS_RU_TEST_MODE = (
     os.getenv("GREENVPN_SMS_RU_TEST_MODE", "").strip().lower()
     in {"1", "true", "yes", "on"}
+)
+SMS_AERO_EMAIL = os.getenv("GREENVPN_SMS_AERO_EMAIL", "").strip()
+SMS_AERO_API_KEY = os.getenv("GREENVPN_SMS_AERO_API_KEY", "").strip()
+SMS_AERO_SIGN = (
+    os.getenv("GREENVPN_SMS_AERO_SIGN", "").strip()
+    or SMS_FROM
+    or "SMSAero"
 )
 AUTH_CODE_TTL_MINUTES = int(os.getenv("GREENVPN_AUTH_CODE_TTL_MINUTES", "10"))
 AUTH_CODE_RESEND_COOLDOWN_SECONDS = int(
@@ -1718,6 +1841,11 @@ class AdminStaleBillingOrderCancelIn(BaseModel):
     reason: str
 
 
+class AdminBillingRefundIn(BaseModel):
+    reason: str
+    confirmOrderId: str
+
+
 class AdminUserDeleteIn(BaseModel):
     reason: str
     confirmEmail: Optional[str] = None
@@ -1729,7 +1857,7 @@ class TariffSelectionIn(BaseModel):
     unlimitedApps: list[str] = []
     devices: int = 1
     dedicatedIp: bool = False
-    autoRenew: bool = True
+    autoRenew: bool = False
     promoCode: Optional[str] = None
     clientMarker: Optional[str] = None
     releaseChannel: Optional[str] = None
@@ -1762,15 +1890,6 @@ class EmailVerifyIn(BaseModel):
     token: str
 
 
-class PhoneStartIn(BaseModel):
-    phone: str
-
-
-class PhoneVerifyIn(BaseModel):
-    phone: str
-    code: str
-
-
 class EmailCodeStartIn(BaseModel):
     email: str
 
@@ -1784,34 +1903,43 @@ class EmailCodeVerifyIn(BaseModel):
     appVersion: Optional[str] = None
 
 
-class PhoneLoginStartIn(BaseModel):
-    phone: str
-
-
-class PhoneLoginVerifyIn(BaseModel):
-    phone: str
-    code: str
-    deviceUid: Optional[str] = None
+class GuestSessionIn(BaseModel):
+    deviceUid: str
     deviceName: Optional[str] = None
     platform: Optional[str] = None
     appVersion: Optional[str] = None
+    clientMarker: Optional[str] = None
+    releaseChannel: Optional[str] = None
 
 
 class AuthChallengeStartIn(BaseModel):
     method: Optional[str] = None
     email: Optional[str] = None
-    phone: Optional[str] = None
 
 
 class AuthChallengeVerifyIn(BaseModel):
     method: Optional[str] = None
     email: Optional[str] = None
-    phone: Optional[str] = None
     code: str
     deviceUid: Optional[str] = None
     deviceName: Optional[str] = None
     platform: Optional[str] = None
     appVersion: Optional[str] = None
+
+
+class CheckoutEmailStartIn(BaseModel):
+    email: str
+
+
+class CheckoutEmailVerifyIn(BaseModel):
+    email: str
+    code: str
+    deviceUid: Optional[str] = None
+    deviceName: Optional[str] = None
+    platform: Optional[str] = None
+    appVersion: Optional[str] = None
+    clientMarker: Optional[str] = None
+    releaseChannel: Optional[str] = None
 
 
 class SupportReportIn(BaseModel):
@@ -3306,9 +3434,133 @@ def init_db() -> None:
             "renewal_key",
             "renewal_key TEXT",
         )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "tax_receipt_mode",
+            "tax_receipt_mode TEXT NOT NULL DEFAULT 'disabled'",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "tax_receipt_status",
+            "tax_receipt_status TEXT NOT NULL DEFAULT 'not_required'",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "tax_receipt_provider_id",
+            "tax_receipt_provider_id TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "tax_receipt_error",
+            "tax_receipt_error TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "tax_receipt_updated_at",
+            "tax_receipt_updated_at TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "activation_subscription_id",
+            "activation_subscription_id INTEGER",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "entitlement_before_json",
+            "entitlement_before_json TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "entitlement_after_json",
+            "entitlement_after_json TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "refund_status",
+            "refund_status TEXT NOT NULL DEFAULT 'not_requested'",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "refund_amount_rub",
+            "refund_amount_rub INTEGER NOT NULL DEFAULT 0",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "refund_reason",
+            "refund_reason TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "refund_provider_id",
+            "refund_provider_id TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "refund_idempotence_key",
+            "refund_idempotence_key TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "refund_receipt_status",
+            "refund_receipt_status TEXT NOT NULL DEFAULT 'not_required'",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "refund_error",
+            "refund_error TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "refund_requested_at",
+            "refund_requested_at TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "refunded_at",
+            "refunded_at TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "refund_updated_at",
+            "refund_updated_at TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "refund_entitlement_status",
+            "refund_entitlement_status TEXT NOT NULL DEFAULT 'not_required'",
+        )
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_orders_renewal_key "
             "ON billing_orders(renewal_key) WHERE renewal_key IS NOT NULL"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_orders_refund_idempotence "
+            "ON billing_orders(refund_idempotence_key) "
+            "WHERE refund_idempotence_key IS NOT NULL"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_orders_refund_provider "
+            "ON billing_orders(refund_provider_id) "
+            "WHERE refund_provider_id IS NOT NULL"
         )
 
         conn.execute(
@@ -3659,7 +3911,7 @@ def ensure_subscription_for_existing_users() -> None:
                 (user["id"],),
             ).fetchone()
             if row is None:
-                create_trial_subscription(conn, user["id"])
+                create_default_subscription(conn, user["id"])
         conn.commit()
 
 
@@ -3721,6 +3973,90 @@ def create_trial_subscription(conn: sqlite3.Connection, user_id: int) -> None:
     )
 
 
+def create_free_subscription(conn: sqlite3.Connection, user_id: int) -> None:
+    now = utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO subscriptions(
+            user_id, plan_code, plan_name, max_devices, is_active,
+            expires_at, created_at, updated_at, monthly_price_rub,
+            selection_json, auto_renew, provider_payment_method_id
+        )
+        VALUES (?, ?, ?, ?, 1, NULL, ?, ?, 0, NULL, 0, NULL)
+        """,
+        (
+            int(user_id),
+            FREE_TIER_PLAN_CODE,
+            FREE_TIER_PLAN_NAME,
+            FREE_TIER_MAX_DEVICES,
+            now,
+            now,
+        ),
+    )
+
+
+def create_default_subscription(conn: sqlite3.Connection, user_id: int) -> None:
+    if FREE_TIER_ENABLED:
+        create_free_subscription(conn, user_id)
+        return
+    create_trial_subscription(conn, user_id)
+
+
+def migrate_stable_trials_to_free() -> dict:
+    if not FREE_TIER_ENABLED:
+        return {"updated": 0, "enabled": False}
+
+    now = utc_now_iso()
+    stable_trial_codes = tuple(
+        dict.fromkeys((DEFAULT_PLAN_CODE, "trial", "free", "free_start"))
+    )
+    placeholders = ", ".join("?" for _ in stable_trial_codes)
+    with db() as conn:
+        updated = conn.execute(
+            f"""
+            UPDATE subscriptions
+            SET plan_code = ?,
+                plan_name = ?,
+                max_devices = ?,
+                is_active = 1,
+                expires_at = NULL,
+                monthly_price_rub = 0,
+                selection_json = NULL,
+                auto_renew = 0,
+                provider_payment_method_id = NULL,
+                updated_at = ?
+            WHERE id IN (
+                SELECT s.id
+                FROM subscriptions s
+                JOIN users u ON u.id = s.user_id
+                WHERE s.id = (
+                    SELECT latest.id
+                    FROM subscriptions latest
+                    WHERE latest.user_id = s.user_id
+                    ORDER BY latest.id DESC
+                    LIMIT 1
+                )
+                  AND LOWER(COALESCE(u.access_cohort, 'stable')) = 'stable'
+                  AND LOWER(COALESCE(s.plan_code, '')) IN ({placeholders})
+                  AND COALESCE(s.monthly_price_rub, 0) = 0
+            )
+            """,
+            (
+                FREE_TIER_PLAN_CODE,
+                FREE_TIER_PLAN_NAME,
+                FREE_TIER_MAX_DEVICES,
+                now,
+                *stable_trial_codes,
+            ),
+        ).rowcount
+        conn.commit()
+    return {
+        "updated": int(updated or 0),
+        "enabled": True,
+        "sourcePlanCodes": list(stable_trial_codes),
+    }
+
+
 def get_subscription_row(user_id: int):
     with db() as conn:
         row = conn.execute(
@@ -3735,7 +4071,7 @@ def get_subscription_row(user_id: int):
         ).fetchone()
 
         if row is None:
-            create_trial_subscription(conn, user_id)
+            create_default_subscription(conn, user_id)
             conn.commit()
             row = conn.execute(
                 """
@@ -3813,7 +4149,18 @@ def subscription_status(row) -> dict:
     }
 
 
-FREE_AD_PLAN_CODES = {"trial", "free", "free_start", "support_trial", DEFAULT_PLAN_CODE}
+FREE_TIER_COMPAT_PLAN_CODES = {
+    "free",
+    "free_start",
+    "free_quota",
+    FREE_TIER_PLAN_CODE,
+}
+FREE_AD_PLAN_CODES = {
+    "trial",
+    "support_trial",
+    DEFAULT_PLAN_CODE,
+    *FREE_TIER_COMPAT_PLAN_CODES,
+}
 
 
 def free_ad_platform_enabled(platform: Optional[str]) -> bool:
@@ -3868,6 +4215,126 @@ def subscription_is_paid_active(sub: dict) -> bool:
     except Exception:
         amount = 0
     return amount > 0 and plan_code not in FREE_AD_PLAN_CODES
+
+
+def free_tier_available(user, sub: dict) -> bool:
+    if not FREE_TIER_ENABLED or subscription_is_paid_active(sub):
+        return False
+
+    plan_code = str(sub.get("planCode") or "").strip().lower()
+    if plan_code in FREE_TIER_COMPAT_PLAN_CODES:
+        return True
+
+    if sub.get("isActive") and plan_code in {
+        PAID_BETA_TRIAL_PLAN_CODE,
+        "support_trial",
+    }:
+        return False
+
+    return True
+
+
+def build_free_tier_subscription(sub: Optional[dict] = None) -> dict:
+    source = dict(sub or {})
+    traffic_limit_gb = (
+        FREE_TIER_MONTHLY_LIMIT_GB if FREE_TIER_QUOTA_ENFORCED else None
+    )
+    free_tier = {
+        "enabled": True,
+        "quotaEnforced": FREE_TIER_QUOTA_ENFORCED,
+        "rateLimitEnforced": FREE_TIER_RATE_LIMIT_ENFORCED,
+        "monthlyLimitGb": traffic_limit_gb,
+        "configuredMonthlyLimitGb": FREE_TIER_MONTHLY_LIMIT_GB,
+        "maxDevices": FREE_TIER_MAX_DEVICES,
+        "speedSustainedMbps": FREE_TIER_SPEED_MBPS,
+        "speedBurstMbps": FREE_TIER_BURST_MBPS,
+        "serviceTargetMinMbps": 10,
+        "period": "calendar_month_utc",
+    }
+    fair_use_policy = {
+        "type": "monthly_free_quota",
+        "trafficLimitGb": traffic_limit_gb,
+        "afterLimit": {
+            "action": (
+                "block_new_connections"
+                if FREE_TIER_QUOTA_ENFORCED
+                else "continue_without_monthly_quota"
+            ),
+            "message": (
+                "Месячный бесплатный лимит исчерпан. Новый период откроется "
+                "автоматически по UTC или можно перейти на платный тариф."
+                if FREE_TIER_QUOTA_ENFORCED
+                else "Месячный лимит не применяется."
+            ),
+        },
+    }
+    return {
+        **source,
+        "planName": FREE_TIER_PLAN_NAME,
+        "planCode": FREE_TIER_PLAN_CODE,
+        "maxDevices": FREE_TIER_MAX_DEVICES,
+        "isActive": True,
+        "expiresAt": None,
+        "monthlyPriceRub": 0,
+        "autoRenew": False,
+        "paymentMethodSaved": False,
+        "selection": None,
+        "includedFeatures": ["vpn_access", "no_ads"],
+        "policyVersion": FREE_TIER_POLICY_VERSION,
+        "pricingModel": "free_tier",
+        "periodDays": None,
+        "trafficLimitGb": traffic_limit_gb,
+        "speedSustainedMbps": FREE_TIER_SPEED_MBPS,
+        "speedBurstMbps": FREE_TIER_BURST_MBPS,
+        "priorityClass": "free_tier",
+        "fairUsePolicy": fair_use_policy,
+        "rateLimitPolicy": {
+            "enforced": FREE_TIER_RATE_LIMIT_ENFORCED,
+            "enforcedBy": (
+                "server_tc"
+                if FREE_TIER_RATE_LIMIT_ENFORCED
+                else "none"
+            ),
+            "speedSustainedMbps": (
+                FREE_TIER_SPEED_MBPS
+                if FREE_TIER_RATE_LIMIT_ENFORCED
+                else None
+            ),
+            "speedBurstMbps": (
+                FREE_TIER_BURST_MBPS
+                if FREE_TIER_RATE_LIMIT_ENFORCED
+                else None
+            ),
+            "serviceTargetMinMbps": 10,
+            "priorityClass": "free_tier",
+        },
+        "isFreeTier": True,
+        "freeTier": free_tier,
+        "sourcePlanCode": source.get("planCode"),
+        "sourceExpiresAt": source.get("expiresAt"),
+    }
+
+
+def effective_client_subscription(user, sub: dict) -> dict:
+    plan_code = str(sub.get("planCode") or "").strip().lower()
+    if plan_code in FREE_TIER_COMPAT_PLAN_CODES and not FREE_TIER_ENABLED:
+        return {
+            **sub,
+            "isActive": False,
+            "isFreeTier": False,
+            "freeTier": None,
+        }
+    if free_tier_available(user, sub):
+        return build_free_tier_subscription(sub)
+    return sub
+
+
+def free_tier_quota_exhausted(access_policy: dict, traffic_usage: dict) -> bool:
+    return bool(
+        access_policy.get("freeTier")
+        and FREE_TIER_QUOTA_ENFORCED
+        and traffic_usage.get("overLimit")
+    )
 
 
 def normalize_client_config_mode(value: Optional[str]) -> str:
@@ -4784,7 +5251,9 @@ def get_user_access_row(user_id: int):
     with db() as conn:
         return conn.execute(
             """
-            SELECT id, email, access_cohort, acquisition_source, cohort_enrolled_at
+            SELECT
+                id, email, email_verified, access_cohort,
+                acquisition_source, cohort_enrolled_at
             FROM users
             WHERE id = ?
             """,
@@ -4973,6 +5442,7 @@ def client_subscription_access_policy(
     beta_user = user_is_paid_beta_cohort(user)
     beta_scope = beta_client or beta_user
     public_product_scope = bool(PUBLIC_PRODUCT_ENABLED and not beta_scope)
+    free_tier = bool(sub.get("isFreeTier"))
 
     if beta_client and not beta_user:
         allowed = False
@@ -5000,10 +5470,13 @@ def client_subscription_access_policy(
         "publicProductScope": public_product_scope,
         "accessCohort": user_access_cohort(user),
         "maxDevices": (
-            PAID_BETA_MAX_DEVICES
+            max(1, int(sub.get("maxDevices") or FREE_TIER_MAX_DEVICES))
+            if free_tier
+            else PAID_BETA_MAX_DEVICES
             if beta_user
             else max(1, int(sub.get("maxDevices") or DEFAULT_MAX_DEVICES))
         ),
+        "freeTier": free_tier,
         # Paid-beta remains permanently ad-free. Public-product users are
         # filtered later by subscription state, so only unpaid/trial users can
         # enter the rewarded-ad gate.
@@ -5029,6 +5502,23 @@ def build_paid_beta_tariff_catalog() -> dict:
             "inviteFirstPeriodPriceRub": PAID_BETA_INVITE_PRICE_RUB,
             "maxDevices": PAID_BETA_MAX_DEVICES,
             "autoRenew": False,
+            "ads": False,
+        },
+        "freeTier": {
+            "enabled": FREE_TIER_ENABLED,
+            "quotaEnforced": FREE_TIER_QUOTA_ENFORCED,
+            "rateLimitEnforced": FREE_TIER_RATE_LIMIT_ENFORCED,
+            "monthlyLimitGb": (
+                FREE_TIER_MONTHLY_LIMIT_GB
+                if FREE_TIER_QUOTA_ENFORCED
+                else None
+            ),
+            "configuredMonthlyLimitGb": FREE_TIER_MONTHLY_LIMIT_GB,
+            "maxDevices": FREE_TIER_MAX_DEVICES,
+            "speedSustainedMbps": FREE_TIER_SPEED_MBPS,
+            "speedBurstMbps": FREE_TIER_BURST_MBPS,
+            "serviceTargetMinMbps": 10,
+            "period": "calendar_month_utc",
             "ads": False,
         },
         "includedFeatures": ["vpn_access", "social_routing", "no_ads"],
@@ -5583,10 +6073,25 @@ def paid_beta_funnel_summary(limit: int = 100) -> dict:
 
 
 def build_public_product_tariff_catalog() -> dict:
+    tax_receipt = tax_receipt_readiness()
+    refunds = refund_execution_readiness()
+    payments = yookassa_payment_readiness()
     return {
         "policyVersion": PUBLIC_PRODUCT_POLICY_VERSION,
         "pricingModel": "fixed_term_plans",
         "defaultPlanCode": PUBLIC_PRODUCT_PLAN_CODE,
+        "paidSalesEnabled": PAID_SALES_ENABLED,
+        "paymentsProductionReady": bool(payments["productionReady"]),
+        "taxReceiptProductionReady": bool(tax_receipt["productionReady"]),
+        "refundProductionReady": bool(refunds["productionReady"]),
+        "checkoutMessage": (
+            "Оплата доступна."
+            if payments["productionReady"]
+            else (
+                "Оплата временно недоступна. Бесплатный тариф продолжает "
+                "работать."
+            )
+        ),
         "plans": [
             {
                 "code": code,
@@ -5612,13 +6117,13 @@ def build_public_product_tariff_catalog() -> dict:
             for code, plan in PUBLIC_PRODUCT_PLANS.items()
         ],
         "includedDevices": PUBLIC_PRODUCT_INCLUDED_DEVICES,
-        "autoRenew": True,
+        "autoRenew": False,
         "adsEnabled": False,
         "includedFeatures": ["vpn_access", "social_routing", "no_ads"],
         "notes": [
             "Все планы включают одинаковые возможности Green VPN.",
             "Чем больше оплаченный срок, тем ниже стоимость месяца.",
-            "Автопродление включено по умолчанию и может быть отключено в приложении.",
+            "Автопродление включается только после явного согласия пользователя.",
         ],
     }
 
@@ -6055,13 +6560,13 @@ def billing_promo_launch_readiness_payload(limit: int = 25) -> dict:
             severity_counts[severity] = severity_counts.get(severity, 0) + 1
 
     missing_launch_campaign = not bool(launch_ready)
-    requires_attention = bool(active_risky) or missing_launch_campaign
+    requires_attention = bool(active_risky)
     message = (
         "Есть безопасная ограниченная акция для старта продаж."
         if launch_ready and not active_risky
         else (
-            "Перед публичным запуском нужно создать или включить ограниченную стартовую акцию."
-            if missing_launch_campaign
+            "Стартовая акция не включена; это безопасный режим запуска без промокода."
+            if missing_launch_campaign and not active_risky
             else "Есть активные промокоды с рисками для экономики запуска."
         )
     )
@@ -6457,7 +6962,7 @@ def quote_tariff(selection: dict, strict_promo: bool = False) -> dict:
             "includedDevices": PUBLIC_PRODUCT_INCLUDED_DEVICES,
             "unlimitedApps": [],
             "dedicatedIp": False,
-            "autoRenew": bool(selection.get("autoRenew", True)),
+            "autoRenew": bool(selection.get("autoRenew", False)),
             "adsEnabled": False,
             "includedFeatures": ["vpn_access", "social_routing", "no_ads"],
             "lineItems": [
@@ -6474,7 +6979,7 @@ def quote_tariff(selection: dict, strict_promo: bool = False) -> dict:
                 "periodDays": period_days,
                 "includedDevices": PUBLIC_PRODUCT_INCLUDED_DEVICES,
                 "ads": False,
-                "autoRenew": bool(selection.get("autoRenew", True)),
+                "autoRenew": bool(selection.get("autoRenew", False)),
             },
         }
 
@@ -6565,7 +7070,7 @@ def quote_tariff(selection: dict, strict_promo: bool = False) -> dict:
         "includedDevices": included_devices,
         "unlimitedApps": apps,
         "dedicatedIp": dedicated_ip,
-        "autoRenew": bool(selection.get("autoRenew", True)),
+        "autoRenew": bool(selection.get("autoRenew", False)),
         "includedFeatures": INCLUDED_FEATURES,
         "speedSustainedMbps": int(speed_profile["sustainedMbps"]),
         "speedBurstMbps": int(speed_profile["burstMbps"]),
@@ -6704,14 +7209,28 @@ def user_phone_verified(user) -> bool:
         return False
 
 
+GUEST_EMAIL_DOMAIN = "guest.greenvpn.local"
+
+
+def user_is_guest(user) -> bool:
+    try:
+        email = str(user["email"] or "").strip().lower()
+    except Exception:
+        return False
+    return bool(email.endswith(f"@{GUEST_EMAIL_DOMAIN}") and not user_email_verified(user))
+
+
+def public_user_email(user) -> str:
+    return "" if user_is_guest(user) else str(user["email"] or "").strip().lower()
+
+
 def auth_session_payload(user, access_token: str) -> dict:
     return {
         "accessToken": access_token,
-        "email": user["email"],
+        "email": public_user_email(user),
+        "isGuest": user_is_guest(user),
         "emailVerified": user_email_verified(user),
         "emailConfirmationRequired": EMAIL_CONFIRMATION_REQUIRED,
-        "phone": user["phone"] if "phone" in user.keys() else None,
-        "phoneVerified": user_phone_verified(user),
         "accessCohort": user_access_cohort(user),
         "paidBeta": user_access_cohort(user) == PAID_BETA_COHORT_CODE,
     }
@@ -7035,6 +7554,23 @@ def normalize_email(email: str) -> str:
     return value
 
 
+def normalize_guest_device_uid(device_uid: str) -> str:
+    value = clean_limited_text(device_uid, 128).strip()
+    if not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", value):
+        raise HTTPException(status_code=400, detail="Некорректный идентификатор устройства.")
+    return value
+
+
+def internal_email_for_guest_device(device_uid: str) -> str:
+    clean_uid = normalize_guest_device_uid(device_uid)
+    digest = hmac.new(
+        AUTH_CODE_PEPPER.encode("utf-8"),
+        clean_uid.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()[:32]
+    return f"guest_{digest}@{GUEST_EMAIL_DOMAIN}"
+
+
 def validate_support_report_code(report: str) -> str:
     value = (report or "").strip()
     if len(value) < 24 or len(value) > 250_000:
@@ -7350,7 +7886,6 @@ def one_time_code_hash(kind: str, target: str, code: str) -> str:
 
 
 def auth_code_readiness() -> dict:
-    sms_ready = sms_confirmation_readiness()
     email_ready = email_sender_configured()
     checks = [
         {
@@ -7363,17 +7898,6 @@ def auth_code_readiness() -> dict:
             "code": "email_delivery",
             "ok": email_ready,
             "message": "Настрой SMTP для отправки кодов входа на почту.",
-        },
-        {
-            "code": "sms_delivery",
-            "ok": True,
-            "message": (
-                "SMS-коды входа можно доставлять."
-                if sms_ready.get("productionReady")
-                else "SMS-вход временно не основной; публичный MVP использует email-код."
-            ),
-            "optional": True,
-            "productionReady": bool(sms_ready.get("productionReady")),
         },
     ]
     return {
@@ -7395,9 +7919,7 @@ def auth_code_readiness() -> dict:
 def user_auth_flow_readiness(limit: int = 10) -> dict:
     safe_limit = max(1, min(int(limit or 10), 50))
     email = email_confirmation_readiness()
-    sms = sms_confirmation_readiness()
     auth_codes = auth_code_readiness()
-    phone_available = bool(sms.get("productionReady") or DEV_AUTH_CODES)
     email_available = bool(email.get("productionReady") or DEV_AUTH_CODES)
     code_policy_ok = (
         4 <= int(AUTH_CODE_DIGITS or 0) <= 8
@@ -7417,9 +7939,7 @@ def user_auth_flow_readiness(limit: int = 10) -> dict:
             SELECT
                 COUNT(*) AS total,
                 SUM(CASE WHEN email_verified = 1 THEN 1 ELSE 0 END) AS email_verified,
-                SUM(CASE WHEN phone_verified = 1 THEN 1 ELSE 0 END) AS phone_verified,
-                SUM(CASE WHEN phone IS NOT NULL AND phone <> '' THEN 1 ELSE 0 END) AS with_phone,
-                SUM(CASE WHEN email LIKE 'phone_%@phone.greenvpn.local' THEN 1 ELSE 0 END) AS phone_only
+                SUM(CASE WHEN email LIKE 'guest_%@guest.greenvpn.local' THEN 1 ELSE 0 END) AS guests
             FROM users
             """
         ).fetchone()
@@ -7467,25 +7987,24 @@ def user_auth_flow_readiness(limit: int = 10) -> dict:
 
     checks = [
         {
-            "code": "primary_email_code",
-            "title": "Основной способ входа",
-            "ok": email_available,
+            "code": "guest_first_bootstrap",
+            "title": "Бесплатный вход без регистрации",
+            "ok": auth_pepper_ok,
             "message": (
-                "Windows/Android-клиент показывает вход и регистрацию по email-коду как основной способ."
-                if email_available
-                else "Настрой SMTP, чтобы основной вход по email-коду работал."
+                "Windows/Android создают анонимную серверную сессию автоматически."
+                if auth_pepper_ok
+                else "Настрой GREENVPN_AUTH_CODE_PEPPER для устойчивых гостевых идентификаторов."
             ),
         },
         {
-            "code": "phone_code_optional",
-            "title": "Код на телефон",
-            "ok": True,
+            "code": "checkout_email_code",
+            "title": "Email перед оплатой и восстановлением",
+            "ok": email_available,
             "message": (
-                "SMS-коды входа можно доставлять."
-                if phone_available
-                else "SMS-вход временно отключён как основной канал; пользователи входят по email-коду."
+                "Email-код привязывает гостевой профиль перед созданием заказа."
+                if email_available
+                else "Настрой SMTP для подтверждения email перед оплатой."
             ),
-            "available": phone_available,
         },
         {
             "code": "legacy_password_fallback",
@@ -7522,12 +8041,6 @@ def user_auth_flow_readiness(limit: int = 10) -> dict:
                 else "Выключи GREENVPN_DEV_AUTH_CODES перед любым публичным запуском."
             ),
         },
-        {
-            "code": "legacy_password_not_primary",
-            "title": "Старый вход по паролю",
-            "ok": True,
-            "message": "Email/пароль остаётся запасным старым способом; публичный сценарий строится вокруг одноразовых кодов.",
-        },
     ]
     missing = [check for check in checks if not check["ok"]]
     production_ready = not missing
@@ -7536,8 +8049,13 @@ def user_auth_flow_readiness(limit: int = 10) -> dict:
         "version": APP_VERSION,
         "generatedAt": utc_now_iso(),
         "productionReady": production_ready,
-        "publicAuthReady": email_available and code_policy_ok and auth_pepper_ok and not DEV_AUTH_CODES,
-        "primaryMethod": "email_code",
+        "publicAuthReady": (
+            email_available
+            and code_policy_ok
+            and auth_pepper_ok
+            and not DEV_AUTH_CODES
+        ),
+        "primaryMethod": "guest",
         "fallbackMethod": "email_password",
         "checks": checks,
         "requiredActions": [check["message"] for check in missing],
@@ -7547,24 +8065,29 @@ def user_auth_flow_readiness(limit: int = 10) -> dict:
             "red": 0,
             "state": "green" if production_ready else "yellow",
             "message": (
-                "Вход и регистрация по одноразовому коду готовы."
+                "Гостевой старт и подтверждение email перед оплатой готовы."
                 if production_ready
-                else "Вход и регистрация по одноразовому коду реализованы, но доставка/настройки еще требуют внимания."
+                else "Guest-first реализован, но подтверждение email ещё требует настройки."
             ),
             "usersTotal": int(user_counts["total"] or 0),
             "emailVerifiedUsers": int(user_counts["email_verified"] or 0),
-            "phoneVerifiedUsers": int(user_counts["phone_verified"] or 0),
-            "usersWithPhone": int(user_counts["with_phone"] or 0),
-            "phoneOnlyUsers": int(user_counts["phone_only"] or 0),
+            "guestUsers": int(user_counts["guests"] or 0),
             "starts24h": starts_24h,
             "verified24h": verified_24h,
             "problem24h": problem_24h,
         },
         "methods": [
             {
+                "code": "guest",
+                "primary": True,
+                "available": True,
+                "productionReady": auth_pepper_ok,
+            },
+            {
                 "code": "email_code",
                 "challengeMethod": "email_code",
-                "primary": True,
+                "primary": False,
+                "checkoutRequired": True,
                 "available": email_available,
                 "deliveryReady": email_sender_configured(),
                 "productionReady": bool(email.get("productionReady")),
@@ -7577,23 +8100,17 @@ def user_auth_flow_readiness(limit: int = 10) -> dict:
                 "available": True,
                 "productionReady": True,
             },
-            {
-                "code": "phone_code",
-                "challengeMethod": "phone_sms",
-                "primary": False,
-                "available": phone_available,
-                "deliveryReady": sms_sender_configured(),
-                "productionReady": bool(sms.get("productionReady")),
-                "provider": sms.get("provider"),
-            },
         ],
         "bootstrapContract": {
             "publicEndpoint": "/api/v1/bootstrap/windows",
-            "primaryMethod": "email_code",
+            "guestSession": "/api/v1/auth/guest",
+            "primaryMethod": "guest",
             "challengeStart": "/api/v1/auth/challenge/start",
             "challengeVerify": "/api/v1/auth/challenge/verify",
-            "phoneStart": "/api/v1/auth/phone/login/start",
-            "phoneVerify": "/api/v1/auth/phone/login/verify",
+            "accessEmailStart": "/api/v1/auth/access/email/start",
+            "accessEmailVerify": "/api/v1/auth/access/email/verify",
+            "checkoutEmailStart": "/api/v1/auth/checkout/email/start",
+            "checkoutEmailVerify": "/api/v1/auth/checkout/email/verify",
             "emailStart": "/api/v1/auth/email/code/start",
             "emailVerify": "/api/v1/auth/email/code/verify",
             "legacyPasswordEndpoints": ["/api/v1/auth/register", "/api/v1/auth/login"],
@@ -7623,10 +8140,9 @@ def user_auth_flow_readiness(limit: int = 10) -> dict:
         "policy": {
             "mode": "readiness_only_no_codes_sent",
             "secretExposure": "No one-time codes, tokens, password hashes, provider keys or private keys are returned.",
-            "publicContract": "Email code is primary; email/password is fallback; phone code is optional while SMS delivery is unavailable.",
+            "publicContract": "Guest session is primary; verified email is required before payment; email/password remains a recovery fallback.",
         },
         "emailReadiness": email,
-        "smsReadiness": sms,
         "authCodeReadiness": auth_codes,
     }
 
@@ -7772,12 +8288,108 @@ def ensure_user_for_email_code(email: str) -> tuple[sqlite3.Row, bool]:
             """,
             (email,),
         ).fetchone()
-        create_trial_subscription(conn, int(row["id"]))
+        create_default_subscription(conn, int(row["id"]))
         conn.commit()
         return row, True
 
 
-def create_email_login_code(user_id: int, email: str) -> tuple[int, str]:
+def ensure_guest_user(
+    device_uid: str,
+    *,
+    paid_beta_client: bool,
+) -> tuple[sqlite3.Row, bool]:
+    internal_email = internal_email_for_guest_device(device_uid)
+    now = utc_now_iso()
+    created = False
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE email = ?",
+            (internal_email,),
+        ).fetchone()
+        if row is None:
+            conn.execute(
+                """
+                INSERT INTO users(
+                    email, password_hash, email_verified, access_cohort,
+                    acquisition_source, created_at, updated_at
+                )
+                VALUES (?, ?, 0, 'stable', 'guest_first', ?, ?)
+                """,
+                (
+                    internal_email,
+                    hash_password(secrets.token_urlsafe(48)),
+                    now,
+                    now,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM users WHERE email = ?",
+                (internal_email,),
+            ).fetchone()
+            create_default_subscription(conn, int(row["id"]))
+            conn.commit()
+            created = True
+
+    if paid_beta_client and user_access_cohort(row) != PAID_BETA_COHORT_CODE:
+        set_user_paid_beta_cohort(
+            int(row["id"]),
+            enabled=True,
+            source="guest_first",
+        )
+        with db() as conn:
+            row = conn.execute(
+                "SELECT * FROM users WHERE id = ?",
+                (int(row["id"]),),
+            ).fetchone()
+    return row, created
+
+
+def transfer_guest_device_to_user(
+    guest_user_id: int,
+    target_user_id: int,
+    device_uid: Optional[str],
+) -> bool:
+    if int(guest_user_id) == int(target_user_id) or not device_uid:
+        return False
+    normalized_uid = normalize_guest_device_uid(device_uid)
+    with db() as conn:
+        row = conn.execute(
+            "SELECT user_id FROM devices WHERE device_uid = ?",
+            (normalized_uid,),
+        ).fetchone()
+        if row is None:
+            return False
+        owner_id = int(row["user_id"])
+        if owner_id == int(target_user_id):
+            return False
+        if owner_id != int(guest_user_id):
+            raise HTTPException(
+                status_code=409,
+                detail="Устройство уже привязано к другому аккаунту.",
+            )
+        conn.execute(
+            """
+            UPDATE devices
+            SET user_id = ?, updated_at = ?
+            WHERE device_uid = ? AND user_id = ?
+            """,
+            (
+                int(target_user_id),
+                utc_now_iso(),
+                normalized_uid,
+                int(guest_user_id),
+            ),
+        )
+        conn.commit()
+    return True
+
+
+def create_email_login_code(
+    user_id: int,
+    email: str,
+    *,
+    purpose: str = "login_or_register",
+) -> tuple[int, str]:
     code = f"{secrets.randbelow(AUTH_CODE_BOUND):0{AUTH_CODE_DIGITS}d}"
     now = utc_now()
     expires_at = now + timedelta(minutes=AUTH_CODE_TTL_MINUTES)
@@ -7802,7 +8414,7 @@ def create_email_login_code(user_id: int, email: str) -> tuple[int, str]:
                 email,
                 one_time_code_hash("email", email, code),
                 "pending",
-                "login_or_register",
+                clean_limited_text(purpose, 120) or "login_or_register",
                 now.isoformat(),
                 expires_at.isoformat(),
             ),
@@ -7876,7 +8488,13 @@ def send_or_queue_email_login_code(
         return {"deliveryStatus": "failed", "outboxId": outbox_id}
 
 
-def consume_email_login_code(email: str, code: str) -> dict:
+def consume_email_login_code(
+    email: str,
+    code: str,
+    *,
+    expected_purpose: str = "login_or_register",
+    attach_email: bool = False,
+) -> dict:
     clean_code = re.sub(r"\D+", "", code or "")
     if len(clean_code) != AUTH_CODE_DIGITS:
         return {"ok": False, "status": "invalid_code"}
@@ -7887,11 +8505,11 @@ def consume_email_login_code(email: str, code: str) -> dict:
             """
             SELECT *
             FROM email_login_codes
-            WHERE email = ?
+            WHERE email = ? AND purpose = ?
             ORDER BY id DESC
             LIMIT 1
             """,
-            (email,),
+            (email, expected_purpose),
         ).fetchone()
 
         if row is None or row["status"] != "pending":
@@ -7933,6 +8551,31 @@ def consume_email_login_code(email: str, code: str) -> dict:
             conn.commit()
             return result
 
+        if attach_email:
+            conflict = conn.execute(
+                "SELECT id FROM users WHERE email = ? AND id <> ?",
+                (email, int(row["user_id"])),
+            ).fetchone()
+            if conflict is not None:
+                return {"ok": False, "status": "email_in_use"}
+            conn.execute(
+                """
+                UPDATE users
+                SET email = ?, email_verified = 1,
+                    email_verified_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (email, now.isoformat(), now.isoformat(), row["user_id"]),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE users
+                SET email_verified = 1, email_verified_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (now.isoformat(), now.isoformat(), row["user_id"]),
+            )
         conn.execute(
             """
             UPDATE email_login_codes
@@ -7941,27 +8584,8 @@ def consume_email_login_code(email: str, code: str) -> dict:
             """,
             ("consumed", now.isoformat(), row["id"]),
         )
-        conn.execute(
-            """
-            UPDATE users
-            SET email_verified = 1, email_verified_at = ?, updated_at = ?
-            WHERE id = ?
-            """,
-            (now.isoformat(), now.isoformat(), row["user_id"]),
-        )
         user = conn.execute(
-            """
-            SELECT
-                id,
-                email,
-                email_verified,
-                email_verified_at,
-                phone,
-                phone_verified,
-                phone_verified_at
-            FROM users
-            WHERE id = ?
-            """,
+            "SELECT * FROM users WHERE id = ?",
             (row["user_id"],),
         ).fetchone()
         conn.commit()
@@ -8047,7 +8671,7 @@ def ensure_user_for_phone_code(phone: str) -> tuple[sqlite3.Row, bool]:
             """,
             (synthetic_email,),
         ).fetchone()
-        create_trial_subscription(conn, int(row["id"]))
+        create_default_subscription(conn, int(row["id"]))
         conn.commit()
         return row, True
 
@@ -8057,6 +8681,8 @@ def ensure_user_for_phone_code(phone: str) -> tuple[sqlite3.Row, bool]:
 def sms_sender_configured() -> bool:
     if SMS_PROVIDER == "smsru":
         return bool(SMS_RU_API_ID)
+    if SMS_PROVIDER == "smsaero":
+        return bool(SMS_AERO_EMAIL and SMS_AERO_API_KEY and SMS_AERO_SIGN)
     return False
 
 
@@ -8116,18 +8742,34 @@ def latest_sms_delivery_issue() -> Optional[dict]:
 
 
 def sms_confirmation_readiness() -> dict:
-    provider_known = SMS_PROVIDER in {"manual_mvp", "smsru"}
+    provider_known = SMS_PROVIDER in {"manual_mvp", "smsru", "smsaero"}
     checks = [
         {
             "code": "provider",
             "ok": provider_known,
-            "message": "Укажи GREENVPN_SMS_PROVIDER: smsru или manual_mvp.",
+            "message": (
+                "Укажи GREENVPN_SMS_PROVIDER: smsru, smsaero или manual_mvp."
+            ),
             "value": SMS_PROVIDER,
         },
         {
             "code": "smsru_api_id",
             "ok": SMS_PROVIDER != "smsru" or bool(SMS_RU_API_ID),
             "message": "Укажи GREENVPN_SMS_RU_API_ID для отправки через SMS.ru.",
+        },
+        {
+            "code": "smsaero_credentials",
+            "ok": SMS_PROVIDER != "smsaero"
+            or bool(SMS_AERO_EMAIL and SMS_AERO_API_KEY),
+            "message": (
+                "Укажи GREENVPN_SMS_AERO_EMAIL и GREENVPN_SMS_AERO_API_KEY "
+                "для отправки через SMS Aero."
+            ),
+        },
+        {
+            "code": "smsaero_sign",
+            "ok": SMS_PROVIDER != "smsaero" or bool(SMS_AERO_SIGN),
+            "message": "Укажи GREENVPN_SMS_AERO_SIGN для отправки через SMS Aero.",
         },
         {
             "code": "code_pepper",
@@ -8149,7 +8791,7 @@ def sms_confirmation_readiness() -> dict:
         "productionReady": production_ready,
         "ttlMinutes": SMS_CONFIRMATION_TTL_MINUTES,
         "resendCooldownSeconds": SMS_RESEND_COOLDOWN_SECONDS,
-        "testMode": SMS_RU_TEST_MODE,
+        "testMode": SMS_RU_TEST_MODE if SMS_PROVIDER == "smsru" else False,
         "lastDeliveryIssue": latest_issue,
         "checks": checks,
         "requiredActions": required_actions,
@@ -8262,6 +8904,35 @@ def send_smsru(phone: str, body: str) -> None:
         raise RuntimeError(first.get("status_text") or "Не удалось отправить SMS на телефон через SMS.ru")
 
 
+def send_smsaero(phone: str, body: str) -> None:
+    credentials = f"{SMS_AERO_EMAIL}:{SMS_AERO_API_KEY}".encode("utf-8")
+    authorization = base64.b64encode(credentials).decode("ascii")
+    data = urllib.parse.urlencode(
+        {
+            "number": phone.lstrip("+"),
+            "text": body,
+            "sign": SMS_AERO_SIGN,
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        "https://gate.smsaero.ru/v2/sms/send",
+        data=data,
+        headers={
+            "Authorization": f"Basic {authorization}",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+
+    if payload.get("success") is not True:
+        error = payload.get("message") or payload.get("data")
+        if isinstance(error, (dict, list)):
+            error = json.dumps(error, ensure_ascii=False)
+        raise RuntimeError(error or "Не удалось отправить SMS через SMS Aero")
+
+
 def send_or_queue_phone_confirmation(user_id: int, phone: str, code: str) -> dict:
     body = f"Код Green VPN: {code}. Никому его не сообщайте."
     body_preview = "Код Green VPN: ******. Никому его не сообщайте."
@@ -8281,6 +8952,8 @@ def send_or_queue_phone_confirmation(user_id: int, phone: str, code: str) -> dic
     try:
         if SMS_PROVIDER == "smsru":
             send_smsru(phone, body)
+        elif SMS_PROVIDER == "smsaero":
+            send_smsaero(phone, body)
         else:
             raise RuntimeError(f"Unsupported SMS provider: {SMS_PROVIDER}")
         update_sms_outbox_status(outbox_id, "sent")
@@ -9623,6 +10296,58 @@ def load_remote_vpn_node_config(server_id: str) -> dict:
     return config
 
 
+def select_remote_node_smoke_ip(
+    remote_config: dict,
+    configured_ip: str,
+    *,
+    offset_from_broadcast: int,
+) -> str:
+    clean_configured_ip = str(configured_ip or "").strip()
+    try:
+        configured_address = ipaddress.ip_address(clean_configured_ip)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Адрес временного peer для smoke-проверки должен быть корректным IP.",
+        ) from exc
+
+    client_subnet = str(remote_config.get("clientSubnet") or "").strip()
+    if not client_subnet:
+        return str(configured_address)
+
+    try:
+        network = ipaddress.ip_network(client_subnet, strict=False)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="clientSubnet удалённого VPN-узла должен быть корректной IP-сетью.",
+        ) from exc
+    if network.version != 4:
+        raise HTTPException(
+            status_code=500,
+            detail="Smoke-проверка удалённого VPN-узла поддерживает только IPv4 clientSubnet.",
+        )
+    if offset_from_broadcast < 1:
+        raise HTTPException(
+            status_code=500,
+            detail="Некорректный отступ временного peer от broadcast-адреса.",
+        )
+
+    candidate_value = int(network.broadcast_address) - offset_from_broadcast
+    if candidate_value <= int(network.network_address):
+        raise HTTPException(
+            status_code=500,
+            detail="clientSubnet слишком мала для безопасного временного peer.",
+        )
+    candidate = ipaddress.ip_address(candidate_value)
+    if candidate not in network or candidate == network.broadcast_address:
+        raise HTTPException(
+            status_code=500,
+            detail="Не удалось выбрать безопасный временный peer внутри clientSubnet.",
+        )
+    return str(candidate)
+
+
 def guarded_config_metadata_owned_by_root(metadata: os.stat_result) -> bool:
     return getattr(metadata, "st_uid", 0) == 0
 
@@ -9705,7 +10430,10 @@ def hysteria2_client_config_check(
 
     sni_match = matches.get("hysteria2_sni_missing")
     config_sni = sni_match.group(0).split(":", 1)[1].strip().lower() if sni_match else ""
-    if not HYSTERIA2_CANARY_SNI or config_sni != HYSTERIA2_CANARY_SNI:
+    allowed_snis = set(HYSTERIA2_CANARY_SNIS)
+    if HYSTERIA2_CANARY_SNI:
+        allowed_snis.add(HYSTERIA2_CANARY_SNI)
+    if config_sni not in allowed_snis:
         add_blocker("hysteria2_sni_not_allowlisted", "TLS SNI не совпадает с canary allowlist.")
 
     config_host = ""
@@ -9883,8 +10611,11 @@ def vless_reality_client_config_check(
         add_blocker("vless_reality_endpoint_host_mismatch", "Host config не совпадает с catalog row.")
     if expected_port and config_port and expected_port != config_port:
         add_blocker("vless_reality_endpoint_port_mismatch", "Port config не совпадает с catalog row.")
-    if config_port and config_port != 443:
-        add_blocker("vless_reality_endpoint_port_not_443", "VLESS REALITY canary должен использовать TCP/443.")
+    if config_port and config_port not in {443, 9443}:
+        add_blocker(
+            "vless_reality_endpoint_port_not_allowlisted",
+            "VLESS REALITY canary должен использовать разрешённый TCP port.",
+        )
 
     return {
         "serverId": clean_server_id,
@@ -10002,7 +10733,7 @@ def naive_https_client_config_check(
     if not root:
         return {"path": str(config_path)}, blockers
 
-    if set(root) != {"listen", "proxy"}:
+    if set(root) != {"listen", "proxy", "endpointIp"}:
         add_blocker("naive_https_config_fields_invalid", "Naive HTTPS config fields are invalid.")
     listen = str(root.get("listen") or "").strip()
     if listen != "socks://127.0.0.1:1982":
@@ -10011,6 +10742,7 @@ def naive_https_client_config_check(
     proxy_text = str(root.get("proxy") or "").strip()
     proxy_host = ""
     proxy_port = 0
+    endpoint_ip = str(root.get("endpointIp") or "").strip().lower()
     try:
         parsed = urllib.parse.urlsplit(proxy_text)
         proxy_host = str(parsed.hostname or "").strip().lower()
@@ -10024,12 +10756,26 @@ def naive_https_client_config_check(
     except (TypeError, ValueError):
         add_blocker("naive_https_proxy_invalid", "Naive HTTPS proxy URI is invalid.")
 
-    if not NAIVE_HTTPS_CANARY_HOST or proxy_host != NAIVE_HTTPS_CANARY_HOST:
+    allowed_endpoints = dict(NAIVE_HTTPS_CANARY_ENDPOINTS)
+    if NAIVE_HTTPS_CANARY_HOST and NAIVE_HTTPS_CANARY_IP:
+        allowed_endpoints[NAIVE_HTTPS_CANARY_HOST] = NAIVE_HTTPS_CANARY_IP
+    if proxy_host not in allowed_endpoints:
         add_blocker("naive_https_host_not_allowlisted", "Naive HTTPS host does not match the canary allowlist.")
+    elif endpoint_ip != allowed_endpoints[proxy_host]:
+        add_blocker(
+            "naive_https_endpoint_ip_not_allowlisted",
+            "Naive HTTPS endpoint IP does not match the guarded host passport.",
+        )
+    try:
+        parsed_endpoint_ip = ipaddress.ip_address(endpoint_ip)
+        if parsed_endpoint_ip.version != 4 or str(parsed_endpoint_ip) != endpoint_ip:
+            raise ValueError("not canonical IPv4")
+    except ValueError:
+        add_blocker("naive_https_endpoint_ip_invalid", "Naive HTTPS endpointIp must be canonical IPv4.")
     if proxy_port != 8443:
         add_blocker("naive_https_port_invalid", "Naive HTTPS canary must use TCP/8443.")
     expected_row_host = str(row_host or "").strip().strip("[]").lower()
-    allowed_row_hosts = {NAIVE_HTTPS_CANARY_HOST, NAIVE_HTTPS_CANARY_IP.strip().lower()} - {""}
+    allowed_row_hosts = {proxy_host, endpoint_ip} - {""}
     if expected_row_host and expected_row_host not in allowed_row_hosts:
         add_blocker("naive_https_endpoint_host_mismatch", "Catalog host does not match the guarded canary.")
     if int(row_port or 0) and int(row_port or 0) != proxy_port:
@@ -10039,6 +10785,7 @@ def naive_https_client_config_check(
         "serverId": clean_server_id,
         "path": str(config_path),
         "host": proxy_host,
+        "endpointIp": endpoint_ip,
         "port": proxy_port,
         "configText": config_text.strip() + "\n",
     }, blockers
@@ -11415,8 +12162,34 @@ def build_server_provisioning_readiness(
             return f"{host}:{port}" if host and port else ""
         return str(endpoint or "").strip()
 
+    def managed_endpoint_string(entry: Optional[dict]) -> str:
+        if not entry:
+            return ""
+        host = str(entry.get("host") or "").strip()
+        port = entry.get("port")
+        return f"{host}:{port}" if host and port else ""
+
     default_endpoint = public_endpoint_string(default_server)
-    default_endpoint_matches = bool(default_server) and default_endpoint == expected_endpoint
+    default_managed_entry = next(
+        (
+            entry
+            for entry in managed_entries
+            if str(entry.get("serverId") or "") == default_server_id
+        ),
+        None,
+    )
+    default_managed_endpoint = managed_endpoint_string(default_managed_entry)
+    default_matches_builtin = default_endpoint == expected_endpoint
+    default_matches_managed = bool(
+        default_managed_entry
+        and default_managed_entry.get("clientConfigReady")
+        and default_managed_entry.get("publicEligible")
+        and default_managed_endpoint
+        and default_endpoint == default_managed_endpoint
+    )
+    default_endpoint_matches = bool(default_server) and bool(
+        default_matches_builtin or default_matches_managed
+    )
     managed_visible_to_client = [
         entry
         for entry in managed_entries
@@ -11459,11 +12232,19 @@ def build_server_provisioning_readiness(
         "Сборщик клиентского конфига совпадает с публичным VPN-узлом",
         default_endpoint_matches,
         (
-            f"Публичный основной VPN-узел совпадает с backend wg0 {expected_endpoint}."
+            (
+                f"Публичный основной VPN-узел совпадает с backend wg0 {expected_endpoint}."
+                if default_matches_builtin
+                else (
+                    "Публичный основной VPN-узел совпадает с готовой managed-записью "
+                    f"{default_server_id} ({default_managed_endpoint})."
+                )
+            )
             if default_endpoint_matches
             else (
                 "Публичный основной VPN-узел должен совпадать с backend wg0 "
-                f"{expected_endpoint}; сейчас {default_endpoint or 'не задан'}."
+                f"{expected_endpoint} или с готовой managed-записью; "
+                f"сейчас {default_endpoint or 'не задан'}."
             )
         ),
     )
@@ -11592,7 +12373,8 @@ def build_server_provisioning_readiness(
             "acceptedServerIds": ["auto", *public_server_ids],
             "defaultServerId": default_server_id,
             "configProfile": "managed_public_catalog",
-            "endpoint": expected_endpoint,
+            "endpoint": default_endpoint,
+            "builtinEndpoint": expected_endpoint,
             "managedCatalogClientVisible": bool(managed_visible_to_client),
             "managedPublicServerIds": [
                 str(entry.get("serverId") or "")
@@ -13507,6 +14289,8 @@ def default_monitoring_targets() -> list[dict]:
     )
     api_base_urls = SERVER_CATALOG_API_BASE_URLS or [PUBLIC_API_BASE_URL]
     api_url = api_base_urls[0]
+    api_parsed = urllib.parse.urlparse(api_url)
+    api_port = api_parsed.port or (443 if api_parsed.scheme == "https" else 80)
     service_targets.extend(
         [
             {
@@ -13515,7 +14299,8 @@ def default_monitoring_targets() -> list[dict]:
                 "service": "api",
                 "targetType": "api",
                 "url": f"{api_url.rstrip('/')}/healthz",
-                "host": urllib.parse.urlparse(api_url).hostname or WG_ENDPOINT_HOST,
+                "host": api_parsed.hostname or WG_ENDPOINT_HOST,
+                "port": api_port,
                 "expectedStatus": 200,
                 "tags": ["api", "bootstrap"],
                 "notes": "Основная проверка API для внутреннего мониторинга.",
@@ -13527,6 +14312,7 @@ def default_monitoring_targets() -> list[dict]:
                 "targetType": "bootstrap",
                 "url": "https://api.greenvpn.pro/healthz",
                 "host": "api.greenvpn.pro",
+                "port": 443,
                 "expectedStatus": 200,
                 "tags": ["api", "domain", "bootstrap"],
                 "notes": "Публичная DNS/HTTPS цель. Держать на паузе, если DNS ещё расходится.",
@@ -13538,7 +14324,8 @@ def default_monitoring_targets() -> list[dict]:
                 "service": "updates",
                 "targetType": "update",
                 "url": f"{api_url.rstrip('/')}/api/v1/updates/windows",
-                "host": urllib.parse.urlparse(api_url).hostname or WG_ENDPOINT_HOST,
+                "host": api_parsed.hostname or WG_ENDPOINT_HOST,
+                "port": api_port,
                 "expectedStatus": 200,
                 "tags": ["updates", "windows"],
                 "notes": "Проверка манифеста обновлений для будущего клиентского обновлятора.",
@@ -13549,7 +14336,8 @@ def default_monitoring_targets() -> list[dict]:
                 "service": "payments",
                 "targetType": "payment",
                 "url": f"{api_url.rstrip('/')}/payment/return",
-                "host": urllib.parse.urlparse(api_url).hostname or WG_ENDPOINT_HOST,
+                "host": api_parsed.hostname or WG_ENDPOINT_HOST,
+                "port": api_port,
                 "expectedStatus": 200,
                 "tags": ["payments", "yookassa"],
                 "notes": "Страница возврата оплаты для боевой ЮKassa.",
@@ -13557,6 +14345,10 @@ def default_monitoring_targets() -> list[dict]:
         ]
     )
     for index, fallback_api_url in enumerate(api_base_urls[1:], start=1):
+        fallback_parsed = urllib.parse.urlparse(fallback_api_url)
+        fallback_port = fallback_parsed.port or (
+            443 if fallback_parsed.scheme == "https" else 80
+        )
         service_targets.append(
             {
                 "targetId": f"green_api_fallback_{index}_healthz",
@@ -13564,7 +14356,8 @@ def default_monitoring_targets() -> list[dict]:
                 "service": "api",
                 "targetType": "bootstrap",
                 "url": f"{fallback_api_url.rstrip('/')}/healthz",
-                "host": urllib.parse.urlparse(fallback_api_url).hostname or WG_ENDPOINT_HOST,
+                "host": fallback_parsed.hostname or WG_ENDPOINT_HOST,
+                "port": fallback_port,
                 "expectedStatus": 200,
                 "tags": ["api", "bootstrap", "fallback"],
                 "notes": "Отдельная проверка резервного API из bootstrap-цепочки.",
@@ -14795,6 +15588,7 @@ def build_wg_peer_rate_limit_plan(server_id: Optional[str] = None) -> dict:
                 d.assigned_ip,
                 d.is_enabled,
                 u.email,
+                u.access_cohort,
                 s.plan_code,
                 s.plan_name,
                 s.is_active,
@@ -14839,9 +15633,33 @@ def build_wg_peer_rate_limit_plan(server_id: Optional[str] = None) -> dict:
                 selection = {}
 
         is_enabled = bool(row["is_enabled"])
-        expires_at = parse_dt(row["expires_at"])
-        sub_active = bool(row["is_active"]) and (expires_at is None or expires_at > utc_now())
-        if is_enabled and sub_active and selection:
+        raw_sub = subscription_status(
+            get_subscription_row(int(row["user_id"]))
+        )
+        effective_sub = effective_client_subscription(
+            {"access_cohort": row["access_cohort"]},
+            raw_sub,
+        )
+        sub_active = bool(effective_sub.get("isActive"))
+        free_tier = bool(effective_sub.get("isFreeTier"))
+        if is_enabled and free_tier:
+            if FREE_TIER_RATE_LIMIT_ENFORCED:
+                # The traffic-control script calls this class free_ad. Ads are
+                # disabled; the name is retained for script compatibility.
+                priority_class = "free_ad"
+                sustained = int(
+                    effective_sub.get("speedSustainedMbps")
+                    or FREE_TIER_SPEED_MBPS
+                )
+                burst = int(
+                    effective_sub.get("speedBurstMbps")
+                    or FREE_TIER_BURST_MBPS
+                )
+            else:
+                priority_class = "unlimited"
+                sustained = None
+                burst = None
+        elif is_enabled and sub_active and selection:
             try:
                 quote = quote_tariff(selection)
             except Exception:
@@ -14860,9 +15678,14 @@ def build_wg_peer_rate_limit_plan(server_id: Optional[str] = None) -> dict:
 
         traffic_usage = subscription_traffic_usage_status(
             int(row["user_id"]),
-            subscription_status(get_subscription_row(int(row["user_id"]))),
+            effective_sub,
         )
-        if is_enabled and sub_active and traffic_usage.get("overLimit"):
+        if (
+            is_enabled
+            and sub_active
+            and not free_tier
+            and traffic_usage.get("overLimit")
+        ):
             priority_class = "bulk_heavy"
             sustained = min(sustained, 10)
             burst = min(burst, 30)
@@ -14874,13 +15697,23 @@ def build_wg_peer_rate_limit_plan(server_id: Optional[str] = None) -> dict:
                 "assignedIp": assigned_ip,
                 "serverId": assigned_server_id,
                 "protocol": row["assigned_protocol"] or "wireguard_udp",
-                "planCode": row["plan_code"] or "none",
-                "planName": row["plan_name"] or "Нет активного тарифа",
+                "planCode": effective_sub.get("planCode") or "none",
+                "planName": (
+                    effective_sub.get("planName")
+                    or "Нет активного тарифа"
+                ),
                 "priorityClass": priority_class,
                 "speedSustainedMbps": sustained,
                 "speedBurstMbps": burst,
                 "enabled": is_enabled,
                 "subscriptionActive": sub_active,
+                "freeTier": free_tier,
+                "quotaExhausted": bool(
+                    free_tier and traffic_usage.get("overLimit")
+                ),
+                "rateLimitEnforced": bool(
+                    free_tier and FREE_TIER_RATE_LIMIT_ENFORCED
+                ),
                 "trafficUsage": {
                     "periodKey": traffic_usage.get("periodKey"),
                     "usedGb": traffic_usage.get("usedGb"),
@@ -14888,10 +15721,35 @@ def build_wg_peer_rate_limit_plan(server_id: Optional[str] = None) -> dict:
                     "usedPercent": traffic_usage.get("usedPercent"),
                     "overLimit": traffic_usage.get("overLimit"),
                 },
-                "scriptLine": f"{assigned_ip}={priority_class}",
+                "scriptLine": (
+                    f"{assigned_ip}={priority_class}"
+                    if priority_class != "unlimited"
+                    else None
+                ),
             }
         )
 
+    unshaped_free_peers = [
+        peer for peer in peers
+        if peer["freeTier"] and peer["enabled"] and not peer["rateLimitEnforced"]
+    ]
+    apply_allowed = not unshaped_free_peers
+    dry_run_command = (
+        f"bash scripts/server/apply_wg_peer_rate_limits.sh --iface {WG_INTERFACE} "
+        f"--root-mbps {SERVER_DEFAULT_BANDWIDTH_MBPS} "
+        f"--reserved-mbps {SERVER_DEFAULT_RESERVED_MBPS} "
+        f"--free-mbps {FREE_TIER_SPEED_MBPS} "
+        f"--free-burst-mbps {FREE_TIER_BURST_MBPS} "
+        "--file /etc/greenvpn/peer-rate-limits.txt"
+    )
+    apply_command = (
+        f"bash scripts/server/apply_wg_peer_rate_limits.sh --apply --iface {WG_INTERFACE} "
+        f"--root-mbps {SERVER_DEFAULT_BANDWIDTH_MBPS} "
+        f"--reserved-mbps {SERVER_DEFAULT_RESERVED_MBPS} "
+        f"--free-mbps {FREE_TIER_SPEED_MBPS} "
+        f"--free-burst-mbps {FREE_TIER_BURST_MBPS} "
+        "--file /etc/greenvpn/peer-rate-limits.txt"
+    )
     return {
         "version": APP_VERSION,
         "generatedAt": utc_now_iso(),
@@ -14901,19 +15759,18 @@ def build_wg_peer_rate_limit_plan(server_id: Optional[str] = None) -> dict:
         "reservedBandwidthMbps": SERVER_DEFAULT_RESERVED_MBPS,
         "scriptPath": "scripts/server/apply_wg_peer_rate_limits.sh",
         "serverTargetFile": "/etc/greenvpn/peer-rate-limits.txt",
-        "dryRunCommand": (
-            f"bash scripts/server/apply_wg_peer_rate_limits.sh --iface {WG_INTERFACE} "
-            f"--root-mbps {SERVER_DEFAULT_BANDWIDTH_MBPS} "
-            f"--reserved-mbps {SERVER_DEFAULT_RESERVED_MBPS} "
-            "--file /etc/greenvpn/peer-rate-limits.txt"
+        "freeTierRateLimitEnforced": FREE_TIER_RATE_LIMIT_ENFORCED,
+        "applyAllowed": apply_allowed,
+        "applyBlockedReason": (
+            None
+            if apply_allowed
+            else "free_tier_rate_limit_disabled"
         ),
-        "applyCommand": (
-            f"bash scripts/server/apply_wg_peer_rate_limits.sh --apply --iface {WG_INTERFACE} "
-            f"--root-mbps {SERVER_DEFAULT_BANDWIDTH_MBPS} "
-            f"--reserved-mbps {SERVER_DEFAULT_RESERVED_MBPS} "
-            "--file /etc/greenvpn/peer-rate-limits.txt"
-        ),
-        "peerLines": [peer["scriptLine"] for peer in peers],
+        "dryRunCommand": dry_run_command if apply_allowed else None,
+        "applyCommand": apply_command if apply_allowed else None,
+        "peerLines": [
+            peer["scriptLine"] for peer in peers if peer["scriptLine"]
+        ],
         "peers": peers,
         "peerCount": len(peers),
     }
@@ -15982,13 +16839,13 @@ def seed_default_feature_flags_and_runbooks() -> None:
             "rollout": 100,
         },
         {
-            "key": "auth.sms_codes_enabled",
-            "title": "Вход по SMS-коду",
-            "description": "Вход и регистрация по телефону после подключения SMS-провайдера.",
-            "value": {"provider": "sms.ru", "ready": False},
+            "key": "auth.guest_first_enabled",
+            "title": "Бесплатный вход без регистрации",
+            "description": "Анонимная серверная сессия до подтверждения email перед оплатой.",
+            "value": True,
             "scope": "auth",
-            "enabled": False,
-            "rollout": 0,
+            "enabled": True,
+            "rollout": 100,
         },
         {
             "key": "support.auto_triage_enabled",
@@ -17467,6 +18324,23 @@ def legacy_wireguard_client_subnet() -> ipaddress.IPv4Network:
         return ipaddress.ip_network("10.10.0.0/24", strict=True)
 
 
+def device_transport_assignment_key(protocol: str, server_id: str) -> str:
+    normalized_protocol = clean_limited_text(protocol, 24).strip().lower()
+    normalized_server_id = clean_limited_text(server_id, 80).strip().lower()
+    if not normalized_protocol or not normalized_server_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Для транспортного IP нужны protocol и serverId.",
+        )
+    key = f"{normalized_protocol}:{normalized_server_id}"
+    if len(key) > 60:
+        raise HTTPException(
+            status_code=409,
+            detail="Ключ назначения транспортного IP слишком длинный.",
+        )
+    return key
+
+
 def ensure_device_transport_ip(
     device_uid: str,
     *,
@@ -17513,6 +18387,45 @@ def ensure_device_transport_ip(
                 status_code=409,
                 detail="Существующий адрес транспорта не входит в настроенный диапазон.",
             )
+
+        legacy_key = normalized_key.split(":", 1)[0]
+        if legacy_key != normalized_key:
+            legacy = conn.execute(
+                """
+                SELECT assigned_ip
+                FROM device_transport_assignments
+                WHERE device_uid = ? AND transport_key = ?
+                """,
+                (device_uid, legacy_key),
+            ).fetchone()
+            legacy_ip = str(legacy["assigned_ip"] or "").strip() if legacy else ""
+            try:
+                legacy_address = ipaddress.ip_address(legacy_ip)
+            except ValueError:
+                legacy_address = None
+            if legacy_address is not None and legacy_address in network:
+                conflict = conn.execute(
+                    """
+                    SELECT 1
+                    FROM device_transport_assignments
+                    WHERE transport_key = ? AND assigned_ip = ?
+                    """,
+                    (normalized_key, legacy_ip),
+                ).fetchone()
+                if conflict is None:
+                    try:
+                        conn.execute(
+                            """
+                            UPDATE device_transport_assignments
+                            SET transport_key = ?, updated_at = ?
+                            WHERE device_uid = ? AND transport_key = ?
+                            """,
+                            (normalized_key, now, device_uid, legacy_key),
+                        )
+                        conn.commit()
+                        return legacy_ip
+                    except sqlite3.IntegrityError:
+                        conn.rollback()
 
         used = {
             str(row["assigned_ip"] or "").strip()
@@ -18416,6 +19329,90 @@ def billing_order_status(row) -> dict:
         "providerPaymentId": row["provider_payment_id"],
         "providerPaymentMethodId": row["provider_payment_method_id"] if "provider_payment_method_id" in row.keys() else None,
         "orderKind": row["order_kind"] if "order_kind" in row.keys() else "manual",
+        "taxReceipt": {
+            "mode": (
+                row["tax_receipt_mode"]
+                if "tax_receipt_mode" in row.keys()
+                else "legacy_untracked"
+            ),
+            "status": (
+                row["tax_receipt_status"]
+                if "tax_receipt_status" in row.keys()
+                else "legacy_untracked"
+            ),
+            "providerId": (
+                row["tax_receipt_provider_id"]
+                if "tax_receipt_provider_id" in row.keys()
+                else None
+            ),
+            "error": (
+                row["tax_receipt_error"]
+                if "tax_receipt_error" in row.keys()
+                else None
+            ),
+            "updatedAt": (
+                row["tax_receipt_updated_at"]
+                if "tax_receipt_updated_at" in row.keys()
+                else None
+            ),
+        },
+        "refund": {
+            "status": (
+                row["refund_status"]
+                if "refund_status" in row.keys()
+                else "not_requested"
+            ),
+            "amountRub": (
+                int(row["refund_amount_rub"] or 0)
+                if "refund_amount_rub" in row.keys()
+                else 0
+            ),
+            "reason": (
+                row["refund_reason"]
+                if "refund_reason" in row.keys()
+                else None
+            ),
+            "providerId": (
+                row["refund_provider_id"]
+                if "refund_provider_id" in row.keys()
+                else None
+            ),
+            "receiptStatus": (
+                row["refund_receipt_status"]
+                if "refund_receipt_status" in row.keys()
+                else "not_required"
+            ),
+            "entitlementStatus": (
+                row["refund_entitlement_status"]
+                if "refund_entitlement_status" in row.keys()
+                else "not_required"
+            ),
+            "error": (
+                row["refund_error"]
+                if "refund_error" in row.keys()
+                else None
+            ),
+            "requestedAt": (
+                row["refund_requested_at"]
+                if "refund_requested_at" in row.keys()
+                else None
+            ),
+            "refundedAt": (
+                row["refunded_at"]
+                if "refunded_at" in row.keys()
+                else None
+            ),
+            "updatedAt": (
+                row["refund_updated_at"]
+                if "refund_updated_at" in row.keys()
+                else None
+            ),
+        },
+        "activationSubscriptionId": (
+            row["activation_subscription_id"]
+            if "activation_subscription_id" in row.keys()
+            else None
+        ),
         "paidAt": row["paid_at"],
         "activatedAt": row["activated_at"],
         "createdAt": row["created_at"],
@@ -18428,6 +19425,21 @@ def public_billing_order_status(order: dict) -> dict:
     public_order.pop("providerPaymentId", None)
     public_order.pop("providerPaymentMethodId", None)
     public_order.pop("betaInvitePublicId", None)
+    public_order.pop("activationSubscriptionId", None)
+    tax_receipt = public_order.get("taxReceipt")
+    if isinstance(tax_receipt, dict):
+        public_order["taxReceipt"] = {
+            key: value
+            for key, value in tax_receipt.items()
+            if key not in {"providerId", "error"}
+        }
+    refund = public_order.get("refund")
+    if isinstance(refund, dict):
+        public_order["refund"] = {
+            key: value
+            for key, value in refund.items()
+            if key not in {"providerId", "error"}
+        }
     return public_order
 
 
@@ -18729,13 +19741,221 @@ def yookassa_effective_webhook_url() -> str:
     return ""
 
 
+def tax_receipt_readiness() -> dict:
+    supported_mode = TAX_RECEIPT_MODE == "yookassa_54fz"
+    checks = [
+        {
+            "code": "tax_receipt_mode",
+            "ok": supported_mode,
+            "message": (
+                "GREENVPN_TAX_RECEIPT_MODE=yookassa_54fz настроен."
+                if supported_mode
+                else (
+                    "Платные продажи закрыты: выбери подтверждённый чековый "
+                    "режим. Встроенно поддержан yookassa_54fz."
+                )
+            ),
+            "value": TAX_RECEIPT_MODE,
+        },
+        {
+            "code": "tax_receipt_workflow_confirmed",
+            "ok": TAX_RECEIPT_WORKFLOW_CONFIRMED,
+            "message": (
+                "Владелец подтвердил применимость чекового режима."
+                if TAX_RECEIPT_WORKFLOW_CONFIRMED
+                else (
+                    "Подтверди юридическую форму и чековый режим до включения "
+                    "платных продаж."
+                )
+            ),
+        },
+        {
+            "code": "tax_receipt_vat_code",
+            "ok": 1 <= TAX_RECEIPT_VAT_CODE <= 12,
+            "message": (
+                "GREENVPN_TAX_RECEIPT_VAT_CODE должен быть подтверждённым "
+                "кодом от 1 до 12."
+            ),
+            "value": TAX_RECEIPT_VAT_CODE,
+        },
+        {
+            "code": "tax_receipt_subject",
+            "ok": TAX_RECEIPT_PAYMENT_SUBJECT == "service",
+            "message": (
+                "GREENVPN_TAX_RECEIPT_PAYMENT_SUBJECT должен быть service "
+                "для подписки Green VPN."
+            ),
+            "value": TAX_RECEIPT_PAYMENT_SUBJECT,
+        },
+        {
+            "code": "tax_receipt_payment_mode",
+            "ok": TAX_RECEIPT_PAYMENT_MODE == "full_payment",
+            "message": (
+                "GREENVPN_TAX_RECEIPT_PAYMENT_MODE должен быть full_payment "
+                "для полной предоплаты подписки."
+            ),
+            "value": TAX_RECEIPT_PAYMENT_MODE,
+        },
+    ]
+    production_ready = all(check["ok"] for check in checks)
+    return {
+        "ok": True,
+        "mode": TAX_RECEIPT_MODE,
+        "productionReady": production_ready,
+        "checks": checks,
+        "requiredActions": [
+            check["message"] for check in checks if not check["ok"]
+        ],
+    }
+
+
+def refund_policy_readiness() -> dict:
+    checks = [
+        {
+            "code": "refund_workflow_confirmed",
+            "ok": REFUND_WORKFLOW_CONFIRMED,
+            "message": (
+                "Владелец подтвердил возвратный процесс."
+                if REFUND_WORKFLOW_CONFIRMED
+                else (
+                    "Подтверди юридический и операционный процесс возврата до "
+                    "включения платных продаж."
+                )
+            ),
+        },
+        {
+            "code": "refund_execution_enabled",
+            "ok": REFUND_EXECUTION_ENABLED,
+            "message": (
+                "Выполнение возвратов включено."
+                if REFUND_EXECUTION_ENABLED
+                else (
+                    "GREENVPN_REFUND_EXECUTION_ENABLED должен оставаться выключенным "
+                    "до подтверждения владельца и боевого refund-smoke."
+                )
+            ),
+        },
+        {
+            "code": "refund_billing_primary",
+            "ok": REFUND_BILLING_PRIMARY,
+            "message": (
+                "Этот узел назначен единственным исполнителем возвратов."
+                if REFUND_BILLING_PRIMARY
+                else (
+                    "GREENVPN_REFUND_BILLING_PRIMARY должен быть включён только "
+                    "на основном платёжном узле."
+                )
+            ),
+        },
+    ]
+    return {
+        "ok": True,
+        "productionReady": all(check["ok"] for check in checks),
+        "workflowConfirmed": REFUND_WORKFLOW_CONFIRMED,
+        "executionEnabled": REFUND_EXECUTION_ENABLED,
+        "billingPrimary": REFUND_BILLING_PRIMARY,
+        "checks": checks,
+        "requiredActions": [
+            check["message"] for check in checks if not check["ok"]
+        ],
+    }
+
+
+def refund_execution_readiness() -> dict:
+    policy = refund_policy_readiness()
+    tax_receipt = tax_receipt_readiness()
+    checks = [
+        {
+            "code": "refund_policy_ready",
+            "ok": policy["productionReady"],
+            "message": (
+                "Политика возвратов готова."
+                if policy["productionReady"]
+                else "Политика возвратов остаётся закрытой."
+            ),
+        },
+        {
+            "code": "refund_provider_keys",
+            "ok": yookassa_configured(),
+            "message": (
+                "Ключи ЮKassa для возврата настроены."
+                if yookassa_configured()
+                else "Для возврата нужны серверные ключи ЮKassa."
+            ),
+        },
+        {
+            "code": "refund_provider_api_https",
+            "ok": _is_https_url(YOOKASSA_API_BASE),
+            "message": "YOOKASSA_API_BASE для возврата должен использовать HTTPS.",
+            "value": YOOKASSA_API_BASE,
+        },
+        {
+            "code": "refund_receipt_workflow_ready",
+            "ok": tax_receipt["productionReady"],
+            "message": (
+                "Чек возврата будет формироваться ЮKassa по данным исходного чека."
+                if tax_receipt["productionReady"]
+                else "Чековый процесс возврата не готов."
+            ),
+        },
+    ]
+    return {
+        "ok": True,
+        "provider": "yookassa",
+        "mode": (
+            "guarded_full_refund"
+            if policy["productionReady"]
+            else "dry_run_readiness_only"
+        ),
+        "productionReady": all(check["ok"] for check in checks),
+        "policy": policy,
+        "taxReceipt": tax_receipt,
+        "checks": checks,
+        "requiredActions": [
+            check["message"] for check in checks if not check["ok"]
+        ],
+    }
+
+
 def yookassa_payment_readiness() -> dict:
     webhook_url = yookassa_effective_webhook_url()
     return_host = _url_host(YOOKASSA_RETURN_URL)
     webhook_host = _url_host(webhook_url)
     public_host = _url_host(PUBLIC_BASE_URL)
+    tax_receipt = tax_receipt_readiness()
+    refunds = refund_execution_readiness()
 
     checks = [
+        {
+            "code": "paid_sales_enabled",
+            "ok": PAID_SALES_ENABLED,
+            "message": (
+                "GREENVPN_PAID_SALES_ENABLED включён."
+                if PAID_SALES_ENABLED
+                else (
+                    "Платные продажи закрыты серверным флагом до завершения "
+                    "чекового и возвратного контура."
+                )
+            ),
+        },
+        {
+            "code": "tax_receipt_ready",
+            "ok": tax_receipt["productionReady"],
+            "message": (
+                "Чековый режим готов."
+                if tax_receipt["productionReady"]
+                else "Чековый режим не готов."
+            ),
+        },
+        {
+            "code": "refund_workflow_ready",
+            "ok": refunds["productionReady"],
+            "message": (
+                "Полный возврат и откат прав готовы."
+                if refunds["productionReady"]
+                else "Платные продажи закрыты до готовности полного возврата."
+            ),
+        },
         {
             "code": "yookassa_keys",
             "ok": yookassa_configured(),
@@ -18780,6 +20000,9 @@ def yookassa_payment_readiness() -> dict:
         "productionReady": production_ready,
         "webhookUrl": webhook_url,
         "returnUrl": YOOKASSA_RETURN_URL,
+        "paidSalesEnabled": PAID_SALES_ENABLED,
+        "taxReceipt": tax_receipt,
+        "refunds": refunds,
         "checks": checks,
         "requiredActions": [
             check["message"] for check in checks if not check["ok"]
@@ -19217,11 +20440,124 @@ def yookassa_get_payment(payment_id: str) -> dict:
     return yookassa_http_request("GET", f"/payments/{payment_id}")
 
 
+def yookassa_get_refund(refund_id: str) -> dict:
+    refund_id = refund_id.strip()
+    if not refund_id:
+        raise HTTPException(status_code=400, detail="YooKassa refund id пустой.")
+    return yookassa_http_request("GET", f"/refunds/{refund_id}")
+
+
 def yookassa_order_id_from_payment(payment: dict) -> str:
     metadata = payment.get("metadata") if isinstance(payment.get("metadata"), dict) else {}
     return str(
         metadata.get("bluevpn_order_id") or metadata.get("orderId") or ""
     ).strip()
+
+
+def paid_sales_policy_readiness() -> dict:
+    tax_receipt = tax_receipt_readiness()
+    refund_policy = refund_policy_readiness()
+    checks = [
+        {
+            "code": "paid_sales_enabled",
+            "ok": PAID_SALES_ENABLED,
+            "message": (
+                "GREENVPN_PAID_SALES_ENABLED включён."
+                if PAID_SALES_ENABLED
+                else "Платные продажи закрыты серверным флагом."
+            ),
+        },
+        {
+            "code": "tax_receipt_ready",
+            "ok": tax_receipt["productionReady"],
+            "message": (
+                "Чековый режим готов."
+                if tax_receipt["productionReady"]
+                else "Чековый режим не готов."
+            ),
+        },
+        {
+            "code": "refund_policy_ready",
+            "ok": refund_policy["productionReady"],
+            "message": (
+                "Политика возвратов готова."
+                if refund_policy["productionReady"]
+                else "Политика возвратов остаётся закрытой."
+            ),
+        },
+    ]
+    return {
+        "ok": True,
+        "productionReady": all(check["ok"] for check in checks),
+        "paidSalesEnabled": PAID_SALES_ENABLED,
+        "taxReceipt": tax_receipt,
+        "refunds": refund_policy,
+        "checks": checks,
+        "requiredActions": [
+            check["message"] for check in checks if not check["ok"]
+        ],
+    }
+
+
+def ensure_paid_sales_ready(*, require_provider: bool = True) -> dict:
+    readiness = (
+        yookassa_payment_readiness()
+        if require_provider
+        else paid_sales_policy_readiness()
+    )
+    if readiness["productionReady"]:
+        return readiness
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "code": "paid_sales_not_ready",
+            "message": (
+                "Оплата временно недоступна: сервер не откроет платёж до "
+                "подтверждённой готовности провайдера, чеков и возвратов."
+            ),
+            "requiredActions": readiness["requiredActions"],
+        },
+    )
+
+
+def yookassa_receipt_payload(
+    *,
+    user_email: str,
+    description: str,
+    amount: str,
+    currency: str,
+) -> dict:
+    if not tax_receipt_readiness()["productionReady"]:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "tax_receipt_not_ready",
+                "message": "Чековый режим не готов к платной продаже.",
+            },
+        )
+    return {
+        "customer": {"email": user_email},
+        "items": [
+            {
+                "description": clean_limited_text(description, 128).strip(),
+                "quantity": "1.00",
+                "amount": {
+                    "value": amount,
+                    "currency": currency,
+                },
+                "vat_code": TAX_RECEIPT_VAT_CODE,
+                "payment_mode": TAX_RECEIPT_PAYMENT_MODE,
+                "payment_subject": TAX_RECEIPT_PAYMENT_SUBJECT,
+            }
+        ],
+    }
+
+
+def yookassa_receipt_registration_status(payment: dict) -> str:
+    value = str(payment.get("receipt_registration") or "").strip().lower()
+    if value in {"pending", "succeeded", "canceled"}:
+        return value
+    return "submitted_with_payment"
 
 
 def authoritative_yookassa_payment_for_webhook(payment: dict) -> dict:
@@ -19237,7 +20573,17 @@ def authoritative_yookassa_payment_for_webhook(payment: dict) -> dict:
     return yookassa_get_payment(payment_id)
 
 
+def authoritative_yookassa_refund_for_webhook(refund: dict) -> dict:
+    if not yookassa_configured():
+        return refund
+    refund_id = str(refund.get("id") or "").strip()
+    if not refund_id:
+        raise HTTPException(status_code=400, detail="YooKassa refund id отсутствует.")
+    return yookassa_get_refund(refund_id)
+
+
 def create_yookassa_payment_for_order(row, user_email: str) -> dict:
+    ensure_paid_sales_ready()
     order = billing_order_status(row)
     quote = order["quote"] if isinstance(order["quote"], dict) else {}
     plan_name = str(quote.get("planName") or "BlueVPN")
@@ -19259,6 +20605,12 @@ def create_yookassa_payment_for_order(row, user_email: str) -> dict:
             "email": user_email,
         },
         "save_payment_method": bool(order["autoRenew"]),
+        "receipt": yookassa_receipt_payload(
+            user_email=user_email,
+            description=f"Подписка Green VPN: {plan_name}",
+            amount=amount,
+            currency=order["currency"],
+        ),
     }
 
     payment = yookassa_request(
@@ -19275,13 +20627,16 @@ def create_yookassa_payment_for_order(row, user_email: str) -> dict:
         if payment_method.get("saved") is True
         else None
     )
+    tax_receipt_status = yookassa_receipt_registration_status(payment)
 
     with db() as conn:
         conn.execute(
             """
             UPDATE billing_orders
             SET provider = ?, provider_payment_id = ?, provider_payment_method_id = ?,
-                payment_url = ?, updated_at = ?
+                payment_url = ?, tax_receipt_mode = ?,
+                tax_receipt_status = ?, tax_receipt_error = NULL,
+                tax_receipt_updated_at = ?, updated_at = ?
             WHERE public_id = ?
             """,
             (
@@ -19289,6 +20644,9 @@ def create_yookassa_payment_for_order(row, user_email: str) -> dict:
                 payment_id,
                 payment_method_id,
                 payment_url,
+                TAX_RECEIPT_MODE,
+                tax_receipt_status,
+                utc_now_iso(),
                 utc_now_iso(),
                 public_id,
             ),
@@ -19306,6 +20664,14 @@ def create_billing_order_for_user(user_id: int, payload: TariffSelectionIn) -> d
     user_access = get_user_access_row(int(user_id))
     if user_access is None:
         raise HTTPException(status_code=404, detail="Пользователь не найден.")
+    if user_is_guest(user_access) or not user_email_verified(user_access):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "email_verification_required",
+                "message": "Подтвердите email для чека и восстановления доступа перед оплатой.",
+            },
+        )
     beta_request = paid_beta_request_allowed(
         payload.clientMarker,
         payload.releaseChannel,
@@ -19349,6 +20715,7 @@ def create_billing_order_for_user(user_id: int, payload: TariffSelectionIn) -> d
             },
         )
 
+    ensure_paid_sales_ready(require_provider=False)
     normalized = normalize_tariff_selection(payload)
     quote = quote_tariff(
         normalized,
@@ -19436,9 +20803,10 @@ def create_billing_order_for_user(user_id: int, payload: TariffSelectionIn) -> d
                     public_id, user_id, status, auto_renew, amount_rub, currency,
                     selection_json, quote_json, promo_code, discount_rub,
                     original_amount_rub, beta_invite_public_id, payment_url, provider,
+                    tax_receipt_mode, tax_receipt_status, tax_receipt_updated_at,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     public_id,
@@ -19455,6 +20823,9 @@ def create_billing_order_for_user(user_id: int, payload: TariffSelectionIn) -> d
                     beta_invite_public_id,
                     None,
                     "yookassa" if yookassa_configured() else "manual_mvp",
+                    TAX_RECEIPT_MODE,
+                    "prepared",
+                    now,
                     now,
                     now,
                 ),
@@ -19562,6 +20933,27 @@ def validate_yookassa_payment_for_order(row, payment: dict) -> None:
         raise HTTPException(status_code=409, detail="Сумма платежа YooKassa не совпадает.")
 
 
+def update_billing_tax_receipt_from_payment(public_id: str, payment: dict) -> None:
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE billing_orders
+            SET tax_receipt_status = ?,
+                tax_receipt_error = NULL,
+                tax_receipt_updated_at = ?,
+                updated_at = ?
+            WHERE public_id = ?
+            """,
+            (
+                yookassa_receipt_registration_status(payment),
+                utc_now_iso(),
+                utc_now_iso(),
+                public_id,
+            ),
+        )
+        conn.commit()
+
+
 def mark_billing_order_canceled(public_id: str, provider_payment_id: Optional[str] = None) -> dict:
     with db() as conn:
         conn.execute(
@@ -19627,6 +21019,7 @@ def apply_yookassa_payment_update(
     )
     status = str(payment.get("status") or "").strip().lower()
     paid = payment.get("paid") is True
+    update_billing_tax_receipt_from_payment(public_id, payment)
 
     if paid or status == "succeeded":
         amount = payment.get("amount") if isinstance(payment.get("amount"), dict) else {}
@@ -19786,7 +21179,7 @@ def billing_order_requires_attention(row, now: datetime) -> list[dict]:
             "medium",
             "Order status is activated but activated_at is empty.",
         )
-    if activated_at and status != "activated":
+    if activated_at and status not in {"activated", "refunded"}:
         add_issue(
             "activation_timestamp_status_mismatch",
             "medium",
@@ -19815,6 +21208,53 @@ def billing_order_requires_attention(row, now: datetime) -> list[dict]:
             "terminal_order_has_payment_markers",
             "high",
             "Failed/canceled order has paid or activated markers and needs manual review.",
+        )
+    refund_status = str(
+        row["refund_status"]
+        if "refund_status" in row.keys()
+        else "not_requested"
+    ).strip().lower()
+    refund_entitlement_status = str(
+        row["refund_entitlement_status"]
+        if "refund_entitlement_status" in row.keys()
+        else "not_required"
+    ).strip().lower()
+    refund_updated_at = parse_dt(
+        row["refund_updated_at"]
+        if "refund_updated_at" in row.keys()
+        else None
+    )
+    refund_age_hours = None
+    if refund_updated_at is not None:
+        if refund_updated_at.tzinfo is None:
+            refund_updated_at = refund_updated_at.replace(tzinfo=timezone.utc)
+        refund_age_hours = max(
+            0.0,
+            (now - refund_updated_at).total_seconds() / 3600.0,
+        )
+    if refund_status in {"processing", "pending", "retry_required"}:
+        severity = (
+            "high"
+            if refund_status == "retry_required"
+            or (refund_age_hours is not None and refund_age_hours >= 1)
+            else "medium"
+        )
+        add_issue(
+            f"refund_{refund_status}",
+            severity,
+            "Возврат не завершён и требует сверки с ЮKassa.",
+        )
+    if refund_status in {"succeeded", "partial_succeeded"} and refund_entitlement_status != "rolled_back":
+        add_issue(
+            "refund_entitlement_review_required",
+            "high",
+            "Деньги возвращены, но права пользователя не были безопасно восстановлены.",
+        )
+    if status == "refunded" and refund_status != "succeeded":
+        add_issue(
+            "refunded_status_mismatch",
+            "high",
+            "Заказ помечен refunded без подтверждённого полного возврата.",
         )
     return issues
 
@@ -20499,13 +21939,15 @@ def create_yookassa_auto_renewal_payment(
     payment_method_id: str,
     renewal_key: str,
 ) -> dict:
+    ensure_paid_sales_ready()
     order = billing_order_status(row)
     quote = order["quote"] if isinstance(order["quote"], dict) else {}
     plan_name = str(quote.get("planName") or PUBLIC_PRODUCT_PLAN_NAME)
     public_id = order["orderId"]
+    amount = f"{int(order['amountRub'])}.00"
     payload = {
         "amount": {
-            "value": f"{int(order['amountRub'])}.00",
+            "value": amount,
             "currency": order["currency"],
         },
         "capture": True,
@@ -20519,6 +21961,12 @@ def create_yookassa_auto_renewal_payment(
             "subscriptionId": str(subscription_id),
             "orderKind": "auto_renewal",
         },
+        "receipt": yookassa_receipt_payload(
+            user_email=user_email,
+            description=f"Автопродление Green VPN: {plan_name}",
+            amount=amount,
+            currency=order["currency"],
+        ),
     }
     idempotence_key = "greenvpn-renew-" + hashlib.sha256(
         renewal_key.encode("utf-8")
@@ -20544,10 +21992,20 @@ def create_yookassa_auto_renewal_payment(
             """
             UPDATE billing_orders
             SET provider = 'yookassa', provider_payment_id = ?,
-                provider_payment_method_id = ?, updated_at = ?
+                provider_payment_method_id = ?, tax_receipt_mode = ?,
+                tax_receipt_status = ?, tax_receipt_error = NULL,
+                tax_receipt_updated_at = ?, updated_at = ?
             WHERE public_id = ?
             """,
-            (payment_id, saved_method_id, utc_now_iso(), public_id),
+            (
+                payment_id,
+                saved_method_id,
+                TAX_RECEIPT_MODE,
+                yookassa_receipt_registration_status(payment),
+                utc_now_iso(),
+                utc_now_iso(),
+                public_id,
+            ),
         )
         conn.commit()
         updated = conn.execute(
@@ -20633,10 +22091,11 @@ def create_auto_renewal_order(subscription_id: int) -> dict:
                 selection_json, quote_json, promo_code, discount_rub,
                 original_amount_rub, payment_url, provider,
                 provider_payment_method_id, created_at, updated_at,
-                order_kind, renewal_key
+                order_kind, renewal_key, tax_receipt_mode,
+                tax_receipt_status, tax_receipt_updated_at
             )
             VALUES (?, ?, 'pending', 1, ?, 'RUB', ?, ?, NULL, 0, ?, NULL,
-                    'yookassa', ?, ?, ?, 'auto_renewal', ?)
+                    'yookassa', ?, ?, ?, 'auto_renewal', ?, ?, 'prepared', ?)
             """,
             (
                 public_id,
@@ -20649,6 +22108,8 @@ def create_auto_renewal_order(subscription_id: int) -> dict:
                 now_iso,
                 now_iso,
                 renewal_key,
+                TAX_RECEIPT_MODE,
+                now_iso,
             ),
         )
         conn.commit()
@@ -20887,7 +22348,7 @@ def subscription_expiry_candidate_payload(
     auto_renew = bool(row["auto_renew"])
     has_payment_method = bool(row["provider_payment_method_id"])
     has_pending_order = pending_order is not None
-    contactable = bool(row["email_verified"]) or bool(row["phone_verified"])
+    contactable = bool(row["email_verified"])
     expiry_review_payload = subscription_expiry_review_payload(expiry_review)
     reviewed_for_expiry = bool(
         expiry_review_payload and expiry_review_payload.get("status") == "reviewed"
@@ -20920,12 +22381,12 @@ def subscription_expiry_candidate_payload(
                 "Paid subscription is expiring soon and auto-renew is off.",
             )
         )
-    if expiring_within_window and not contactable:
+    if expiring_within_window and billable and not contactable:
         issues.append(
             renewal_issue(
                 "retention_contact_unverified",
                 "medium",
-                "No verified email or phone is available for expiry/retention contact.",
+                "No verified email is available for expiry/retention contact.",
             )
         )
     if expiring_within_window and billable and auto_renew and not has_payment_method:
@@ -20991,7 +22452,6 @@ def subscription_expiry_candidate_payload(
         "pendingAutoRenewOrder": renewal_pending_order_snapshot(pending_order),
         "contactable": contactable,
         "emailVerified": bool(row["email_verified"]),
-        "phoneVerified": bool(row["phone_verified"]),
         "reviewedForExpiry": reviewed_for_expiry,
         "expiryReview": expiry_review_payload,
         "clearedIssueCodes": cleared_issue_codes,
@@ -21015,8 +22475,7 @@ def subscription_expiry_readiness_payload(limit: int = 25) -> dict:
             SELECT
                 s.*,
                 u.email AS user_email,
-                u.email_verified,
-                u.phone_verified
+                u.email_verified
             FROM subscriptions s
             JOIN (
                 SELECT user_id, MAX(id) AS latest_subscription_id
@@ -21093,12 +22552,16 @@ def subscription_expiry_readiness_payload(limit: int = 25) -> dict:
     missing_contact = [
         candidate
         for candidate in expiring
-        if not candidate["contactable"] and not candidate["reviewedForExpiry"]
+        if candidate["billable"]
+        and not candidate["contactable"]
+        and not candidate["reviewedForExpiry"]
     ]
     reviewed_missing_contact = [
         candidate
         for candidate in expiring
-        if not candidate["contactable"] and candidate["reviewedForExpiry"]
+        if candidate["billable"]
+        and not candidate["contactable"]
+        and candidate["reviewedForExpiry"]
     ]
     blocked_expiring = [
         candidate
@@ -21218,6 +22681,154 @@ def cancel_auto_renew_for_user(user_id: int) -> dict:
     return subscription_status(get_subscription_row(user_id))
 
 
+def billing_subscription_snapshot(row: Optional[sqlite3.Row]) -> Optional[dict]:
+    if row is None:
+        return None
+    return {
+        "id": int(row["id"]),
+        "userId": int(row["user_id"]),
+        "planCode": str(row["plan_code"] or ""),
+        "planName": str(row["plan_name"] or ""),
+        "maxDevices": int(row["max_devices"] or 0),
+        "isActive": bool(row["is_active"]),
+        "expiresAt": row["expires_at"],
+        "createdAt": row["created_at"],
+        "monthlyPriceRub": (
+            int(row["monthly_price_rub"])
+            if "monthly_price_rub" in row.keys()
+            and row["monthly_price_rub"] is not None
+            else None
+        ),
+        "selectionJson": (
+            row["selection_json"]
+            if "selection_json" in row.keys()
+            else None
+        ),
+        "autoRenew": (
+            bool(row["auto_renew"])
+            if "auto_renew" in row.keys()
+            else False
+        ),
+        "providerPaymentMethodId": (
+            row["provider_payment_method_id"]
+            if "provider_payment_method_id" in row.keys()
+            else None
+        ),
+    }
+
+
+def parse_billing_subscription_snapshot(raw: Optional[str]) -> Optional[dict]:
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def billing_subscription_matches_snapshot(
+    row: Optional[sqlite3.Row],
+    snapshot: Optional[dict],
+) -> bool:
+    if row is None or not isinstance(snapshot, dict):
+        return False
+    comparable = {
+        "id": int(row["id"]),
+        "userId": int(row["user_id"]),
+        "planCode": str(row["plan_code"] or ""),
+        "planName": str(row["plan_name"] or ""),
+        "maxDevices": int(row["max_devices"] or 0),
+        "isActive": bool(row["is_active"]),
+        "expiresAt": row["expires_at"],
+        "monthlyPriceRub": (
+            int(row["monthly_price_rub"])
+            if "monthly_price_rub" in row.keys()
+            and row["monthly_price_rub"] is not None
+            else None
+        ),
+    }
+    return all(comparable.get(key) == snapshot.get(key) for key in comparable)
+
+
+def billing_refund_entitlement_preflight(row: sqlite3.Row) -> dict:
+    before = parse_billing_subscription_snapshot(
+        row["entitlement_before_json"]
+        if "entitlement_before_json" in row.keys()
+        else None
+    )
+    after = parse_billing_subscription_snapshot(
+        row["entitlement_after_json"]
+        if "entitlement_after_json" in row.keys()
+        else None
+    )
+    if before is None or after is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "refund_entitlement_snapshot_missing",
+                "message": (
+                    "Для этого старого заказа нет безопасного снимка прав. "
+                    "Деньги нельзя возвращать автоматически до ручной сверки."
+                ),
+            },
+        )
+    current = get_subscription_row(int(row["user_id"]))
+    if not billing_subscription_matches_snapshot(current, after):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "refund_entitlement_changed",
+                "message": (
+                    "После этого заказа права пользователя уже изменились. "
+                    "Автоматический полный возврат остановлен до ручной сверки."
+                ),
+            },
+        )
+    return {
+        "before": before,
+        "after": after,
+        "subscriptionId": int(current["id"]),
+    }
+
+
+def restore_billing_subscription_snapshot(
+    conn: sqlite3.Connection,
+    snapshot: dict,
+) -> None:
+    subscription_id = int(snapshot["id"])
+    user_id = int(snapshot["userId"])
+    existing = conn.execute(
+        "SELECT id, user_id FROM subscriptions WHERE id = ?",
+        (subscription_id,),
+    ).fetchone()
+    if existing is None or int(existing["user_id"]) != user_id:
+        raise RuntimeError("refund entitlement subscription is missing")
+    conn.execute(
+        """
+        UPDATE subscriptions
+        SET plan_code = ?, plan_name = ?, max_devices = ?, is_active = ?,
+            expires_at = ?, monthly_price_rub = ?, selection_json = ?,
+            auto_renew = ?, provider_payment_method_id = ?, updated_at = ?
+        WHERE id = ? AND user_id = ?
+        """,
+        (
+            str(snapshot.get("planCode") or ""),
+            str(snapshot.get("planName") or ""),
+            int(snapshot.get("maxDevices") or 0),
+            1 if snapshot.get("isActive") else 0,
+            snapshot.get("expiresAt"),
+            snapshot.get("monthlyPriceRub"),
+            snapshot.get("selectionJson"),
+            1 if snapshot.get("autoRenew") else 0,
+            snapshot.get("providerPaymentMethodId"),
+            utc_now_iso(),
+            subscription_id,
+            user_id,
+        ),
+    )
+
+
 def mark_billing_order_paid_and_activate(
     public_id: str,
     provider_payment_id: Optional[str] = None,
@@ -21233,6 +22844,14 @@ def mark_billing_order_paid_and_activate(
         raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
 
     row = initial_row
+    before_subscription = billing_subscription_snapshot(
+        get_subscription_row(int(initial_row["user_id"]))
+    )
+    before_subscription_json = json.dumps(
+        before_subscription,
+        ensure_ascii=False,
+        sort_keys=True,
+    )
     if str(row["status"] or "").strip().lower() in {"failed", "canceled", "cancelled"}:
         raise HTTPException(
             status_code=409,
@@ -21309,6 +22928,7 @@ def mark_billing_order_paid_and_activate(
                 provider_payment_id = COALESCE(?, provider_payment_id),
                 provider_payment_method_id = COALESCE(?, provider_payment_method_id),
                 selection_json = ?, quote_json = ?,
+                entitlement_before_json = COALESCE(entitlement_before_json, ?),
                 paid_at = COALESCE(paid_at, ?),
                 updated_at = ?
             WHERE public_id = ?
@@ -21318,6 +22938,7 @@ def mark_billing_order_paid_and_activate(
                 provider_payment_method_id,
                 json.dumps(selection, ensure_ascii=False),
                 json.dumps(order_quote, ensure_ascii=False),
+                before_subscription_json,
                 now,
                 now,
                 public_id,
@@ -21346,12 +22967,21 @@ def mark_billing_order_paid_and_activate(
             conn.commit()
         raise
 
+    after_subscription_row = get_subscription_row(int(row["user_id"]))
+    after_subscription = billing_subscription_snapshot(after_subscription_row)
+    after_subscription_json = json.dumps(
+        after_subscription,
+        ensure_ascii=False,
+        sort_keys=True,
+    )
     with db() as conn:
         conn.execute(
             """
             UPDATE billing_orders
             SET status = ?, provider_payment_id = ?, paid_at = COALESCE(paid_at, ?),
                 provider_payment_method_id = COALESCE(?, provider_payment_method_id),
+                activation_subscription_id = ?,
+                entitlement_after_json = ?,
                 activated_at = ?, updated_at = ?
             WHERE public_id = ?
             """,
@@ -21360,6 +22990,8 @@ def mark_billing_order_paid_and_activate(
                 provider_payment_id or row["provider_payment_id"],
                 now,
                 provider_payment_method_id,
+                int(after_subscription_row["id"]),
+                after_subscription_json,
                 now,
                 now,
                 public_id,
@@ -21405,6 +23037,387 @@ def mark_billing_order_paid_and_activate(
         "selection": result["selection"],
         "quote": result["quote"],
         "subscription": result["subscription"],
+    }
+
+
+def ensure_refund_execution_ready() -> dict:
+    readiness = refund_execution_readiness()
+    if readiness["productionReady"]:
+        return readiness
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "code": "refund_execution_not_ready",
+            "message": (
+                "Возврат не выполнен: серверный контур возвратов закрыт до "
+                "отдельного подтверждения владельца и боевого smoke."
+            ),
+            "requiredActions": readiness["requiredActions"],
+        },
+    )
+
+
+def yookassa_refund_receipt_status(refund: dict) -> str:
+    value = str(refund.get("receipt_registration") or "").strip().lower()
+    if value in {"pending", "succeeded", "canceled"}:
+        return value
+    return "submitted_with_refund"
+
+
+def get_billing_order_row_by_provider_payment_id(
+    provider_payment_id: str,
+) -> Optional[sqlite3.Row]:
+    provider_payment_id = provider_payment_id.strip()
+    if not provider_payment_id:
+        return None
+    with db() as conn:
+        return conn.execute(
+            """
+            SELECT *
+            FROM billing_orders
+            WHERE provider = 'yookassa' AND provider_payment_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (provider_payment_id,),
+        ).fetchone()
+
+
+def validate_yookassa_refund_for_order(
+    row: sqlite3.Row,
+    refund: dict,
+) -> tuple[int, str]:
+    provider_payment_id = str(row["provider_payment_id"] or "").strip()
+    refund_payment_id = str(refund.get("payment_id") or "").strip()
+    if not refund_payment_id or refund_payment_id != provider_payment_id:
+        raise HTTPException(
+            status_code=409,
+            detail="YooKassa refund payment id не совпадает с заказом.",
+        )
+    amount = refund.get("amount") if isinstance(refund.get("amount"), dict) else {}
+    currency = str(amount.get("currency") or "").strip().upper()
+    amount_rub = _payment_amount_rub(refund)
+    if amount_rub is None or amount_rub <= 0:
+        raise HTTPException(
+            status_code=409,
+            detail="Сумма возврата YooKassa отсутствует или некорректна.",
+        )
+    if currency != str(row["currency"] or "").strip().upper():
+        raise HTTPException(
+            status_code=409,
+            detail="Валюта возврата YooKassa не совпадает с заказом.",
+        )
+    if amount_rub > int(row["amount_rub"]):
+        raise HTTPException(
+            status_code=409,
+            detail="Сумма возврата YooKassa превышает сумму заказа.",
+        )
+    saved_refund_id = str(
+        (
+            row["refund_provider_id"]
+            if "refund_provider_id" in row.keys()
+            else ""
+        )
+        or ""
+    ).strip()
+    incoming_refund_id = str(refund.get("id") or "").strip()
+    if saved_refund_id and incoming_refund_id and saved_refund_id != incoming_refund_id:
+        raise HTTPException(
+            status_code=409,
+            detail="YooKassa refund id не совпадает с сохранённым возвратом.",
+        )
+    return amount_rub, currency
+
+
+def apply_yookassa_refund_update(
+    public_id: str,
+    refund: dict,
+) -> dict:
+    row = get_billing_order_row(public_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
+    amount_rub, _ = validate_yookassa_refund_for_order(row, refund)
+    refund_id = str(refund.get("id") or "").strip() or None
+    provider_status = str(refund.get("status") or "").strip().lower()
+    receipt_status = yookassa_refund_receipt_status(refund)
+    now = utc_now_iso()
+
+    if provider_status == "succeeded":
+        is_full_refund = amount_rub == int(row["amount_rub"])
+        before = parse_billing_subscription_snapshot(
+            row["entitlement_before_json"]
+            if "entitlement_before_json" in row.keys()
+            else None
+        )
+        after = parse_billing_subscription_snapshot(
+            row["entitlement_after_json"]
+            if "entitlement_after_json" in row.keys()
+            else None
+        )
+        entitlement_status = "review_required"
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute(
+                """
+                SELECT *
+                FROM subscriptions
+                WHERE user_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (int(row["user_id"]),),
+            ).fetchone()
+            if (
+                is_full_refund
+                and before is not None
+                and after is not None
+                and billing_subscription_matches_snapshot(current, after)
+            ):
+                restore_billing_subscription_snapshot(conn, before)
+                entitlement_status = "rolled_back"
+            conn.execute(
+                """
+                UPDATE billing_orders
+                SET status = CASE WHEN ? = 1 THEN 'refunded' ELSE status END,
+                    auto_renew = CASE WHEN ? = 1 THEN 0 ELSE auto_renew END,
+                    provider_payment_method_id = CASE
+                        WHEN ? = 1 THEN NULL
+                        ELSE provider_payment_method_id
+                    END,
+                    refund_status = ?,
+                    refund_amount_rub = ?,
+                    refund_provider_id = COALESCE(?, refund_provider_id),
+                    refund_receipt_status = ?,
+                    refund_entitlement_status = ?,
+                    refund_error = NULL,
+                    refunded_at = COALESCE(refunded_at, ?),
+                    refund_updated_at = ?,
+                    updated_at = ?
+                WHERE public_id = ?
+                """,
+                (
+                    1 if is_full_refund else 0,
+                    1 if is_full_refund else 0,
+                    1 if is_full_refund else 0,
+                    "succeeded" if is_full_refund else "partial_succeeded",
+                    amount_rub,
+                    refund_id,
+                    receipt_status,
+                    entitlement_status,
+                    now,
+                    now,
+                    now,
+                    public_id,
+                ),
+            )
+            conn.commit()
+        updated = get_billing_order_row(public_id)
+        return {
+            "order": billing_order_status(updated),
+            "fullRefund": is_full_refund,
+            "entitlementRolledBack": entitlement_status == "rolled_back",
+        }
+
+    normalized_status = (
+        provider_status
+        if provider_status in {"pending", "canceled"}
+        else "pending"
+    )
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE billing_orders
+            SET refund_status = ?,
+                refund_amount_rub = ?,
+                refund_provider_id = COALESCE(?, refund_provider_id),
+                refund_receipt_status = ?,
+                refund_error = CASE
+                    WHEN ? = 'canceled' THEN 'provider_refund_canceled'
+                    ELSE NULL
+                END,
+                refund_updated_at = ?,
+                updated_at = ?
+            WHERE public_id = ?
+            """,
+            (
+                normalized_status,
+                amount_rub,
+                refund_id,
+                receipt_status,
+                normalized_status,
+                now,
+                now,
+                public_id,
+            ),
+        )
+        conn.commit()
+    return {
+        "order": billing_order_status(get_billing_order_row(public_id)),
+        "fullRefund": amount_rub == int(row["amount_rub"]),
+        "entitlementRolledBack": False,
+    }
+
+
+def execute_full_refund_for_order(
+    public_id: str,
+    *,
+    reason: str,
+) -> dict:
+    public_id = clean_limited_text(public_id, 120).strip()
+    reason = clean_limited_text(reason, 500).strip()
+    if len(reason) < 12:
+        raise HTTPException(
+            status_code=400,
+            detail="Причина возврата должна содержать минимум 12 символов.",
+        )
+    row = get_billing_order_row(public_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
+    existing_refund_status = str(
+        row["refund_status"]
+        if "refund_status" in row.keys()
+        else "not_requested"
+    ).strip().lower()
+    if existing_refund_status == "succeeded" or str(row["status"]).lower() == "refunded":
+        return {
+            "order": billing_order_status(row),
+            "reused": True,
+            "providerCalled": False,
+        }
+
+    ensure_refund_execution_ready()
+    if str(row["status"] or "").strip().lower() != "activated":
+        raise HTTPException(
+            status_code=409,
+            detail="Полный возврат разрешён только для активированного заказа.",
+        )
+    if str(row["provider"] or "").strip().lower() != "yookassa":
+        raise HTTPException(
+            status_code=409,
+            detail="Автоматический возврат доступен только для заказа ЮKassa.",
+        )
+    payment_id = str(row["provider_payment_id"] or "").strip()
+    if not payment_id:
+        raise HTTPException(
+            status_code=409,
+            detail="У заказа отсутствует идентификатор платежа ЮKassa.",
+        )
+    billing_refund_entitlement_preflight(row)
+
+    existing_refund_id = str(
+        (
+            row["refund_provider_id"]
+            if "refund_provider_id" in row.keys()
+            else ""
+        )
+        or ""
+    ).strip()
+    if existing_refund_id:
+        provider_refund = yookassa_get_refund(existing_refund_id)
+        result = apply_yookassa_refund_update(public_id, provider_refund)
+        return {
+            **result,
+            "reused": True,
+            "providerCalled": True,
+        }
+
+    payment = yookassa_get_payment(payment_id)
+    validate_yookassa_payment_for_order(row, payment)
+    if str(payment.get("status") or "").strip().lower() != "succeeded":
+        raise HTTPException(
+            status_code=409,
+            detail="ЮKassa не подтверждает успешный статус исходного платежа.",
+        )
+    if payment.get("refundable") is False:
+        raise HTTPException(
+            status_code=409,
+            detail="ЮKassa пометила исходный платёж как недоступный для возврата.",
+        )
+
+    idempotence_key = "greenvpn-refund-" + hashlib.sha256(
+        public_id.encode("utf-8")
+    ).hexdigest()[:32]
+    now = utc_now_iso()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        current = conn.execute(
+            "SELECT * FROM billing_orders WHERE public_id = ?",
+            (public_id,),
+        ).fetchone()
+        if current is None:
+            raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
+        current_status = str(current["refund_status"] or "").strip().lower()
+        if current_status == "succeeded":
+            conn.commit()
+            return {
+                "order": billing_order_status(current),
+                "reused": True,
+                "providerCalled": False,
+            }
+        conn.execute(
+            """
+            UPDATE billing_orders
+            SET refund_status = 'processing',
+                refund_amount_rub = amount_rub,
+                refund_reason = COALESCE(refund_reason, ?),
+                refund_idempotence_key = COALESCE(refund_idempotence_key, ?),
+                refund_receipt_status = 'prepared',
+                refund_entitlement_status = 'prepared',
+                refund_error = NULL,
+                refund_requested_at = COALESCE(refund_requested_at, ?),
+                refund_updated_at = ?,
+                updated_at = ?
+            WHERE public_id = ?
+            """,
+            (reason, idempotence_key, now, now, now, public_id),
+        )
+        conn.commit()
+
+    payload = {
+        "payment_id": payment_id,
+        "amount": {
+            "value": f"{int(row['amount_rub'])}.00",
+            "currency": str(row["currency"]),
+        },
+        "description": clean_limited_text(
+            f"Полный возврат Green VPN, заказ {public_id}",
+            128,
+        ),
+    }
+    try:
+        provider_refund = yookassa_request(
+            "/refunds",
+            payload,
+            idempotence_key=idempotence_key,
+        )
+    except Exception as exc:
+        detail = exc.detail if isinstance(exc, HTTPException) else type(exc).__name__
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE billing_orders
+                SET refund_status = 'retry_required',
+                    refund_error = ?,
+                    refund_updated_at = ?,
+                    updated_at = ?
+                WHERE public_id = ?
+                  AND refund_status = 'processing'
+                """,
+                (
+                    clean_limited_text(str(detail), 500),
+                    utc_now_iso(),
+                    utc_now_iso(),
+                    public_id,
+                ),
+            )
+            conn.commit()
+        raise
+
+    result = apply_yookassa_refund_update(public_id, provider_refund)
+    return {
+        **result,
+        "reused": False,
+        "providerCalled": True,
     }
 
 
@@ -22704,7 +24717,6 @@ def build_product_readiness() -> dict:
     public_site = public_site_readiness()
     payment = yookassa_payment_readiness()
     email = email_confirmation_readiness()
-    sms = sms_confirmation_readiness()
     auth_codes = auth_code_readiness()
     user_auth_flow = user_auth_flow_readiness()
     alerts = admin_alert_readiness()
@@ -22718,12 +24730,6 @@ def build_product_readiness() -> dict:
     monitoring = build_monitoring_status()
     service_monitoring = build_service_availability_observation_summary()
     monitoring_probes = service_monitoring.get("probeReadiness") or {}
-    sms_required = (user_auth_flow.get("primaryMethod") or "") in {
-        "phone_code",
-        "phone_sms",
-    }
-    sms_ok_for_current_auth = bool(sms.get("productionReady")) or not sms_required
-
     checks = [
         {
             "code": "public_api",
@@ -22763,22 +24769,10 @@ def build_product_readiness() -> dict:
             "message": "SMTP/Yandex 360 должен быть настроен для реальных email-кодов.",
         },
         {
-            "code": "sms",
-            "title": "Доставка SMS-кодов",
-            "ok": sms_ok_for_current_auth,
-            "message": (
-                "SMS.ru должен быть настроен для кодов входа по телефону."
-                if sms_required
-                else "SMS-вход сейчас optional; публичный MVP использует email-код как основной канал."
-            ),
-            "optional": not sms_required,
-            "available": bool(sms.get("productionReady")),
-        },
-        {
             "code": "user_auth_flow",
             "title": "Пользовательский вход",
             "ok": bool(user_auth_flow.get("productionReady")),
-            "message": "Вход и регистрация по email-коду должны быть готовы: email основной, пароль запасной, SMS optional, лимиты безопасны, dev-коды не выдаются.",
+            "message": "Гостевой старт и подтверждение email перед оплатой должны быть готовы; пароль остаётся запасным способом восстановления.",
         },
         {
             "code": "payments",
@@ -22825,7 +24819,7 @@ def build_product_readiness() -> dict:
             "code": "admin_alerts",
             "title": "Оповещения админов",
             "ok": bool(alerts.get("productionReady")),
-            "message": "Telegram-оповещения об инцидентах должны быть настроены для поддержки/операций.",
+            "message": "Автоматическая доставка инцидентов через SMTP или Telegram должна быть настроена для поддержки/операций.",
         },
         {
             "code": "admin_2fa",
@@ -22854,7 +24848,6 @@ def build_product_readiness() -> dict:
         "publicSiteReadiness": public_site,
         "paymentReadiness": payment,
         "emailReadiness": email,
-        "smsReadiness": sms,
         "authCodeReadiness": auth_codes,
         "userAuthFlowReadiness": user_auth_flow,
         "alertReadiness": alerts,
@@ -22878,7 +24871,6 @@ LAUNCH_GATE_SEVERITY = {
     "payments": "critical",
     "updates": "critical",
     "windows_trust": "critical",
-    "sms": "warning",
     "email": "warning",
     "user_auth_flow": "warning",
     "monitoring": "warning",
@@ -22896,7 +24888,6 @@ LAUNCH_GATE_TITLES_RU = {
     "payments": "Платежи",
     "updates": "Финальный установщик и обновления",
     "windows_trust": "Доверенный Windows-релиз",
-    "sms": "SMS-коды",
     "email": "Email-коды",
     "user_auth_flow": "Пользовательский вход",
     "monitoring": "Мониторинг backend/VPN",
@@ -22914,12 +24905,11 @@ LAUNCH_GATE_NEXT_ACTION_RU = {
     "payments": "Дождаться активного статуса самозанятого/ЮKassa и применить production-ключи только через серверный env.",
     "updates": "Собрать финальный Windows-установщик только в конце, опубликовать HTTPS-ссылку, SHA256 и rollback.",
     "windows_trust": "Получить Code Signing/Trusted Signing, подписать финальный установщик и бинарники, затем опубликовать trusted download.",
-    "sms": "Держать SMS.ru в рабочем режиме или явно оставить email как основной канал входа.",
     "email": "Держать Yandex 360 SMTP рабочим для кодов входа, уведомлений и 2FA админки.",
-    "user_auth_flow": "Держать вход code-first: телефон как основной канал, email как запасной, dev-коды выключены.",
+    "user_auth_flow": "Держать гостевой старт и подтверждение email перед оплатой; dev-коды должны быть выключены.",
     "monitoring": "Держать backend/WireGuard monitoring зелёным перед тестами и релизом.",
     "monitoring_probes": "Поставить отдельный внешний probe, чтобы проверять сайт/API и пользовательские сервисы не с того же сервера.",
-    "admin_alerts": "Подключить Telegram incident alerts, когда владелец даст bot token/chat id.",
+    "admin_alerts": "Держать SMTP incident alerts рабочими; Telegram можно подключить как дополнительный канал.",
     "admin_2fa": "Включить 2FA минимум для владельца и ключевых staff-аккаунтов перед публичным запуском.",
 }
 
@@ -22970,7 +24960,6 @@ def build_launch_readiness() -> dict:
         "payments",
         "updates",
         "windows_trust",
-        "sms",
         "email",
         "user_auth_flow",
         "monitoring",
@@ -23045,7 +25034,7 @@ def build_launch_readiness() -> dict:
     gates.append(
         launch_gate_payload(
             "promo_campaign",
-            bool(promo_readiness.get("safeToRunLaunchCampaign")),
+            not bool(promo_readiness.get("requiresAttention")),
             promo_summary.get("message")
             or "Стартовая акция пока не готова к публичному запуску.",
             severity="warning",
@@ -23197,7 +25186,6 @@ PAID_TRAFFIC_REQUIRED_CODES = {
 PRIVATE_DEMO_ALLOWED_MISSING_CODES = {
     "updates",
     "windows_trust",
-    "sms",
     "monitoring",
     "monitoring_probes",
     "admin_alerts",
@@ -23393,13 +25381,6 @@ LAUNCH_CLOSURE_ACTION_SPECS = {
         "secret": True,
         "safeWithoutOwner": False,
     },
-    "sms": {
-        "category": "auth",
-        "ownerRequired": True,
-        "autonomousCodeWork": False,
-        "ownerInput": "SMS.ru api_id и решение по sender через server-only env, если SMS readiness не зелёный.",
-        "secret": True,
-    },
     "email": {
         "category": "auth",
         "ownerRequired": True,
@@ -23430,7 +25411,7 @@ LAUNCH_CLOSURE_ACTION_SPECS = {
         "category": "ops",
         "ownerRequired": True,
         "autonomousCodeWork": False,
-        "ownerInput": "Telegram bot token и chat id через server-only env.",
+        "ownerInput": "Рабочий SMTP-ящик для email-alerts или Telegram bot token/chat id через server-only env.",
         "secret": True,
     },
     "admin_2fa": {
@@ -23472,10 +25453,10 @@ LAUNCH_CLOSURE_ACTION_SPECS = {
     },
     "owner_actions": {
         "category": "owner_actions",
-        "ownerRequired": True,
+        "ownerRequired": False,
         "autonomousCodeWork": False,
-        "ownerInput": "Закрыть ожидающие внешние действия без вставки секретов в repo/docs/chat.",
-        "secret": True,
+        "operationalReview": True,
+        "operatorAction": "Сводный gate закрывается автоматически после готовности конкретных внешних действий.",
     },
 }
 
@@ -23925,7 +25906,6 @@ def external_owner_setup_bundle() -> dict:
             "/api/v1/admin/network/split-plan",
             "/api/v1/admin/external-actions",
             "/api/v1/admin/email/readiness",
-            "/api/v1/admin/sms/readiness",
             "/api/v1/admin/billing/readiness",
             "/api/v1/admin/billing/payment-smoke/readiness",
             "/api/v1/admin/alerts/readiness",
@@ -23994,27 +25974,6 @@ def external_action_specs() -> list[dict]:
             "blocks": ["email_login_codes", "support_mail"],
         },
         {
-            "code": "sms",
-            "title": "SMS.ru для входа по телефону",
-            "ownerAction": "Получить SMS.ru api_id и, если нужен брендированный отправитель, согласовать GREENVPN_SMS_FROM.",
-            "envKeys": ["GREENVPN_SMS_PROVIDER", "GREENVPN_SMS_RU_API_ID", "GREENVPN_SMS_FROM"],
-            "ownerInputs": [
-                {"name": "SMS.ru api_id", "envKey": "GREENVPN_SMS_RU_API_ID", "secret": True},
-                {"name": "Согласованное имя отправителя", "envKey": "GREENVPN_SMS_FROM", "secret": False, "optional": True, "example": "GreenVPN"},
-                {"name": "Режим SMS.ru test-mode", "envKey": "GREENVPN_SMS_RU_TEST_MODE", "secret": False, "example": "0"},
-            ],
-            "applySteps": [
-                "Запустить configure_backend_env_wsl.ps1 и ответить на вопросы по SMS.ru.",
-                "GREENVPN_SMS_RU_TEST_MODE=1 оставлять только для sandbox-проверок провайдера; для production нужно 0.",
-            ],
-            "verifySteps": [
-                "GET /api/v1/admin/sms/readiness",
-                "Запустить и проверить вход по SMS-коду на тестовом номере, одобренном владельцем.",
-            ],
-            "secret": True,
-            "blocks": ["phone_login_codes"],
-        },
-        {
             "code": "payments",
             "title": "ЮKassa в боевом режиме",
             "ownerAction": "Получить shop_id/secret_key, указать returnUrl/webhook URL в кабинете ЮKassa и передать ключи только в server-only env.",
@@ -24074,7 +26033,7 @@ def external_action_specs() -> list[dict]:
         {
             "code": "windows_trust",
             "title": "Подписанный Windows-релиз",
-            "ownerAction": "Выпустить OV/EV Code Signing certificate или настроить Microsoft Trusted Signing, подписать финальный installer/app/service/DLL и публиковать только доверенную сборку.",
+            "ownerAction": "Получить Authenticode Code Signing certificate с доступным private key или настроить совместимый cloud-signing profile. Сборка, подпись, URL, SHA256, публикация и проверка выполняются автоматизацией.",
             "envKeys": [
                 "GREENVPN_WINDOWS_CODE_SIGNING_PROVIDER",
                 "GREENVPN_WINDOWS_CODE_SIGNING_PUBLISHER",
@@ -24085,17 +26044,22 @@ def external_action_specs() -> list[dict]:
                 "GREENVPN_YANDEX_AV_SUBMISSION_ID",
             ],
             "ownerInputs": [
-                {"name": "Провайдер Code Signing", "envKey": "GREENVPN_WINDOWS_CODE_SIGNING_PROVIDER", "secret": False, "example": "OV Code Signing / Microsoft Trusted Signing"},
-                {"name": "Имя издателя", "envKey": "GREENVPN_WINDOWS_CODE_SIGNING_PUBLISHER", "secret": False, "example": "Green VPN"},
-                {"name": "Отпечаток сертификата", "envKey": "GREENVPN_WINDOWS_CODE_SIGNING_CERT_THUMBPRINT", "secret": False},
-                {"name": "Приватный ключ подписи / доступ к cloud signing", "secret": True},
-                {"name": "URL подписанного установщика", "envKey": "GREENVPN_WINDOWS_SIGNED_INSTALLER_URL", "secret": False, "example": "https://greenvpn.pro/downloads/GreenVPN_Setup.exe"},
-                {"name": "SHA256 подписанного установщика", "envKey": "GREENVPN_WINDOWS_SIGNED_INSTALLER_SHA256", "secret": False},
+                {
+                    "name": "Установленный Code Signing certificate с private key или доступ к cloud signing",
+                    "secret": True,
+                },
+            ],
+            "automationOutputs": [
+                {"name": "Провайдер Code Signing", "envKey": "GREENVPN_WINDOWS_CODE_SIGNING_PROVIDER"},
+                {"name": "Имя издателя", "envKey": "GREENVPN_WINDOWS_CODE_SIGNING_PUBLISHER"},
+                {"name": "Отпечаток сертификата", "envKey": "GREENVPN_WINDOWS_CODE_SIGNING_CERT_THUMBPRINT"},
+                {"name": "URL подписанного установщика", "envKey": "GREENVPN_WINDOWS_SIGNED_INSTALLER_URL"},
+                {"name": "SHA256 подписанного установщика", "envKey": "GREENVPN_WINDOWS_SIGNED_INSTALLER_SHA256"},
             ],
             "applySteps": [
                 "Не покупать SSL-сертификаты для подписи .exe; для этого нужен Code Signing или Microsoft Trusted Signing.",
-                "Запускать scripts/windows/sign_release_artifacts.ps1 только после финальной сборки и готового сертификата/профиля подписи.",
-                "Перед публикацией проверить Authenticode у installer, Flutter app exe, Windows service exe и DLL.",
+                "После появления сертификата запускать scripts/windows/finalize_windows_trusted_release.ps1 -Apply.",
+                "Перед публикацией проверить Authenticode у installer, Flutter app exe, Windows service exe и bootstrap.",
                 "Если браузер или Defender все еще блокирует доверенную сборку, отправить подписанный false positive в Microsoft/Yandex.",
             ],
             "verifySteps": [
@@ -24159,22 +26123,24 @@ def external_action_specs() -> list[dict]:
         },
         {
             "code": "admin_alerts",
-            "title": "Telegram алерты для админов",
-            "ownerAction": "Создать Telegram bot, добавить его в support/admin чат и задать bot token/chat id в backend env.",
+            "title": "Автоматические алерты для админов",
+            "ownerAction": "Использовать рабочий SMTP/email; при желании добавить Telegram как дополнительный канал.",
             "envKeys": [
                 "GREENVPN_ADMIN_ALERTS_ENABLED",
                 "GREENVPN_ADMIN_ALERT_MIN_SEVERITY",
+                "GREENVPN_ADMIN_ALERT_EMAIL",
                 "GREENVPN_TELEGRAM_ALERT_BOT_TOKEN",
                 "GREENVPN_TELEGRAM_ALERT_CHAT_ID",
             ],
             "ownerInputs": [
+                {"name": "Email для incident alerts", "envKey": "GREENVPN_ADMIN_ALERT_EMAIL", "secret": False, "example": "support@greenvpn.pro"},
                 {"name": "Telegram bot token", "envKey": "GREENVPN_TELEGRAM_ALERT_BOT_TOKEN", "secret": True},
                 {"name": "Telegram chat id", "envKey": "GREENVPN_TELEGRAM_ALERT_CHAT_ID", "secret": True},
                 {"name": "Минимальная важность алерта", "envKey": "GREENVPN_ADMIN_ALERT_MIN_SEVERITY", "secret": False, "example": "high"},
             ],
             "applySteps": [
-                "Запустить configure_backend_env_wsl.ps1 и ответить на вопросы по Telegram-алертам.",
-                "Хранить bot token только в backend server env.",
+                "По умолчанию использовать уже настроенный SMTP и GREENVPN_LEGAL_CONTACT_EMAIL.",
+                "Если нужен Telegram, хранить bot token только в backend server env.",
             ],
             "verifySteps": [
                 "GET /api/v1/admin/alerts/readiness",
@@ -25625,12 +27591,35 @@ def admin_alert_min_severity() -> str:
     return normalize_incident_severity(ADMIN_ALERT_MIN_SEVERITY, "high")
 
 
+def telegram_admin_alerts_configured() -> bool:
+    return bool(TELEGRAM_ALERT_BOT_TOKEN and TELEGRAM_ALERT_CHAT_ID)
+
+
+def email_admin_alerts_configured() -> bool:
+    return bool(
+        email_sender_configured()
+        and ADMIN_ALERT_EMAIL
+        and "@" in ADMIN_ALERT_EMAIL
+    )
+
+
+def admin_alert_provider() -> str:
+    if not ADMIN_ALERTS_ENABLED:
+        return "manual_mvp"
+    if telegram_admin_alerts_configured():
+        return "telegram"
+    if email_admin_alerts_configured():
+        return "smtp"
+    return "manual_mvp"
+
+
 def admin_alerts_configured() -> bool:
-    return bool(ADMIN_ALERTS_ENABLED and TELEGRAM_ALERT_BOT_TOKEN and TELEGRAM_ALERT_CHAT_ID)
+    return admin_alert_provider() in {"telegram", "smtp"}
 
 
 def admin_alert_readiness() -> dict:
     min_severity = admin_alert_min_severity()
+    provider = admin_alert_provider()
     checks = [
         {
             "code": "alerts_enabled",
@@ -25638,30 +27627,37 @@ def admin_alert_readiness() -> dict:
             "message": "Укажи GREENVPN_ADMIN_ALERTS_ENABLED=1 для оповещений об инцидентах.",
         },
         {
-            "code": "telegram_bot_token",
-            "ok": bool(TELEGRAM_ALERT_BOT_TOKEN),
-            "message": "Укажи GREENVPN_TELEGRAM_ALERT_BOT_TOKEN на backend-сервере.",
-        },
-        {
-            "code": "telegram_chat_id",
-            "ok": bool(TELEGRAM_ALERT_CHAT_ID),
-            "message": "Укажи GREENVPN_TELEGRAM_ALERT_CHAT_ID для чата админов/поддержки.",
+            "code": "delivery_channel",
+            "ok": provider in {"telegram", "smtp"},
+            "message": "Настрой рабочий SMTP recipient или Telegram bot/chat для incident alerts.",
         },
     ]
     production_ready = all(check["ok"] for check in checks)
     return {
         "ok": True,
-        "provider": "telegram" if production_ready else "manual_mvp",
+        "provider": provider,
         "productionReady": production_ready,
         "minSeverity": min_severity,
+        "channels": {
+            "smtp": {
+                "configured": email_admin_alerts_configured(),
+                "recipientConfigured": bool(
+                    ADMIN_ALERT_EMAIL and "@" in ADMIN_ALERT_EMAIL
+                ),
+            },
+            "telegram": {
+                "configured": telegram_admin_alerts_configured(),
+                "optional": True,
+            },
+        },
         "checks": checks,
         "summary": {
             "green": sum(1 for check in checks if check["ok"]),
             "yellow": sum(1 for check in checks if not check["ok"]),
             "message": (
-                "Админские оповещения готовы."
+                f"Админские оповещения готовы через {provider}."
                 if production_ready
-                else "Настрой Telegram bot token и chat id для автоматических оповещений об инцидентах."
+                else "Настрой SMTP/email или Telegram для автоматических оповещений об инцидентах."
             ),
         },
     }
@@ -25691,7 +27687,7 @@ def format_admin_incident_alert(incident: dict, reason: str) -> str:
 
 
 def send_telegram_admin_alert(message: str) -> dict:
-    if not admin_alerts_configured():
+    if not ADMIN_ALERTS_ENABLED or not telegram_admin_alerts_configured():
         return {"ok": False, "error": "telegram_alerts_not_configured"}
     payload = urllib.parse.urlencode(
         {
@@ -25719,6 +27715,40 @@ def send_telegram_admin_alert(message: str) -> dict:
         return {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
 
 
+def send_email_admin_alert(message: str) -> dict:
+    if not ADMIN_ALERTS_ENABLED or not email_admin_alerts_configured():
+        return {"ok": False, "error": "smtp_alerts_not_configured"}
+    try:
+        send_smtp_email(
+            ADMIN_ALERT_EMAIL,
+            "[Green VPN] Incident alert",
+            message,
+        )
+        return {"ok": True, "status": "sent", "error": None}
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": f"{type(exc).__name__}: {str(exc)[:160]}",
+        }
+
+
+def send_admin_alert(message: str) -> dict:
+    provider = admin_alert_provider()
+    if provider == "telegram":
+        result = send_telegram_admin_alert(message)
+    elif provider == "smtp":
+        result = send_email_admin_alert(message)
+    else:
+        return {
+            "ok": False,
+            "status": "skipped",
+            "provider": "manual_mvp",
+            "error": "admin_alerts_not_configured",
+        }
+    return {**result, "provider": provider}
+
+
 def record_admin_incident_alert_attempt(
     incident_id: int,
     result: dict,
@@ -25729,8 +27759,9 @@ def record_admin_incident_alert_attempt(
     now = utc_now_iso()
     status = clean_limited_text(result.get("status"), 40).strip() or ("sent" if result.get("ok") else "failed")
     error = clean_limited_text(result.get("error"), 240) or None
-    provider = clean_limited_text(result.get("provider"), 40).strip() or (
-        "telegram" if admin_alerts_configured() else "manual_mvp"
+    provider = (
+        clean_limited_text(result.get("provider"), 40).strip()
+        or admin_alert_provider()
     )
     message_preview = clean_limited_text(message, 500) or None
     incident_key = clean_limited_text((incident or {}).get("key"), 160) or None
@@ -26002,14 +28033,13 @@ def upsert_admin_incident(
     if should_alert and incident_severity_rank(payload["severity"]) >= incident_severity_rank(admin_alert_min_severity()):
         message = format_admin_incident_alert(payload, alert_reason)
         if should_send_admin_alert(payload["severity"]):
-            result = send_telegram_admin_alert(message)
-            result["provider"] = "telegram"
+            result = send_admin_alert(message)
         else:
             result = {
                 "ok": False,
                 "status": "skipped",
                 "provider": "manual_mvp",
-                "error": "telegram_alerts_not_configured",
+                "error": "admin_alerts_not_configured",
             }
         payload["lastAlertAt"] = record_admin_incident_alert_attempt(
             payload["id"],
@@ -27367,6 +29397,7 @@ def on_startup() -> None:
     seed_default_feature_flags_and_runbooks()
     backfill_support_report_workflow_fields()
     backfill_expired_non_paid_subscriptions()
+    migrate_stable_trials_to_free()
     ensure_subscription_for_existing_users()
     ADMIN_TOKEN = ensure_admin_token()
 
@@ -27374,9 +29405,9 @@ def on_startup() -> None:
 @app.head("/healthz")
 @app.get("/healthz")
 def healthz():
-    payment_ready = yookassa_payment_readiness()["productionReady"]
+    payment_readiness = yookassa_payment_readiness()
+    payment_ready = payment_readiness["productionReady"]
     email_ready = email_confirmation_readiness()["productionReady"]
-    sms_ready = sms_confirmation_readiness()["productionReady"]
     auth_code_ready = auth_code_readiness()["productionReady"]
     user_auth_ready = user_auth_flow_readiness()["productionReady"]
     return {
@@ -27386,9 +29417,12 @@ def healthz():
         "subscriptionEnforced": ENFORCE_SUBSCRIPTION_ACCESS,
         "autoReplaceOldestDeviceOnLimit": AUTO_REPLACE_OLDEST_DEVICE_ON_LIMIT,
         "paymentsProductionReady": payment_ready,
+        "paidSalesEnabled": PAID_SALES_ENABLED,
+        "taxReceiptProductionReady": payment_readiness["taxReceipt"][
+            "productionReady"
+        ],
         "emailConfirmationRequired": EMAIL_CONFIRMATION_REQUIRED,
         "emailProductionReady": email_ready,
-        "smsProductionReady": sms_ready,
         "authCodeProductionReady": auth_code_ready,
         "userAuthFlowProductionReady": user_auth_ready,
     }
@@ -27428,7 +29462,6 @@ def windows_public_bootstrap(
         client_id=clientId,
     )
     auth_codes = auth_code_readiness()
-    sms_ready = sms_confirmation_readiness()
     email_ready = email_confirmation_readiness()
     return {
         "ok": True,
@@ -27439,17 +29472,33 @@ def windows_public_bootstrap(
             "platform": "windows",
         },
         "auth": {
-            "primaryMethod": "email_code",
-            "fallbackMethod": "email_password",
+            "primaryMethod": "guest",
+            "fallbackMethod": "email_code",
+            "guestEndpoint": "/api/v1/auth/guest",
             "challengeEndpoints": {
                 "start": "/api/v1/auth/challenge/start",
                 "verify": "/api/v1/auth/challenge/verify",
             },
+            "checkoutEmailEndpoints": {
+                "start": "/api/v1/auth/checkout/email/start",
+                "verify": "/api/v1/auth/checkout/email/verify",
+            },
+            "accessEmailEndpoints": {
+                "start": "/api/v1/auth/access/email/start",
+                "verify": "/api/v1/auth/access/email/verify",
+            },
             "methods": [
+                {
+                    "code": "guest",
+                    "title": "Без регистрации",
+                    "subtitle": "Бесплатный профиль создаётся автоматически.",
+                    "available": True,
+                    "productionReady": True,
+                },
                 {
                     "code": "email_code",
                     "title": "Email",
-                    "subtitle": "Вход или регистрация по одноразовому коду из письма.",
+                    "subtitle": "Подтверждение перед оплатой и восстановление доступа.",
                     "available": email_ready["productionReady"] or DEV_AUTH_CODES,
                     "productionReady": email_ready["productionReady"],
                 },
@@ -27459,13 +29508,6 @@ def windows_public_bootstrap(
                     "subtitle": "Legacy-вход для существующих аккаунтов.",
                     "available": True,
                     "productionReady": True,
-                },
-                {
-                    "code": "phone_code",
-                    "title": "Телефон",
-                    "subtitle": "SMS-вход временно недоступен; используйте email-код.",
-                    "available": sms_ready["productionReady"] or DEV_AUTH_CODES,
-                    "productionReady": sms_ready["productionReady"],
                 },
             ],
             "codeTtlMinutes": auth_codes["ttlMinutes"],
@@ -27844,12 +29886,13 @@ def public_landing_page():
   <section class="hero">
     <div class="wrap">
       <h1>Green VPN</h1>
-      <p>Защищенное подключение для Windows и Android. Попробуйте все основные функции бесплатно 3 дня, затем выберите удобный срок подписки.</p>
+      <p>Защищенное подключение для Windows и Android. Откройте приложение и подключайтесь без регистрации; email понадобится только перед оплатой или для восстановления доступа.</p>
       <div class="badges">
-        <span class="badge">Trial 3 дня</span>
+        <span class="badge">Бесплатный старт</span>
         <span class="badge">От 249 ₽</span>
         <span class="badge">До 6 месяцев</span>
         <span class="badge">Платная подписка без рекламы</span>
+        <span class="badge">Гостевой старт</span>
         <span class="badge">Windows и Android</span>
       </div>
       <div class="actions">
@@ -27873,7 +29916,7 @@ def public_landing_page():
       <div class="grid">
         <div class="card"><h3>Защита соединения</h3><p>Шифрование трафика между устройством пользователя и инфраструктурой Green VPN.</p></div>
         <div class="card"><h3>Стабильный маршрут</h3><p>Маршрутизация через выбранный сервер, когда прямое соединение провайдера нестабильно.</p></div>
-        <div class="card"><h3>Простая установка</h3><p>Windows-приложение устанавливается одним файлом, вход выполняется по телефону, email-коду или паролю.</p></div>
+        <div class="card"><h3>Простая установка</h3><p>Приложение создаёт бесплатный гостевой профиль автоматически. Email подтверждается только перед оплатой или для восстановления доступа.</p></div>
         <div class="card"><h3>Поддержка</h3><p>Пользователь может отправить отчет в поддержку без раскрытия приватных ключей и технических секретов.</p></div>
       </div>
     </section>
@@ -27884,14 +29927,15 @@ def public_landing_page():
         <div class="card"><h3>3 месяца</h3><div class="price">649 ₽</div><p>Около 216 ₽ за месяц, выгода 13% относительно помесячной оплаты.</p></div>
         <div class="card"><h3>6 месяцев</h3><div class="price">1 099 ₽</div><p>Около 183 ₽ за месяц, выгода 26% относительно помесячной оплаты.</p></div>
       </div>
-      <p class="note">Во всех вариантах доступны одинаковые функции Green VPN. Отличается только оплаченный срок. Автопродление включено по умолчанию и отключается в приложении.</p>
+      <p class="note">Во всех вариантах доступны одинаковые функции Green VPN. Отличается только оплаченный срок. Автопродление включается только после явного согласия на сохранение способа оплаты и отключается в приложении.</p>
     </section>
     <section id="setup">
       <h2>Как пользователь получает услугу</h2>
       <ul>
         <li>Скачивает и устанавливает приложение Green VPN.</li>
-        <li>Регистрируется или входит в аккаунт.</li>
-        <li>Пользуется Trial 3 дня без карты и оплаты.</li>
+        <li>Приложение автоматически создаёт бесплатный гостевой профиль.</li>
+        <li>Пользователь проверяет подключение без карты и оплаты.</li>
+        <li>Перед оплатой подтверждает email, чтобы получить чек и восстановить доступ при необходимости.</li>
         <li>Выбирает подписку на 1, 3 или 6 месяцев.</li>
         <li>Подписка активируется только после подтверждения платежа YooKassa.</li>
       </ul>
@@ -28007,8 +30051,8 @@ def legal_offer_page():
     <h2>1. Предмет</h2>
     <p>Владелец сервиса предоставляет пользователю доступ к приложению Green VPN и серверной инфраструктуре для защищенного и стабильного сетевого подключения в рамках выбранного тарифа.</p>
     <h2>2. Тарифы и оплата</h2>
-    <p>Пробный период действует 3 дня. Подписка на 30 дней стоит 249 ₽, на 90 дней — 649 ₽, на 180 дней — 1 099 ₽. Все варианты включают одинаковые функции сервиса и отличаются только сроком доступа.</p>
-    <p>Автопродление включено по умолчанию только при явном согласии пользователя на сохранение способа оплаты. В конце оплаченного срока Green VPN списывает стоимость выбранного периода и продлевает доступ после подтверждения YooKassa. Пользователь может отключить автопродление в приложении до даты следующего списания.</p>
+    <p>До выбора подписки пользователю может предоставляться бесплатный доступ на условиях, показанных в приложении. Подписка на 30 дней стоит 249 ₽, на 90 дней — 649 ₽, на 180 дней — 1 099 ₽. Все варианты включают одинаковые функции сервиса и отличаются только сроком доступа.</p>
+    <p>Автопродление не включается автоматически. Оно действует только после явного согласия пользователя на сохранение способа оплаты. В конце оплаченного срока Green VPN списывает стоимость выбранного периода и продлевает доступ после подтверждения YooKassa. Пользователь может отключить автопродление в приложении до даты следующего списания.</p>
     <p>Если повторное списание отклонено банком или платежным провайдером, доступ не продлевается автоматически. Пользователь может оплатить новый период вручную.</p>
     <h2>3. Получение услуги</h2>
     <p>После оплаты пользователь входит в приложение, получает доступ к тарифу и может подключиться к защищенному соединению в пределах выбранных лимитов.</p>
@@ -28029,10 +30073,10 @@ def legal_privacy_page():
     body = f"""
   <main class="wrap">
     <h1>Политика конфиденциальности</h1>
-    <p>Green VPN обрабатывает данные, необходимые для регистрации, входа, оплаты, поддержки, безопасности и технической работы сервиса.</p>
+    <p>Green VPN обрабатывает данные, необходимые для создания бесплатного профиля, подтверждения email перед оплатой, поддержки, безопасности и технической работы сервиса.</p>
     <h2>Какие данные используются</h2>
     <ul>
-      <li>email, телефон или иной идентификатор аккаунта;</li>
+      <li>email, если пользователь подтверждает его перед оплатой или для восстановления доступа, и технический идентификатор бесплатного профиля;</li>
       <li>статус подписки, тариф, платежный статус и сумма заказа;</li>
       <li>выбранный срок подписки, технический идентификатор устройства, версия приложения, выданный сервер и технические счетчики работы сервиса;</li>
       <li>сообщения в поддержку и диагностические отчеты, если пользователь отправляет их добровольно.</li>
@@ -28045,8 +30089,8 @@ def legal_privacy_page():
     </ul>
     <h2>Что не анализируется</h2>
     <p>Green VPN не использует содержимое передаваемого трафика для рекламы и не формирует историю посещенных страниц. Для работы сервиса могут обрабатываться технические счетчики объема трафика, время подключения, выбранный сервер и диагностические события.</p>
-    <h2>Реклама в бесплатном режиме Android</h2>
-    <p>Перед бесплатным подключением приложение Android может показать рекламный ролик через рекламного провайдера. Провайдер может обрабатывать рекламный идентификатор устройства, IP-адрес и технические сведения о показе в соответствии со своей политикой. Green VPN получает только техническое подтверждение завершенного просмотра и не передает провайдеру содержимое VPN-трафика или историю посещенных страниц. Платная подписка и приложение Windows работают без рекламного показа.</p>
+    <h2>Реклама в приложении</h2>
+    <p>В текущей версии рекламные показы отключены. Green VPN не передает рекламным провайдерам идентификаторы устройства или сведения о подключении. Если рекламный формат будет включен в будущем, эта политика будет обновлена до начала такой обработки.</p>
     <h2>Платежи</h2>
     <p>Платежные данные обрабатываются YooKassa или другим подключенным платежным провайдером. Green VPN получает только статус платежа, сумму, валюту и технические идентификаторы, необходимые для активации тарифа.</p>
     <h2>Хранение и удаление</h2>
@@ -28227,7 +30271,7 @@ def auth_register(payload: RegisterIn):
             (email,),
         ).fetchone()
 
-        create_trial_subscription(conn, user["id"])
+        create_default_subscription(conn, user["id"])
         conn.commit()
 
     confirmation_token = create_email_confirmation(int(user["id"]), user["email"])
@@ -28275,33 +30319,49 @@ def auth_login(payload: LoginIn):
 def normalize_auth_challenge_method(
     method: Optional[str],
     email: Optional[str],
-    phone: Optional[str],
 ) -> str:
     candidate = clean_limited_text(method, 40).strip().lower().replace("-", "_")
-    if candidate in {"phone", "sms", "phone_sms", "phone_code"}:
-        return "phone_sms"
     if candidate in {"email", "email_code", "mail"}:
         return "email_code"
-    if phone and str(phone).strip():
-        return "phone_sms"
     if email and str(email).strip():
         return "email_code"
-    raise HTTPException(status_code=400, detail="Нужен способ подтверждения входа.")
+    raise HTTPException(status_code=400, detail="Доступен вход по email-коду.")
+
+
+@app.post("/api/v1/auth/guest")
+def auth_guest(payload: GuestSessionIn, request: Request):
+    device_uid = normalize_guest_device_uid(payload.deviceUid)
+    beta_client = paid_beta_request_allowed(
+        payload.clientMarker,
+        payload.releaseChannel,
+    )
+    user, created = ensure_guest_user(
+        device_uid,
+        paid_beta_client=beta_client,
+    )
+    token = issue_token(int(user["id"]))
+    log_auth_event(
+        "guest_session",
+        "created" if created else "restored",
+        request=request,
+        user_id=int(user["id"]),
+        details={
+            "deviceUid": device_uid,
+            "platform": clean_limited_text(payload.platform, 40),
+            "appVersion": clean_limited_text(payload.appVersion, 80),
+            "paidBetaClient": beta_client,
+        },
+    )
+    response = auth_session_payload(user, token)
+    response["loginMethod"] = "guest"
+    response["createdUser"] = created
+    response["message"] = "Бесплатный профиль готов."
+    return response
 
 
 @app.post("/api/v1/auth/challenge/start")
 def auth_challenge_start(payload: AuthChallengeStartIn, request: Request):
-    method = normalize_auth_challenge_method(payload.method, payload.email, payload.phone)
-    if method == "phone_sms":
-        result = auth_phone_login_start(
-            PhoneLoginStartIn(phone=payload.phone or ""),
-            request,
-        )
-        result["challengeMethod"] = "phone_sms"
-        result["primary"] = False
-        result["channel"] = "sms"
-        return result
-
+    normalize_auth_challenge_method(payload.method, payload.email)
     result = auth_email_code_start(
         EmailCodeStartIn(email=payload.email or ""),
         request,
@@ -28314,23 +30374,7 @@ def auth_challenge_start(payload: AuthChallengeStartIn, request: Request):
 
 @app.post("/api/v1/auth/challenge/verify")
 def auth_challenge_verify(payload: AuthChallengeVerifyIn, request: Request):
-    method = normalize_auth_challenge_method(payload.method, payload.email, payload.phone)
-    if method == "phone_sms":
-        result = auth_phone_login_verify(
-            PhoneLoginVerifyIn(
-                phone=payload.phone or "",
-                code=payload.code,
-                deviceUid=payload.deviceUid,
-                deviceName=payload.deviceName,
-                platform=payload.platform,
-                appVersion=payload.appVersion,
-            ),
-            request,
-        )
-        result["challengeMethod"] = "phone_sms"
-        result["primary"] = False
-        return result
-
+    normalize_auth_challenge_method(payload.method, payload.email)
     result = auth_email_code_verify(
         EmailCodeVerifyIn(
             email=payload.email or "",
@@ -28424,99 +30468,198 @@ def auth_email_code_verify(payload: EmailCodeVerifyIn, request: Request):
     return response
 
 
-@app.post("/api/v1/auth/phone/login/start")
-def auth_phone_login_start(payload: PhoneLoginStartIn, request: Request):
-    phone = normalize_phone(payload.phone)
-    user, created = ensure_user_for_phone_code(phone)
-    ensure_sms_resend_allowed(int(user["id"]))
-    code = create_phone_confirmation(int(user["id"]), phone)
-    delivery = send_or_queue_phone_confirmation(int(user["id"]), phone, code)
+@app.post("/api/v1/auth/checkout/email/start")
+def auth_checkout_email_start(
+    payload: CheckoutEmailStartIn,
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+):
+    current_user = get_user_by_token(authorization)
+    if user_email_verified(current_user):
+        raise HTTPException(
+            status_code=409,
+            detail="Email уже привязан. Продолжите оплату в текущем аккаунте.",
+        )
+    email = normalize_email(payload.email)
+    if not user_is_guest(current_user) and email != str(current_user["email"]):
+        raise HTTPException(
+            status_code=409,
+            detail="Подтвердите email текущего аккаунта или войдите в другой аккаунт.",
+        )
+    ensure_email_code_resend_allowed(email)
+    guest_user_id = int(current_user["id"])
+    with db() as conn:
+        existing = conn.execute(
+            "SELECT * FROM users WHERE email = ?",
+            (email,),
+        ).fetchone()
+    target_user = existing or current_user
+    action = "attach" if user_is_guest(current_user) and existing is None else "login"
+    purpose = f"checkout_{action}:{guest_user_id}"
+    code_id, code = create_email_login_code(
+        int(target_user["id"]),
+        email,
+        purpose=purpose,
+    )
+    delivery = send_or_queue_email_login_code(
+        int(target_user["id"]),
+        email,
+        code_id,
+        code,
+    )
     log_auth_event(
-        "phone_code_start",
-        "created",
+        "checkout_email_start",
+        "created" if delivery["deliveryStatus"] == "sent" else "delivery_failed",
         request=request,
-        user_id=int(user["id"]),
-        phone=phone,
+        user_id=guest_user_id,
+        email=email,
         details={
-            "createdUser": created,
+            "action": action,
             "deliveryStatus": delivery["deliveryStatus"],
             "outboxId": delivery.get("outboxId"),
         },
     )
-    delivery_status = delivery["deliveryStatus"]
-    message = "Код входа отправлен на телефон."
-    if delivery_status == "failed":
-        message = "SMS-провайдер не отправил код. Используй email-код или повтори позже."
-    elif delivery_status == "not_configured":
-        message = "SMS-вход пока не настроен. Используй вход по email-коду."
+    if delivery["deliveryStatus"] != "sent" and not DEV_AUTH_CODES:
+        raise HTTPException(
+            status_code=503,
+            detail="Не удалось отправить email-код. Попробуйте ещё раз.",
+        )
     response = {
         "ok": True,
-        "phone": phone,
-        "createdUser": created,
-        "deliveryStatus": delivery_status,
-        "deliveryReady": sms_sender_configured(),
-        "provider": SMS_PROVIDER,
+        "email": email,
+        "deliveryStatus": delivery["deliveryStatus"],
+        "deliveryReady": email_sender_configured(),
         "codeDigits": AUTH_CODE_DIGITS,
-        "ttlMinutes": SMS_CONFIRMATION_TTL_MINUTES,
-        "resendCooldownSeconds": SMS_RESEND_COOLDOWN_SECONDS,
-        "message": message,
+        "ttlMinutes": AUTH_CODE_TTL_MINUTES,
+        "resendCooldownSeconds": AUTH_CODE_RESEND_COOLDOWN_SECONDS,
+        "message": "Код подтверждения отправлен на email.",
     }
     if DEV_AUTH_CODES:
         response["devCode"] = code
     return response
 
 
-@app.post("/api/v1/auth/phone/login/verify")
-def auth_phone_login_verify(payload: PhoneLoginVerifyIn, request: Request):
-    phone = normalize_phone(payload.phone)
-    user, _ = ensure_user_for_phone_code(phone)
-    result = consume_phone_confirmation_code(int(user["id"]), phone, payload.code)
+@app.post("/api/v1/auth/checkout/email/verify")
+def auth_checkout_email_verify(
+    payload: CheckoutEmailVerifyIn,
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+):
+    current_user = get_user_by_token(authorization)
+    if user_email_verified(current_user):
+        raise HTTPException(status_code=409, detail="Email уже привязан.")
+    email = normalize_email(payload.email)
+    if not user_is_guest(current_user) and email != str(current_user["email"]):
+        raise HTTPException(status_code=409, detail="Email не совпадает с аккаунтом.")
+    guest_user_id = int(current_user["id"])
+    purposes = (
+        (f"checkout_attach:{guest_user_id}", True),
+        (f"checkout_login:{guest_user_id}", False),
+    )
+    result = {"ok": False, "status": "not_found"}
+    for purpose, attach_email in purposes:
+        result = consume_email_login_code(
+            email,
+            payload.code,
+            expected_purpose=purpose,
+            attach_email=attach_email,
+        )
+        if result.get("status") != "not_found":
+            break
     if not result.get("ok"):
         status = str(result.get("status") or "failed")
         log_auth_event(
-            "phone_code_verify",
+            "checkout_email_verify",
             status,
             request=request,
-            user_id=int(user["id"]),
-            phone=phone,
+            user_id=guest_user_id,
+            email=email,
         )
         raise HTTPException(
             status_code=429 if status == "too_many_attempts" else 401,
             detail=status or "Invalid code.",
         )
 
-    with db() as conn:
-        fresh_user = conn.execute(
-            """
-            SELECT
-                id,
-                email,
-                email_verified,
-                email_verified_at,
-                phone,
-                phone_verified,
-                phone_verified_at
-            FROM users
-            WHERE id = ?
-            """,
-            (int(user["id"]),),
-        ).fetchone()
-    token = issue_token(int(fresh_user["id"]))
+    user = result["user"]
+    current_was_guest = user_is_guest(current_user)
+    if current_was_guest:
+        transfer_guest_device_to_user(
+            guest_user_id,
+            int(user["id"]),
+            payload.deviceUid,
+        )
+        with db() as conn:
+            record_replication_tombstones_for_delete(
+                conn,
+                "tokens",
+                "user_id = ?",
+                (guest_user_id,),
+            )
+            conn.execute(
+                "DELETE FROM tokens WHERE user_id = ?",
+                (guest_user_id,),
+            )
+            conn.commit()
+    if paid_beta_request_allowed(payload.clientMarker, payload.releaseChannel):
+        set_user_paid_beta_cohort(
+            int(user["id"]),
+            enabled=True,
+            source="guest_checkout",
+        )
+        with db() as conn:
+            user = conn.execute(
+                "SELECT * FROM users WHERE id = ?",
+                (int(user["id"]),),
+            ).fetchone()
+    token = issue_token(int(user["id"]))
     log_auth_event(
-        "phone_code_verify",
+        "checkout_email_verify",
         "verified",
         request=request,
-        user_id=int(fresh_user["id"]),
-        phone=phone,
+        user_id=int(user["id"]),
+        email=email,
         details={
             "deviceUid": payload.deviceUid,
             "platform": payload.platform,
             "appVersion": payload.appVersion,
         },
     )
-    response = auth_session_payload(fresh_user, token)
-    response["loginMethod"] = "phone_code"
-    response["message"] = "Вход выполнен по коду из SMS."
+    response = auth_session_payload(user, token)
+    response["loginMethod"] = "checkout_email"
+    response["message"] = "Email подтверждён. Можно переходить к оплате."
+    return response
+
+
+@app.post("/api/v1/auth/access/email/start")
+def auth_access_email_start(
+    payload: CheckoutEmailStartIn,
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+):
+    response = auth_checkout_email_start(
+        payload,
+        request,
+        authorization=authorization,
+    )
+    response["flow"] = "access_restore"
+    response["message"] = "Код входа отправлен на email."
+    return response
+
+
+@app.post("/api/v1/auth/access/email/verify")
+def auth_access_email_verify(
+    payload: CheckoutEmailVerifyIn,
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+):
+    response = auth_checkout_email_verify(
+        payload,
+        request,
+        authorization=authorization,
+    )
+    response["flow"] = "access_restore"
+    response["loginMethod"] = "access_email"
+    response["message"] = "Вход выполнен. Доступ на устройстве восстановлен."
     return response
 
 
@@ -28525,12 +30668,10 @@ def me(authorization: Optional[str] = Header(default=None)):
     user = get_user_by_token(authorization)
     return {
         "id": user["id"],
-        "email": user["email"],
+        "email": public_user_email(user),
+        "isGuest": user_is_guest(user),
         "emailVerified": user_email_verified(user),
         "emailConfirmationRequired": EMAIL_CONFIRMATION_REQUIRED,
-        "phone": user["phone"],
-        "phoneVerified": user_phone_verified(user),
-        "phoneVerifiedAt": user["phone_verified_at"],
         "accessCohort": user_access_cohort(user),
         "paidBeta": user_is_paid_beta_cohort(user),
     }
@@ -28541,7 +30682,8 @@ def auth_email_status(authorization: Optional[str] = Header(default=None)):
     user = get_user_by_token(authorization)
     return {
         "ok": True,
-        "email": user["email"],
+        "email": public_user_email(user),
+        "isGuest": user_is_guest(user),
         "emailVerified": user_email_verified(user),
         "emailVerifiedAt": user["email_verified_at"],
         "emailConfirmationRequired": EMAIL_CONFIRMATION_REQUIRED,
@@ -28553,6 +30695,11 @@ def auth_email_status(authorization: Optional[str] = Header(default=None)):
 @app.post("/api/v1/auth/email/resend")
 def auth_email_resend(authorization: Optional[str] = Header(default=None)):
     user = get_user_by_token(authorization)
+    if user_is_guest(user):
+        raise HTTPException(
+            status_code=409,
+            detail="Email ещё не привязан. Укажите его перед оплатой.",
+        )
     if user_email_verified(user):
         return {
             "ok": True,
@@ -28670,70 +30817,16 @@ def auth_email_verify_post(payload: EmailVerifyIn):
     return result
 
 
-@app.get("/api/v1/auth/phone/status")
-def auth_phone_status(authorization: Optional[str] = Header(default=None)):
-    user = get_user_by_token(authorization)
-    return {
-        "ok": True,
-        "phone": user["phone"],
-        "phoneVerified": user_phone_verified(user),
-        "phoneVerifiedAt": user["phone_verified_at"],
-        "deliveryReady": sms_sender_configured(),
-        "provider": SMS_PROVIDER,
-        "latestConfirmation": latest_phone_confirmation_status(int(user["id"])),
-    }
-
-
-@app.post("/api/v1/auth/phone/start")
-def auth_phone_start(
-    payload: PhoneStartIn,
-    authorization: Optional[str] = Header(default=None),
-):
-    user = get_user_by_token(authorization)
-    phone = normalize_phone(payload.phone)
-    if user_phone_verified(user) and user["phone"] == phone:
-        return {
-            "ok": True,
-            "phone": phone,
-            "phoneVerified": True,
-            "deliveryStatus": "already_verified",
-        }
-
-    ensure_sms_resend_allowed(int(user["id"]))
-    code = create_phone_confirmation(int(user["id"]), phone)
-    delivery = send_or_queue_phone_confirmation(int(user["id"]), phone, code)
-    return {
-        "ok": True,
-        "phone": phone,
-        "phoneVerified": False,
-        "deliveryStatus": delivery["deliveryStatus"],
-        "deliveryReady": sms_sender_configured(),
-        "latestConfirmation": latest_phone_confirmation_status(int(user["id"])),
-    }
-
-
-@app.post("/api/v1/auth/phone/verify")
-def auth_phone_verify(
-    payload: PhoneVerifyIn,
-    authorization: Optional[str] = Header(default=None),
-):
-    user = get_user_by_token(authorization)
-    phone = normalize_phone(payload.phone)
-    result = consume_phone_confirmation_code(int(user["id"]), phone, payload.code)
-    return {
-        **result,
-        "phoneVerified": bool(result.get("ok")),
-    }
-
-
 @app.get("/api/v1/subscription/me")
 def subscription_me(authorization: Optional[str] = Header(default=None)):
     user = get_user_by_token(authorization)
-    sub = subscription_status(get_subscription_row(user["id"]))
+    raw_sub = subscription_status(get_subscription_row(user["id"]))
+    sub = effective_client_subscription(user, raw_sub)
     traffic_usage = subscription_traffic_usage_status(int(user["id"]), sub)
     beta_offer = paid_beta_offer_for_user(int(user["id"])) if PAID_BETA_ENABLED else None
     return {
-        "email": user["email"],
+        "email": public_user_email(user),
+        "isGuest": user_is_guest(user),
         "planName": sub["planName"],
         "planCode": sub["planCode"],
         "maxDevices": sub["maxDevices"],
@@ -28744,6 +30837,12 @@ def subscription_me(authorization: Optional[str] = Header(default=None)):
         "paymentMethodSaved": sub["paymentMethodSaved"],
         "selection": sub["selection"],
         "includedFeatures": sub["includedFeatures"],
+        "policyVersion": sub.get("policyVersion"),
+        "pricingModel": sub.get("pricingModel"),
+        "fairUsePolicy": sub.get("fairUsePolicy"),
+        "rateLimitPolicy": sub.get("rateLimitPolicy"),
+        "isFreeTier": bool(sub.get("isFreeTier")),
+        "freeTier": sub.get("freeTier"),
         "trafficUsage": traffic_usage,
         "accessCohort": user_access_cohort(user),
         "paidBeta": user_is_paid_beta_cohort(user),
@@ -28822,7 +30921,7 @@ def billing_create_order(
     order = create_billing_order_for_user(user["id"], payload)
     return {
         "ok": True,
-        "email": user["email"],
+        "email": public_user_email(user),
         "order": public_billing_order_status(order),
         "message": "Order created. Payment provider is not connected yet; activate it after payment confirmation.",
     }
@@ -28870,6 +30969,25 @@ async def billing_yookassa_webhook(request: Request):
     payload = await request.json()
     event = str(payload.get("event") or "")
     incoming = payload.get("object") if isinstance(payload.get("object"), dict) else {}
+    if event.startswith("refund."):
+        refund = authoritative_yookassa_refund_for_webhook(incoming)
+        payment_id = str(refund.get("payment_id") or "").strip()
+        row = get_billing_order_row_by_provider_payment_id(payment_id)
+        if row is None:
+            return {
+                "ok": True,
+                "ignored": True,
+                "event": event,
+                "reason": "refund_order_not_found",
+            }
+        result = apply_yookassa_refund_update(str(row["public_id"]), refund)
+        return {
+            "ok": True,
+            "event": event,
+            "orderId": str(row["public_id"]),
+            **result,
+        }
+
     payment = authoritative_yookassa_payment_for_webhook(incoming)
     order_id = yookassa_order_id_from_payment(payment) or yookassa_order_id_from_payment(incoming)
 
@@ -28923,7 +31041,8 @@ def client_bootstrap(
     )
     touch_device(device["device_uid"], config_issued=False)
 
-    sub = subscription_status(get_subscription_row(user["id"]))
+    raw_sub = subscription_status(get_subscription_row(user["id"]))
+    sub = effective_client_subscription(user, raw_sub)
     access_policy = client_subscription_access_policy(
         user,
         sub,
@@ -28934,9 +31053,17 @@ def client_bootstrap(
     if access_policy["paidBetaUser"]:
         sub = {**sub, "maxDevices": effective_max_devices}
     traffic_usage = subscription_traffic_usage_status(int(user["id"]), sub)
+    quota_exhausted = free_tier_quota_exhausted(
+        access_policy,
+        traffic_usage,
+    )
+    access_policy = {
+        **access_policy,
+        "quotaExhausted": quota_exhausted,
+    }
 
     with db() as conn:
-        if access_policy["reason"] == "beta_cohort_required":
+        if not access_policy["allowed"] or quota_exhausted:
             count = enabled_device_count(conn, int(user["id"]))
         else:
             count = enforce_device_limit_for_current_device(
@@ -28964,6 +31091,7 @@ def client_bootstrap(
         subscription_ok
         and count <= effective_max_devices
         and device_enabled
+        and not quota_exhausted
         and not ad_gate["required"]
     )
 
@@ -28972,6 +31100,8 @@ def client_bootstrap(
         reason = "device_limit_exceeded"
     elif reason is None and not device_enabled:
         reason = "device_disabled"
+    elif reason is None and quota_exhausted:
+        reason = "free_quota_exhausted"
     elif reason is None and ad_gate["required"]:
         reason = "ad_reward_required"
 
@@ -29044,7 +31174,8 @@ def client_config(
     authorization: Optional[str] = Header(default=None),
 ):
     user = get_user_by_token(authorization)
-    sub = subscription_status(get_subscription_row(user["id"]))
+    raw_sub = subscription_status(get_subscription_row(user["id"]))
+    sub = effective_client_subscription(user, raw_sub)
     access_policy = client_subscription_access_policy(
         user,
         sub,
@@ -29071,6 +31202,28 @@ def client_config(
     if access_policy["paidBetaUser"]:
         sub = {**sub, "maxDevices": effective_max_devices}
     traffic_usage = subscription_traffic_usage_status(int(user["id"]), sub)
+    quota_exhausted = free_tier_quota_exhausted(
+        access_policy,
+        traffic_usage,
+    )
+    access_policy = {
+        **access_policy,
+        "quotaExhausted": quota_exhausted,
+    }
+    if quota_exhausted:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "free_quota_exhausted",
+                "message": (
+                    "Бесплатный лимит на этот месяц исчерпан. "
+                    "Новый период откроется автоматически по UTC "
+                    "или можно перейти на платный тариф."
+                ),
+                "trafficUsage": traffic_usage,
+                "accessPolicy": access_policy,
+            },
+        )
 
     with db() as conn:
         device = conn.execute(
@@ -29377,7 +31530,10 @@ def client_config(
         selected_remote_config = load_remote_vpn_node_config(selected_server_id)
         assigned_ip = ensure_device_transport_ip(
             device["device_uid"],
-            transport_key=selected_protocol,
+            transport_key=device_transport_assignment_key(
+                selected_protocol,
+                selected_server_id,
+            ),
             client_subnet=selected_remote_config.get("clientSubnet") or "",
         )
 
@@ -31005,10 +33161,13 @@ def admin_server_catalog_remote_provisioning_check(
     if row is None:
         raise HTTPException(status_code=404, detail="Managed VPN-узел не найден.")
     profile = server_row_client_config_profile(row)
-    if profile != "remote_ssh_wg0":
+    if profile not in {"remote_ssh_wg0", "remote_ssh_awg2"}:
         raise HTTPException(
             status_code=409,
-            detail="Проверка доступна только для профиля remote_ssh_wg0.",
+            detail=(
+                "Проверка доступна только для профилей "
+                "remote_ssh_wg0 и remote_ssh_awg2."
+            ),
         )
     config, blockers = remote_vpn_node_config_check(
         normalized_server_id,
@@ -31068,10 +33227,13 @@ def admin_server_catalog_remote_peer_smoke(
     if row is None:
         raise HTTPException(status_code=404, detail="Managed VPN-узел не найден.")
     profile = server_row_client_config_profile(row)
-    if profile != "remote_ssh_wg0":
+    if profile not in {"remote_ssh_wg0", "remote_ssh_awg2"}:
         raise HTTPException(
             status_code=409,
-            detail="Smoke-проверка доступна только для профиля remote_ssh_wg0.",
+            detail=(
+                "Smoke-проверка доступна только для профилей "
+                "remote_ssh_wg0 и remote_ssh_awg2."
+            ),
         )
     config, blockers = remote_vpn_node_config_check(
         normalized_server_id,
@@ -31089,14 +33251,11 @@ def admin_server_catalog_remote_peer_smoke(
             "removed": False,
         }
 
-    smoke_ip = REMOTE_NODE_SMOKE_PEER_IP.strip()
-    try:
-        ipaddress.ip_address(smoke_ip)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="GREENVPN_REMOTE_NODE_SMOKE_PEER_IP должен быть корректным IP.",
-        ) from exc
+    smoke_ip = select_remote_node_smoke_ip(
+        config,
+        REMOTE_NODE_SMOKE_PEER_IP,
+        offset_from_broadcast=2,
+    )
 
     smoke_device_uid = f"admin-smoke-{normalized_server_id}-{int(time.time())}"
     _, smoke_public_key = wg_genkeypair()
@@ -31193,10 +33352,13 @@ def admin_server_catalog_client_config_smoke(
 
     entry = server_catalog_entry_payload(row)
     profile = entry.get("clientConfigProfile") or "none"
-    if profile != "remote_ssh_wg0":
+    if profile not in {"remote_ssh_wg0", "remote_ssh_awg2"}:
         raise HTTPException(
             status_code=409,
-            detail="Smoke-проверка клиентского конфига доступна только для профиля remote_ssh_wg0.",
+            detail=(
+                "Smoke-проверка клиентского конфига доступна только для профилей "
+                "remote_ssh_wg0 и remote_ssh_awg2."
+            ),
         )
 
     readiness = entry.get("clientConfigReadiness") or {}
@@ -31217,16 +33379,12 @@ def admin_server_catalog_client_config_smoke(
             "removed": False,
         }
 
-    smoke_ip = REMOTE_NODE_CLIENT_CONFIG_SMOKE_PEER_IP.strip()
-    try:
-        ipaddress.ip_address(smoke_ip)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail="GREENVPN_REMOTE_NODE_CLIENT_CONFIG_SMOKE_PEER_IP должен быть корректным IP.",
-        ) from exc
-
     remote_config = load_remote_vpn_node_config(normalized_server_id)
+    smoke_ip = select_remote_node_smoke_ip(
+        remote_config,
+        REMOTE_NODE_CLIENT_CONFIG_SMOKE_PEER_IP,
+        offset_from_broadcast=3,
+    )
     selected_server = managed_catalog_entry_to_public_server(entry)
     smoke_device_uid = f"admin-client-smoke-{normalized_server_id}-{int(time.time())}"
     client_private_key, client_public_key = wg_genkeypair()
@@ -31263,6 +33421,7 @@ def admin_server_catalog_client_config_smoke(
             endpoint_host=provisioning["endpointHost"],
             endpoint_port=provisioning["endpointPort"],
             client_mtu=provisioning.get("clientMtu"),
+            interface_fields=provisioning.get("interfaceFields"),
         )
         config_text_bytes = len(config_text.encode("utf-8"))
         expected_mtu = int(provisioning.get("clientMtu") or WG_CLIENT_MTU)
@@ -31321,6 +33480,21 @@ def admin_server_catalog_client_config_smoke(
                 "message": "Клиентский конфиг содержит keepalive для мобильных сетей.",
             },
         ]
+        if profile == "remote_ssh_awg2":
+            required_awg_fields = ("S1", "S2", "H1", "H2", "H3", "H4")
+            config_checks.extend(
+                {
+                    "code": f"awg_{field.lower()}",
+                    "ok": (
+                        f"{field} = "
+                        f"{(provisioning.get('interfaceFields') or {}).get(field, '')}"
+                    ) in config_text,
+                    "message": (
+                        f"Клиентский AWG-конфиг содержит согласованное поле {field}."
+                    ),
+                }
+                for field in required_awg_fields
+            )
         config_shape_ok = all(bool(check.get("ok")) for check in config_checks)
     except HTTPException as exc:
         error_code = "client_config_smoke_failed"
@@ -33134,13 +35308,14 @@ def admin_alerts_test(
             detail=readiness.get("message") or "Админские оповещения не настроены.",
         )
 
-    result = send_telegram_admin_alert(
-        "Green VPN admin alert test: Telegram delivery is configured."
+    result = send_admin_alert(
+        "Green VPN admin alert test: automatic incident delivery is configured."
     )
+    provider = clean_limited_text(result.get("provider"), 40) or admin_alert_provider()
     write_admin_audit(
         "admin_alert_test_sent",
         "admin_alert",
-        "telegram",
+        provider,
         {
             "ok": bool(result.get("ok")),
             "status": result.get("status"),
@@ -33151,11 +35326,12 @@ def admin_alerts_test(
     if not result.get("ok"):
         raise HTTPException(
             status_code=502,
-            detail=result.get("error") or "Не удалось доставить Telegram-оповещение.",
+            detail=result.get("error") or "Не удалось доставить автоматическое оповещение.",
         )
     return {
         "ok": True,
         "result": {
+            "provider": provider,
             "status": result.get("status"),
             "deliveredAt": utc_now_iso(),
         },
@@ -33639,6 +35815,15 @@ def admin_billing_reconciliation(
     return billing_reconciliation_payload(limit=limit)
 
 
+@app.get("/api/v1/admin/billing/refunds/readiness")
+def admin_billing_refunds_readiness(
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "billing.read")
+    return refund_execution_readiness()
+
+
 @app.get("/api/v1/admin/billing/renewals/readiness")
 def admin_billing_renewals_readiness(
     limit: int = 25,
@@ -33773,6 +35958,54 @@ def admin_cancel_stale_billing_order(
     return {
         "ok": True,
         **result,
+        "reconciliation": billing_reconciliation_payload(),
+    }
+
+
+@app.post("/api/v1/admin/billing/orders/{order_id}/refund-full")
+def admin_refund_billing_order_full(
+    order_id: str,
+    payload: AdminBillingRefundIn,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "billing.manage", request=request)
+    if clean_limited_text(payload.confirmOrderId, 120).strip() != order_id:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "refund_confirmation_mismatch",
+                "message": "Для возврата нужно точно повторить идентификатор заказа.",
+            },
+        )
+    result = execute_full_refund_for_order(
+        order_id,
+        reason=payload.reason,
+    )
+    order = result["order"]
+    write_admin_audit(
+        "billing_order_full_refund_requested",
+        "billing_order",
+        order_id,
+        {
+            "reason": clean_limited_text(payload.reason, 500).strip(),
+            "userId": order.get("userId"),
+            "amountRub": order.get("amountRub"),
+            "refundStatus": (order.get("refund") or {}).get("status"),
+            "entitlementStatus": (order.get("refund") or {}).get(
+                "entitlementStatus"
+            ),
+            "reused": bool(result.get("reused")),
+            "providerCalled": bool(result.get("providerCalled")),
+        },
+        request=request,
+    )
+    return {
+        "ok": True,
+        **result,
+        "order": public_billing_order_status(order),
+        "refundReadiness": refund_execution_readiness(),
         "reconciliation": billing_reconciliation_payload(),
     }
 

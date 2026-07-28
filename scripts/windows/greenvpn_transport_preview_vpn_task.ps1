@@ -55,8 +55,6 @@ $VlessHevStderrPath = Join-Path $ProgramDataRoot 'vless-reality-hev.stderr.log'
 $NaiveTunnelName = 'GreenVPNNaivePreview'
 $NaiveRouteMetric = 42734
 $NaiveSocksPort = 1982
-$NaiveCanaryHost = 'nl2.vpn.greenvpn.pro'
-$NaiveCanaryIp = '5.129.216.42'
 $NaiveCanaryPort = 8443
 $NaiveToolRoot = Join-Path $PSScriptRoot 'naive-https'
 $NaiveExe = Join-Path $NaiveToolRoot 'naive.exe'
@@ -74,7 +72,29 @@ $NaiveStdoutPath = Join-Path $ProgramDataRoot 'naive-https-client.stdout.log'
 $NaiveStderrPath = Join-Path $ProgramDataRoot 'naive-https-client.stderr.log'
 $NaiveHevStdoutPath = Join-Path $ProgramDataRoot 'naive-https-hev.stdout.log'
 $NaiveHevStderrPath = Join-Path $ProgramDataRoot 'naive-https-hev.stderr.log'
+$DnsttTunnelName = 'GreenVPNDnsttPreview'
+$DnsttRouteMetric = 42735
+$DnsttSocksPort = 1983
+$DnsttZone = 't.greenvpn.pro'
+$DnsttExpectedEgress = '5.129.216.42'
+$DnsttToolRoot = Join-Path $PSScriptRoot 'dnstt'
+$DnsttExe = Join-Path $DnsttToolRoot 'dnstt-client-windows-amd64.exe'
+$DnsttHevExe = Join-Path $DnsttToolRoot 'hev-socks5-tunnel.exe'
+$DnsttHevMsysDll = Join-Path $DnsttToolRoot 'msys-2.0.dll'
+$DnsttHevWintunDll = Join-Path $DnsttToolRoot 'wintun.dll'
+$DnsttWatchdogScript = Join-Path $PSScriptRoot 'greenvpn_dnstt_watchdog.ps1'
+$DnsttRuntimeConfigPath = Join-Path $ProgramDataRoot 'dnstt-client.runtime.json'
+$DnsttHevRuntimeConfigPath = Join-Path $ProgramDataRoot 'dnstt-hev.runtime.yaml'
+$DnsttPidPath = Join-Path $ProgramDataRoot 'dnstt-client.pid'
+$DnsttHevPidPath = Join-Path $ProgramDataRoot 'dnstt-hev.pid'
+$DnsttWatchdogPidPath = Join-Path $ProgramDataRoot 'dnstt-watchdog.pid'
+$DnsttRouteStatePath = Join-Path $ProgramDataRoot 'dnstt-routes.json'
+$DnsttStdoutPath = Join-Path $ProgramDataRoot 'dnstt-client.stdout.log'
+$DnsttStderrPath = Join-Path $ProgramDataRoot 'dnstt-client.stderr.log'
+$DnsttHevStdoutPath = Join-Path $ProgramDataRoot 'dnstt-hev.stdout.log'
+$DnsttHevStderrPath = Join-Path $ProgramDataRoot 'dnstt-hev.stderr.log'
 $LogPath = Join-Path $ProgramDataRoot 'backend.log'
+$SelectiveRoutingHelper = Join-Path $PSScriptRoot 'greenvpn_selective_routing.ps1'
 
 $ExpectedHysteriaRuntimeHashes = @{
     'hysteria-windows-amd64.exe' = 'BCD3865B09BE2E5CC18D117DCF3AD687D1E6E27B0B050376B9CF4EA251B64D6F'
@@ -94,6 +114,17 @@ $ExpectedNaiveRuntimeHashes = @{
     'msys-2.0.dll' = '6C0DE43EFC0F14D871CC9F3FA803B9BD1E74802F45B3C8AFFE3DACC21B2EEA18'
     'wintun.dll' = 'E5DA8447DC2C320EDC0FC52FA01885C103DE8C118481F683643CACC3220DAFCE'
 }
+$ExpectedDnsttRuntimeHashes = @{
+    'dnstt-client-windows-amd64.exe' = '282995EA68FD13514AC033BC953193AD11CF01F83BB6E3F97929089E5BD85A99'
+    'hev-socks5-tunnel.exe' = '46167DBA51A2C3DD5F2E3478B0D8A30CAD03392D388DC1330D55246492F48C1E'
+    'msys-2.0.dll' = '6C0DE43EFC0F14D871CC9F3FA803B9BD1E74802F45B3C8AFFE3DACC21B2EEA18'
+    'wintun.dll' = 'E5DA8447DC2C320EDC0FC52FA01885C103DE8C118481F683643CACC3220DAFCE'
+}
+
+if (-not (Test-Path -LiteralPath $SelectiveRoutingHelper -PathType Leaf)) {
+    throw "Selective routing helper is missing: $SelectiveRoutingHelper"
+}
+. $SelectiveRoutingHelper
 
 function Write-GreenLog {
     param([string]$Message)
@@ -203,10 +234,25 @@ function Assert-NaiveRuntime {
     }
 }
 
+function Assert-DnsttRuntime {
+    foreach ($entry in $ExpectedDnsttRuntimeHashes.GetEnumerator()) {
+        $path = Join-Path $DnsttToolRoot $entry.Key
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "dnstt preview runtime is missing: $($entry.Key)"
+        }
+        if ((Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash -ne $entry.Value) {
+            throw "dnstt preview runtime hash mismatch: $($entry.Key)"
+        }
+    }
+    if (-not (Test-Path -LiteralPath $DnsttWatchdogScript -PathType Leaf)) {
+        throw 'dnstt preview watchdog is missing.'
+    }
+}
+
 function Get-ManagedProtocol {
     if (-not (Test-Path -LiteralPath $ProtocolPath)) { return 'wireguard_udp' }
     $value = (Get-Content -LiteralPath $ProtocolPath -Raw -ErrorAction Stop).Trim().ToLowerInvariant()
-    if ($value -notin @('wireguard_udp', 'amneziawg', 'hysteria2', 'vless_reality', 'naive_https')) {
+    if ($value -notin @('wireguard_udp', 'amneziawg', 'hysteria2', 'vless_reality', 'naive_https', 'dnstt')) {
         throw "Unsupported managed protocol: $value"
     }
     return $value
@@ -226,7 +272,13 @@ function Ensure-GreenProgramDataAcl {
     $writeMask = [Security.AccessControl.FileSystemRights]::Write -bor `
         [Security.AccessControl.FileSystemRights]::Modify -bor `
         [Security.AccessControl.FileSystemRights]::FullControl
-    foreach ($path in @($ProgramDataRoot, $ConfigPath, $ProtocolPath)) {
+    foreach ($path in @(
+        $ProgramDataRoot,
+        $ConfigPath,
+        $ProtocolPath,
+        $RoutingModePath,
+        $RoutingAppsPath
+    )) {
         if (-not (Test-Path -LiteralPath $path)) { continue }
         $item = Get-Item -LiteralPath $path -Force
         if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
@@ -249,13 +301,30 @@ function Ensure-GreenProgramDataAcl {
 function Get-ManagedIpv4Endpoint {
     if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "Config missing: $ConfigPath" }
     $protocol = Get-ManagedProtocol
+    if ($protocol -eq 'dnstt') {
+        $root = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
+        $resolvers = @($root.resolvers)
+        if ($resolvers.Count -lt 1 -or [string]$resolvers[0].mode -ne 'doh' -or
+            [string]$resolvers[0].endpoint -ne 'https://1.1.1.1/dns-query') {
+            throw 'Windows dnstt preview resolver is not the guarded DoH endpoint.'
+        }
+        return '1.1.1.1'
+    }
     if ($protocol -eq 'naive_https') {
         $root = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
         $proxy = [Uri][string]$root.proxy
-        if ($proxy.Scheme -ne 'https' -or $proxy.Host -ne $NaiveCanaryHost -or $proxy.Port -ne $NaiveCanaryPort) {
+        $endpointIp = [string]$root.endpointIp
+        $guardedEndpoints = @{
+            'nl2.vpn.greenvpn.pro' = '5.129.216.42'
+            'nl1.vpn.greenvpn.pro' = '37.220.85.211'
+            '88-218-250-86.sslip.io' = '88.218.250.86'
+        }
+        $expectedIp = $guardedEndpoints[$proxy.Host.ToLowerInvariant()]
+        if ($proxy.Scheme -ne 'https' -or $proxy.Port -ne $NaiveCanaryPort -or
+            [string]::IsNullOrWhiteSpace([string]$expectedIp) -or $endpointIp -ne $expectedIp) {
             throw 'Windows Naive HTTPS preview endpoint is not the guarded canary.'
         }
-        return $NaiveCanaryIp
+        return $endpointIp
     }
     if ($protocol -eq 'vless_reality') {
         $root = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
@@ -264,6 +333,14 @@ function Get-ManagedIpv4Endpoint {
         if (-not [Net.IPAddress]::TryParse($candidate, [ref]$address) -or
             $address.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) {
             throw 'Windows VLESS preview endpoint is not valid IPv4.'
+        }
+        $candidatePort = [int]$root.outbounds[0].settings.vnext[0].port
+        if ("$($address.IPAddressToString):$candidatePort" -notin @(
+            '5.129.216.42:443',
+            '37.220.85.211:443',
+            '88.218.250.86:9443'
+        )) {
+            throw 'Windows VLESS preview endpoint passport is not allowlisted.'
         }
         return $address.IPAddressToString
     }
@@ -547,6 +624,58 @@ function Stop-NaiveHttpsTunnel {
     }
 }
 
+function Stop-DnsttWatchdog {
+    $pidValue = Read-ManagedPid -Path $DnsttWatchdogPidPath
+    if ($pidValue -gt 0) {
+        try {
+            $process = Get-CimInstance Win32_Process -Filter "ProcessId=$pidValue" -ErrorAction Stop
+            $expectedPowerShell = [IO.Path]::GetFullPath((Join-Path $PSHOME 'powershell.exe'))
+            $actual = [IO.Path]::GetFullPath([string]$process.ExecutablePath)
+            $command = [string]$process.CommandLine
+            if ($actual.Equals($expectedPowerShell, [StringComparison]::OrdinalIgnoreCase) -and
+                $command.IndexOf($DnsttWatchdogScript, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                Stop-Process -Id $pidValue -Force -ErrorAction SilentlyContinue
+            }
+        } catch {}
+    }
+    Remove-Item -LiteralPath $DnsttWatchdogPidPath -Force -ErrorAction SilentlyContinue
+}
+
+function Remove-DnsttRoutes {
+    if (-not (Test-Path -LiteralPath $DnsttRouteStatePath)) { return }
+    try {
+        $state = Get-Content -LiteralPath $DnsttRouteStatePath -Raw | ConvertFrom-Json
+        if ([int]$state.metric -ne $DnsttRouteMetric) { return }
+        foreach ($prefix in @($state.prefixes)) {
+            if ($prefix -notin @('0.0.0.0/1', '128.0.0.0/1', '::/1', '8000::/1')) { continue }
+            Get-NetRoute -DestinationPrefix $prefix -InterfaceIndex ([int]$state.interfaceIndex) -ErrorAction SilentlyContinue |
+                Where-Object { $_.RouteMetric -eq $DnsttRouteMetric } |
+                Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+        }
+    } catch {
+        Write-GreenLog 'dnstt route cleanup warning'
+    } finally {
+        Remove-Item -LiteralPath $DnsttRouteStatePath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Stop-DnsttTunnel {
+    Stop-DnsttWatchdog
+    Stop-ExactProcessFromState -PidPath $DnsttHevPidPath -ExpectedPath $DnsttHevExe
+    Stop-ExactProcessFromState -PidPath $DnsttPidPath -ExpectedPath $DnsttExe
+    Remove-DnsttRoutes
+    foreach ($path in @(
+        $DnsttRuntimeConfigPath,
+        $DnsttHevRuntimeConfigPath,
+        $DnsttStdoutPath,
+        $DnsttStderrPath,
+        $DnsttHevStdoutPath,
+        $DnsttHevStderrPath
+    )) {
+        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Wait-LocalTcpPort {
     param([int]$Port, [int]$Seconds = 15)
     $deadline = (Get-Date).AddSeconds($Seconds)
@@ -701,7 +830,12 @@ function New-VlessRuntimeConfigs {
     $server = $outbound.settings.vnext[0]
     $user = $server.users[0]
     $stream = $outbound.streamSettings
-    if ([string]$outbound.protocol -ne 'vless' -or [int]$server.port -ne 443 -or
+    if ([string]$outbound.protocol -ne 'vless' -or
+        "$([string]$server.address):$([int]$server.port)" -notin @(
+            '5.129.216.42:443',
+            '37.220.85.211:443',
+            '88.218.250.86:9443'
+        ) -or
         [string]$user.encryption -ne 'none' -or [string]::IsNullOrWhiteSpace([string]$user.id) -or
         [string]$stream.network -ne 'xhttp' -or [string]$stream.security -ne 'reality' -or
         [string]::IsNullOrWhiteSpace([string]$stream.realitySettings.serverName) -or
@@ -717,7 +851,7 @@ function New-VlessRuntimeConfigs {
     }
     $endpointRoute = Get-Content -LiteralPath $EndpointRouteStatePath -Raw | ConvertFrom-Json
     $physicalAdapter = Get-NetAdapter -InterfaceIndex ([int]$endpointRoute.interfaceIndex) -ErrorAction Stop
-    if ($null -eq $physicalAdapter -or $physicalAdapter.Name -in @($TunnelName, $HysteriaTunnelName, $VlessTunnelName, $NaiveTunnelName)) {
+    if ($null -eq $physicalAdapter -or $physicalAdapter.Name -in @($TunnelName, $HysteriaTunnelName, $VlessTunnelName, $NaiveTunnelName, $DnsttTunnelName)) {
         throw 'VLESS REALITY could not resolve a safe physical outbound interface.'
     }
     $physicalAddress = Get-NetIPAddress -InterfaceIndex ([int]$endpointRoute.interfaceIndex) -AddressFamily IPv4 -ErrorAction Stop |
@@ -860,7 +994,7 @@ function New-NaiveRuntimeConfigs {
     }
     $root = $configText | ConvertFrom-Json
     $properties = @($root.PSObject.Properties.Name)
-    if ($properties.Count -ne 2 -or @($properties | Where-Object { $_ -notin @('listen', 'proxy') }).Count -ne 0) {
+    if ($properties.Count -ne 3 -or @($properties | Where-Object { $_ -notin @('listen', 'proxy', 'endpointIp') }).Count -ne 0) {
         throw 'Naive HTTPS config contains unsupported fields.'
     }
     if ([string]$root.listen -ne "socks://127.0.0.1:$NaiveSocksPort") {
@@ -871,7 +1005,14 @@ function New-NaiveRuntimeConfigs {
         throw 'Naive HTTPS proxy URI is invalid.'
     }
     $proxy = [Uri]$proxyText
-    if ($proxy.Scheme -ne 'https' -or $proxy.Host -ne $NaiveCanaryHost -or $proxy.Port -ne $NaiveCanaryPort -or
+    $guardedEndpoints = @{
+        'nl2.vpn.greenvpn.pro' = '5.129.216.42'
+        'nl1.vpn.greenvpn.pro' = '37.220.85.211'
+        '88-218-250-86.sslip.io' = '88.218.250.86'
+    }
+    $expectedIp = $guardedEndpoints[$proxy.Host.ToLowerInvariant()]
+    if ($proxy.Scheme -ne 'https' -or $proxy.Port -ne $NaiveCanaryPort -or
+        [string]::IsNullOrWhiteSpace([string]$expectedIp) -or [string]$root.endpointIp -ne $expectedIp -or
         $proxy.AbsolutePath -ne '/' -or -not [string]::IsNullOrEmpty($proxy.Query) -or
         -not [string]::IsNullOrEmpty($proxy.Fragment)) {
         throw 'Naive HTTPS profile is not the guarded TLS canary.'
@@ -883,8 +1024,9 @@ function New-NaiveRuntimeConfigs {
         throw 'Naive HTTPS credentials are incomplete.'
     }
     $endpoint = Get-ManagedIpv4Endpoint
-    if ($endpoint -ne $NaiveCanaryIp) { throw 'Naive HTTPS endpoint is inconsistent.' }
-    $root | Add-Member -NotePropertyName 'host-resolver-rules' -NotePropertyValue "MAP $NaiveCanaryHost $NaiveCanaryIp" -Force
+    if ($endpoint -ne $expectedIp) { throw 'Naive HTTPS endpoint is inconsistent.' }
+    $root.PSObject.Properties.Remove('endpointIp')
+    $root | Add-Member -NotePropertyName 'host-resolver-rules' -NotePropertyValue "MAP $($proxy.Host) $endpoint" -Force
 
     $hevRuntime = @"
 tunnel:
@@ -972,12 +1114,181 @@ function Start-NaiveHttpsTunnel {
     Write-GreenLog "Naive HTTPS preview started ifIndex=$($adapter.ifIndex)"
 }
 
+function Wait-DnsttAdapter {
+    param([int]$Seconds = 20)
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    do {
+        $adapter = Get-NetAdapter -Name $DnsttTunnelName -ErrorAction SilentlyContinue
+        if ($null -ne $adapter -and $adapter.Status -eq 'Up') { return $adapter }
+        Start-Sleep -Milliseconds 300
+    } while ((Get-Date) -lt $deadline)
+    throw 'dnstt preview adapter did not become ready.'
+}
+
+function New-DnsttRuntimeConfigs {
+    $configText = [IO.File]::ReadAllText($ConfigPath)
+    $configSize = [Text.Encoding]::UTF8.GetByteCount($configText)
+    if ($configSize -lt 180 -or $configSize -gt 16384) {
+        throw 'dnstt config size is invalid.'
+    }
+    $root = $configText | ConvertFrom-Json
+    $rootProperties = @($root.PSObject.Properties.Name)
+    $allowedRoot = @('zone', 'publicKey', 'socks', 'resolvers', 'expectedEgress')
+    if ($rootProperties.Count -ne $allowedRoot.Count -or
+        @($rootProperties | Where-Object { $_ -notin $allowedRoot }).Count -ne 0) {
+        throw 'dnstt config fields are invalid.'
+    }
+    if ([string]$root.zone -ne $DnsttZone -or
+        [string]$root.expectedEgress -ne $DnsttExpectedEgress) {
+        throw 'dnstt profile is not the guarded canary.'
+    }
+    $publicKey = [string]$root.publicKey
+    if ($publicKey -notmatch '^[0-9a-f]{64}$') {
+        throw 'dnstt public key is invalid.'
+    }
+
+    $socks = $root.socks
+    $socksProperties = @($socks.PSObject.Properties.Name)
+    $allowedSocks = @('listen', 'username', 'password')
+    if ($socksProperties.Count -ne $allowedSocks.Count -or
+        @($socksProperties | Where-Object { $_ -notin $allowedSocks }).Count -ne 0) {
+        throw 'dnstt SOCKS fields are invalid.'
+    }
+    $username = [string]$socks.username
+    $password = [string]$socks.password
+    if ([string]$socks.listen -ne "127.0.0.1:$DnsttSocksPort" -or
+        $username -notmatch '^[A-Za-z0-9_.-]{3,128}$' -or
+        $password -notmatch '^[A-Za-z0-9+/=]{16,255}$') {
+        throw 'dnstt SOCKS profile is invalid.'
+    }
+
+    $resolvers = @($root.resolvers)
+    if ($resolvers.Count -lt 1 -or $resolvers.Count -gt 3) {
+        throw 'dnstt resolver count is invalid.'
+    }
+    $allowedResolvers = @(
+        'doh|https://1.1.1.1/dns-query',
+        'doh|https://8.8.8.8/dns-query',
+        'dot|1.1.1.1:853'
+    )
+    $seenResolvers = @{}
+    foreach ($resolver in $resolvers) {
+        $resolverProperties = @($resolver.PSObject.Properties.Name)
+        if ($resolverProperties.Count -ne 2 -or
+            @($resolverProperties | Where-Object { $_ -notin @('mode', 'endpoint') }).Count -ne 0) {
+            throw 'dnstt resolver fields are invalid.'
+        }
+        $resolverKey = "$([string]$resolver.mode)|$([string]$resolver.endpoint)"
+        if ($resolverKey -notin $allowedResolvers -or $seenResolvers.ContainsKey($resolverKey)) {
+            throw 'dnstt resolver is not allowlisted or is duplicated.'
+        }
+        $seenResolvers[$resolverKey] = $true
+    }
+    if ([string]$resolvers[0].mode -ne 'doh' -or
+        [string]$resolvers[0].endpoint -ne 'https://1.1.1.1/dns-query') {
+        throw 'dnstt primary resolver is not the guarded DoH endpoint.'
+    }
+
+    $hevRuntime = @"
+tunnel:
+  name: $DnsttTunnelName
+  mtu: 1400
+  ipv4: 198.18.3.1
+  ipv6: 'fc00:3::1'
+socks5:
+  address: 127.0.0.1
+  port: $DnsttSocksPort
+  username: '$username'
+  password: '$password'
+  udp: 'tcp'
+mapdns:
+  address: 198.18.3.2
+  port: 53
+  network: 100.64.0.0
+  netmask: 255.192.0.0
+  cache-size: 10000
+misc:
+  log-file: stderr
+  log-level: warn
+  connect-timeout: 10000
+  tcp-read-write-timeout: 300000
+  udp-read-write-timeout: 60000
+"@
+    Write-PrivateRuntimeFile -Path $DnsttRuntimeConfigPath -Content ($root | ConvertTo-Json -Depth 20)
+    Write-PrivateRuntimeFile -Path $DnsttHevRuntimeConfigPath -Content $hevRuntime
+}
+
+function Add-DnsttRoutes {
+    param([int]$InterfaceIndex)
+    $prefixes = @('0.0.0.0/1', '128.0.0.0/1', '::/1', '8000::/1')
+    foreach ($prefix in $prefixes) {
+        $family = if ($prefix.Contains(':')) { 'IPv6' } else { 'IPv4' }
+        $nextHop = if ($family -eq 'IPv6') { '::' } else { '0.0.0.0' }
+        Get-NetRoute -AddressFamily $family -DestinationPrefix $prefix -InterfaceIndex $InterfaceIndex -ErrorAction SilentlyContinue |
+            Where-Object { $_.RouteMetric -eq $DnsttRouteMetric } |
+            Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+        New-NetRoute -AddressFamily $family -DestinationPrefix $prefix -InterfaceIndex $InterfaceIndex `
+            -NextHop $nextHop -RouteMetric $DnsttRouteMetric -PolicyStore ActiveStore -ErrorAction Stop | Out-Null
+    }
+    Set-DnsClientServerAddress -InterfaceIndex $InterfaceIndex -ServerAddresses @('198.18.3.2') -ErrorAction Stop
+    [ordered]@{
+        interfaceIndex = $InterfaceIndex
+        metric = $DnsttRouteMetric
+        prefixes = $prefixes
+    } | ConvertTo-Json -Compress | Set-Content -LiteralPath $DnsttRouteStatePath -Encoding ASCII
+    & attrib.exe +H $DnsttRouteStatePath 2>$null | Out-Null
+    & icacls.exe $DnsttRouteStatePath /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
+}
+
+function Start-DnsttTunnel {
+    Assert-DnsttRuntime
+    Ensure-EndpointBypassRoute
+    New-DnsttRuntimeConfigs
+
+    foreach ($path in @($DnsttStdoutPath, $DnsttStderrPath, $DnsttHevStdoutPath, $DnsttHevStderrPath)) {
+        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        Write-PrivateRuntimeFile -Path $path -Content ''
+    }
+    $profile = Get-Content -LiteralPath $DnsttRuntimeConfigPath -Raw | ConvertFrom-Json
+    $resolver = @($profile.resolvers)[0]
+    $dnstt = Start-Process -FilePath $DnsttExe -ArgumentList @(
+        '-doh', [string]$resolver.endpoint,
+        '-pubkey', [string]$profile.publicKey,
+        [string]$profile.zone,
+        "127.0.0.1:$DnsttSocksPort"
+    ) -WorkingDirectory $DnsttToolRoot -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput $DnsttStdoutPath -RedirectStandardError $DnsttStderrPath
+    Write-PrivateRuntimeFile -Path $DnsttPidPath -Content ([string]$dnstt.Id)
+    Wait-LocalTcpPort -Port $DnsttSocksPort
+
+    $hev = Start-Process -FilePath $DnsttHevExe -ArgumentList @($DnsttHevRuntimeConfigPath) `
+        -WorkingDirectory $DnsttToolRoot -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput $DnsttHevStdoutPath -RedirectStandardError $DnsttHevStderrPath
+    Write-PrivateRuntimeFile -Path $DnsttHevPidPath -Content ([string]$hev.Id)
+    $adapter = Wait-DnsttAdapter
+    Add-DnsttRoutes -InterfaceIndex ([int]$adapter.ifIndex)
+
+    $watchdog = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @(
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'RemoteSigned',
+        '-File', ('"' + $DnsttWatchdogScript + '"'),
+        '-DnsttPid', $dnstt.Id,
+        '-HevPid', $hev.Id
+    ) -WindowStyle Hidden -PassThru
+    Write-PrivateRuntimeFile -Path $DnsttWatchdogPidPath -Content ([string]$watchdog.Id)
+
+    if (-not (Test-ExactProcess -ProcessId $dnstt.Id -ExpectedPath $DnsttExe) -or
+        -not (Test-ExactProcess -ProcessId $hev.Id -ExpectedPath $DnsttHevExe)) {
+        throw 'dnstt preview engine exited during startup.'
+    }
+    Write-GreenLog "dnstt preview started ifIndex=$($adapter.ifIndex)"
+}
+
 function Get-CompetingVpnLabels {
     $labels = New-Object System.Collections.Generic.List[string]
     try {
         Get-NetAdapter -ErrorAction SilentlyContinue |
             Where-Object {
-                $_.Status -eq 'Up' -and $_.Name -notin @($TunnelName, $HysteriaTunnelName, $VlessTunnelName, $NaiveTunnelName) -and
+                $_.Status -eq 'Up' -and $_.Name -notin @($TunnelName, $HysteriaTunnelName, $VlessTunnelName, $NaiveTunnelName, $DnsttTunnelName) -and
                 ($_.Name -match '(?i)(wireguard|wintun|amnezia|warp|cloudflare|device[0-9_]+)' -or $_.InterfaceDescription -match '(?i)(wireguard|wintun|amnezia|warp|cloudflare)')
             } | ForEach-Object { $labels.Add("adapter:$($_.Name)") | Out-Null }
     } catch {
@@ -997,9 +1308,21 @@ function Get-CompetingVpnLabels {
 }
 
 function Stop-OwnTunnel {
+    Stop-GreenProcessRouter
+    $managedProcesses = @(
+        [pscustomobject]@{ pid = Read-ManagedPid -Path $HysteriaPidPath; path = $HysteriaExe },
+        [pscustomobject]@{ pid = Read-ManagedPid -Path $HevPidPath; path = $HevExe },
+        [pscustomobject]@{ pid = Read-ManagedPid -Path $XrayPidPath; path = $XrayExe },
+        [pscustomobject]@{ pid = Read-ManagedPid -Path $VlessHevPidPath; path = $VlessHevExe },
+        [pscustomobject]@{ pid = Read-ManagedPid -Path $NaivePidPath; path = $NaiveExe },
+        [pscustomobject]@{ pid = Read-ManagedPid -Path $NaiveHevPidPath; path = $NaiveHevExe },
+        [pscustomobject]@{ pid = Read-ManagedPid -Path $DnsttPidPath; path = $DnsttExe },
+        [pscustomobject]@{ pid = Read-ManagedPid -Path $DnsttHevPidPath; path = $DnsttHevExe }
+    )
     Stop-Hysteria2Tunnel
     Stop-VlessRealityTunnel
     Stop-NaiveHttpsTunnel
+    Stop-DnsttTunnel
     foreach ($serviceName in @($WireGuardServiceName, $AmneziaWgServiceName)) {
         try {
             Invoke-External -FilePath 'sc.exe' -Arguments @('stop', $serviceName) -AllowedExitCodes @(0, 1056, 1060, 1062) | Out-Null
@@ -1018,6 +1341,26 @@ function Stop-OwnTunnel {
         try { Invoke-External -FilePath $amneziaWg -Arguments @('/uninstalltunnelservice', $TunnelName) -AllowedExitCodes @(0, 1) | Out-Null } catch { Write-GreenLog 'AmneziaWG uninstall warning' }
     }
     Remove-EndpointBypassRoute
+
+    for ($attempt = 0; $attempt -lt 12; $attempt++) {
+        $runningServices = @(
+            Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -in @($WireGuardServiceName, $AmneziaWgServiceName) -and $_.State -ne 'Stopped' }
+        )
+        $runningProcesses = @(
+            $managedProcesses |
+                Where-Object { Test-ExactProcess -ProcessId ([int]$_.pid) -ExpectedPath ([string]$_.path) }
+        )
+        $activeAdapters = @(
+            Get-NetAdapter -Name @($HysteriaTunnelName, $VlessTunnelName, $NaiveTunnelName, $DnsttTunnelName) -ErrorAction SilentlyContinue |
+                Where-Object { $_.Status -eq 'Up' }
+        )
+        if ($runningServices.Count -eq 0 -and $runningProcesses.Count -eq 0 -and $activeAdapters.Count -eq 0) {
+            return
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    throw 'Previous Green VPN transport did not stop completely.'
 }
 
 function Start-OwnTunnel {
@@ -1033,6 +1376,17 @@ function Start-OwnTunnel {
 
     $engine = if ($protocol -eq 'amneziawg') { Resolve-AmneziaWgExe } else { Resolve-WireGuardExe }
     Stop-OwnTunnel
+    $routingMode = Get-GreenRoutingMode
+    $routingPolicy = $null
+    $applicationPaths = @()
+    if ($routingMode -eq 'applications') {
+        if ($protocol -notin @('wireguard_udp', 'amneziawg')) {
+            throw "Selective application routing is not supported by $protocol."
+        }
+        $routingPolicy = Get-GreenRoutingPolicy
+        $applicationPaths = @(Get-GreenApplicationPaths -Policy $routingPolicy)
+        Ensure-GreenApplicationTunnelRoutes -Policy $routingPolicy
+    }
     if ($protocol -eq 'hysteria2') {
         Start-Hysteria2Tunnel
         return
@@ -1045,14 +1399,48 @@ function Start-OwnTunnel {
         Start-NaiveHttpsTunnel
         return
     }
+    if ($protocol -eq 'dnstt') {
+        Start-DnsttTunnel
+        return
+    }
     if ([string]::IsNullOrWhiteSpace($engine)) { throw "Engine unavailable for $protocol" }
-    Ensure-NativeFullTunnelKillSwitch
+    if ($routingMode -ne 'applications') {
+        Ensure-NativeFullTunnelKillSwitch
+    }
     Ensure-GreenProgramDataAcl
     Ensure-EndpointBypassRoute
     Invoke-External -FilePath $engine -Arguments @('/installtunnelservice', $ConfigPath) | Out-Null
     $serviceName = Get-SelectedServiceName -Protocol $protocol
     Invoke-External -FilePath 'sc.exe' -Arguments @('config', $serviceName, 'start=', 'demand') | Out-Null
     Invoke-External -FilePath 'sc.exe' -Arguments @('start', $serviceName) -AllowedExitCodes @(0, 1056) | Out-Null
+    if ($routingMode -eq 'applications' -and $applicationPaths.Count -gt 0) {
+        $tunnelReady = $false
+        for ($i = 0; $i -lt 40; $i++) {
+            $service = Get-CimInstance Win32_Service -Filter "Name='$serviceName'" -ErrorAction SilentlyContinue
+            if (
+                $null -ne $service -and
+                $service.State -eq 'Running' -and
+                (Test-GreenTcpEndpoint -HostName $ApplicationProxyHost -Port $ApplicationProxyPort)
+            ) {
+                $tunnelReady = $true
+                break
+            }
+            Start-Sleep -Milliseconds 500
+        }
+        if (-not $tunnelReady) {
+            Stop-OwnTunnel
+            throw 'The application routing gateway is unavailable through the tunnel.'
+        }
+        try {
+            Start-GreenProcessRouter -ApplicationPaths $applicationPaths
+        } catch {
+            Stop-OwnTunnel
+            throw
+        }
+    } elseif ($routingMode -eq 'applications') {
+        Stop-GreenProcessRouter
+        Write-GreenLog 'selective tunnel uses destination routes only; process router not required'
+    }
 }
 
 function Invoke-GreenGuard {
@@ -1063,7 +1451,17 @@ function Invoke-GreenGuard {
         (Test-ExactProcess -ProcessId (Read-ManagedPid -Path $VlessHevPidPath) -ExpectedPath $VlessHevExe)
     $naiveRunning = (Test-ExactProcess -ProcessId (Read-ManagedPid -Path $NaivePidPath) -ExpectedPath $NaiveExe) -and
         (Test-ExactProcess -ProcessId (Read-ManagedPid -Path $NaiveHevPidPath) -ExpectedPath $NaiveHevExe)
-    if ($ownRunning.Count -eq 0 -and -not $hysteriaRunning -and -not $vlessRunning -and -not $naiveRunning) { return }
+    $dnsttRunning = (Test-ExactProcess -ProcessId (Read-ManagedPid -Path $DnsttPidPath) -ExpectedPath $DnsttExe) -and
+        (Test-ExactProcess -ProcessId (Read-ManagedPid -Path $DnsttHevPidPath) -ExpectedPath $DnsttHevExe)
+    if ($ownRunning.Count -eq 0 -and -not $hysteriaRunning -and -not $vlessRunning -and -not $naiveRunning -and -not $dnsttRunning) { return }
+    if (
+        (Test-Path -LiteralPath $ProcessRouterActivePath -PathType Leaf) -and
+        -not (Test-GreenProcessRouterRunning)
+    ) {
+        Write-GreenLog 'guard disconnecting application-only tunnel because process router stopped'
+        Stop-OwnTunnel
+        return
+    }
     if (@(Get-CompetingVpnLabels).Count -gt 0) {
         Write-GreenLog 'guard disconnecting preview because a competing VPN is active'
         Stop-OwnTunnel

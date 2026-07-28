@@ -12,15 +12,44 @@
     [bool]$TrialOnlyNoAdsBuild = $true,
     [bool]$PaidBetaBuild = $false,
     [bool]$PublicProductBuild = $false,
+    [bool]$EnableTransportCascade = $false,
     [ValidateSet('stable', 'paid-beta')]
     [string]$WindowsRuntimeScope = 'stable',
+    [string]$UpdateChannelOverride = '',
     [string]$ProcessRouterRoot = $env:GREENVPN_PROCESS_ROUTER_ROOT,
+    [string]$CertificateThumbprint = $env:GREENVPN_WINDOWS_CODE_SIGNING_CERT_THUMBPRINT,
+    [string]$CodeSigningExpectedPublisher = $env:GREENVPN_WINDOWS_CODE_SIGNING_PUBLISHER,
+    [string]$CodeSigningTimestampUrl = 'http://timestamp.digicert.com',
+    [string]$SigningReportDir = '',
+    [switch]$RequireCodeSigning,
     [switch]$SkipBuild,
     [switch]$OpenFolder
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+$normalizedCertificateThumbprint = ($CertificateThumbprint -replace '\s+', '').ToUpperInvariant()
+if (
+    -not [string]::IsNullOrWhiteSpace($normalizedCertificateThumbprint) -and
+    $normalizedCertificateThumbprint -notmatch '^[0-9A-F]{40}$'
+) {
+    throw 'CertificateThumbprint must be a 40-character SHA-1 thumbprint.'
+}
+$codeSigningEnabled = -not [string]::IsNullOrWhiteSpace($normalizedCertificateThumbprint)
+if ($RequireCodeSigning -and -not $codeSigningEnabled) {
+    throw 'RequireCodeSigning was requested, but no code-signing certificate thumbprint was supplied.'
+}
+if ($RequireCodeSigning -and [string]::IsNullOrWhiteSpace($CodeSigningExpectedPublisher)) {
+    throw 'RequireCodeSigning was requested, but CodeSigningExpectedPublisher is empty.'
+}
+if ($codeSigningEnabled -and -not [string]::IsNullOrWhiteSpace($ReleaseZip)) {
+    throw 'Code signing requires a freshly generated payload; ReleaseZip must be empty.'
+}
+$signScriptPath = Join-Path $ProjectRoot 'scripts\windows\sign_release_artifacts.ps1'
+if ($codeSigningEnabled -and -not (Test-Path -LiteralPath $signScriptPath -PathType Leaf)) {
+    throw "Code-signing helper was not found: $signScriptPath"
+}
 
 if ([string]::IsNullOrWhiteSpace($ProcessRouterRoot)) {
     $ProcessRouterRoot = Join-Path $ProjectRoot 'third_party\windows\process_router'
@@ -42,6 +71,28 @@ function Write-Section {
     Write-Host ("=" * 80) -ForegroundColor Cyan
     Write-Host $Title -ForegroundColor Cyan
     Write-Host ("=" * 80) -ForegroundColor Cyan
+}
+
+function Invoke-CodeSigningStage {
+    param(
+        [Parameter(Mandatory=$true)][string[]]$ArtifactPath,
+        [Parameter(Mandatory=$true)][string[]]$RequiredLeafName,
+        [Parameter(Mandatory=$true)][string]$ReportPath
+    )
+
+    if (-not $codeSigningEnabled) {
+        return
+    }
+    & $signScriptPath `
+        -CertificateThumbprint $normalizedCertificateThumbprint `
+        -Path $ArtifactPath `
+        -TimestampUrl $CodeSigningTimestampUrl `
+        -ExpectedPublisher $CodeSigningExpectedPublisher `
+        -RequiredLeafName $RequiredLeafName `
+        -ReportPath $ReportPath
+    if (-not $?) {
+        throw 'Code-signing stage failed.'
+    }
 }
 
 function Assert-SafeChildPath {
@@ -157,7 +208,7 @@ namespace GreenVpn {
     }
 }
 
-function Set-ExeRequireAdministrator {
+function Set-ExeAsInvoker {
     param([Parameter(Mandatory=$true)][string]$ExePath)
 
     if (-not (Test-Path -LiteralPath $ExePath)) { return }
@@ -190,7 +241,7 @@ namespace GreenVpn {
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>
-        <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>
+        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
       </requestedPrivileges>
     </security>
   </trustInfo>
@@ -256,6 +307,21 @@ if ($PublicProductBuild) {
         throw "Public product Windows build must use the stable runtime scope."
     }
 }
+if (
+    -not [string]::IsNullOrWhiteSpace($UpdateChannelOverride) -and
+    $UpdateChannelOverride -notin @('stable', 'paid-beta', 'preview', 'public-product')
+) {
+    throw "Unsupported update channel override: $UpdateChannelOverride"
+}
+$effectiveUpdateChannel = if (-not [string]::IsNullOrWhiteSpace($UpdateChannelOverride)) {
+    $UpdateChannelOverride.Trim().ToLowerInvariant()
+} elseif ($PaidBetaBuild) {
+    'paid-beta'
+} elseif ($PublicProductBuild) {
+    'public-product'
+} else {
+    'stable'
+}
 
 $runtime = if ($WindowsRuntimeScope -eq 'paid-beta') {
     [ordered]@{
@@ -288,6 +354,13 @@ New-Item -ItemType Directory -Force -Path $OutBase | Out-Null
 $workRoot = Join-Path $OutBase '_installer_work'
 $payloadDir = Join-Path $workRoot 'payload'
 $installerPath = Join-Path $OutBase $InstallerName
+$signingReportStem = [IO.Path]::GetFileNameWithoutExtension($InstallerName) -replace '[^A-Za-z0-9._-]', '_'
+if ([string]::IsNullOrWhiteSpace($SigningReportDir)) {
+    $SigningReportDir = Join-Path $OutBase 'signing_reports'
+}
+if ($codeSigningEnabled) {
+    New-Item -ItemType Directory -Force -Path $SigningReportDir | Out-Null
+}
 
 Assert-SafeChildPath -BasePath $OutBase -CandidatePath $workRoot
 if (Test-Path -LiteralPath $workRoot) {
@@ -301,6 +374,7 @@ if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
         $trialOnlyDefine = $TrialOnlyNoAdsBuild.ToString().ToLowerInvariant()
         $paidBetaDefine = $PaidBetaBuild.ToString().ToLowerInvariant()
         $publicProductDefine = $PublicProductBuild.ToString().ToLowerInvariant()
+        $transportCascadeDefine = $EnableTransportCascade.ToString().ToLowerInvariant()
         $previousRuntimeEnvironment = @{}
         foreach ($name in $runtime.Keys) {
             $previousRuntimeEnvironment[$name] = [pscustomobject]@{
@@ -324,6 +398,12 @@ if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
                 --dart-define="GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=$trialOnlyDefine" `
                 --dart-define="GREENVPN_PAID_BETA_BUILD=$paidBetaDefine" `
                 --dart-define="GREENVPN_PUBLIC_PRODUCT_BUILD=$publicProductDefine" `
+                --dart-define="GREENVPN_AWG2_PREVIEW_ENABLED=$transportCascadeDefine" `
+                --dart-define="GREENVPN_HYSTERIA2_PREVIEW_ENABLED=$transportCascadeDefine" `
+                --dart-define="GREENVPN_VLESS_REALITY_PREVIEW_ENABLED=$transportCascadeDefine" `
+                --dart-define="GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED=$transportCascadeDefine" `
+                --dart-define="GREENVPN_DNSTT_PREVIEW_ENABLED=$transportCascadeDefine" `
+                --dart-define="GREENVPN_UPDATE_CHANNEL=$effectiveUpdateChannel" `
                 --dart-define="GREENVPN_WINDOWS_RUNTIME_SCOPE=$($runtime.GREENVPN_WINDOWS_RUNTIME_SCOPE)" `
                 --dart-define="GREENVPN_WINDOWS_TUNNEL_NAME=$($runtime.GREENVPN_WINDOWS_TUNNEL_NAME)" `
                 --dart-define="GREENVPN_WINDOWS_SERVICE_NAME=$($runtime.GREENVPN_WINDOWS_SERVICE_NAME)" `
@@ -404,14 +484,24 @@ if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
         }
     }
 
-    $vpnTask = Join-Path $ProjectRoot 'scripts\windows\greenvpn_vpn_task.ps1'
-    if (Test-Path -LiteralPath $vpnTask) {
-        $packagedVpnTask = Join-Path $generatedToolsDir 'greenvpn_vpn_task.ps1'
-        Copy-Item -LiteralPath $vpnTask -Destination $packagedVpnTask -Force
-        if ($WindowsRuntimeScope -eq 'paid-beta') {
-            $taskContent = Get-Content -LiteralPath $packagedVpnTask -Raw
-            $taskContent = $taskContent.Replace('BlueVPNDev1', 'GreenVPNBeta').Replace("'BlueVPN'", "'BlueVPNBeta'")
-            Set-Content -LiteralPath $packagedVpnTask -Value $taskContent -Encoding UTF8
+    if ($EnableTransportCascade) {
+        & (Join-Path $ProjectRoot 'scripts\windows\stage_windows_transport_cascade.ps1') `
+            -ProjectRoot $ProjectRoot `
+            -DestinationToolsDir $generatedToolsDir `
+            -RuntimeScope $WindowsRuntimeScope
+        if (-not $?) {
+            throw 'Windows transport cascade staging failed.'
+        }
+    } else {
+        $vpnTask = Join-Path $ProjectRoot 'scripts\windows\greenvpn_vpn_task.ps1'
+        if (Test-Path -LiteralPath $vpnTask) {
+            $packagedVpnTask = Join-Path $generatedToolsDir 'greenvpn_vpn_task.ps1'
+            Copy-Item -LiteralPath $vpnTask -Destination $packagedVpnTask -Force
+            if ($WindowsRuntimeScope -eq 'paid-beta') {
+                $taskContent = Get-Content -LiteralPath $packagedVpnTask -Raw
+                $taskContent = $taskContent.Replace('BlueVPNDev1', 'GreenVPNBeta').Replace("'BlueVPN'", "'BlueVPNBeta'")
+                Set-Content -LiteralPath $packagedVpnTask -Value $taskContent -Encoding UTF8
+            }
         }
     }
 
@@ -487,6 +577,25 @@ Build time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
 Release exe timestamp: $((Get-Item -LiteralPath $releaseExe).LastWriteTime)
 "@ | Set-Content -LiteralPath (Join-Path $generatedDocsDir 'BUILD_INFO.txt') -Encoding UTF8
 
+    if ($codeSigningEnabled) {
+        $ownedPayloadBinaries = @($generatedGreenExe)
+        $requiredPayloadLeafNames = @((Split-Path -Leaf $generatedGreenExe))
+        $generatedServiceExe = if ($WindowsRuntimeScope -eq 'paid-beta') {
+            Join-Path $generatedAppDir 'greenvpn_beta_service.exe'
+        } else {
+            Join-Path $generatedAppDir 'greenvpn_service.exe'
+        }
+        if (-not (Test-Path -LiteralPath $generatedServiceExe -PathType Leaf)) {
+            throw "Green VPN service executable is missing before signing: $generatedServiceExe"
+        }
+        $ownedPayloadBinaries += $generatedServiceExe
+        $requiredPayloadLeafNames += (Split-Path -Leaf $generatedServiceExe)
+        Invoke-CodeSigningStage `
+            -ArtifactPath $ownedPayloadBinaries `
+            -RequiredLeafName $requiredPayloadLeafNames `
+            -ReportPath (Join-Path $SigningReportDir "$signingReportStem-payload.json")
+    }
+
     Compress-Archive -Path (Join-Path $generatedPackageDir '*') -DestinationPath $generatedReleaseZip -Force
     $ReleaseZip = $generatedReleaseZip
 }
@@ -510,6 +619,7 @@ $installBootstrapExe = Join-Path $payloadDir 'install_bootstrap.exe'
 param(
     [string]$PayloadZip = "",
     [string]$InstallDir = "$env:ProgramFiles\Green VPN",
+    [string]$OwnerSid = "",
     [switch]$NoLaunch
 )
 
@@ -527,6 +637,26 @@ function Write-Step {
 }
 
 function Stop-BlueVpnTunnel {
+    $managedTask = Join-Path $env:ProgramFiles 'Green VPN\tools\greenvpn_vpn_task.ps1'
+    if (Test-Path -LiteralPath $managedTask -PathType Leaf) {
+        try {
+            $powershell = Join-Path $PSHOME 'powershell.exe'
+            $process = Start-Process -FilePath $powershell -ArgumentList @(
+                '-NoProfile',
+                '-NonInteractive',
+                '-ExecutionPolicy', 'RemoteSigned',
+                '-File', ('"' + $managedTask + '"'),
+                '-Action', 'Disconnect'
+            ) -WindowStyle Hidden -Wait -PassThru
+            if ($process.ExitCode -eq 0) {
+                return
+            }
+            Write-Step "Системный контроллер вернул код $($process.ExitCode); применяем резервную остановку."
+        } catch {
+            Write-Step "Не удалось вызвать системный контроллер остановки: $($_.Exception.Message)"
+        }
+    }
+
     $candidates = @(
         (Join-Path $env:ProgramFiles 'WireGuard\wireguard.exe'),
         (Join-Path ${env:ProgramFiles(x86)} 'WireGuard\wireguard.exe')
@@ -549,6 +679,30 @@ function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Resolve-InstallingUserSid {
+    param([string]$CandidateSid)
+
+    $value = $CandidateSid.Trim()
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        $value = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    }
+    try {
+        $sid = [Security.Principal.SecurityIdentifier]::new($value)
+    } catch {
+        throw "Invalid Windows account SID supplied to the installer."
+    }
+    if (-not $sid.IsAccountSid() -or $sid.Value -in @(
+        'S-1-1-0',
+        'S-1-5-11',
+        'S-1-5-18',
+        'S-1-5-32-544',
+        'S-1-5-32-545'
+    )) {
+        throw "The installer owner must be an individual Windows account."
+    }
+    return $sid.Value
 }
 
 function Remove-CallerLegacyInstall {
@@ -575,13 +729,37 @@ function Remove-CallerLegacyInstall {
 }
 
 function Ensure-GreenVpnProgramDataAcl {
+    param([Parameter(Mandatory=$true)][string]$UserSid)
+
     $root = Join-Path $env:ProgramData 'BlueVPN'
     New-Item -ItemType Directory -Force -Path $root | Out-Null
     attrib -H -S -R $root 2>$null | Out-Null
-    icacls $root /inheritance:e /grant '*S-1-5-11:(OI)(CI)M' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+
+    & icacls.exe $root /grant:r `
+        ('*' + $UserSid + ':(OI)(CI)M') `
+        '*S-1-5-18:(OI)(CI)F' `
+        '*S-1-5-32-544:(OI)(CI)F' /T /C | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to seed protected Green VPN state ACLs.' }
+
+    & icacls.exe $root /inheritance:r /T /C | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to disable inherited Green VPN state ACLs.' }
+
+    & icacls.exe $root /remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' /T /C | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to remove broad Green VPN state access.' }
+
+    & icacls.exe $root /grant:r `
+        ('*' + $UserSid + ':(OI)(CI)M') `
+        '*S-1-5-18:(OI)(CI)F' `
+        '*S-1-5-32-544:(OI)(CI)F' /T /C | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to apply protected Green VPN state ACLs.' }
+
+    & icacls.exe $root /setowner ('*' + $UserSid) /T /C | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to bind Green VPN state to the installing Windows account.' }
 }
 
 function Ensure-GreenVpnServiceToken {
+    param([Parameter(Mandatory=$true)][string]$UserSid)
+
     $root = Join-Path $env:ProgramData 'BlueVPN'
     $tokenPath = Join-Path $root 'service_token'
     New-Item -ItemType Directory -Force -Path $root | Out-Null
@@ -607,7 +785,13 @@ function Ensure-GreenVpnServiceToken {
     }
 
     attrib +H $tokenPath 2>$null | Out-Null
-    icacls $tokenPath /inheritance:r /grant '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-11:R' | Out-Null
+    & icacls.exe $tokenPath /inheritance:r /remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to remove broad Green VPN service token access.' }
+    & icacls.exe $tokenPath /grant:r `
+        '*S-1-5-18:F' `
+        '*S-1-5-32-544:F' `
+        ('*' + $UserSid + ':R') | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to protect the Green VPN service token.' }
 }
 
 function Unregister-GreenVpnTasks {
@@ -790,7 +974,9 @@ if (-not (Test-Path -LiteralPath $PayloadZip)) {
 
 if (-not (Test-IsAdministrator)) {
     Write-Step "Запрашиваем права администратора для установки Green VPN..."
-    $launchAfterInstall = -not $NoLaunch
+    $launchAfterInstall = -not $NoLaunch -and
+        $env:GREENVPN_INSTALLER_SKIP_APP_LAUNCH -ne '1'
+    $callerSid = Resolve-InstallingUserSid -CandidateSid $OwnerSid
     $argList = @(
         '-NoProfile',
         '-NonInteractive',
@@ -802,6 +988,8 @@ if (-not (Test-IsAdministrator)) {
         "`"$PayloadZip`"",
         '-InstallDir',
         "`"$InstallDir`"",
+        '-OwnerSid',
+        "`"$callerSid`"",
         '-NoLaunch'
     )
     $p = Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList $argList
@@ -818,6 +1006,7 @@ if (-not (Test-IsAdministrator)) {
     exit $p.ExitCode
 }
 
+$installingUserSid = Resolve-InstallingUserSid -CandidateSid $OwnerSid
 $installRoot = [System.IO.Path]::GetFullPath($InstallDir)
 $programFilesRoot = [System.IO.Path]::GetFullPath($env:ProgramFiles).TrimEnd('\') + '\'
 $installCandidate = $installRoot.TrimEnd('\') + '\'
@@ -1279,8 +1468,8 @@ exit /b %ERRORLEVEL%
     $shortcut.Save()
 
     Write-Step "Удаляем устаревшие системные задачи Green VPN..."
-    Ensure-GreenVpnProgramDataAcl
-    Ensure-GreenVpnServiceToken
+    Ensure-GreenVpnProgramDataAcl -UserSid $installingUserSid
+    Ensure-GreenVpnServiceToken -UserSid $installingUserSid
     Unregister-GreenVpnTasks
 
     Write-Step "Устанавливаем системную службу Green VPN..."
@@ -1297,7 +1486,10 @@ exit /b %ERRORLEVEL%
     Remove-Item -LiteralPath $installErrorLog -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $backupRoot -Recurse -Force -ErrorAction SilentlyContinue
     Remove-CallerLegacyInstall
-    if (-not $NoLaunch) {
+    if (
+        -not $NoLaunch -and
+        $env:GREENVPN_INSTALLER_SKIP_APP_LAUNCH -ne '1'
+    ) {
         Write-Step "Запускаем Green VPN..."
         Start-Process -FilePath $exe -WorkingDirectory $installRoot
     }
@@ -1551,6 +1743,10 @@ $timer.Add_Tick({
             $stageLabel.Text = 'Установка успешно завершена.'
             $hintLabel.Text = 'Green VPN уже запущен. Это окно можно закрыть.'
             $okButton.Text = 'Готово'
+            if ($env:GREENVPN_INSTALLER_AUTOCLOSE_SUCCESS -eq '1') {
+                $form.Close()
+                return
+            }
         } else {
             Set-UiText -Title 'Установка не завершена' -Detail "Код ошибки: $script:exitCode. Журнал: $logPath" -Accent $brandDanger
             $stageLabel.Text = 'Проверьте журнал установки.'
@@ -1638,6 +1834,10 @@ if ([string]::IsNullOrWhiteSpace($compiler)) {
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $installBootstrapExe)) {
     throw "Installer bootstrap compilation failed with exit code $LASTEXITCODE."
 }
+Invoke-CodeSigningStage `
+    -ArtifactPath @($installBootstrapExe) `
+    -RequiredLeafName @('install_bootstrap.exe') `
+    -ReportPath (Join-Path $SigningReportDir "$signingReportStem-bootstrap.json")
 
 if ($WindowsRuntimeScope -eq 'paid-beta') {
     $uiContent = Get-Content -LiteralPath $installUiPs1 -Raw
@@ -1711,10 +1911,18 @@ if (-not (Test-Path -LiteralPath $installerPath)) {
 try {
     $installerIcon = Join-Path $ProjectRoot 'windows\runner\resources\app_icon.ico'
     Set-ExeIcon -ExePath $installerPath -IconPath $installerIcon
-    Set-ExeRequireAdministrator -ExePath $installerPath
+    Set-ExeAsInvoker -ExePath $installerPath
 } catch {
+    if ($RequireCodeSigning) {
+        throw "Installer resource update failed before signing: $($_.Exception.Message)"
+    }
     Write-Warning "Installer resource update failed: $($_.Exception.Message)"
 }
+
+Invoke-CodeSigningStage `
+    -ArtifactPath @($installerPath) `
+    -RequiredLeafName @((Split-Path -Leaf $installerPath)) `
+    -ReportPath (Join-Path $SigningReportDir "$signingReportStem-installer.json")
 
 $latestAliasName = if ($WindowsRuntimeScope -eq 'paid-beta') { 'GreenVPN_Beta_Setup_LATEST.exe' } else { 'GreenVPN_Setup_LATEST.exe' }
 $latestAliasPath = Join-Path $OutBase $latestAliasName

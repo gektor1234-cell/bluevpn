@@ -440,6 +440,7 @@
                 <option value="pending">Ожидает</option>
                 <option value="paid">Оплачен</option>
                 <option value="activated">Активирован</option>
+                <option value="refunded">Возвращён</option>
                 <option value="failed">Ошибка</option>
                 <option value="cancelled">Отменён</option>
               </select>
@@ -448,6 +449,7 @@
           </div>
           <div id="billingReconciliationSummary" class="check-list"></div>
           <div id="billingPaymentSmokeSummary" class="check-list"></div>
+          <div id="billingRefundSummary" class="check-list"></div>
           <div id="billingRenewalSummary" class="check-list"></div>
           <div id="promoReadinessSummary" class="check-list"></div>
           <div class="split-grid compact-split">
@@ -1444,7 +1446,7 @@
               <p class="eyebrow">Действия владельца</p>
               <h2>Что нужно будет дать мне одним заходом</h2>
             </div>
-            <button id="testAlertsButton" class="ghost-button" type="button">Проверить оповещение Telegram</button>
+            <button id="testAlertsButton" class="ghost-button" type="button">Проверить автоматическое оповещение</button>
           </div>
           <div id="externalActionsList" class="check-list"></div>
           <div class="panel-head nested-head">

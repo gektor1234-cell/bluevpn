@@ -6,6 +6,10 @@ void main() {
   final publicProductSkip =
       !kPublicProductBuild || kTrialOnlyNoAdsBuild || kPaidBetaCustomerUi;
 
+  test('new local preferences require explicit auto-renew opt-in', () {
+    expect(Prefs.defaults().optAutoRenew, isFalse);
+  });
+
   testWidgets(
     'settings exposes one auto-renew entry and opens its own page',
     (tester) async {
@@ -20,18 +24,13 @@ void main() {
               language: 'Русский',
               onPickLanguage: () {},
               email: 'user@example.com',
+              isGuest: false,
               emailVerified: true,
               emailConfirmationRequired: false,
               emailStatusBusy: false,
               emailStatusMessage: null,
               onResendEmailConfirmation: () async {},
               onRefreshEmailStatus: () async {},
-              phone: null,
-              phoneVerified: false,
-              phoneStatusBusy: false,
-              phoneStatusMessage: null,
-              onRefreshPhoneStatus: () async {},
-              onBindPhone: () async {},
               subscriptionActive: true,
               subscriptionAutoRenew: true,
               paymentMethodSaved: true,
@@ -125,4 +124,49 @@ void main() {
     },
     skip: publicProductSkip,
   );
+
+  testWidgets('guest account settings expose a dedicated restore action', (
+    tester,
+  ) async {
+    var restoreCalls = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SettingsPage(
+            themeMode: ThemeMode.light,
+            onThemeModeChanged: (_) {},
+            language: 'Русский',
+            onPickLanguage: () {},
+            email: '',
+            isGuest: true,
+            emailVerified: false,
+            emailConfirmationRequired: false,
+            emailStatusBusy: false,
+            emailStatusMessage: null,
+            onResendEmailConfirmation: () async {},
+            onRefreshEmailStatus: () async {},
+            subscriptionActive: false,
+            subscriptionAutoRenew: false,
+            paymentMethodSaved: false,
+            onOpenTariff: () {},
+            onRestoreAccess: () => restoreCalls += 1,
+            onCancelAutoRenew: () async => false,
+            onLogout: () async {},
+            onOpenUpdates: () {},
+            onOpenDiagnostics: () {},
+          ),
+        ),
+      ),
+    );
+
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('restore_access_settings')),
+      160,
+    );
+    expect(find.text('Войти в аккаунт'), findsOneWidget);
+    expect(find.text('Восстановить уже оплаченную подписку'), findsOneWidget);
+    await tester.tap(find.text('Войти в аккаунт'));
+    await tester.pump();
+    expect(restoreCalls, 1);
+  });
 }

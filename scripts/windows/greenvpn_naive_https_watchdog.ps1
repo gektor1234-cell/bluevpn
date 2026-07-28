@@ -63,8 +63,8 @@ function Remove-ManagedEndpointRoute {
     try {
         $state = Get-Content -LiteralPath $EndpointRouteStatePath -Raw | ConvertFrom-Json
         if ($state.created -eq $true -and [int]$state.metric -eq $EndpointRouteMetric -and
-            [string]$state.endpoint -eq '5.129.216.42') {
-            Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '5.129.216.42/32' `
+            [string]$state.endpoint -match '^\d{1,3}(?:\.\d{1,3}){3}$') {
+            Get-NetRoute -AddressFamily IPv4 -DestinationPrefix "$($state.endpoint)/32" `
                 -InterfaceIndex ([int]$state.interfaceIndex) -ErrorAction SilentlyContinue |
                 Where-Object { $_.NextHop -eq [string]$state.nextHop -and $_.RouteMetric -eq $EndpointRouteMetric } |
                 Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue

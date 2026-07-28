@@ -1,6 +1,6 @@
 param(
     [string]$Adb = "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe",
-    [string]$Serial = 'R9WT10CDC2J',
+    [Parameter(Mandatory = $true)][string]$Serial,
     [string]$Package = 'pro.greenvpn.app.transportpreview',
     [string]$ProbePackage = 'pro.greenvpn.transportprobe',
     [string]$ExpectedCanaryEgress = '5.129.216.42',
@@ -23,9 +23,6 @@ $ErrorActionPreference = 'Stop'
 $debugService = "$Package/pro.greenvpn.app.TransportContractDebugService"
 $resultFile = 'files/greenvpn-transport-contract-debug-result.json'
 $uiDumpPath = '/sdcard/greenvpn-flutter-transport-test.xml'
-$mainConnectX = 540
-$mainConnectY = 504
-
 $stages = @(
     [pscustomobject]@{ name = 'awg'; expectedProtocol = 'amneziawg'; selector = 'awg'; expectedEgress = $ExpectedCanaryEgress },
     [pscustomobject]@{ name = 'hysteria'; expectedProtocol = 'hysteria2'; selector = 'same-title:1'; expectedEgress = $ExpectedCanaryEgress },
@@ -113,9 +110,7 @@ function Wait-MainScreen {
     do {
         $xml = Get-UiXml
         $button = @($xml.SelectNodes('//node[@clickable="true"]')) | Where-Object {
-            $bounds = Get-Bounds -Value $_.GetAttribute('bounds')
-            $bounds.left -le $mainConnectX -and $bounds.right -ge $mainConnectX -and
-            $bounds.top -le $mainConnectY -and $bounds.bottom -ge $mainConnectY
+            $_.GetAttribute('content-desc') -match 'VPN(?:\s|$)'
         } | Select-Object -First 1
         if ($null -ne $button) { return $xml }
         Start-Sleep -Milliseconds 500
@@ -208,9 +203,7 @@ function Select-ServerThroughUi {
 function Tap-MainVpnButton {
     $xml = Wait-MainScreen
     $button = @($xml.SelectNodes('//node[@clickable="true"]')) | Where-Object {
-        $bounds = Get-Bounds -Value $_.GetAttribute('bounds')
-        $bounds.left -le $mainConnectX -and $bounds.right -ge $mainConnectX -and
-        $bounds.top -le $mainConnectY -and $bounds.bottom -ge $mainConnectY
+        $_.GetAttribute('content-desc') -match 'VPN(?:\s|$)'
     } | Select-Object -First 1
     if ($null -eq $button) { throw 'Main VPN button is missing.' }
     Tap-Node -Node $button

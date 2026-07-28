@@ -59,6 +59,10 @@ const String kPublicProductClientMarker = String.fromEnvironment(
   defaultValue: 'green-vpn-public-product-v1',
 );
 const String kPublicProductReleaseChannel = 'public-product';
+const String kUpdateChannelOverride = String.fromEnvironment(
+  'GREENVPN_UPDATE_CHANNEL',
+  defaultValue: '',
+);
 const bool kAwg2PreviewEnabled = bool.fromEnvironment(
   'GREENVPN_AWG2_PREVIEW_ENABLED',
   defaultValue: false,
@@ -205,6 +209,8 @@ bool greenVpnUpdateManifestMatchesCurrentPlatform(
 }
 
 String greenVpnUpdateChannel() {
+  final override = kUpdateChannelOverride.trim().toLowerCase();
+  if (override.isNotEmpty) return override;
   if (kPaidBetaBuild) return kPaidBetaReleaseChannel;
   final version = kAppVersion.toLowerCase();
   if (version.contains('preview') || version.contains('adgate')) {
@@ -212,6 +218,22 @@ String greenVpnUpdateChannel() {
   }
   return 'stable';
 }
+
+String greenVpnCatalogChannelForBuild({
+  required bool publicProductBuild,
+  required bool paidBetaBuild,
+  required String updateChannel,
+}) {
+  if (publicProductBuild) return kPublicProductReleaseChannel;
+  if (paidBetaBuild) return kPaidBetaReleaseChannel;
+  return updateChannel.trim();
+}
+
+String greenVpnCatalogChannel() => greenVpnCatalogChannelForBuild(
+  publicProductBuild: kPublicProductBuild,
+  paidBetaBuild: kPaidBetaBuild,
+  updateChannel: greenVpnUpdateChannel(),
+);
 
 String greenVpnNormalizeBaseUrl(String value) {
   var normalized = value.trim();
@@ -633,6 +655,8 @@ class AppBootstrap extends StatefulWidget {
 
 class _AppBootstrapState extends State<AppBootstrap> {
   final SessionStore _sessionStore = SessionStore();
+  final DeviceIdStore _deviceStore = DeviceIdStore();
+  final BlueVpnApi _api = const BlueVpnApi(baseUrl: kApiBaseUrl);
   Session? _session;
   bool _loading = true;
   bool _openSessionDirectly = false;
@@ -658,10 +682,37 @@ class _AppBootstrapState extends State<AppBootstrap> {
     if (mounted) {
       setState(() => _loadingStage = 'Проверяем сохранённую сессию...');
     }
-    final s = await _sessionStore.read();
+    var s = await _sessionStore.read();
     await appendBlueVpnClientLog(
       'bootstrap session=${s == null ? "none" : "present"}',
     );
+    if (s == null && !kIsWeb) {
+      if (mounted) {
+        setState(() => _loadingStage = 'Создаём бесплатный профиль...');
+      }
+      try {
+        final deviceUid = await _deviceStore.getOrCreate();
+        final guest = await _api.createGuestSession(
+          deviceUid: deviceUid,
+          deviceName: greenVpnClientDeviceName(),
+          platform: greenVpnClientPlatform(),
+          appVersion: kAppVersion,
+        );
+        if (guest.ok && guest.data != null) {
+          s = guest.data!;
+          await _sessionStore.write(s);
+          await appendBlueVpnClientLog('guest session created and persisted');
+        } else {
+          await appendBlueVpnClientLog(
+            'guest session unavailable message=${guest.message ?? ""}',
+          );
+        }
+      } catch (e) {
+        await appendBlueVpnClientLog(
+          'guest session bootstrap failed type=${e.runtimeType}',
+        );
+      }
+    }
     if (s != null) {
       await _prepareWindowsFullTunnelConfig();
     }
@@ -775,6 +826,8 @@ class _AppBootstrapState extends State<AppBootstrap> {
     });
   }
 
+  Future<void> _onSessionChanged(Session s) => _onAuthSuccess(s);
+
   Future<void> _logout() async {
     await _sessionStore.clear();
     await ConfigStore().deleteManagedConfig(); // скрыто от пользователя
@@ -798,6 +851,7 @@ class _AppBootstrapState extends State<AppBootstrap> {
       onThemeModeChanged: widget.onThemeModeChanged,
       session: _session!,
       onLogout: _logout,
+      onSessionChanged: _onSessionChanged,
     );
     if (_openSessionDirectly) return shell;
 
@@ -1141,29 +1195,26 @@ class Session {
   final String accessToken;
   final String email;
   final String apiBaseUrl;
+  final bool isGuest;
   final bool emailVerified;
   final bool emailConfirmationRequired;
-  final String? phone;
-  final bool phoneVerified;
 
   const Session({
     required this.accessToken,
     required this.email,
     this.apiBaseUrl = '',
+    this.isGuest = false,
     this.emailVerified = false,
     this.emailConfirmationRequired = false,
-    this.phone,
-    this.phoneVerified = false,
   });
 
   Map<String, dynamic> toJson() => {
     'accessToken': accessToken,
     'email': email,
     'apiBaseUrl': apiBaseUrl,
+    'isGuest': isGuest,
     'emailVerified': emailVerified,
     'emailConfirmationRequired': emailConfirmationRequired,
-    'phone': phone,
-    'phoneVerified': phoneVerified,
   };
 
   static Session fromJson(Map<String, dynamic> json) {
@@ -1173,10 +1224,9 @@ class Session {
       apiBaseUrl: greenVpnNormalizeBaseUrl(
         (json['apiBaseUrl'] ?? '').toString(),
       ),
+      isGuest: json['isGuest'] == true,
       emailVerified: json['emailVerified'] == true,
       emailConfirmationRequired: json['emailConfirmationRequired'] == true,
-      phone: json['phone']?.toString(),
-      phoneVerified: json['phoneVerified'] == true,
     );
   }
 
@@ -1184,20 +1234,18 @@ class Session {
     String? accessToken,
     String? email,
     String? apiBaseUrl,
+    bool? isGuest,
     bool? emailVerified,
     bool? emailConfirmationRequired,
-    String? phone,
-    bool? phoneVerified,
   }) {
     return Session(
       accessToken: accessToken ?? this.accessToken,
       email: email ?? this.email,
       apiBaseUrl: apiBaseUrl ?? this.apiBaseUrl,
+      isGuest: isGuest ?? this.isGuest,
       emailVerified: emailVerified ?? this.emailVerified,
       emailConfirmationRequired:
           emailConfirmationRequired ?? this.emailConfirmationRequired,
-      phone: phone ?? this.phone,
-      phoneVerified: phoneVerified ?? this.phoneVerified,
     );
   }
 }
@@ -1249,6 +1297,45 @@ class WindowsLocalSecurity {
     } catch (_) {}
   }
 
+  static Future<void> _runIcacls(List<String> arguments) async {
+    final result = await Process.run('icacls', arguments, runInShell: true);
+    if (result.exitCode != 0) {
+      throw FileSystemException(
+        'Failed to protect local Windows state',
+        arguments.isEmpty ? null : arguments.first,
+      );
+    }
+  }
+
+  static Future<void> _prepareProtectedSharedPath(
+    String path, {
+    required bool directory,
+  }) async {
+    final userSid = await _currentUserSid();
+    if (userSid == null) {
+      throw FileSystemException('Windows account SID is unavailable', path);
+    }
+    final grants = directory
+        ? [
+            '*$userSid:(OI)(CI)M',
+            '*S-1-5-18:(OI)(CI)F',
+            '*S-1-5-32-544:(OI)(CI)F',
+          ]
+        : ['*$userSid:M', '*S-1-5-18:F', '*S-1-5-32-544:F'];
+
+    // Seed trusted access before removing inherited and legacy broad grants.
+    await _runIcacls([path, '/grant:r', ...grants]);
+    await _runIcacls([path, '/inheritance:r']);
+    await _runIcacls([
+      path,
+      '/remove:g',
+      '*S-1-1-0',
+      '*S-1-5-11',
+      '*S-1-5-32-545',
+    ]);
+    await _runIcacls([path, '/grant:r', ...grants]);
+  }
+
   static Future<void> repairBlueVpnLocalAcls() async {
     if (kIsWeb || !Platform.isWindows) return;
     try {
@@ -1258,7 +1345,10 @@ class WindowsLocalSecurity {
       }
       final programData = Platform.environment['ProgramData'];
       if (programData != null && programData.trim().isNotEmpty) {
-        await repairDirectoryAcl('$programData\\BlueVPN');
+        final dir = Directory('$programData\\$greenVpnProgramDataSubdir');
+        if (dir.existsSync()) {
+          await _prepareProtectedSharedPath(dir.path, directory: true);
+        }
       }
     } catch (_) {}
   }
@@ -1425,15 +1515,7 @@ try {
       final dir = Directory(path);
       if (!dir.existsSync()) return;
       await Process.run('attrib', ['+h', '+s', dir.path], runInShell: true);
-      await Process.run('icacls', [
-        dir.path,
-        '/inheritance:e',
-        '/grant',
-        '*S-1-5-11:(OI)(CI)(M)',
-        '*S-1-5-18:(OI)(CI)(F)',
-        '*S-1-5-32-544:(OI)(CI)(F)',
-        '/T',
-      ], runInShell: true);
+      await _prepareProtectedSharedPath(dir.path, directory: true);
     } catch (_) {}
   }
 
@@ -1441,14 +1523,7 @@ try {
     if (kIsWeb || !Platform.isWindows || path.trim().isEmpty) return;
     try {
       await Process.run('attrib', ['+h', path], runInShell: true);
-      await Process.run('icacls', [
-        path,
-        '/inheritance:e',
-        '/grant',
-        '*S-1-5-11:(M)',
-        '*S-1-5-18:(F)',
-        '*S-1-5-32-544:(F)',
-      ], runInShell: true);
+      await _prepareProtectedSharedPath(path, directory: false);
     } catch (_) {}
   }
 
@@ -1465,26 +1540,7 @@ try {
         '-R',
         dir.path,
       ], runInShell: true);
-      final userSid = await _currentUserSid();
-      final args =
-          greenVpnWindowsRuntimeScope == 'transport-preview' && userSid != null
-          ? [
-              dir.path,
-              '/inheritance:r',
-              '/grant:r',
-              '*$userSid:(OI)(CI)M',
-              '*S-1-5-18:(OI)(CI)F',
-              '*S-1-5-32-544:(OI)(CI)F',
-            ]
-          : [
-              dir.path,
-              '/inheritance:e',
-              '/grant',
-              '*S-1-5-11:(OI)(CI)M',
-              '*S-1-5-18:(OI)(CI)F',
-              '*S-1-5-32-544:(OI)(CI)F',
-            ];
-      await Process.run('icacls', args, runInShell: true);
+      await _prepareProtectedSharedPath(dir.path, directory: true);
     } catch (_) {}
   }
 
@@ -1494,26 +1550,7 @@ try {
       final f = File(path);
       if (!f.existsSync()) return;
       await Process.run('attrib', ['-H', '-S', '-R', path], runInShell: true);
-      final userSid = await _currentUserSid();
-      final args =
-          greenVpnWindowsRuntimeScope == 'transport-preview' && userSid != null
-          ? [
-              path,
-              '/inheritance:r',
-              '/grant:r',
-              '*$userSid:F',
-              '*S-1-5-18:F',
-              '*S-1-5-32-544:F',
-            ]
-          : [
-              path,
-              '/inheritance:e',
-              '/grant',
-              '*S-1-5-11:M',
-              '*S-1-5-18:F',
-              '*S-1-5-32-544:F',
-            ];
-      await Process.run('icacls', args, runInShell: true);
+      await _prepareProtectedSharedPath(path, directory: false);
     } catch (_) {}
   }
 }
@@ -2546,7 +2583,7 @@ class Prefs {
     optNoAds: true,
     optSmartRouting: true,
     optDedicatedIp: false,
-    optAutoRenew: true,
+    optAutoRenew: false,
   );
 
   Prefs copyWith({
@@ -3092,6 +3129,12 @@ class AuthProvisioningService {
   }
 
   Future<bool> _reuseLocalConfigIfPresent(String reason) async {
+    if (greenVpnIsFreeQuotaExhaustedMessage(reason)) {
+      await appendBlueVpnClientLog(
+        'auth local config fallback blocked by free quota',
+      );
+      return false;
+    }
     try {
       await cfg.ensureBaseSeededFromManagedIfMissing();
       final base = await cfg.readBaseConfig();
@@ -3157,6 +3200,12 @@ class AuthProvisioningService {
     if (!cfgRes.ok ||
         cfgRes.data == null ||
         cfgRes.data!.configText.trim().isEmpty) {
+      if (greenVpnIsFreeQuotaExhaustedMessage(cfgRes.message)) {
+        await appendBlueVpnClientLog(
+          'auth warmup config fetch blocked by free quota',
+        );
+        return ProvisioningWarmupResult(ok: true, planName: planName);
+      }
       if (greenVpnIsAdRewardRequiredMessage(cfgRes.message)) {
         await appendBlueVpnClientLog(
           'auth warmup config fetch blocked by ad gate',
@@ -3740,6 +3789,24 @@ while True:
     });
   }
 
+  Future<ApiResult<Session>> createGuestSession({
+    required String deviceUid,
+    String? deviceName,
+    String? platform,
+    String? appVersion,
+  }) async {
+    return _postSession('/api/v1/auth/guest', {
+      'deviceUid': deviceUid,
+      'deviceName': ?deviceName,
+      'platform': ?platform,
+      'appVersion': ?appVersion,
+      if (kPaidBetaCustomerUi) 'clientMarker': kPaidBetaClientMarker,
+      if (kPaidBetaCustomerUi) 'releaseChannel': kPaidBetaReleaseChannel,
+      if (kPublicProductBuild) 'clientMarker': kPublicProductClientMarker,
+      if (kPublicProductBuild) 'releaseChannel': kPublicProductReleaseChannel,
+    });
+  }
+
   Future<ApiResult<Map<String, dynamic>>> startEmailCodeAuth({
     required String email,
   }) async {
@@ -3780,55 +3847,14 @@ while True:
     );
   }
 
-  Future<ApiResult<Map<String, dynamic>>> startPhoneCodeAuth({
-    required String phone,
-  }) async {
-    final res = await _jsonRequest(
-      method: 'POST',
-      path: '/api/v1/auth/phone/login/start',
-      payload: {'phone': phone},
-      onSuccessBaseUrl: (baseUrl) {
-        _pendingAuthApiBaseUrl = _normalizeApiBaseUrl(baseUrl);
-      },
-    );
-    if (!res.ok) return ApiResult.err(res.message);
-    if (res.data is! Map) {
-      return const ApiResult.err('Некорректный ответ auth/phone/login/start.');
-    }
-    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
-  }
-
-  Future<ApiResult<Session>> verifyPhoneCodeAuth({
-    required String phone,
-    required String code,
-    String? deviceUid,
-    String? deviceName,
-    String? platform,
-    String? appVersion,
-  }) async {
-    return _postSession(
-      '/api/v1/auth/phone/login/verify',
-      {
-        'phone': phone,
-        'code': code,
-        'deviceUid': ?deviceUid,
-        'deviceName': ?deviceName,
-        'platform': ?platform,
-        'appVersion': ?appVersion,
-      },
-      preferredApiBaseUrl: _pendingAuthApiBaseUrl,
-    );
-  }
-
   Future<ApiResult<Map<String, dynamic>>> startAuthChallenge({
     required String method,
-    String? phone,
     String? email,
   }) async {
     final res = await _jsonRequest(
       method: 'POST',
       path: '/api/v1/auth/challenge/start',
-      payload: {'method': method, 'phone': ?phone, 'email': ?email},
+      payload: {'method': method, 'email': ?email},
       onSuccessBaseUrl: (baseUrl) {
         _pendingAuthApiBaseUrl = _normalizeApiBaseUrl(baseUrl);
       },
@@ -3843,7 +3869,6 @@ while True:
   Future<ApiResult<Session>> verifyAuthChallenge({
     required String method,
     required String code,
-    String? phone,
     String? email,
     String? deviceUid,
     String? deviceName,
@@ -3853,13 +3878,100 @@ while True:
     return _postSession('/api/v1/auth/challenge/verify', {
       'method': method,
       'code': code,
-      'phone': ?phone,
       'email': ?email,
       'deviceUid': ?deviceUid,
       'deviceName': ?deviceName,
       'platform': ?platform,
       'appVersion': ?appVersion,
     }, preferredApiBaseUrl: _pendingAuthApiBaseUrl);
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> startCheckoutEmail({
+    required String accessToken,
+    required String email,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'POST',
+      path: '/api/v1/auth/checkout/email/start',
+      bearerToken: accessToken,
+      payload: {'email': email},
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err(
+        'Некорректный ответ auth/checkout/email/start.',
+      );
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<Session>> verifyCheckoutEmail({
+    required String accessToken,
+    required String email,
+    required String code,
+    String? deviceUid,
+    String? deviceName,
+    String? platform,
+    String? appVersion,
+  }) async {
+    return _postSession(
+      '/api/v1/auth/checkout/email/verify',
+      {
+        'email': email,
+        'code': code,
+        'deviceUid': ?deviceUid,
+        'deviceName': ?deviceName,
+        'platform': ?platform,
+        'appVersion': ?appVersion,
+        if (kPaidBetaCustomerUi) 'clientMarker': kPaidBetaClientMarker,
+        if (kPaidBetaCustomerUi) 'releaseChannel': kPaidBetaReleaseChannel,
+        if (kPublicProductBuild) 'clientMarker': kPublicProductClientMarker,
+        if (kPublicProductBuild) 'releaseChannel': kPublicProductReleaseChannel,
+      },
+      preferredApiBaseUrl: _preferredApiBaseUrlForBearer(accessToken),
+      bearerToken: accessToken,
+    );
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> startAccessEmail({
+    required String accessToken,
+    required String email,
+  }) async {
+    final res = await _jsonRequest(
+      method: 'POST',
+      path: '/api/v1/auth/access/email/start',
+      bearerToken: accessToken,
+      payload: {'email': email},
+    );
+    if (!res.ok) return ApiResult.err(res.message);
+    if (res.data is! Map) {
+      return const ApiResult.err('Некорректный ответ auth/access/email/start.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+  }
+
+  Future<ApiResult<Session>> verifyAccessEmail({
+    required String accessToken,
+    required String email,
+    required String code,
+    String? deviceUid,
+    String? deviceName,
+    String? platform,
+    String? appVersion,
+  }) async {
+    return _postSession(
+      '/api/v1/auth/access/email/verify',
+      {
+        'email': email,
+        'code': code,
+        'deviceUid': ?deviceUid,
+        'deviceName': ?deviceName,
+        'platform': ?platform,
+        'appVersion': ?appVersion,
+      },
+      preferredApiBaseUrl: _preferredApiBaseUrlForBearer(accessToken),
+      bearerToken: accessToken,
+    );
   }
 
   Future<ApiResult<Map<String, dynamic>>> fetchWindowsBootstrap() async {
@@ -3959,56 +4071,6 @@ while True:
     return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
   }
 
-  Future<ApiResult<Map<String, dynamic>>> fetchPhoneStatus({
-    required String accessToken,
-  }) async {
-    final res = await _jsonRequest(
-      method: 'GET',
-      path: '/api/v1/auth/phone/status',
-      bearerToken: accessToken,
-    );
-    if (!res.ok) return ApiResult.err(res.message);
-    if (res.data is! Map) {
-      return const ApiResult.err('Некорректный ответ auth/phone/status.');
-    }
-    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
-  }
-
-  Future<ApiResult<Map<String, dynamic>>> startPhoneConfirmation({
-    required String accessToken,
-    required String phone,
-  }) async {
-    final res = await _jsonRequest(
-      method: 'POST',
-      path: '/api/v1/auth/phone/start',
-      bearerToken: accessToken,
-      payload: {'phone': phone},
-    );
-    if (!res.ok) return ApiResult.err(res.message);
-    if (res.data is! Map) {
-      return const ApiResult.err('Некорректный ответ auth/phone/start.');
-    }
-    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
-  }
-
-  Future<ApiResult<Map<String, dynamic>>> verifyPhoneConfirmation({
-    required String accessToken,
-    required String phone,
-    required String code,
-  }) async {
-    final res = await _jsonRequest(
-      method: 'POST',
-      path: '/api/v1/auth/phone/verify',
-      bearerToken: accessToken,
-      payload: {'phone': phone, 'code': code},
-    );
-    if (!res.ok) return ApiResult.err(res.message);
-    if (res.data is! Map) {
-      return const ApiResult.err('Некорректный ответ auth/phone/verify.');
-    }
-    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
-  }
-
   Future<ApiResult<Map<String, dynamic>>> sendSupportReport({
     required String accessToken,
     required String report,
@@ -4066,7 +4128,7 @@ while True:
   Future<ApiResult<Map<String, dynamic>>> fetchServerCatalog({
     String? releaseChannel,
   }) async {
-    final channel = (releaseChannel ?? greenVpnUpdateChannel()).trim();
+    final channel = (releaseChannel ?? greenVpnCatalogChannel()).trim();
     final path =
         '/api/v1/catalog/servers?channel=${Uri.encodeQueryComponent(channel)}'
         '&currentVersion=${Uri.encodeQueryComponent(kAppVersion)}';
@@ -4144,6 +4206,8 @@ while True:
     required int devices,
     required bool dedicatedIp,
   }) async {
+    final usesFixedBillingPlan =
+        billingPlanCode != null && billingPlanCode.trim().isNotEmpty;
     final res = await _jsonRequest(
       method: 'POST',
       path: '/api/v1/subscription/quote',
@@ -4155,10 +4219,16 @@ while True:
         'devices': devices,
         'dedicatedIp': dedicatedIp,
         'billingPlanCode': ?billingPlanCode,
-        if (kPublicProductBuild) 'clientMarker': kPublicProductClientMarker,
-        if (kPublicProductBuild) 'releaseChannel': kPublicProductReleaseChannel,
-        if (kPaidBetaCustomerUi) 'clientMarker': kPaidBetaClientMarker,
-        if (kPaidBetaCustomerUi) 'releaseChannel': kPaidBetaReleaseChannel,
+        if (kPublicProductBuild ||
+            (kPaidBetaCustomerUi && usesFixedBillingPlan))
+          'clientMarker': kPublicProductClientMarker,
+        if (kPublicProductBuild ||
+            (kPaidBetaCustomerUi && usesFixedBillingPlan))
+          'releaseChannel': kPublicProductReleaseChannel,
+        if (kPaidBetaCustomerUi && !usesFixedBillingPlan)
+          'clientMarker': kPaidBetaClientMarker,
+        if (kPaidBetaCustomerUi && !usesFixedBillingPlan)
+          'releaseChannel': kPaidBetaReleaseChannel,
       },
     );
     if (!res.ok) return ApiResult.err(res.message);
@@ -4178,6 +4248,8 @@ while True:
     required bool dedicatedIp,
     required bool autoRenew,
   }) async {
+    final usesFixedBillingPlan =
+        billingPlanCode != null && billingPlanCode.trim().isNotEmpty;
     final res = await _jsonRequest(
       method: 'POST',
       path: '/api/v1/billing/orders',
@@ -4192,10 +4264,16 @@ while True:
         'dedicatedIp': dedicatedIp,
         'autoRenew': autoRenew,
         'billingPlanCode': ?billingPlanCode,
-        if (kPublicProductBuild) 'clientMarker': kPublicProductClientMarker,
-        if (kPublicProductBuild) 'releaseChannel': kPublicProductReleaseChannel,
-        if (kPaidBetaCustomerUi) 'clientMarker': kPaidBetaClientMarker,
-        if (kPaidBetaCustomerUi) 'releaseChannel': kPaidBetaReleaseChannel,
+        if (kPublicProductBuild ||
+            (kPaidBetaCustomerUi && usesFixedBillingPlan))
+          'clientMarker': kPublicProductClientMarker,
+        if (kPublicProductBuild ||
+            (kPaidBetaCustomerUi && usesFixedBillingPlan))
+          'releaseChannel': kPublicProductReleaseChannel,
+        if (kPaidBetaCustomerUi && !usesFixedBillingPlan)
+          'clientMarker': kPaidBetaClientMarker,
+        if (kPaidBetaCustomerUi && !usesFixedBillingPlan)
+          'releaseChannel': kPaidBetaReleaseChannel,
       },
     );
     if (!res.ok) return ApiResult.err(res.message);
@@ -4524,6 +4602,7 @@ while True:
     String path,
     Map<String, dynamic> payload, {
     String? preferredApiBaseUrl,
+    String? bearerToken,
   }) async {
     try {
       await _authLog('POST $path email=${payload['email'] ?? ''}');
@@ -4537,6 +4616,9 @@ while True:
         final uri = _uFor(resolvedBaseUrl, path);
         final req = await client.postUrl(uri);
         req.headers.contentType = ContentType.json;
+        if ((bearerToken ?? '').isNotEmpty) {
+          req.headers.set('Authorization', 'Bearer $bearerToken');
+        }
         req.write(jsonEncode(payload));
 
         final res = await req.close().timeout(const Duration(seconds: 8));
@@ -4575,6 +4657,10 @@ while True:
           accessToken: token,
           email: email,
           apiBaseUrl: sessionApiBaseUrl ?? _primaryBaseUrl(),
+          isGuest: jsonMap['isGuest'] == true,
+          emailVerified: jsonMap['emailVerified'] == true,
+          emailConfirmationRequired:
+              jsonMap['emailConfirmationRequired'] == true,
         );
         rememberSession(session);
         _pendingAuthApiBaseUrl = null;
@@ -4625,7 +4711,7 @@ while True:
 
     if (path.endsWith('/auth/challenge/verify') ||
         path.endsWith('/auth/email/code/verify') ||
-        path.endsWith('/auth/phone/login/verify')) {
+        path.endsWith('/auth/checkout/email/verify')) {
       if (statusCode == 401 ||
           lower.contains('invalid_code') ||
           lower.contains('invalid code') ||
@@ -4924,12 +5010,14 @@ class ConfigStore {
   static const _mobileManagedConfigKey = 'greenvpn_mobile_managed_config_v1';
   static const _mobileManagedProtocolKey =
       'greenvpn_mobile_managed_protocol_v1';
+  static const _mobileManagedRouteIdKey = 'greenvpn_mobile_managed_route_id_v1';
   static const _mobileBaseConfigKey = 'greenvpn_mobile_base_config_v1';
   static const _mobileServerBaseConfigPrefix =
       'greenvpn_mobile_base_config_server_v1_';
   static const _mobileConfigChannel = MethodChannel('green_vpn/android_vpn');
   static String? _mobileManagedConfig;
   static String _mobileManagedProtocol = 'wireguard_udp';
+  static String _mobileManagedRouteId = '';
   static String? _mobileBaseConfig;
   static final Map<String, String?> _mobileServerBaseConfigs = {};
 
@@ -4940,6 +5028,7 @@ class ConfigStore {
     if (!Platform.isAndroid) {
       if (key == _mobileManagedConfigKey) return _mobileManagedConfig;
       if (key == _mobileManagedProtocolKey) return _mobileManagedProtocol;
+      if (key == _mobileManagedRouteIdKey) return _mobileManagedRouteId;
       return _mobileBaseConfig;
     }
     try {
@@ -4952,6 +5041,8 @@ class ConfigStore {
       } else if (key == _mobileManagedProtocolKey) {
         final normalized = (value ?? '').trim().toLowerCase();
         if (normalized.isNotEmpty) _mobileManagedProtocol = normalized;
+      } else if (key == _mobileManagedRouteIdKey) {
+        _mobileManagedRouteId = greenVpnNormalizeManagedRouteId(value ?? '');
       } else if (key == _mobileBaseConfigKey) {
         _mobileBaseConfig = value;
       }
@@ -4960,6 +5051,7 @@ class ConfigStore {
       await appendBlueVpnClientLog('mobile config secure read failed: $e');
       if (key == _mobileManagedConfigKey) return _mobileManagedConfig;
       if (key == _mobileManagedProtocolKey) return _mobileManagedProtocol;
+      if (key == _mobileManagedRouteIdKey) return _mobileManagedRouteId;
       return _mobileBaseConfig;
     }
   }
@@ -4969,6 +5061,8 @@ class ConfigStore {
       _mobileManagedConfig = content;
     } else if (key == _mobileManagedProtocolKey) {
       _mobileManagedProtocol = content.trim().toLowerCase();
+    } else if (key == _mobileManagedRouteIdKey) {
+      _mobileManagedRouteId = greenVpnNormalizeManagedRouteId(content);
     } else if (key == _mobileBaseConfigKey) {
       _mobileBaseConfig = content;
     }
@@ -4988,6 +5082,8 @@ class ConfigStore {
       _mobileManagedConfig = null;
     } else if (key == _mobileManagedProtocolKey) {
       _mobileManagedProtocol = 'wireguard_udp';
+    } else if (key == _mobileManagedRouteIdKey) {
+      _mobileManagedRouteId = '';
     } else if (key == _mobileBaseConfigKey) {
       _mobileBaseConfig = null;
     }
@@ -5233,7 +5329,52 @@ class ConfigStore {
     if (Platform.isWindows) {
       final file = File('$managedConfigPath.protocol');
       if (!file.parent.existsSync()) file.parent.createSync(recursive: true);
-      await file.writeAsString(_mobileManagedProtocol);
+      await WindowsLocalSecurity.prepareSharedConfigDirectory(file.parent.path);
+      if (file.existsSync()) {
+        await WindowsLocalSecurity.prepareSharedConfigFile(file.path);
+      }
+      await file.writeAsString(_mobileManagedProtocol, flush: true);
+      await WindowsLocalSecurity.prepareSharedConfigFile(file.path);
+    }
+  }
+
+  Future<String> readManagedRouteId() async {
+    if (kIsWeb) return '';
+    if (_usesMobileSecureConfig) {
+      final value = await _readMobileConfig(_mobileManagedRouteIdKey);
+      _mobileManagedRouteId = greenVpnNormalizeManagedRouteId(value ?? '');
+      return _mobileManagedRouteId;
+    }
+    if (Platform.isWindows) {
+      final file = File('$managedConfigPath.route_id');
+      if (file.existsSync()) {
+        try {
+          final value = await file.readAsString();
+          _mobileManagedRouteId = greenVpnNormalizeManagedRouteId(value);
+        } on FileSystemException {
+          _mobileManagedRouteId = '';
+        }
+      }
+    }
+    return _mobileManagedRouteId;
+  }
+
+  Future<void> writeManagedRouteId(String routeId) async {
+    _mobileManagedRouteId = greenVpnNormalizeManagedRouteId(routeId);
+    if (kIsWeb) return;
+    if (_usesMobileSecureConfig) {
+      await _writeMobileConfig(_mobileManagedRouteIdKey, _mobileManagedRouteId);
+      return;
+    }
+    if (Platform.isWindows) {
+      final file = File('$managedConfigPath.route_id');
+      if (!file.parent.existsSync()) file.parent.createSync(recursive: true);
+      await WindowsLocalSecurity.prepareSharedConfigDirectory(file.parent.path);
+      if (file.existsSync()) {
+        await WindowsLocalSecurity.prepareSharedConfigFile(file.path);
+      }
+      await file.writeAsString(_mobileManagedRouteId, flush: true);
+      await WindowsLocalSecurity.prepareSharedConfigFile(file.path);
     }
   }
 
@@ -5506,6 +5647,8 @@ class ConfigStore {
       if (kIsWeb) return;
       if (_usesMobileSecureConfig) {
         await _deleteMobileConfig(_mobileManagedConfigKey);
+        await _deleteMobileConfig(_mobileManagedProtocolKey);
+        await _deleteMobileConfig(_mobileManagedRouteIdKey);
         await _deleteMobileConfig(_mobileBaseConfigKey);
         return;
       }
@@ -5529,6 +5672,21 @@ class ConfigStore {
             if (f.existsSync()) {
               await f.delete();
             }
+          }
+        }
+        for (final sidecarPath in <String>[
+          '$managed.protocol',
+          '$managed.route_id',
+        ]) {
+          final sidecar = File(sidecarPath);
+          if (!sidecar.existsSync()) continue;
+          try {
+            await WindowsLocalSecurity.prepareSharedConfigFile(sidecar.path);
+            await sidecar.delete();
+          } on FileSystemException {
+            await WindowsLocalSecurity.repairBlueVpnLocalAcls();
+            await WindowsLocalSecurity.prepareSharedConfigFile(sidecar.path);
+            if (sidecar.existsSync()) await sidecar.delete();
           }
         }
       }
@@ -5563,7 +5721,21 @@ class ConfigStore {
 
 class AuthPage extends StatefulWidget {
   final Future<void> Function(Session s) onAuthSuccess;
-  const AuthPage({super.key, required this.onAuthSuccess});
+  final BlueVpnApi? api;
+  final bool probeWireGuardOnStart;
+  final bool prepareWindowsNetworkForAuth;
+  final bool authLoggingEnabled;
+  final String? authDeviceIdOverride;
+
+  const AuthPage({
+    super.key,
+    required this.onAuthSuccess,
+    this.api,
+    this.probeWireGuardOnStart = true,
+    this.prepareWindowsNetworkForAuth = true,
+    this.authLoggingEnabled = true,
+    this.authDeviceIdOverride,
+  });
 
   @override
   State<AuthPage> createState() => _AuthPageState();
@@ -5572,11 +5744,10 @@ class AuthPage extends StatefulWidget {
 class _AuthPageState extends State<AuthPage>
     with SingleTickerProviderStateMixin {
   late final TabController _tabs;
-  final _api = const BlueVpnApi(baseUrl: kApiBaseUrl);
+  late final BlueVpnApi _api;
   final _deviceStore = DeviceIdStore();
+  int _activeAuthTabIndex = 0;
 
-  final _phone = TextEditingController();
-  final _phoneCode = TextEditingController();
   final _emailCodeEmail = TextEditingController();
   final _emailCode = TextEditingController();
   final _legacyEmail = TextEditingController();
@@ -5584,7 +5755,6 @@ class _AuthPageState extends State<AuthPage>
 
   bool _busy = false;
   String? _authStatus;
-  String? _activePhone;
   String? _activeEmailCodeAddress;
   bool _emailCodeRequested = false;
   WireGuardInstallState? _wireGuardState;
@@ -5593,18 +5763,27 @@ class _AuthPageState extends State<AuthPage>
   @override
   void initState() {
     super.initState();
+    _api = widget.api ?? const BlueVpnApi(baseUrl: kApiBaseUrl);
     _tabs = TabController(length: 2, vsync: this);
-    _tabs.addListener(() {
-      if (mounted) setState(() {});
+    _tabs.addListener(_handleAuthTabChanged);
+    if (widget.probeWireGuardOnStart) {
+      unawaited(_refreshWireGuardState());
+    }
+  }
+
+  void _handleAuthTabChanged() {
+    if (!mounted || _activeAuthTabIndex == _tabs.index) return;
+    setState(() {
+      _activeAuthTabIndex = _tabs.index;
+      _authStatus = null;
     });
-    unawaited(_refreshWireGuardState());
+    ScaffoldMessenger.maybeOf(context)?.hideCurrentSnackBar();
   }
 
   @override
   void dispose() {
+    _tabs.removeListener(_handleAuthTabChanged);
     _tabs.dispose();
-    _phone.dispose();
-    _phoneCode.dispose();
     _emailCodeEmail.dispose();
     _emailCode.dispose();
     _legacyEmail.dispose();
@@ -5627,6 +5806,7 @@ class _AuthPageState extends State<AuthPage>
   }
 
   Future<void> _authLog(String text) async {
+    if (!widget.authLoggingEnabled) return;
     if (kIsWeb || !Platform.isWindows) return;
     try {
       final f = File(greenVpnAuthLogPathSync());
@@ -5660,6 +5840,7 @@ class _AuthPageState extends State<AuthPage>
   }
 
   Future<bool> _prepareNetworkForAuth(String actionLabel) async {
+    if (!widget.prepareWindowsNetworkForAuth) return true;
     if (kIsWeb || !Platform.isWindows) return true;
     try {
       _setAuthStatus('Готовим сеть...');
@@ -5682,6 +5863,9 @@ class _AuthPageState extends State<AuthPage>
   }
 
   Future<String?> _deviceIdForAuth() async {
+    if (widget.authDeviceIdOverride != null) {
+      return widget.authDeviceIdOverride;
+    }
     if (kIsWeb) return 'web';
     try {
       return await _deviceStore.getOrCreate();
@@ -5696,17 +5880,9 @@ class _AuthPageState extends State<AuthPage>
   String get _platformForAuth => greenVpnClientPlatform();
 
   String _challengeDeliveryMessage({
-    required bool phone,
     required String delivery,
     required bool deliveryReady,
   }) {
-    if (phone) {
-      if (delivery == 'sent') return 'SMS-код отправлен.';
-      if (delivery == 'failed' || !deliveryReady) {
-        return 'SMS сейчас недоступна. Используй вход по email-коду.';
-      }
-      return 'Код подготовлен. Проверь SMS.';
-    }
     if (delivery == 'sent') return 'Код отправлен на email.';
     if (delivery == 'failed' || !deliveryReady) {
       return 'Email сейчас недоступен. Попробуй позже или войди по паролю.';
@@ -5714,35 +5890,27 @@ class _AuthPageState extends State<AuthPage>
     return 'Код подготовлен. Проверь email.';
   }
 
-  Future<void> _startChallenge({required bool phone}) async {
+  Future<void> _startChallenge() async {
     if (_busy) return;
 
-    final contact = phone ? _phone.text.trim() : _emailCodeEmail.text.trim();
-    if (phone) {
-      if (contact.isEmpty) {
-        _toast('Введи номер телефона.');
-        return;
-      }
-    } else if (contact.isEmpty || !contact.contains('@')) {
+    final contact = _emailCodeEmail.text.trim();
+    if (contact.isEmpty || !contact.contains('@')) {
       _toast('Введи корректный email.');
       return;
     }
 
     setState(() => _busy = true);
     try {
-      await _authLog(
-        'challenge start method=${phone ? 'phone_sms' : 'email_code'}',
-      );
+      await _authLog('challenge start method=email_code');
       final networkReady = await _prepareNetworkForAuth(
-        phone ? 'phone_challenge_start' : 'email_challenge_start',
+        'email_challenge_start',
       );
       if (!networkReady) return;
 
-      _setAuthStatus(phone ? 'Отправляем SMS-код...' : 'Отправляем код...');
+      _setAuthStatus('Отправляем код...');
       final res = await _api.startAuthChallenge(
-        method: phone ? 'phone_sms' : 'email_code',
-        phone: phone ? contact : null,
-        email: phone ? null : contact,
+        method: 'email_code',
+        email: contact,
       );
       await _authLog(
         'challenge start result ok=${res.ok} msg=${res.message ?? ''}',
@@ -5759,12 +5927,10 @@ class _AuthPageState extends State<AuthPage>
       }
 
       final data = res.data!;
-      final normalized = (data[phone ? 'phone' : 'email'] ?? contact)
-          .toString();
+      final normalized = (data['email'] ?? contact).toString();
       final delivery = (data['deliveryStatus'] ?? '').toString();
       final deliveryReady = data['deliveryReady'] == true;
       final message = _challengeDeliveryMessage(
-        phone: phone,
         delivery: delivery,
         deliveryReady: deliveryReady,
       );
@@ -5773,16 +5939,10 @@ class _AuthPageState extends State<AuthPage>
       if (!mounted) return;
       setState(() {
         _authStatus = message;
-        if (phone) {
-          _activePhone = normalized;
-          _phone.text = normalized;
-          _phoneCode.clear();
-        } else {
-          _activeEmailCodeAddress = normalized;
-          _emailCodeEmail.text = normalized;
-          _emailCode.clear();
-          _emailCodeRequested = canEnterCode;
-        }
+        _activeEmailCodeAddress = normalized;
+        _emailCodeEmail.text = normalized;
+        _emailCode.clear();
+        _emailCodeRequested = canEnterCode;
       });
       _toast(message);
     } catch (e, st) {
@@ -5795,15 +5955,13 @@ class _AuthPageState extends State<AuthPage>
     }
   }
 
-  Future<void> _verifyChallenge({required bool phone}) async {
+  Future<void> _verifyChallenge() async {
     if (_busy) return;
 
-    final contact = phone
-        ? (_activePhone ?? _phone.text).trim()
-        : (_activeEmailCodeAddress ?? _emailCodeEmail.text).trim();
-    final code = phone ? _phoneCode.text.trim() : _emailCode.text.trim();
+    final contact = (_activeEmailCodeAddress ?? _emailCodeEmail.text).trim();
+    final code = _emailCode.text.trim();
     if (contact.isEmpty) {
-      _toast(phone ? 'Введи номер телефона.' : 'Введи email.');
+      _toast('Введи email.');
       return;
     }
     if (code.isEmpty) {
@@ -5813,20 +5971,17 @@ class _AuthPageState extends State<AuthPage>
 
     setState(() => _busy = true);
     try {
-      await _authLog(
-        'challenge verify method=${phone ? 'phone_sms' : 'email_code'}',
-      );
+      await _authLog('challenge verify method=email_code');
       final networkReady = await _prepareNetworkForAuth(
-        phone ? 'phone_challenge_verify' : 'email_challenge_verify',
+        'email_challenge_verify',
       );
       if (!networkReady) return;
 
       final deviceId = await _deviceIdForAuth();
       _setAuthStatus('Проверяем код...');
       final res = await _api.verifyAuthChallenge(
-        method: phone ? 'phone_sms' : 'email_code',
-        phone: phone ? contact : null,
-        email: phone ? null : contact,
+        method: 'email_code',
+        email: contact,
         code: code,
         deviceUid: deviceId,
         deviceName: _deviceNameForAuth,
@@ -5984,6 +6139,7 @@ class _AuthPageState extends State<AuthPage>
     return Column(
       children: [
         TextField(
+          key: const Key('auth_email_contact'),
           controller: _emailCodeEmail,
           enabled: !_busy,
           keyboardType: TextInputType.emailAddress,
@@ -5994,15 +6150,26 @@ class _AuthPageState extends State<AuthPage>
             labelText: 'Email',
             border: OutlineInputBorder(),
           ),
+          autofillHints: const [AutofillHints.email],
+          onChanged: (_) {
+            if (!_emailCodeRequested) return;
+            setState(() {
+              _activeEmailCodeAddress = null;
+              _emailCodeRequested = false;
+              _emailCode.clear();
+              _authStatus = null;
+            });
+          },
           onSubmitted: (_) {
             if (!_busy && !_emailCodeRequested) {
-              unawaited(_startChallenge(phone: false));
+              unawaited(_startChallenge());
             }
           },
         ),
         if (_emailCodeRequested) ...[
           const SizedBox(height: 10),
           TextField(
+            key: const Key('auth_email_code'),
             controller: _emailCode,
             enabled: !_busy,
             keyboardType: TextInputType.number,
@@ -6016,8 +6183,9 @@ class _AuthPageState extends State<AuthPage>
               hintText: '0000',
               border: OutlineInputBorder(),
             ),
+            autofillHints: const [AutofillHints.oneTimeCode],
             onSubmitted: (_) {
-              if (!_busy) unawaited(_verifyChallenge(phone: false));
+              if (!_busy) unawaited(_verifyChallenge());
             },
           ),
         ],
@@ -6030,14 +6198,14 @@ class _AuthPageState extends State<AuthPage>
           onPressed: _busy
               ? null
               : () => _emailCodeRequested
-                    ? _verifyChallenge(phone: false)
-                    : _startChallenge(phone: false),
+                    ? _verifyChallenge()
+                    : _startChallenge(),
         ),
         if (_emailCodeRequested) ...[
           const SizedBox(height: 8),
           _buildResendButton(
             label: 'Получить новый код',
-            onPressed: _busy ? null : () => _startChallenge(phone: false),
+            onPressed: _busy ? null : _startChallenge,
           ),
         ],
       ],
@@ -6149,7 +6317,7 @@ class _AuthPageState extends State<AuthPage>
                                       ),
                                       SizedBox(height: 2),
                                       Text(
-                                        'Войти или зарегистрироваться',
+                                        'Восстановить доступ',
                                         style: TextStyle(
                                           fontSize: 12,
                                           fontWeight: FontWeight.w700,
@@ -6179,7 +6347,7 @@ class _AuthPageState extends State<AuthPage>
                                 fontWeight: FontWeight.w900,
                               ),
                               tabs: const [
-                                Tab(text: 'Email-код'),
+                                Tab(text: 'Email'),
                                 Tab(text: 'Пароль'),
                               ],
                             ),
@@ -6218,6 +6386,417 @@ class _AuthPageState extends State<AuthPage>
           },
         ),
       ),
+    );
+  }
+}
+
+class RestoreAccessDialog extends StatefulWidget {
+  final BlueVpnApi api;
+  final Session session;
+  final String? initialEmail;
+  final String? deviceUidOverride;
+
+  const RestoreAccessDialog({
+    super.key,
+    required this.api,
+    required this.session,
+    this.initialEmail,
+    this.deviceUidOverride,
+  });
+
+  @override
+  State<RestoreAccessDialog> createState() => _RestoreAccessDialogState();
+}
+
+class _RestoreAccessDialogState extends State<RestoreAccessDialog> {
+  final _email = TextEditingController();
+  final _code = TextEditingController();
+  final _deviceStore = DeviceIdStore();
+  bool _busy = false;
+  bool _codeRequested = false;
+  String? _status;
+
+  @override
+  void initState() {
+    super.initState();
+    _email.text = widget.initialEmail?.trim() ?? '';
+  }
+
+  @override
+  void dispose() {
+    _email.dispose();
+    _code.dispose();
+    super.dispose();
+  }
+
+  Future<void> _start() async {
+    final email = _email.text.trim();
+    if (_busy || email.isEmpty || !email.contains('@')) {
+      setState(() => _status = 'Введите корректный email.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _status = 'Отправляем код...';
+    });
+    try {
+      final res = await widget.api.startAccessEmail(
+        accessToken: widget.session.accessToken,
+        email: email,
+      );
+      if (!mounted) return;
+      if (!res.ok || res.data == null) {
+        setState(
+          () => _status = authUserMessage(
+            res.message ?? 'Не удалось отправить код.',
+            fallback: 'Не удалось отправить код.',
+          ),
+        );
+        return;
+      }
+      final delivery = (res.data!['deliveryStatus'] ?? '').toString();
+      final ready = res.data!['deliveryReady'] == true;
+      setState(() {
+        _codeRequested = delivery == 'sent' && ready;
+        _code.clear();
+        _status = _codeRequested
+            ? 'Код отправлен на email.'
+            : 'Не удалось отправить код. Попробуйте позже.';
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _verify() async {
+    final email = _email.text.trim();
+    final code = _code.text.trim();
+    if (_busy || code.isEmpty) {
+      setState(() => _status = 'Введите код из письма.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _status = 'Входим в аккаунт...';
+    });
+    try {
+      final deviceUid =
+          widget.deviceUidOverride ?? await _deviceStore.getOrCreate();
+      final res = await widget.api.verifyAccessEmail(
+        accessToken: widget.session.accessToken,
+        email: email,
+        code: code,
+        deviceUid: deviceUid,
+        deviceName: greenVpnClientDeviceName(),
+        platform: greenVpnClientPlatform(),
+        appVersion: kAppVersion,
+      );
+      if (!mounted) return;
+      if (!res.ok || res.data == null) {
+        setState(
+          () => _status = authUserMessage(
+            res.message ?? 'Код не подошёл или уже истёк.',
+            fallback: 'Код не подошёл или уже истёк.',
+          ),
+        );
+        return;
+      }
+      Navigator.of(context).pop(res.data);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Войти в аккаунт'),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Используйте email, к которому привязана подписка. '
+              'После входа Green VPN проверит доступ и восстановит его на этом устройстве.',
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              key: const Key('restore_access_email'),
+              controller: _email,
+              enabled: !_busy && !_codeRequested,
+              keyboardType: TextInputType.emailAddress,
+              autofillHints: const [AutofillHints.email],
+              textInputAction: TextInputAction.done,
+              decoration: const InputDecoration(
+                labelText: 'Email',
+                border: OutlineInputBorder(),
+              ),
+              onSubmitted: (_) {
+                if (!_codeRequested) unawaited(_start());
+              },
+            ),
+            if (_codeRequested) ...[
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('restore_access_code'),
+                controller: _code,
+                enabled: !_busy,
+                autofocus: true,
+                keyboardType: TextInputType.number,
+                autofillHints: const [AutofillHints.oneTimeCode],
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(4),
+                ],
+                decoration: const InputDecoration(
+                  labelText: 'Код из письма',
+                  hintText: '0000',
+                  border: OutlineInputBorder(),
+                ),
+                onSubmitted: (_) => unawaited(_verify()),
+              ),
+            ],
+            if ((_status ?? '').isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Text(
+                _status!,
+                style: const TextStyle(
+                  color: kBrandMuted,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.of(context).pop(),
+          child: const Text('Отмена'),
+        ),
+        FilledButton.icon(
+          onPressed: _busy
+              ? null
+              : _codeRequested
+              ? _verify
+              : _start,
+          icon: _busy
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Icon(
+                  _codeRequested
+                      ? Icons.login_rounded
+                      : Icons.mark_email_read_rounded,
+                ),
+          label: Text(_codeRequested ? 'Войти' : 'Получить код'),
+        ),
+      ],
+    );
+  }
+}
+
+class CheckoutEmailDialog extends StatefulWidget {
+  final BlueVpnApi api;
+  final Session session;
+  final String? initialEmail;
+  final String? deviceUidOverride;
+
+  const CheckoutEmailDialog({
+    super.key,
+    required this.api,
+    required this.session,
+    this.initialEmail,
+    this.deviceUidOverride,
+  });
+
+  @override
+  State<CheckoutEmailDialog> createState() => _CheckoutEmailDialogState();
+}
+
+class _CheckoutEmailDialogState extends State<CheckoutEmailDialog> {
+  final _email = TextEditingController();
+  final _code = TextEditingController();
+  final _deviceStore = DeviceIdStore();
+  bool _busy = false;
+  bool _codeRequested = false;
+  String? _status;
+
+  @override
+  void initState() {
+    super.initState();
+    _email.text = widget.initialEmail?.trim() ?? '';
+  }
+
+  @override
+  void dispose() {
+    _email.dispose();
+    _code.dispose();
+    super.dispose();
+  }
+
+  Future<void> _start() async {
+    final email = _email.text.trim();
+    if (_busy || email.isEmpty || !email.contains('@')) {
+      setState(() => _status = 'Введите корректный email.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _status = 'Отправляем код...';
+    });
+    try {
+      final res = await widget.api.startCheckoutEmail(
+        accessToken: widget.session.accessToken,
+        email: email,
+      );
+      if (!mounted) return;
+      if (!res.ok || res.data == null) {
+        setState(() => _status = res.message ?? 'Не удалось отправить код.');
+        return;
+      }
+      final delivery = (res.data!['deliveryStatus'] ?? '').toString();
+      final ready = res.data!['deliveryReady'] == true;
+      setState(() {
+        _codeRequested = delivery == 'sent' && ready;
+        _code.clear();
+        _status = _codeRequested
+            ? 'Код отправлен на email.'
+            : 'Не удалось отправить код. Попробуйте позже.';
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _verify() async {
+    final email = _email.text.trim();
+    final code = _code.text.trim();
+    if (_busy || code.isEmpty) {
+      setState(() => _status = 'Введите код из письма.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _status = 'Подтверждаем email...';
+    });
+    try {
+      final deviceUid =
+          widget.deviceUidOverride ?? await _deviceStore.getOrCreate();
+      final res = await widget.api.verifyCheckoutEmail(
+        accessToken: widget.session.accessToken,
+        email: email,
+        code: code,
+        deviceUid: deviceUid,
+        deviceName: greenVpnClientDeviceName(),
+        platform: greenVpnClientPlatform(),
+        appVersion: kAppVersion,
+      );
+      if (!mounted) return;
+      if (!res.ok || res.data == null) {
+        setState(
+          () => _status = res.message ?? 'Код не подошёл или уже истёк.',
+        );
+        return;
+      }
+      Navigator.of(context).pop(res.data);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Email для оплаты'),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'На этот адрес придут подтверждение оплаты и уведомления о продлении. '
+              'Он также позволит войти на другом устройстве.',
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              key: const Key('checkout_email'),
+              controller: _email,
+              enabled: !_busy && !_codeRequested,
+              keyboardType: TextInputType.emailAddress,
+              autofillHints: const [AutofillHints.email],
+              decoration: const InputDecoration(
+                labelText: 'Email',
+                border: OutlineInputBorder(),
+              ),
+              onSubmitted: (_) {
+                if (!_codeRequested) unawaited(_start());
+              },
+            ),
+            if (_codeRequested) ...[
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('checkout_email_code'),
+                controller: _code,
+                enabled: !_busy,
+                autofocus: true,
+                keyboardType: TextInputType.number,
+                autofillHints: const [AutofillHints.oneTimeCode],
+                inputFormatters: [
+                  FilteringTextInputFormatter.digitsOnly,
+                  LengthLimitingTextInputFormatter(4),
+                ],
+                decoration: const InputDecoration(
+                  labelText: 'Код из письма',
+                  hintText: '0000',
+                  border: OutlineInputBorder(),
+                ),
+                onSubmitted: (_) => unawaited(_verify()),
+              ),
+            ],
+            if ((_status ?? '').isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Text(
+                _status!,
+                style: const TextStyle(
+                  color: kBrandMuted,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.of(context).pop(),
+          child: const Text('Отмена'),
+        ),
+        FilledButton.icon(
+          onPressed: _busy
+              ? null
+              : _codeRequested
+              ? _verify
+              : _start,
+          icon: _busy
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Icon(
+                  _codeRequested
+                      ? Icons.check_rounded
+                      : Icons.mark_email_read_rounded,
+                ),
+          label: Text(_codeRequested ? 'Подтвердить' : 'Получить код'),
+        ),
+      ],
     );
   }
 }
@@ -6441,6 +7020,7 @@ class RootShell extends StatefulWidget {
 
   final Session session;
   final Future<void> Function() onLogout;
+  final Future<void> Function(Session session) onSessionChanged;
 
   const RootShell({
     super.key,
@@ -6448,6 +7028,7 @@ class RootShell extends StatefulWidget {
     required this.onThemeModeChanged,
     required this.session,
     required this.onLogout,
+    required this.onSessionChanged,
   });
 
   @override
@@ -6688,7 +7269,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   bool optNoAds = true;
   bool optSmartRouting = true; // этим флагом управляем доступностью "соцсетей"
   bool optDedicatedIp = false;
-  bool optAutoRenew = !kPaidBetaBuild;
+  bool optAutoRenew = false;
 
   // ===== SETTINGS (косметика) =====
   String sLanguage = 'Русский';
@@ -6701,6 +7282,14 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   Timer? _vpnTapCooldownTimer;
   Timer? _pendingBillingPollTimer;
   Timer? _freeAdSessionTimer;
+  Timer? _windowsRuntimeFailoverTimer;
+  ServerLocation? _activeWindowsRuntimeRoute;
+  int _windowsRuntimeFailoverEpoch = 0;
+  int _windowsRuntimeFailureCount = 0;
+  bool _windowsRuntimeProbeRunning = false;
+  bool _windowsRuntimeRecoveryRunning = false;
+  bool _windowsRuntimeRestoreRunning = false;
+  bool _prefsLoaded = false;
   WireGuardInstallState? _wireGuardState;
   bool _wireGuardBusy = false;
   bool _tariffBusy = false;
@@ -6715,6 +7304,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   bool _subscriptionActive = false;
   bool _subscriptionEntitlementResolved = false;
   String _subscriptionPlanCode = 'base';
+  bool _freeTierActive = false;
+  Map<String, dynamic> _trafficUsage = <String, dynamic>{};
+  int _subscriptionMaxDevices = kPaidBetaBuild ? 2 : 1;
   bool _subscriptionAutoRenew = false;
   bool _paymentMethodSaved = false;
   String? _subscriptionExpiresAt;
@@ -6729,10 +7321,6 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   late bool _emailConfirmationRequired;
   bool _emailStatusBusy = false;
   String? _emailStatusMessage;
-  String? _phone;
-  bool _phoneVerified = false;
-  bool _phoneStatusBusy = false;
-  String? _phoneStatusMessage;
   bool _updateCheckBusy = false;
   bool _forcedUpdateRouteOpen = false;
   String? _updatePromptVersionInFlight;
@@ -6758,8 +7346,6 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _vpnBackend = VpnBackend.createDefault(tunnelName: kTunnelName);
     _emailVerified = widget.session.emailVerified;
     _emailConfirmationRequired = widget.session.emailConfirmationRequired;
-    _phone = widget.session.phone;
-    _phoneVerified = widget.session.phoneVerified;
 
     _loadPrefsAndApply();
     if (kPaidBetaBuild) {
@@ -6774,12 +7360,26 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _loadPendingBillingOrder();
     _refreshTariffServerState(showToast: false);
     _refreshServerCatalog(showToast: false);
-    _refreshEmailStatus(showToast: false);
-    _refreshPhoneStatus(showToast: false);
+    if (!widget.session.isGuest) {
+      _refreshEmailStatus(showToast: false);
+    }
     unawaited(_refreshWireGuardState());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) unawaited(_checkRequiredUpdateSilently());
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant RootShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.session.accessToken == widget.session.accessToken) return;
+    _emailVerified = widget.session.emailVerified;
+    _emailConfirmationRequired = widget.session.emailConfirmationRequired;
+    _emailStatusMessage = widget.session.isGuest
+        ? null
+        : widget.session.emailVerified
+        ? 'Почта подтверждена.'
+        : 'Почта пока не подтверждена.';
   }
 
   @override
@@ -6857,6 +7457,56 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     return '${raw.substring(0, 180)}...';
   }
 
+  Future<Session?> _renewGuestSession({
+    required String source,
+    bool showToast = false,
+  }) async {
+    if (!widget.session.isGuest) return widget.session;
+    try {
+      final deviceUid = await _ensureDeviceId();
+      if (deviceUid == null || deviceUid.isEmpty) {
+        throw StateError('device_uid_unavailable');
+      }
+      final result = await _api.createGuestSession(
+        deviceUid: deviceUid,
+        deviceName: greenVpnClientDeviceName(),
+        platform: greenVpnClientPlatform(),
+        appVersion: kAppVersion,
+      );
+      if (!result.ok || result.data == null) {
+        await appendBlueVpnClientLog(
+          'guest session refresh failed source=$source message=${result.message ?? ""}',
+        );
+        if (showToast && mounted) {
+          _toast(
+            context,
+            'Не удалось обновить бесплатный профиль. Повторите попытку.',
+          );
+        }
+        return null;
+      }
+
+      final session = result.data!;
+      await widget.onSessionChanged(session);
+      await appendBlueVpnClientLog('guest session refreshed source=$source');
+      if (showToast && mounted) {
+        _toast(context, 'Бесплатный профиль обновлён.');
+      }
+      return session;
+    } catch (e) {
+      await appendBlueVpnClientLog(
+        'guest session refresh exception source=$source type=${e.runtimeType}',
+      );
+      if (showToast && mounted) {
+        _toast(
+          context,
+          'Не удалось обновить бесплатный профиль. Повторите попытку.',
+        );
+      }
+      return null;
+    }
+  }
+
   Future<void> _handleInvalidSession({
     required String source,
     String? message,
@@ -6868,6 +7518,19 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     if (_sessionInvalidationInProgress) return;
     _sessionInvalidationInProgress = true;
     try {
+      final expiredSessionAction = greenVpnExpiredSessionAction(
+        isGuest: widget.session.isGuest,
+      );
+      if (logout &&
+          expiredSessionAction == GreenVpnExpiredSessionAction.refreshGuest) {
+        final renewed = await _renewGuestSession(
+          source: source,
+          showToast: showToast,
+        );
+        if (renewed != null) return;
+        return;
+      }
+
       final reason = _safeSessionInvalidationReason(message);
       await appendBlueVpnClientLog(
         'invalid session detected source=$source logout=$logout disconnectVpn=$disconnectVpn reason=$reason',
@@ -6888,6 +7551,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         } catch (_) {}
       }
       if (disconnectVpn) {
+        _disarmWindowsRuntimeFailover(reason: 'session_invalidation');
         try {
           await _vpnBackend.disconnect().timeout(const Duration(seconds: 8));
         } catch (e) {
@@ -7046,253 +7710,6 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _refreshPhoneStatus({required bool showToast}) async {
-    if (kIsWeb || widget.session.accessToken == 'dev-token') return;
-    if (_phoneStatusBusy) return;
-    setState(() => _phoneStatusBusy = true);
-    try {
-      final res = await _api.fetchPhoneStatus(
-        accessToken: widget.session.accessToken,
-      );
-      if (!mounted) return;
-      if (greenVpnIsInvalidSessionMessage(res.message)) {
-        if (!showToast) {
-          await _noteInvalidSession(
-            source: 'phone_status',
-            message: res.message,
-          );
-          return;
-        }
-        await _handleInvalidSession(
-          source: 'phone_status',
-          message: res.message,
-        );
-        return;
-      }
-      if (!res.ok || res.data == null) {
-        final text = res.message ?? 'Не удалось проверить статус телефона.';
-        setState(() => _phoneStatusMessage = text);
-        if (showToast) _toast(context, text);
-        return;
-      }
-      final data = res.data!;
-      final phone = (data['phone'] ?? '').toString().trim();
-      final verified = data['phoneVerified'] == true;
-      setState(() {
-        _phone = phone.isEmpty ? null : phone;
-        _phoneVerified = verified;
-        _phoneStatusMessage = verified
-            ? 'Телефон подтверждён.'
-            : 'Телефон пока не подтверждён.';
-      });
-      if (showToast) _toast(context, _phoneStatusMessage!);
-    } finally {
-      if (mounted) setState(() => _phoneStatusBusy = false);
-    }
-  }
-
-  Future<Map<String, dynamic>?> _startPhoneConfirmation(String phone) async {
-    if (_phoneStatusBusy) return null;
-    setState(() {
-      _phoneStatusBusy = true;
-      _phoneStatusMessage = 'Готовим SMS-код...';
-    });
-    try {
-      final res = await _api.startPhoneConfirmation(
-        accessToken: widget.session.accessToken,
-        phone: phone,
-      );
-      if (!mounted) return null;
-      if (greenVpnIsInvalidSessionMessage(res.message)) {
-        await _handleInvalidSession(
-          source: 'phone_confirmation_start',
-          message: res.message,
-        );
-        return null;
-      }
-      if (!res.ok || res.data == null) {
-        final text = authUserMessage(
-          res.message ?? 'Не удалось отправить SMS.',
-          fallback: 'Не удалось отправить SMS.',
-        );
-        setState(() => _phoneStatusMessage = text);
-        _toast(context, text);
-        return null;
-      }
-      final data = res.data!;
-      final normalizedPhone = (data['phone'] ?? phone).toString();
-      final verified = data['phoneVerified'] == true;
-      final delivery = (data['deliveryStatus'] ?? '').toString();
-      final text = verified
-          ? 'Телефон уже подтверждён.'
-          : delivery == 'sent'
-          ? 'SMS-код отправлен.'
-          : delivery == 'failed'
-          ? 'SMS не отправилось. Проверь настройки SMS-провайдера.'
-          : 'Телефон подготовлен. Реальная отправка включится после подключения SMS-провайдера.';
-      setState(() {
-        _phone = normalizedPhone;
-        _phoneVerified = verified;
-        _phoneStatusMessage = text;
-      });
-      _toast(context, text);
-      return data;
-    } finally {
-      if (mounted) setState(() => _phoneStatusBusy = false);
-    }
-  }
-
-  Future<bool> _verifyPhoneConfirmation(String phone, String code) async {
-    if (_phoneStatusBusy) return false;
-    setState(() {
-      _phoneStatusBusy = true;
-      _phoneStatusMessage = 'Проверяем SMS-код...';
-    });
-    try {
-      final res = await _api.verifyPhoneConfirmation(
-        accessToken: widget.session.accessToken,
-        phone: phone,
-        code: code,
-      );
-      if (!mounted) return false;
-      if (greenVpnIsInvalidSessionMessage(res.message)) {
-        await _handleInvalidSession(
-          source: 'phone_confirmation_verify',
-          message: res.message,
-        );
-        return false;
-      }
-      if (!res.ok || res.data == null || res.data!['ok'] != true) {
-        final status = (res.data?['status'] ?? '').toString();
-        final text = status == 'expired'
-            ? 'SMS-код истёк. Запроси новый код.'
-            : status == 'invalid_code'
-            ? 'Неверный SMS-код.'
-            : res.message ?? 'Не удалось подтвердить телефон.';
-        setState(() => _phoneStatusMessage = text);
-        _toast(context, text);
-        return false;
-      }
-      final verifiedPhone = (res.data!['phone'] ?? phone).toString();
-      setState(() {
-        _phone = verifiedPhone;
-        _phoneVerified = true;
-        _phoneStatusMessage = 'Телефон подтверждён.';
-      });
-      _toast(context, 'Телефон подтверждён.');
-      return true;
-    } finally {
-      if (mounted) setState(() => _phoneStatusBusy = false);
-    }
-  }
-
-  Future<void> _showPhoneBindingDialog() async {
-    if (kIsWeb || widget.session.accessToken == 'dev-token') return;
-    final phoneController = TextEditingController(text: _phone ?? '');
-    final codeController = TextEditingController();
-    bool codeRequested = false;
-    String? activePhone = _phone;
-
-    try {
-      await showDialog<void>(
-        context: context,
-        builder: (dialogContext) {
-          return StatefulBuilder(
-            builder: (dialogContext, setDialogState) {
-              return AlertDialog(
-                title: const Text('Привязать телефон'),
-                content: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    TextField(
-                      controller: phoneController,
-                      keyboardType: TextInputType.phone,
-                      decoration: const InputDecoration(
-                        labelText: 'Телефон',
-                        hintText: '+7 900 000-00-00',
-                      ),
-                    ),
-                    if (codeRequested) ...[
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: codeController,
-                        keyboardType: TextInputType.number,
-                        inputFormatters: [
-                          FilteringTextInputFormatter.digitsOnly,
-                          LengthLimitingTextInputFormatter(4),
-                        ],
-                        decoration: const InputDecoration(
-                          labelText: 'Код из SMS',
-                          hintText: '0000',
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 12),
-                    Text(
-                      _phoneStatusMessage ??
-                          'SMS-вход подготовлен. После подключения провайдера код будет приходить автоматически.',
-                      style: const TextStyle(
-                        color: kBrandMuted,
-                        fontWeight: FontWeight.w700,
-                        height: 1.35,
-                      ),
-                    ),
-                  ],
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.of(dialogContext).pop(),
-                    child: const Text('Закрыть'),
-                  ),
-                  FilledButton(
-                    onPressed: _phoneStatusBusy
-                        ? null
-                        : () async {
-                            if (!codeRequested) {
-                              final data = await _startPhoneConfirmation(
-                                phoneController.text,
-                              );
-                              if (data == null) return;
-                              activePhone =
-                                  (data['phone'] ?? phoneController.text)
-                                      .toString();
-                              phoneController.text =
-                                  activePhone ?? phoneController.text;
-                              if (data['phoneVerified'] == true) {
-                                if (dialogContext.mounted) {
-                                  Navigator.of(dialogContext).pop();
-                                }
-                                return;
-                              }
-                              if (data['deliveryStatus'] == 'sent') {
-                                setDialogState(() => codeRequested = true);
-                              }
-                              return;
-                            }
-
-                            final ok = await _verifyPhoneConfirmation(
-                              activePhone ?? phoneController.text,
-                              codeController.text,
-                            );
-                            if (ok && dialogContext.mounted) {
-                              Navigator.of(dialogContext).pop();
-                            }
-                          },
-                    child: Text(codeRequested ? 'Подтвердить' : 'Получить код'),
-                  ),
-                ],
-              );
-            },
-          );
-        },
-      );
-    } finally {
-      phoneController.dispose();
-      codeController.dispose();
-    }
-  }
-
   Future<void> _loadPrefsAndApply() async {
     if (kIsWeb) return;
 
@@ -7401,10 +7818,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       optDedicatedIp = (kPaidBetaBuild || kPublicProductBuild)
           ? false
           : p.optDedicatedIp;
-      optAutoRenew = kPaidBetaBuild
+      optAutoRenew =
+          kPaidBetaBuild || (kPublicProductBuild && widget.session.isGuest)
           ? false
-          : kPublicProductBuild
-          ? true
           : p.optAutoRenew;
 
       await _syncWindowsRoutingPolicy();
@@ -7419,6 +7835,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     } catch (_) {
       // ignore
     } finally {
+      _prefsLoaded = true;
+      if (mounted && vpnEnabled) {
+        unawaited(
+          _restoreWindowsRuntimeFailoverIfPossible(source: 'prefs_loaded'),
+        );
+      }
       if (!_pendingVpnResumeScheduled) {
         _pendingVpnResumeScheduled = true;
         unawaited(_resumePendingVpnActionIfNeeded());
@@ -7501,7 +7923,6 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     final nextGb = ((selection['trafficGb'] ?? trafficGb) as num).toDouble();
     final nextDevices = (selection['devices'] ?? devices) as int;
     final nextDedicatedIp = selection['dedicatedIp'] == true;
-    final nextAutoRenew = selection['autoRenew'] == true;
     final rawApps = (selection['unlimitedApps'] as List?) ?? const [];
     final nextApps = <TariffApp>{};
     for (final item in rawApps) {
@@ -7516,7 +7937,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       final nextBillingPlanCode = (selection['planCode'] ?? '')
           .toString()
           .trim();
-      if (kPublicProductBuild && nextBillingPlanCode.isNotEmpty) {
+      if (greenVpnFixedPublicBillingPlanCodes.contains(nextBillingPlanCode)) {
         _publicBillingPlanCode = greenVpnNormalizePublicBillingPlanCode(
           nextBillingPlanCode,
         );
@@ -7529,15 +7950,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       optDedicatedIp = (kPaidBetaBuild || kPublicProductBuild)
           ? false
           : nextDedicatedIp;
-      if (kPaidBetaBuild) {
-        optAutoRenew = false;
-      } else if (kPublicProductBuild) {
-        optAutoRenew = selection['policyMode'] == 'public_product'
-            ? nextAutoRenew
-            : true;
-      } else {
-        optAutoRenew = nextAutoRenew;
-      }
+      optAutoRenew = greenVpnSelectionAutoRenewEnabled(
+        selection,
+        paidBetaBuild: kPaidBetaBuild,
+      );
       selectedApps
         ..clear()
         ..addAll(nextApps);
@@ -7618,13 +8034,18 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
   void _applySubscriptionUiState(
     Map<String, dynamic> profile,
-    Object? subscription,
-  ) {
+    Object? subscription, {
+    Object? trafficUsage,
+  }) {
     Map<String, dynamic>? sub;
     if (subscription is Map) {
       sub = Map<String, dynamic>.from(subscription);
     }
 
+    _freeTierActive = greenVpnIsFreeTierSubscription(
+      profile,
+      subscription: sub,
+    );
     _subscriptionActive =
         profile['isActive'] == true || sub?['isActive'] == true;
     _subscriptionEntitlementResolved = true;
@@ -7639,12 +8060,26 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _subscriptionMonthlyPriceRub = monthlyRaw is num
         ? monthlyRaw.toInt()
         : int.tryParse((monthlyRaw ?? '').toString());
+    final maxDevicesRaw = profile['maxDevices'] ?? sub?['maxDevices'];
+    final parsedMaxDevices = maxDevicesRaw is num
+        ? maxDevicesRaw.toInt()
+        : int.tryParse((maxDevicesRaw ?? '').toString());
+    if (parsedMaxDevices != null && parsedMaxDevices > 0) {
+      _subscriptionMaxDevices = parsedMaxDevices;
+    }
 
     final autoRenewRaw = profile['autoRenew'] ?? sub?['autoRenew'];
     _subscriptionAutoRenew = autoRenewRaw == true;
     final paymentMethodRaw =
         profile['paymentMethodSaved'] ?? sub?['paymentMethodSaved'];
     _paymentMethodSaved = paymentMethodRaw == true;
+
+    final rawTrafficUsage = trafficUsage ?? profile['trafficUsage'];
+    if (rawTrafficUsage is Map) {
+      _trafficUsage = Map<String, dynamic>.from(rawTrafficUsage);
+    } else if (!_freeTierActive) {
+      _trafficUsage = <String, dynamic>{};
+    }
   }
 
   Future<void> _reconcileSubscriptionEntitlements() async {
@@ -7759,10 +8194,20 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     if (mounted) setState(() => _tariffBusy = true);
     try {
       final catalogRes = await _api.fetchTariffCatalog();
+      final fixedPlanCodes = greenVpnFixedBillingPlanCodesFromCatalog(
+        catalogRes.data,
+      );
+      final usesFixedBillingPlans =
+          kPublicProductBuild || fixedPlanCodes.isNotEmpty;
       final quoteRes = await _api.quoteTariff(
         accessToken: widget.session.accessToken,
-        billingPlanCode: kPublicProductBuild
-            ? greenVpnNormalizePublicBillingPlanCode(_publicBillingPlanCode)
+        billingPlanCode: usesFixedBillingPlans
+            ? greenVpnNormalizePublicBillingPlanCode(
+                _publicBillingPlanCode,
+                availableCodes: fixedPlanCodes.isEmpty
+                    ? greenVpnFixedPublicBillingPlanCodes
+                    : fixedPlanCodes,
+              )
             : null,
         trafficPack: trafficPack.name,
         trafficGb: trafficGb.round(),
@@ -7802,7 +8247,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         final monthly = quote is Map ? quote['monthlyPriceRub'] : null;
         _tariffStatus = monthly == null
             ? 'Цена обновлена.'
-            : kPublicProductBuild
+            : usesFixedBillingPlans
             ? 'Стоимость: $monthly ₽.'
             : 'Цена обновлена: $monthly ₽/мес.';
       });
@@ -7912,17 +8357,44 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       _toast(context, 'Trial-версия работает без оплаты и рекламы.');
       return;
     }
+    if (_tariffCatalog?['paidSalesEnabled'] != true ||
+        _tariffCatalog?['paymentsProductionReady'] != true) {
+      final message = (_tariffCatalog?['checkoutMessage'] ?? '')
+          .toString()
+          .trim();
+      final text = message.isEmpty
+          ? 'Оплата временно недоступна. Бесплатный тариф продолжает работать.'
+          : message;
+      if (mounted) {
+        setState(() => _tariffStatus = text);
+        _toast(context, text);
+      }
+      return;
+    }
     if (widget.session.accessToken == 'dev-token') {
       _toast(context, 'Сначала войди в аккаунт, чтобы подключить тариф.');
       return;
     }
 
+    final paymentSession = await _ensurePaymentSession();
+    if (paymentSession == null || !mounted) return;
+
     if (mounted) setState(() => _tariffBusy = true);
     try {
+      final fixedPlanCodes = greenVpnFixedBillingPlanCodesFromCatalog(
+        _tariffCatalog,
+      );
+      final usesFixedBillingPlans =
+          kPublicProductBuild || fixedPlanCodes.isNotEmpty;
       final res = await _api.createBillingOrder(
-        accessToken: widget.session.accessToken,
-        billingPlanCode: kPublicProductBuild
-            ? greenVpnNormalizePublicBillingPlanCode(_publicBillingPlanCode)
+        accessToken: paymentSession.accessToken,
+        billingPlanCode: usesFixedBillingPlans
+            ? greenVpnNormalizePublicBillingPlanCode(
+                _publicBillingPlanCode,
+                availableCodes: fixedPlanCodes.isEmpty
+                    ? greenVpnFixedPublicBillingPlanCodes
+                    : fixedPlanCodes,
+              )
             : null,
         trafficPack: trafficPack.name,
         trafficGb: trafficGb.round(),
@@ -7978,6 +8450,144 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     } finally {
       if (mounted) setState(() => _tariffBusy = false);
     }
+  }
+
+  Future<Session?> _ensurePaymentSession() async {
+    if (!widget.session.isGuest && widget.session.emailVerified) {
+      return widget.session;
+    }
+    var checkoutSession = widget.session;
+    if (checkoutSession.isGuest) {
+      final renewed = await _renewGuestSession(
+        source: 'checkout_open',
+        showToast: false,
+      );
+      if (renewed == null || !mounted) {
+        if (mounted) {
+          _toast(
+            context,
+            'Не удалось подготовить бесплатный профиль. Повторите попытку.',
+          );
+        }
+        return null;
+      }
+      checkoutSession = renewed;
+    }
+    final session = await showDialog<Session>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => CheckoutEmailDialog(
+        api: _api,
+        session: checkoutSession,
+        initialEmail: checkoutSession.email,
+      ),
+    );
+    if (session == null || !mounted) return null;
+
+    await widget.onSessionChanged(session);
+    if (!mounted) return null;
+    setState(() {
+      _emailVerified = session.emailVerified;
+      _emailConfirmationRequired = session.emailConfirmationRequired;
+      _emailStatusMessage = session.emailVerified
+          ? 'Почта подтверждена.'
+          : 'Почта пока не подтверждена.';
+    });
+
+    final profile = await _api.fetchSubscriptionProfile(
+      accessToken: session.accessToken,
+    );
+    if (!mounted) return null;
+    if (profile.ok && profile.data != null) {
+      final data = profile.data!;
+      final subscription = data['subscription'];
+      final plan = (data['planName'] ?? '').toString().trim();
+      setState(() {
+        if (plan.isNotEmpty) planName = plan;
+        _applySubscriptionUiState(data, subscription);
+      });
+      await _reconcileSubscriptionEntitlements();
+      if (!mounted) return null;
+      if (_hasPaidSubscriptionEntitlement) {
+        _toast(context, 'Доступ по этому email восстановлен.');
+        return null;
+      }
+    }
+
+    return session;
+  }
+
+  Future<void> _openRestoreAccess() async {
+    if (!widget.session.isGuest) {
+      _toast(context, 'Вы уже вошли в аккаунт.');
+      return;
+    }
+
+    final guestSession = await _renewGuestSession(
+      source: 'access_restore_open',
+      showToast: false,
+    );
+    if (guestSession == null || !mounted) {
+      if (mounted) {
+        _toast(context, 'Не удалось подготовить вход. Повторите попытку.');
+      }
+      return;
+    }
+
+    final session = await showDialog<Session>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => RestoreAccessDialog(
+        api: _api,
+        session: guestSession,
+        initialEmail: guestSession.email,
+      ),
+    );
+    if (session == null || !mounted) return;
+
+    await widget.onSessionChanged(session);
+    if (!mounted) return;
+    setState(() {
+      _emailVerified = session.emailVerified;
+      _emailConfirmationRequired = session.emailConfirmationRequired;
+      _emailStatusMessage = session.emailVerified
+          ? 'Почта подтверждена.'
+          : 'Почта пока не подтверждена.';
+    });
+
+    final profile = await _api.fetchSubscriptionProfile(
+      accessToken: session.accessToken,
+    );
+    if (!mounted) return;
+    if (!profile.ok || profile.data == null) {
+      _toast(
+        context,
+        'Вход выполнен, но подписку пока не удалось проверить. Повторите позже.',
+      );
+      return;
+    }
+
+    final data = profile.data!;
+    final subscription = data['subscription'];
+    final plan = (data['planName'] ?? '').toString().trim();
+    setState(() {
+      if (plan.isNotEmpty) planName = plan;
+      _applySubscriptionUiState(data, subscription);
+    });
+    await _reconcileSubscriptionEntitlements();
+    if (!mounted) return;
+
+    _toast(
+      context,
+      _hasPaidSubscriptionEntitlement
+          ? 'Подписка восстановлена на этом устройстве.'
+          : 'Вход выполнен. Активной подписки у аккаунта нет.',
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_syncPlanSilently());
+      unawaited(_refreshServerCatalog(showToast: false));
+    });
   }
 
   Future<void> _checkPendingBillingOrder({
@@ -8501,6 +9111,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           : _buildManagedConfigFromBase(rawConfig),
     );
     await _cfg.writeManagedProtocol(server?.protocolCode ?? 'wireguard_udp');
+    await _cfg.writeManagedRouteId(server?.id ?? '');
     try {
       await _cfg.writeBaseConfig(rawConfig);
     } catch (e) {
@@ -8525,6 +9136,18 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     required bool showToast,
     ServerLocation? serverOverride,
   }) async {
+    if (greenVpnIsFreeQuotaExhaustedMessage(reason)) {
+      await appendBlueVpnClientLog(
+        'local config fallback blocked by free quota: $reason',
+      );
+      if (showToast && mounted) {
+        _toast(
+          context,
+          'Бесплатный лимит исчерпан. Открой тариф или дождись нового месяца.',
+        );
+      }
+      return false;
+    }
     if (greenVpnIsAdRewardRequiredMessage(reason)) {
       await appendBlueVpnClientLog(
         'local config fallback blocked by ad gate: $reason',
@@ -8562,6 +9185,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
       await _cfg.writeManagedConfig(
         _buildManagedConfigFromBase(normalizedBase),
+      );
+      await _cfg.writeManagedProtocol(effectiveServer.protocolCode);
+      await _cfg.writeManagedRouteId(
+        effectiveServer.isAuto ? '' : effectiveServer.id,
       );
       try {
         await _cfg.writeBaseConfig(normalizedBase);
@@ -8628,6 +9255,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           return false;
         }
       } else {
+        final runtimeRoute = _activeWindowsRuntimeRoute;
+        _disarmWindowsRuntimeFailover(reason: 'routing_mode_reconnect');
         final off = await _vpnBackend.disconnect();
         if (!mounted) return false;
         if (!off.ok) {
@@ -8644,6 +9273,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           _toast(context, on.message ?? 'Не удалось заново подключить VPN.');
           await _syncVpnStatus();
           return false;
+        }
+        if (!socialOnlyEnabled && runtimeRoute != null) {
+          await _armRuntimeFailover(runtimeRoute);
         }
       }
 
@@ -8706,6 +9338,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         vpnEnabled = on;
         _androidExternalVpnActive = false;
       });
+      if (on) {
+        await _restoreWindowsRuntimeFailoverIfPossible(source: 'status_sync');
+      } else if (_activeWindowsRuntimeRoute != null ||
+          _windowsRuntimeFailoverTimer != null) {
+        _disarmWindowsRuntimeFailover(reason: 'status_disconnected');
+      }
     }
   }
 
@@ -9040,7 +9678,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         if (mounted) {
           setState(() {
             if (p.isNotEmpty) planName = p;
-            _applySubscriptionUiState(const <String, dynamic>{}, subMap);
+            _applySubscriptionUiState(
+              const <String, dynamic>{},
+              subMap,
+              trafficUsage: boot.data!['trafficUsage'],
+            );
           });
           await _reconcileSubscriptionEntitlements();
         }
@@ -9230,6 +9872,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           'Отключаем VPN. Для нового подключения нужно снова посмотреть рекламу.',
     );
     try {
+      _disarmWindowsRuntimeFailover(reason: 'free_session_expired');
       final res = await _vpnBackend.disconnect();
       await appendBlueVpnClientLog(
         'free ad session disconnect ok=${res.ok} message=${res.message ?? ""}',
@@ -9548,7 +10191,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       if (mounted) {
         setState(() {
           if (p.isNotEmpty) planName = p;
-          _applySubscriptionUiState(const <String, dynamic>{}, subMap);
+          _applySubscriptionUiState(
+            const <String, dynamic>{},
+            subMap,
+            trafficUsage: bootMap['trafficUsage'],
+          );
         });
         await _reconcileSubscriptionEntitlements();
       }
@@ -9561,8 +10208,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           'Для закрытой beta нужен персональный инвайт.',
         'subscription_inactive' =>
           'Beta Trial закончился. Открой тариф и оплати следующий период.',
+        'free_quota_exhausted' =>
+          'Бесплатный лимит на этот месяц исчерпан. Открой тариф или дождись нового месяца.',
         'device_limit_exceeded' =>
-          'Достигнут лимит beta: не больше двух устройств.',
+          _freeTierActive
+              ? 'Бесплатный тариф: устройств не больше $_subscriptionMaxDevices.'
+              : 'Достигнут лимит beta: не больше двух устройств.',
         'device_disabled' => 'Это устройство отключено в аккаунте.',
         _ => 'Beta-доступ сейчас недоступен.',
       };
@@ -9620,6 +10271,16 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           context,
           'Для бесплатного подключения сначала посмотри рекламу.',
         );
+        return ProvisionedConfigResult.err(res.message);
+      }
+      if (greenVpnIsFreeQuotaExhaustedMessage(res.message)) {
+        if (mounted) {
+          setState(() => _index = 1);
+          _toast(
+            context,
+            'Бесплатный лимит исчерпан. Открой тариф или дождись нового месяца.',
+          );
+        }
         return ProvisionedConfigResult.err(res.message);
       }
       final reused = await _reuseExistingProvisionedConfig(
@@ -9751,28 +10412,273 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _routeFailureCooldown.recordSuccess(_routeCooldownKey(server));
   }
 
-  Future<void> _armAndroidRuntimeFailover(ServerLocation server) async {
+  void _disarmWindowsRuntimeFailover({required String reason}) {
+    final hadMonitor =
+        _windowsRuntimeFailoverTimer != null ||
+        _activeWindowsRuntimeRoute != null;
+    _windowsRuntimeFailoverTimer?.cancel();
+    _windowsRuntimeFailoverTimer = null;
+    _activeWindowsRuntimeRoute = null;
+    _windowsRuntimeFailureCount = 0;
+    _windowsRuntimeFailoverEpoch += 1;
+    if (hadMonitor) {
+      unawaited(
+        appendBlueVpnClientLog(
+          'windows runtime failover disarmed reason=$reason',
+        ),
+      );
+    }
+  }
+
+  Future<void> _armRuntimeFailover(ServerLocation server) async {
+    final isAndroid =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+    final isWindows =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
     if (!greenVpnShouldArmRuntimeFailover(
       previewEnabled: kTransportPreviewFallbackEnabled,
-      isAndroid: !kIsWeb && defaultTargetPlatform == TargetPlatform.android,
+      isAndroid: isAndroid,
+      isWindows: isWindows,
       serverIsAuto: server.isAuto,
-      socialOnlyEnabled: socialOnlyEnabled,
+      socialOnlyEnabled:
+          socialOnlyEnabled || (isWindows && _socialOnlyPreferenceRequested),
     )) {
+      if (isWindows) {
+        _disarmWindowsRuntimeFailover(reason: 'policy_not_eligible');
+      }
       return;
     }
+
+    if (isAndroid) {
+      try {
+        final raw = await kAndroidPlatformChannel
+            .invokeMapMethod<String, dynamic>('armRuntimeFailover', {
+              'serverId': server.id,
+              'protocol': server.protocolCode,
+            });
+        await appendBlueVpnClientLog(
+          'runtime failover armed ok=${raw?['ok'] == true} server=${server.id}',
+        );
+      } catch (error) {
+        await appendBlueVpnClientLog(
+          'runtime failover arm failed server=${server.id} error=$error',
+        );
+      }
+      return;
+    }
+
+    _disarmWindowsRuntimeFailover(reason: 'rearm');
+    _activeWindowsRuntimeRoute = server;
+    final epoch = _windowsRuntimeFailoverEpoch;
+    _windowsRuntimeFailoverTimer = Timer.periodic(
+      const Duration(seconds: 15),
+      (_) => unawaited(_pollWindowsRuntimeFailover(server, epoch)),
+    );
+    await appendBlueVpnClientLog(
+      'windows runtime failover armed server=${server.id} protocol=${server.protocolCode} intervalSeconds=15 threshold=$greenVpnRuntimeFailoverFailureThreshold',
+    );
+  }
+
+  Future<void> _restoreWindowsRuntimeFailoverIfPossible({
+    required String source,
+  }) async {
+    if (kIsWeb ||
+        !Platform.isWindows ||
+        !mounted ||
+        !_prefsLoaded ||
+        !vpnEnabled ||
+        _windowsRuntimeRestoreRunning ||
+        _windowsRuntimeRecoveryRunning ||
+        _windowsRuntimeFailoverTimer != null ||
+        _activeWindowsRuntimeRoute != null ||
+        socialOnlyEnabled ||
+        _socialOnlyPreferenceRequested) {
+      return;
+    }
+
+    _windowsRuntimeRestoreRunning = true;
     try {
-      final raw = await kAndroidPlatformChannel
-          .invokeMapMethod<String, dynamic>('armRuntimeFailover', {
-            'serverId': server.id,
-            'protocol': server.protocolCode,
-          });
+      final routeId = greenVpnNormalizeManagedRouteId(
+        await _cfg.readManagedRouteId(),
+      );
+      final protocol = (await _cfg.readManagedProtocol()).trim().toLowerCase();
+      if (routeId.isEmpty || protocol.isEmpty) {
+        await appendBlueVpnClientLog(
+          'windows runtime failover restore skipped source=$source reason=missing_route_metadata',
+        );
+        return;
+      }
+
+      final matches = servers.where(
+        (server) =>
+            !server.isAuto &&
+            server.id == routeId &&
+            server.protocolCode.trim().toLowerCase() == protocol &&
+            server.isCurrentClientReady,
+      );
+      if (matches.isEmpty) {
+        await appendBlueVpnClientLog(
+          'windows runtime failover restore deferred source=$source route=$routeId protocol=$protocol reason=catalog_route_missing',
+        );
+        return;
+      }
+
+      final route = matches.first;
+      await _armRuntimeFailover(route);
       await appendBlueVpnClientLog(
-        'runtime failover armed ok=${raw?['ok'] == true} server=${server.id}',
+        'windows runtime failover restored source=$source server=${route.id} protocol=${route.protocolCode}',
       );
     } catch (error) {
       await appendBlueVpnClientLog(
-        'runtime failover arm failed server=${server.id} error=$error',
+        'windows runtime failover restore failed source=$source error=$error',
       );
+    } finally {
+      _windowsRuntimeRestoreRunning = false;
+    }
+  }
+
+  Future<void> _pollWindowsRuntimeFailover(
+    ServerLocation server,
+    int epoch,
+  ) async {
+    if (kIsWeb ||
+        !Platform.isWindows ||
+        !mounted ||
+        epoch != _windowsRuntimeFailoverEpoch ||
+        _windowsRuntimeProbeRunning ||
+        _windowsRuntimeRecoveryRunning ||
+        vpnBusy ||
+        !vpnEnabled) {
+      return;
+    }
+    final active = _activeWindowsRuntimeRoute;
+    if (active == null ||
+        _routeCooldownKey(active) != _routeCooldownKey(server)) {
+      return;
+    }
+
+    _windowsRuntimeProbeRunning = true;
+    var backendConnected = false;
+    PostConnectProbeResult? probe;
+    Object? statusError;
+    try {
+      try {
+        backendConnected = await _vpnBackend.isConnected().timeout(
+          const Duration(seconds: 5),
+        );
+      } catch (error) {
+        statusError = error;
+      }
+      if (backendConnected) {
+        probe = await _probeConnectedTunnelRoute(server);
+      }
+    } finally {
+      _windowsRuntimeProbeRunning = false;
+    }
+
+    if (!mounted ||
+        epoch != _windowsRuntimeFailoverEpoch ||
+        vpnBusy ||
+        _windowsRuntimeRecoveryRunning) {
+      return;
+    }
+
+    final routeHealthy = backendConnected && probe?.ok == true;
+    final previousFailureCount = _windowsRuntimeFailureCount;
+    _windowsRuntimeFailureCount = greenVpnNextRuntimeFailoverFailureCount(
+      currentFailureCount: _windowsRuntimeFailureCount,
+      routeHealthy: routeHealthy,
+    );
+    if (routeHealthy) {
+      if (previousFailureCount > 0) {
+        await appendBlueVpnClientLog(
+          'windows runtime probe recovered server=${server.id} previousFailures=$previousFailureCount',
+        );
+      }
+      return;
+    }
+
+    final errorCode = !backendConnected
+        ? 'runtime_backend_not_connected'
+        : (probe?.statusCode == null
+              ? 'runtime_youtube_probe_failed'
+              : 'runtime_youtube_http_${probe?.statusCode}');
+    await appendBlueVpnClientLog(
+      'windows runtime probe failed server=${server.id} protocol=${server.protocolCode} failures=$_windowsRuntimeFailureCount connected=$backendConnected status=${probe?.statusCode} statusError=${statusError ?? ""} probeError=${probe?.error ?? ""}',
+    );
+    unawaited(
+      _reportRouteEvent(
+        server,
+        stage: 'runtime_probe',
+        ok: false,
+        latencyMs: probe?.latencyMs,
+        errorCode: errorCode,
+        message: 'Активный Windows-маршрут перестал подтверждать работу.',
+        details: {
+          'failureCount': _windowsRuntimeFailureCount,
+          'backendConnected': backendConnected,
+          'target': probe?.target,
+          'statusCode': probe?.statusCode,
+          'statusError': statusError?.toString(),
+          'probeError': probe?.error,
+        },
+      ),
+    );
+    if (!greenVpnShouldTriggerRuntimeFailover(_windowsRuntimeFailureCount)) {
+      return;
+    }
+
+    _recordRouteFailure(server, 'runtime_probe');
+    _windowsRuntimeRecoveryRunning = true;
+    _disarmWindowsRuntimeFailover(reason: 'failure_threshold');
+    var handedOffToConnect = false;
+    try {
+      _setVpnBusyUi(
+        stage: 'Восстанавливаем VPN...',
+        hint:
+            '${greenVpnPublicServerTitle(server)} перестал отвечать. Полностью останавливаем маршрут перед безопасным переходом.',
+      );
+      final stopped = await _stopFailedRouteBeforeFallback(
+        server,
+        stage: 'runtime_probe_failed',
+      );
+      if (!mounted) return;
+      if (!stopped) {
+        _toast(
+          context,
+          'Не удалось подтвердить полную остановку предыдущего маршрута. '
+          'Автовосстановление остановлено без запуска другого туннеля.',
+        );
+        return;
+      }
+
+      _vpnTapCooldownTimer?.cancel();
+      setState(() {
+        vpnEnabled = false;
+        _vpnTapCooldown = false;
+        _vpnBusyHint = null;
+      });
+      _clearVpnBusyUi();
+      await appendBlueVpnClientLog(
+        'windows runtime failover clean-down confirmed server=${server.id}; starting ordered reconnect',
+      );
+      handedOffToConnect = true;
+      await _toggleVpnReal();
+    } catch (error, stack) {
+      await appendBlueVpnClientLog(
+        'windows runtime failover exception server=${server.id} error=$error stack=$stack',
+      );
+      if (mounted) {
+        _toast(
+          context,
+          'Автовосстановление не завершилось. VPN оставлен выключенным.',
+        );
+      }
+    } finally {
+      _windowsRuntimeRecoveryRunning = false;
+      if (!handedOffToConnect) {
+        _clearVpnBusyUi();
+      }
     }
   }
 
@@ -9938,6 +10844,67 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         'route event exception stage=$stage server=${server.id} error=$e',
       );
     }
+  }
+
+  Future<bool> _stopFailedRouteBeforeFallback(
+    ServerLocation server, {
+    required String stage,
+  }) async {
+    final watch = Stopwatch()..start();
+    VpnBackendResult? disconnectResult;
+    Object? disconnectError;
+    try {
+      disconnectResult = await _vpnBackend.disconnect().timeout(
+        const Duration(seconds: 130),
+      );
+    } catch (e) {
+      disconnectError = e;
+    }
+
+    var stillConnected = true;
+    Object? statusError;
+    try {
+      stillConnected = await _vpnBackend.isConnected().timeout(
+        const Duration(seconds: 5),
+      );
+      for (var attempt = 0; stillConnected && attempt < 4; attempt += 1) {
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+        stillConnected = await _vpnBackend.isConnected().timeout(
+          const Duration(seconds: 5),
+        );
+      }
+    } catch (e) {
+      statusError = e;
+      stillConnected = true;
+    }
+    watch.stop();
+
+    final stopped = disconnectResult?.ok == true && !stillConnected;
+    await appendBlueVpnClientLog(
+      'fallback cleanup stage=$stage server=${server.id} '
+      'disconnectOk=${disconnectResult?.ok ?? false} stopped=$stopped '
+      'disconnectMessage=${disconnectResult?.message ?? ""} '
+      'disconnectError=${disconnectError ?? ""} statusError=${statusError ?? ""}',
+    );
+    unawaited(
+      _reportRouteEvent(
+        server,
+        stage: '${stage}_disconnect',
+        ok: stopped,
+        latencyMs: watch.elapsedMilliseconds,
+        errorCode: stopped ? null : 'previous_route_still_active',
+        message: stopped
+            ? 'Предыдущий маршрут полностью остановлен перед fallback.'
+            : 'Не удалось подтвердить остановку предыдущего маршрута.',
+        details: {
+          'disconnectCallOk': disconnectResult?.ok ?? false,
+          'disconnectError': disconnectError?.toString(),
+          'statusError': statusError?.toString(),
+        },
+      ),
+    );
+    await _syncVpnStatus();
+    return stopped;
   }
 
   bool get _shouldRunPostConnectProbe =>
@@ -10223,8 +11190,19 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             lastError =
                 res.message ??
                 'не удалось подключить ${greenVpnPublicServerTitle(candidate)}';
-            await _syncVpnStatus();
+            final stopped = await _stopFailedRouteBeforeFallback(
+              candidate,
+              stage: 'connect_failed',
+            );
             if (!mounted) return;
+            if (!stopped) {
+              _toast(
+                context,
+                'Не удалось полностью остановить предыдущий маршрут. '
+                'Автопереключение остановлено.',
+              );
+              return;
+            }
             if (canTryNext) {
               _setVpnBusyUi(
                 stage: 'Пробуем запасной узел...',
@@ -10266,6 +11244,19 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             _recordRouteFailure(candidate, 'handshake');
             lastError =
                 'VPN не подтвердился после запуска ${greenVpnPublicServerTitle(candidate)}';
+            final stopped = await _stopFailedRouteBeforeFallback(
+              candidate,
+              stage: 'handshake_failed',
+            );
+            if (!mounted) return;
+            if (!stopped) {
+              _toast(
+                context,
+                'Не удалось полностью остановить неподтверждённый маршрут. '
+                'Автопереключение остановлено.',
+              );
+              return;
+            }
             if (canTryNext) continue;
             _toast(context, 'VPN запустился, но статус не подтвердился.');
             return;
@@ -10309,9 +11300,19 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               await appendBlueVpnClientLog(
                 'post connect probe rejected server=${candidate.id}; disconnecting before next candidate',
               );
-              await _vpnBackend.disconnect();
-              await _syncVpnStatus();
+              final stopped = await _stopFailedRouteBeforeFallback(
+                candidate,
+                stage: 'post_connect_probe_failed',
+              );
               if (!mounted) return;
+              if (!stopped) {
+                _toast(
+                  context,
+                  'Не удалось полностью остановить нерабочий маршрут. '
+                  'Автопереключение остановлено.',
+                );
+                return;
+              }
               if (canTryNext) {
                 _setVpnBusyUi(
                   stage: 'Пробуем запасной узел...',
@@ -10333,7 +11334,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           );
           if (!mounted) return;
           _recordRouteSuccess(candidate);
-          await _armAndroidRuntimeFailover(candidate);
+          await _armRuntimeFailover(candidate);
           if (!mounted) return;
           if (kPaidBetaBuild) {
             unawaited(_recordPaidBetaEvent('vpn_connected'));
@@ -10359,6 +11360,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         );
       } else {
         await appendBlueVpnClientLog('toggle disconnect branch start');
+        _disarmWindowsRuntimeFailover(reason: 'user_disconnect');
         _setVpnBusyUi(
           stage: 'Отключаем VPN...',
           hint: 'Останавливаем VPN и аккуратно снимаем подключение.',
@@ -10451,6 +11453,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               'Не удалось обновить список локаций. Используется сохранённый список.';
         });
         if (showToast) _toast(context, _serverCatalogStatus!);
+        await _restoreWindowsRuntimeFailoverIfPossible(
+          source: 'catalog_fallback',
+        );
         return;
       }
 
@@ -10541,6 +11546,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       await _reconcileSubscriptionEntitlements();
       if (!mounted) return;
       if (showToast) _toast(context, _serverCatalogStatus!);
+      await _restoreWindowsRuntimeFailoverIfPossible(source: 'catalog_refresh');
     } finally {
       if (mounted) setState(() => _serverCatalogBusy = false);
     }
@@ -10664,38 +11670,26 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       stage: 'Переключаем сервер...',
       hint: 'Останавливаем текущее подключение и запускаем VPN заново.',
     );
+    _disarmWindowsRuntimeFailover(reason: 'server_switch');
 
     try {
       await appendBlueVpnClientLog(
         'server switch start requested=${picked.id} title=${picked.title}',
       );
 
-      final disconnectWatch = Stopwatch()..start();
-      final off = await _vpnBackend.disconnect();
-      disconnectWatch.stop();
-      await appendBlueVpnClientLog(
-        'server switch disconnect ok=${off.ok} message=${off.message ?? ""}',
+      final stoppedCurrent = await _stopFailedRouteBeforeFallback(
+        picked,
+        stage: 'switch_start',
       );
       if (!mounted) return;
-      unawaited(
-        _reportRouteEvent(
-          picked,
-          stage: 'switch_disconnect',
-          ok: off.ok,
-          latencyMs: disconnectWatch.elapsedMilliseconds,
-          errorCode: off.ok ? null : 'disconnect_failed',
-          message: off.message,
-        ),
-      );
-      if (!off.ok) {
-        await _syncVpnStatus();
-        if (!mounted) return;
-        _toast(context, off.message ?? 'Не удалось остановить текущий VPN.');
+      if (!stoppedCurrent) {
+        _toast(
+          context,
+          'Не удалось полностью остановить текущий VPN. '
+          'Переключение отменено.',
+        );
         return;
       }
-
-      await _syncVpnStatus();
-      if (!mounted) return;
       final candidates = _connectCandidatesForCurrentSelection().isNotEmpty
           ? _connectCandidatesForCurrentSelection()
           : <ServerLocation>[picked];
@@ -10787,12 +11781,38 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           lastError =
               on.message ??
               'не удалось подключить ${greenVpnPublicServerTitle(effectiveServer)}';
+          final stopped = await _stopFailedRouteBeforeFallback(
+            effectiveServer,
+            stage: 'switch_connect_failed',
+          );
+          if (!mounted) return;
+          if (!stopped) {
+            _toast(
+              context,
+              'Не удалось полностью остановить предыдущий маршрут. '
+              'Переключение отменено.',
+            );
+            return;
+          }
           if (canTryNext) continue;
           break;
         }
         if (!vpnEnabled) {
           lastError =
               'VPN не подтвердился через ${greenVpnPublicServerTitle(effectiveServer)}';
+          final stopped = await _stopFailedRouteBeforeFallback(
+            effectiveServer,
+            stage: 'switch_handshake_failed',
+          );
+          if (!mounted) return;
+          if (!stopped) {
+            _toast(
+              context,
+              'Не удалось полностью остановить неподтверждённый маршрут. '
+              'Переключение отменено.',
+            );
+            return;
+          }
           if (canTryNext) continue;
           break;
         }
@@ -10834,16 +11854,26 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             await appendBlueVpnClientLog(
               'server switch post connect probe rejected server=${effectiveServer.id}; disconnecting before next candidate',
             );
-            await _vpnBackend.disconnect();
-            await _syncVpnStatus();
+            final stopped = await _stopFailedRouteBeforeFallback(
+              effectiveServer,
+              stage: 'switch_post_connect_probe_failed',
+            );
             if (!mounted) return;
+            if (!stopped) {
+              _toast(
+                context,
+                'Не удалось полностью остановить нерабочий маршрут. '
+                'Переключение отменено.',
+              );
+              return;
+            }
             if (canTryNext) continue;
             break;
           }
         }
 
         _recordRouteSuccess(effectiveServer);
-        await _armAndroidRuntimeFailover(effectiveServer);
+        await _armRuntimeFailover(effectiveServer);
         if (!mounted) return;
 
         _startVpnTapCooldown(
@@ -11612,6 +12642,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _vpnTapCooldownTimer?.cancel();
     _pendingBillingPollTimer?.cancel();
     _freeAdSessionTimer?.cancel();
+    _disarmWindowsRuntimeFailover(reason: 'dispose');
     super.dispose();
   }
 
@@ -11897,6 +12928,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     final pages = <Widget>[
       VpnPage(
         planName: planName,
+        freeTierActive: _freeTierActive,
+        trafficUsage: _trafficUsage,
+        isGuest: widget.session.isGuest,
+        onRestoreAccess: () => unawaited(_openRestoreAccess()),
         vpnEnabled: vpnEnabled,
         androidExternalVpnActive: _androidExternalVpnActive,
         vpnBusy: vpnBusy,
@@ -12008,6 +13043,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
       TariffPage(
         planName: planName,
+        freeTierActive: _freeTierActive,
+        trafficUsage: _trafficUsage,
+        isGuest: widget.session.isGuest,
+        onRestoreAccess: () => unawaited(_openRestoreAccess()),
         selectedApps: selectedApps,
         trafficPack: trafficPack,
         trafficGb: trafficGb,
@@ -12021,6 +13060,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         tariffStatus: _tariffStatus,
         pendingBillingOrder: _pendingBillingOrder,
         subscriptionActive: _subscriptionActive,
+        subscriptionMaxDevices: _subscriptionMaxDevices,
         subscriptionExpiresAt: _subscriptionExpiresAt,
         subscriptionMonthlyPriceRub: _subscriptionMonthlyPriceRub,
         publicBillingPlanCode: _publicBillingPlanCode,
@@ -12094,22 +13134,18 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           onSelect: (v) => _setLanguage(v),
         ),
         email: widget.session.email,
+        isGuest: widget.session.isGuest,
         emailVerified: _emailVerified,
         emailConfirmationRequired: _emailConfirmationRequired,
         emailStatusBusy: _emailStatusBusy,
         emailStatusMessage: _emailStatusMessage,
         onResendEmailConfirmation: _resendEmailConfirmation,
         onRefreshEmailStatus: () => _refreshEmailStatus(showToast: true),
-        phone: _phone,
-        phoneVerified: _phoneVerified,
-        phoneStatusBusy: _phoneStatusBusy,
-        phoneStatusMessage: _phoneStatusMessage,
-        onRefreshPhoneStatus: () => _refreshPhoneStatus(showToast: true),
-        onBindPhone: _showPhoneBindingDialog,
         subscriptionActive: _subscriptionActive,
         subscriptionAutoRenew: _subscriptionAutoRenew,
         paymentMethodSaved: _paymentMethodSaved,
         onOpenTariff: () => setState(() => _index = 1),
+        onRestoreAccess: () => unawaited(_openRestoreAccess()),
         onCancelAutoRenew: _cancelAutoRenew,
         onLogout: widget.onLogout,
         onOpenUpdates: () {
@@ -12146,9 +13182,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.star_rounded),
-            label: kPaidBetaCustomerUi
-                ? 'Beta'
-                : (kTrialOnlyNoAdsBuild ? 'Trial' : 'Тариф'),
+            label: kTrialOnlyNoAdsBuild ? 'Trial' : 'Тариф',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.settings_rounded),
@@ -12240,6 +13274,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
 class VpnPage extends StatelessWidget {
   final String planName;
+  final bool freeTierActive;
+  final Map<String, dynamic> trafficUsage;
+  final bool isGuest;
+  final VoidCallback? onRestoreAccess;
   final bool vpnEnabled;
   final bool androidExternalVpnActive;
   final bool vpnBusy;
@@ -12269,6 +13307,10 @@ class VpnPage extends StatelessWidget {
   const VpnPage({
     super.key,
     required this.planName,
+    this.freeTierActive = false,
+    this.trafficUsage = const <String, dynamic>{},
+    this.isGuest = false,
+    this.onRestoreAccess,
     required this.vpnEnabled,
     required this.androidExternalVpnActive,
     required this.vpnBusy,
@@ -12333,9 +13375,17 @@ class VpnPage extends StatelessWidget {
     final appsText = selectedAppTitles.isEmpty
         ? 'Не выбрано'
         : selectedAppTitles.join(', ');
-    final displayedPlanName = kPublicProductBuild
+    final displayedPlanName = isGuest
+        ? 'Бесплатный'
+        : kPublicProductBuild
         ? greenVpnPublicPlanTitle(planName)
         : planName;
+    final freeUsageSummary = freeTierActive
+        ? greenVpnTrafficUsageSummary(trafficUsage)
+        : null;
+    final freeUsageProgress = freeTierActive
+        ? greenVpnTrafficUsageProgress(trafficUsage)
+        : null;
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -12362,9 +13412,20 @@ class VpnPage extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      'Текущий: $displayedPlanName • открыть тариф',
+                      freeUsageSummary ??
+                          'Текущий: $displayedPlanName • открыть тариф',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontSize: 12),
                     ),
+                    if (freeUsageProgress != null) ...[
+                      const SizedBox(height: 6),
+                      LinearProgressIndicator(
+                        value: freeUsageProgress,
+                        minHeight: 5,
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -12372,6 +13433,40 @@ class VpnPage extends StatelessWidget {
             ],
           ),
         ),
+        if (isGuest && onRestoreAccess != null) ...[
+          const SizedBox(height: 8),
+          OutlinedButton(
+            key: const Key('restore_access_home'),
+            onPressed: onRestoreAccess,
+            style: OutlinedButton.styleFrom(
+              minimumSize: const Size.fromHeight(54),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.login_rounded),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Уже есть подписка?',
+                        style: TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                      SizedBox(height: 2),
+                      Text('Войти по email', style: TextStyle(fontSize: 12)),
+                    ],
+                  ),
+                ),
+                Icon(Icons.chevron_right_rounded),
+              ],
+            ),
+          ),
+        ],
         const SizedBox(height: 18),
         if (!wireGuardInstalled) ...[
           _WireGuardSetupCard(
@@ -12727,6 +13822,10 @@ enum TrafficPack {
 
 class TariffPage extends StatelessWidget {
   final String planName;
+  final bool freeTierActive;
+  final Map<String, dynamic> trafficUsage;
+  final bool isGuest;
+  final VoidCallback? onRestoreAccess;
   final Set<TariffApp> selectedApps;
   final TrafficPack trafficPack;
   final double trafficGb;
@@ -12741,6 +13840,7 @@ class TariffPage extends StatelessWidget {
   final String? tariffStatus;
   final Map<String, dynamic>? pendingBillingOrder;
   final bool subscriptionActive;
+  final int subscriptionMaxDevices;
   final String? subscriptionExpiresAt;
   final int? subscriptionMonthlyPriceRub;
   final String publicBillingPlanCode;
@@ -12764,6 +13864,10 @@ class TariffPage extends StatelessWidget {
   const TariffPage({
     super.key,
     required this.planName,
+    this.freeTierActive = false,
+    this.trafficUsage = const <String, dynamic>{},
+    this.isGuest = false,
+    this.onRestoreAccess,
     required this.selectedApps,
     required this.trafficPack,
     required this.trafficGb,
@@ -12777,6 +13881,7 @@ class TariffPage extends StatelessWidget {
     required this.tariffStatus,
     required this.pendingBillingOrder,
     required this.subscriptionActive,
+    this.subscriptionMaxDevices = 1,
     required this.subscriptionExpiresAt,
     required this.subscriptionMonthlyPriceRub,
     required this.publicBillingPlanCode,
@@ -12795,6 +13900,37 @@ class TariffPage extends StatelessWidget {
     required this.onOpenPaymentUrl,
     required this.onPublicBillingPlanChanged,
   });
+
+  Widget _buildRestoreAccessButton() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Уже оплачивали подписку?',
+          style: TextStyle(fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            key: const Key('restore_access_tariff'),
+            onPressed: onRestoreAccess,
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            icon: const Icon(Icons.login_rounded),
+            label: const Text(
+              'Войти по email',
+              style: TextStyle(fontWeight: FontWeight.w900),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 
   int _basePriceForGb(double gb) {
     final g = gb.clamp(1.0, 800.0);
@@ -12866,6 +14002,7 @@ class TariffPage extends StatelessWidget {
   }
 
   bool get _hasPaidPlan {
+    if (freeTierActive) return false;
     final code = planName.trim().toLowerCase();
     if (!subscriptionActive) return false;
     if (kPaidBetaBuild && code.contains('trial')) return false;
@@ -12876,6 +14013,7 @@ class TariffPage extends StatelessWidget {
   }
 
   bool get _hadPaidPlanBefore {
+    if (freeTierActive) return false;
     final code = planName.trim().toLowerCase();
     return code.isNotEmpty &&
         code != 'base' &&
@@ -13098,6 +14236,12 @@ class TariffPage extends StatelessWidget {
     final textColor = theme.colorScheme.onSurface;
     final mutedColor = textColor.withValues(alpha: isDark ? 0.72 : 0.62);
     final usesApplications = !kIsWeb && Platform.isAndroid;
+    final paidSalesAvailable =
+        tariffCatalog?['paidSalesEnabled'] == true &&
+        tariffCatalog?['paymentsProductionReady'] == true;
+    final checkoutMessage = (tariffCatalog?['checkoutMessage'] ?? '')
+        .toString()
+        .trim();
     final rawPlans = (tariffCatalog?['plans'] as List?) ?? const [];
     final plans = rawPlans
         .whereType<Map>()
@@ -13158,7 +14302,9 @@ class TariffPage extends StatelessWidget {
           'cancelled',
           'failed',
         }.contains(pendingStatus);
-    final currentPlan = _hasPaidPlan
+    final currentPlan = isGuest || freeTierActive
+        ? 'Бесплатный тариф'
+        : _hasPaidPlan
         ? _currentPlanText()
         : subscriptionActive
         ? 'Пробный период активен'
@@ -13274,7 +14420,10 @@ class TariffPage extends StatelessWidget {
                   fontSize: 18,
                 ),
               ),
-              if (!_hasPaidPlan && subscriptionExpiresAt != null) ...[
+              if (!isGuest &&
+                  !freeTierActive &&
+                  !_hasPaidPlan &&
+                  subscriptionExpiresAt != null) ...[
                 const SizedBox(height: 6),
                 Text(
                   'Пробный период до ${_formatCompactDate(subscriptionExpiresAt!)}',
@@ -13283,6 +14432,10 @@ class TariffPage extends StatelessWidget {
                     fontWeight: FontWeight.w700,
                   ),
                 ),
+              ],
+              if (isGuest && onRestoreAccess != null) ...[
+                const Divider(height: 24),
+                _buildRestoreAccessButton(),
               ],
             ],
           ),
@@ -13390,11 +14543,21 @@ class TariffPage extends StatelessWidget {
             style: TextStyle(color: mutedColor, fontWeight: FontWeight.w700),
           ),
         ],
+        if (!paidSalesAvailable) ...[
+          const SizedBox(height: 10),
+          Text(
+            checkoutMessage.isEmpty
+                ? 'Оплата временно недоступна. Бесплатный тариф продолжает работать.'
+                : checkoutMessage,
+            style: TextStyle(color: mutedColor, fontWeight: FontWeight.w700),
+          ),
+        ],
         const SizedBox(height: 12),
         SizedBox(
           width: double.infinity,
           child: ElevatedButton.icon(
-            onPressed: tariffBusy || hasPendingOrder
+            key: const Key('start_payment_button'),
+            onPressed: tariffBusy || hasPendingOrder || !paidSalesAvailable
                 ? null
                 : () => onApplyTariff(),
             icon: tariffBusy
@@ -13405,8 +14568,9 @@ class TariffPage extends StatelessWidget {
                   )
                 : const Icon(Icons.payment_rounded),
             label: Text(
-              'Оплатить $selectedPrice ₽ '
-              'за $selectedPeriodTitle',
+              paidSalesAvailable
+                  ? 'Оплатить $selectedPrice ₽ за $selectedPeriodTitle'
+                  : 'Оплата временно недоступна',
               style: const TextStyle(fontWeight: FontWeight.w900),
             ),
           ),
@@ -13457,12 +14621,13 @@ class TariffPage extends StatelessWidget {
           'cancelled',
           'failed',
         }.contains(pendingStatus);
-    final currentPlan = _hasPaidPlan
+    final currentPlan = freeTierActive
+        ? 'Бесплатный тариф'
+        : _hasPaidPlan
         ? _currentPlanText()
         : subscriptionActive
         ? 'Trial активен'
         : 'Trial завершён';
-
     void applyPreset(double gb, int deviceCount) {
       onTrafficChanged(TrafficPack.gb20);
       onTrafficGbChanged(gb);
@@ -13549,6 +14714,10 @@ class TariffPage extends StatelessWidget {
                     fontWeight: FontWeight.w700,
                   ),
                 ),
+              ],
+              if (isGuest && onRestoreAccess != null) ...[
+                const Divider(height: 24),
+                _buildRestoreAccessButton(),
               ],
             ],
           ),
@@ -13812,11 +14981,16 @@ class TariffPage extends StatelessWidget {
           'cancelled',
           'failed',
         }.contains(pendingStatus);
-    final currentPlan = _hasPaidPlan
+    final currentPlan = freeTierActive
+        ? 'Бесплатный тариф'
+        : _hasPaidPlan
         ? _currentPlanText()
         : subscriptionActive
         ? 'Trial активен'
         : 'Trial завершён';
+    final freeUsageProgress = freeTierActive
+        ? greenVpnTrafficUsageProgress(trafficUsage)
+        : null;
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -13848,7 +15022,35 @@ class TariffPage extends StatelessWidget {
                   fontSize: 18,
                 ),
               ),
+              if (freeTierActive) ...[
+                const SizedBox(height: 8),
+                Text(
+                  greenVpnTrafficUsageSummary(trafficUsage),
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                if (freeUsageProgress != null) ...[
+                  const SizedBox(height: 8),
+                  LinearProgressIndicator(
+                    value: freeUsageProgress,
+                    minHeight: 7,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ],
+                const SizedBox(height: 6),
+                Text(
+                  'Устройств: $subscriptionMaxDevices • обычное подключение • без рекламы',
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
               if (!_hasPaidPlan &&
+                  !freeTierActive &&
                   subscriptionExpiresAt != null &&
                   subscriptionExpiresAt!.trim().isNotEmpty) ...[
                 const SizedBox(height: 6),
@@ -13859,6 +15061,10 @@ class TariffPage extends StatelessWidget {
                     fontWeight: FontWeight.w700,
                   ),
                 ),
+              ],
+              if (isGuest && onRestoreAccess != null) ...[
+                const Divider(height: 24),
+                _buildRestoreAccessButton(),
               ],
             ],
           ),
@@ -14046,12 +15252,13 @@ class TariffPage extends StatelessWidget {
     final textColor = theme.colorScheme.onSurface;
     final mutedColor = textColor.withValues(alpha: isDark ? 0.72 : 0.62);
 
-    if (kPaidBetaCustomerUi) {
-      return _buildPaidBeta(context);
+    if (kPublicProductBuild ||
+        greenVpnCatalogHasFixedBillingPlans(tariffCatalog)) {
+      return _buildFixedPublicProduct(context);
     }
 
-    if (kPublicProductBuild) {
-      return _buildFixedPublicProduct(context);
+    if (kPaidBetaCustomerUi) {
+      return _buildPaidBeta(context);
     }
 
     if (kTrialOnlyNoAdsBuild) {
@@ -14738,22 +15945,18 @@ class SettingsPage extends StatelessWidget {
   final VoidCallback onPickLanguage;
 
   final String email;
+  final bool isGuest;
   final bool emailVerified;
   final bool emailConfirmationRequired;
   final bool emailStatusBusy;
   final String? emailStatusMessage;
   final Future<void> Function() onResendEmailConfirmation;
   final Future<void> Function() onRefreshEmailStatus;
-  final String? phone;
-  final bool phoneVerified;
-  final bool phoneStatusBusy;
-  final String? phoneStatusMessage;
-  final Future<void> Function() onRefreshPhoneStatus;
-  final Future<void> Function() onBindPhone;
   final bool subscriptionActive;
   final bool subscriptionAutoRenew;
   final bool paymentMethodSaved;
   final VoidCallback onOpenTariff;
+  final VoidCallback? onRestoreAccess;
   final Future<bool> Function() onCancelAutoRenew;
   final Future<void> Function() onLogout;
   final VoidCallback onOpenUpdates;
@@ -14766,22 +15969,18 @@ class SettingsPage extends StatelessWidget {
     required this.language,
     required this.onPickLanguage,
     required this.email,
+    required this.isGuest,
     required this.emailVerified,
     required this.emailConfirmationRequired,
     required this.emailStatusBusy,
     required this.emailStatusMessage,
     required this.onResendEmailConfirmation,
     required this.onRefreshEmailStatus,
-    required this.phone,
-    required this.phoneVerified,
-    required this.phoneStatusBusy,
-    required this.phoneStatusMessage,
-    required this.onRefreshPhoneStatus,
-    required this.onBindPhone,
     required this.subscriptionActive,
     required this.subscriptionAutoRenew,
     required this.paymentMethodSaved,
     required this.onOpenTariff,
+    this.onRestoreAccess,
     required this.onCancelAutoRenew,
     required this.onLogout,
     required this.onOpenUpdates,
@@ -14890,31 +16089,44 @@ class SettingsPage extends StatelessWidget {
               children: [
                 const _SectionTitle('Аккаунт'),
                 const SizedBox(height: 8),
-                _SettingsNavRow(
-                  title: 'Почта',
-                  subtitle: email.isEmpty ? 'Не указана' : email,
-                  icon: Icons.alternate_email_rounded,
-                  onTap: () {
-                    unawaited(onRefreshEmailStatus());
-                  },
-                ),
-                const Divider(height: 18),
-                _SettingsNavRow(
-                  title: 'Телефон',
-                  subtitle: phone?.isNotEmpty == true ? phone! : 'Не добавлен',
-                  icon: Icons.phone_iphone_rounded,
-                  onTap: () {
-                    unawaited(onRefreshPhoneStatus());
-                    unawaited(onBindPhone());
-                  },
-                ),
-                const Divider(height: 18),
-                _SettingsActionRow(
-                  title: 'Выйти',
-                  subtitle: 'Сбросить сессию на этом устройстве',
-                  icon: Icons.logout_rounded,
-                  onTap: () => onLogout(),
-                ),
+                if (isGuest)
+                  Column(
+                    children: [
+                      const ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.person_outline_rounded),
+                        title: Text('Бесплатный профиль'),
+                        subtitle: Text('Без регистрации'),
+                      ),
+                      if (onRestoreAccess != null) ...[
+                        const Divider(height: 18),
+                        KeyedSubtree(
+                          key: const Key('restore_access_settings'),
+                          child: _SettingsActionRow(
+                            title: 'Войти в аккаунт',
+                            subtitle: 'Восстановить уже оплаченную подписку',
+                            icon: Icons.login_rounded,
+                            onTap: onRestoreAccess!,
+                          ),
+                        ),
+                      ],
+                    ],
+                  )
+                else ...[
+                  _SettingsNavRow(
+                    title: 'Почта',
+                    subtitle: email.isEmpty ? 'Не указана' : email,
+                    icon: Icons.alternate_email_rounded,
+                    onTap: () => unawaited(onRefreshEmailStatus()),
+                  ),
+                  const Divider(height: 18),
+                  _SettingsActionRow(
+                    title: 'Выйти',
+                    subtitle: 'Сбросить сессию на этом устройстве',
+                    icon: Icons.logout_rounded,
+                    onTap: () => onLogout(),
+                  ),
+                ],
               ],
             ),
           ),
@@ -17657,12 +18869,15 @@ class _IncludedBadge extends StatelessWidget {
         children: [
           Icon(icon, size: 16, color: kBrandPrimary),
           const SizedBox(width: 8),
-          Text(
-            text,
-            style: TextStyle(
-              color: theme.colorScheme.onSurface,
-              fontWeight: FontWeight.w800,
-              fontSize: 12,
+          Flexible(
+            child: Text(
+              text,
+              softWrap: true,
+              style: TextStyle(
+                color: theme.colorScheme.onSurface,
+                fontWeight: FontWeight.w800,
+                fontSize: 12,
+              ),
             ),
           ),
         ],
@@ -18647,7 +19862,7 @@ abstract class VpnBackend {
       );
     }
     if (Platform.isWindows) {
-      if (kAwg2PreviewEnabled) {
+      if (kTransportPreviewFallbackEnabled) {
         return WindowsTransportPreviewBackend(tunnelName: tunnelName);
       }
       return WireGuardWindowsBackend(tunnelName: tunnelName);
@@ -18952,6 +20167,7 @@ class WindowsTransportPreviewBackend extends VpnBackend {
   final SystemServiceWindowsPreviewBackend _hysteria2;
   final SystemServiceWindowsPreviewBackend _vlessReality;
   final SystemServiceWindowsPreviewBackend _naiveHttps;
+  final SystemServiceWindowsPreviewBackend _dnstt;
 
   WindowsTransportPreviewBackend({required String tunnelName})
     : _wireGuard = WireGuardWindowsBackend(tunnelName: tunnelName),
@@ -18967,6 +20183,10 @@ class WindowsTransportPreviewBackend extends VpnBackend {
       _naiveHttps = const SystemServiceWindowsPreviewBackend(
         protocol: 'naive_https',
         enabled: kNaiveHttpsPreviewEnabled,
+      ),
+      _dnstt = const SystemServiceWindowsPreviewBackend(
+        protocol: 'dnstt',
+        enabled: kDnsttPreviewEnabled,
       );
 
   Future<String> _managedProtocol(String configPath) async {
@@ -18978,6 +20198,35 @@ class WindowsTransportPreviewBackend extends VpnBackend {
     } catch (_) {
       return 'wireguard_udp';
     }
+  }
+
+  Future<bool> _waitForServiceCleanDown(
+    _GreenVpnSystemServiceClient service,
+  ) async {
+    const componentStateKeys = <String>[
+      'tunnelState',
+      'wireGuardState',
+      'amneziaWgState',
+      'hysteriaClientState',
+      'hysteriaTunState',
+      'vlessClientState',
+      'vlessTunState',
+      'naiveClientState',
+      'naiveTunState',
+      'dnsttClientState',
+      'dnsttTunState',
+    ];
+    for (var attempt = 0; attempt < 40; attempt += 1) {
+      final status = await service.status();
+      if (status.ok) {
+        final anyRunning = componentStateKeys.any(
+          (key) => status.data[key]?.toString().toLowerCase() == 'running',
+        );
+        if (!anyRunning) return true;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+    return false;
   }
 
   @override
@@ -18995,6 +20244,9 @@ class WindowsTransportPreviewBackend extends VpnBackend {
     if (protocol == 'naive_https') {
       return _naiveHttps.connect(configPath: configPath);
     }
+    if (protocol == 'dnstt') {
+      return _dnstt.connect(configPath: configPath);
+    }
     if (protocol != 'wireguard_udp') {
       return VpnBackendResult(
         ok: false,
@@ -19006,23 +20258,38 @@ class WindowsTransportPreviewBackend extends VpnBackend {
 
   @override
   Future<VpnBackendResult> disconnect() async {
-    if (await _naiveHttps.isConnected()) {
-      return _naiveHttps.disconnect();
+    const service = _GreenVpnSystemServiceClient();
+    final ping = await service.ping();
+    if (!ping.ok) {
+      return const VpnBackendResult(
+        ok: false,
+        message:
+            'Системный компонент Green VPN не отвечает. Автоматическая очистка всех транспортов остановлена. Переустанови последнюю версию GreenVPN_Setup.exe один раз с правами администратора.',
+      );
     }
-    if (await _vlessReality.isConnected()) {
-      return _vlessReality.disconnect();
+
+    final response = await service.disconnect();
+    if (!response.ok) {
+      return VpnBackendResult(
+        ok: false,
+        message:
+            response.message ??
+            'Системный компонент не смог полностью остановить VPN.',
+      );
     }
-    if (await _hysteria2.isConnected()) {
-      return _hysteria2.disconnect();
+    if (!await _waitForServiceCleanDown(service)) {
+      return const VpnBackendResult(
+        ok: false,
+        message:
+            'Один из компонентов VPN остался активен после остановки. Другой маршрут не будет запущен.',
+      );
     }
-    if (await _amneziaWg.isConnected()) {
-      return _amneziaWg.disconnect();
-    }
-    return _wireGuard.disconnect();
+    return const VpnBackendResult(ok: true);
   }
 
   @override
   Future<bool> isConnected() async {
+    if (await _dnstt.isConnected()) return true;
     if (await _naiveHttps.isConnected()) return true;
     if (await _vlessReality.isConnected()) return true;
     if (await _hysteria2.isConnected()) return true;

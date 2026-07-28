@@ -775,6 +775,132 @@ class TransportRolloutGuardTests(unittest.TestCase):
         self.assertNotIn("unsupported", config)
         self.assertLess(config.index("H4 = 4234-8678"), config.index("[Peer]"))
 
+    def test_awg_admin_client_config_smoke_checks_obfuscation_fields(self) -> None:
+        interface_fields = {
+            "S1": "64",
+            "S2": "96",
+            "H1": "1001",
+            "H2": "1002",
+            "H3": "1003",
+            "H4": "1004",
+        }
+        row = {"id": 77, "host": "203.0.113.42", "port": 1443}
+        entry = {
+            "id": 77,
+            "serverId": "nl2-awg2-canary",
+            "host": "203.0.113.42",
+            "port": 1443,
+            "clientConfigProfile": "remote_ssh_awg2",
+            "clientConfigReadiness": {"ready": True, "blockers": []},
+        }
+        remote = {
+            "interface": "awgcanary0",
+            "publicHost": "203.0.113.42",
+            "publicPort": 1443,
+            "clientSubnet": "10.202.0.0/24",
+        }
+        provisioning = {
+            "serverPublicKey": "server-public",
+            "endpointHost": "203.0.113.42",
+            "endpointPort": 1443,
+            "clientMtu": 1280,
+            "interfaceFields": interface_fields,
+        }
+        with patch.object(main, "require_admin"), patch.object(
+            main,
+            "get_managed_server_catalog_row_by_server_id",
+            return_value=row,
+        ), patch.object(
+            main,
+            "server_catalog_entry_payload",
+            return_value=entry,
+        ), patch.object(
+            main,
+            "load_remote_vpn_node_config",
+            return_value=remote,
+        ), patch.object(
+            main,
+            "managed_catalog_entry_to_public_server",
+            return_value={"id": "nl2-awg2-canary"},
+        ), patch.object(
+            main,
+            "wg_genkeypair",
+            return_value=("client-private", "client-public"),
+        ), patch.object(
+            main,
+            "wg_genpsk",
+            return_value="client-psk",
+        ), patch.object(
+            main,
+            "provision_wireguard_peer_for_selected_server",
+            return_value=provisioning,
+        ), patch.object(
+            main,
+            "remote_vpn_node_peer_status",
+            side_effect=[{"exists": True}, {"exists": False}],
+        ), patch.object(
+            main,
+            "best_effort_remove_remote_peer_live",
+            return_value=True,
+        ), patch.object(main, "write_admin_audit"), patch.object(
+            main,
+            "REMOTE_NODE_CLIENT_CONFIG_SMOKE_PEER_IP",
+            "10.202.0.254",
+        ):
+            result = main.admin_server_catalog_client_config_smoke(
+                "nl2-awg2-canary",
+                request=object(),
+                x_admin_token="test",
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["profile"], "remote_ssh_awg2")
+        self.assertEqual(result["interface"], "awgcanary0")
+        self.assertEqual(result["smokeIp"], "10.202.0.252")
+        self.assertTrue(result["configShapeOk"])
+        check_codes = {item["code"] for item in result["configChecks"]}
+        self.assertTrue(
+            {"awg_s1", "awg_s2", "awg_h1", "awg_h2", "awg_h3", "awg_h4"}
+            <= check_codes
+        )
+
+    def test_smoke_ip_keeps_configured_ip_without_client_subnet(self) -> None:
+        self.assertEqual(
+            main.select_remote_node_smoke_ip(
+                {},
+                "10.10.0.253",
+                offset_from_broadcast=2,
+            ),
+            "10.10.0.253",
+        )
+
+    def test_smoke_ip_uses_safe_tail_address_inside_client_subnet(self) -> None:
+        remote = {"clientSubnet": "10.203.0.0/24"}
+        self.assertEqual(
+            main.select_remote_node_smoke_ip(
+                remote,
+                "10.10.0.253",
+                offset_from_broadcast=2,
+            ),
+            "10.203.0.253",
+        )
+        self.assertEqual(
+            main.select_remote_node_smoke_ip(
+                remote,
+                "10.10.0.252",
+                offset_from_broadcast=3,
+            ),
+            "10.203.0.252",
+        )
+
+    def test_smoke_ip_rejects_subnet_without_safe_host(self) -> None:
+        with self.assertRaises(main.HTTPException):
+            main.select_remote_node_smoke_ip(
+                {"clientSubnet": "10.203.0.0/31"},
+                "10.10.0.253",
+                offset_from_broadcast=3,
+            )
+
     def test_awg_profile_requires_awg_tool_and_matching_fields(self) -> None:
         row = {
             "server_id": "nl2-awg2",
@@ -852,6 +978,44 @@ class TransportRolloutGuardTests(unittest.TestCase):
         )
         self.assertEqual(first, "10.202.0.50")
         self.assertEqual(second, first)
+        nl2_key = main.device_transport_assignment_key(
+            "amneziawg",
+            "nl2-awg2-canary",
+        )
+        nl1_key = main.device_transport_assignment_key(
+            "amneziawg",
+            "nl1-awg2-canary",
+        )
+        self.assertNotEqual(nl1_key, nl2_key)
+        migrated = main.ensure_device_transport_ip(
+            device_uid,
+            transport_key=nl2_key,
+            client_subnet="10.202.0.0/24",
+        )
+        separate = main.ensure_device_transport_ip(
+            device_uid,
+            transport_key=nl1_key,
+            client_subnet="10.203.0.0/24",
+        )
+        self.assertEqual(migrated, first)
+        self.assertEqual(separate, "10.203.0.50")
+        with main.db() as conn:
+            assignments = conn.execute(
+                """
+                SELECT transport_key, assigned_ip
+                FROM device_transport_assignments
+                WHERE device_uid = ?
+                ORDER BY transport_key
+                """,
+                (device_uid,),
+            ).fetchall()
+        self.assertEqual(
+            [(row["transport_key"], row["assigned_ip"]) for row in assignments],
+            [
+                (nl1_key, "10.203.0.50"),
+                (nl2_key, "10.202.0.50"),
+            ],
+        )
         with self.assertRaises(HTTPException) as raised:
             main.ensure_device_transport_ip(
                 device_uid,
@@ -869,6 +1033,7 @@ class TransportRolloutGuardTests(unittest.TestCase):
                     {
                         "listen": "socks://127.0.0.1:1982",
                         "proxy": "https://preview-user:preview-password@nl2.vpn.greenvpn.pro:8443",
+                        "endpointIp": "203.0.113.42",
                     }
                 ),
                 encoding="utf-8",
@@ -900,7 +1065,7 @@ class TransportRolloutGuardTests(unittest.TestCase):
             self.assertEqual(readiness["managedBy"], "static_naive_https_canary")
             self.assertEqual(loaded["host"], "nl2.vpn.greenvpn.pro")
             self.assertEqual(loaded["port"], 8443)
-            self.assertEqual(set(json.loads(loaded["configText"])), {"listen", "proxy"})
+            self.assertEqual(set(json.loads(loaded["configText"])), {"listen", "proxy", "endpointIp"})
 
     def test_naive_static_profile_rejects_endpoint_and_field_drift(self) -> None:
         with tempfile.TemporaryDirectory(prefix="greenvpn-naive-unsafe-") as config_root:
@@ -911,6 +1076,7 @@ class TransportRolloutGuardTests(unittest.TestCase):
                     {
                         "listen": "socks://0.0.0.0:1982",
                         "proxy": "http://preview-user:preview-password@example.com:8080/path",
+                        "endpointIp": "127.0.0.1",
                         "log": "/tmp/unsafe.log",
                     }
                 ),

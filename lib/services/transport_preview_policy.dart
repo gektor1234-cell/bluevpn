@@ -1,4 +1,5 @@
 const List<String> greenVpnTransportPreviewCascade = <String>[
+  'wireguard_udp',
   'amneziawg',
   'hysteria2',
   'vless_reality',
@@ -18,6 +19,13 @@ const List<Duration> greenVpnStartupRouteProbeDelays = <Duration>[
   Duration(milliseconds: 900),
   Duration(milliseconds: 1400),
 ];
+
+const int greenVpnRuntimeFailoverFailureThreshold = 2;
+const int greenVpnManagedRouteIdMaxLength = 160;
+
+final RegExp _greenVpnManagedRouteIdPattern = RegExp(
+  r'^[A-Za-z0-9][A-Za-z0-9_.:-]*$',
+);
 
 Duration greenVpnStartupRouteProbeDelay(int attempt) {
   final index = (attempt - 1).clamp(
@@ -39,10 +47,7 @@ int greenVpnTransportPreviewRank(String protocol) {
   final normalized = protocol.trim().toLowerCase();
   final previewRank = greenVpnTransportPreviewCascade.indexOf(normalized);
   if (previewRank >= 0) return previewRank;
-  if (normalized == 'wireguard_udp') {
-    return greenVpnTransportPreviewCascade.length;
-  }
-  return greenVpnTransportPreviewCascade.length + 1;
+  return greenVpnTransportPreviewCascade.length;
 }
 
 bool greenVpnTransportRequiresFullTunnel(String protocol) =>
@@ -53,9 +58,38 @@ bool greenVpnTransportRequiresFullTunnel(String protocol) =>
 bool greenVpnShouldArmRuntimeFailover({
   required bool previewEnabled,
   required bool isAndroid,
+  required bool isWindows,
   required bool serverIsAuto,
   required bool socialOnlyEnabled,
-}) => previewEnabled && isAndroid && !serverIsAuto && !socialOnlyEnabled;
+}) =>
+    previewEnabled &&
+    (isAndroid || isWindows) &&
+    !serverIsAuto &&
+    !socialOnlyEnabled;
+
+int greenVpnNextRuntimeFailoverFailureCount({
+  required int currentFailureCount,
+  required bool routeHealthy,
+}) {
+  if (routeHealthy) return 0;
+  return (currentFailureCount + 1).clamp(
+    0,
+    greenVpnRuntimeFailoverFailureThreshold,
+  );
+}
+
+bool greenVpnShouldTriggerRuntimeFailover(int failureCount) =>
+    failureCount >= greenVpnRuntimeFailoverFailureThreshold;
+
+String greenVpnNormalizeManagedRouteId(String value) {
+  final normalized = value.trim();
+  if (normalized.isEmpty ||
+      normalized.length > greenVpnManagedRouteIdMaxLength ||
+      !_greenVpnManagedRouteIdPattern.hasMatch(normalized)) {
+    return '';
+  }
+  return normalized;
+}
 
 int greenVpnCompareTransportPreviewCandidates({
   required String leftProtocol,

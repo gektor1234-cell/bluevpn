@@ -50,6 +50,7 @@ const state = {
     promos: [],
     promoReadiness: null,
     billingReconciliation: null,
+    billingRefunds: null,
     billingRenewals: null,
     billingPaymentSmoke: null,
     subscriptionExpiry: null,
@@ -3934,6 +3935,7 @@ function resetLoadedData() {
     promos: [],
     promoReadiness: null,
     billingReconciliation: null,
+    billingRefunds: null,
     billingRenewals: null,
     billingPaymentSmoke: null,
     subscriptionExpiry: null,
@@ -4029,6 +4031,7 @@ function queueSectionRequests(requests, section) {
     addAllowedRequest(requests, 'billingPromos', 'billing.read', () => apiGet('/api/v1/admin/billing/promos'));
     addAllowedRequest(requests, 'billingPromoReadiness', 'billing.read', () => apiGet('/api/v1/admin/billing/promos/readiness'));
     addAllowedRequest(requests, 'billingPaymentSmoke', 'billing.read', () => apiGet('/api/v1/admin/billing/payment-smoke/readiness?limit=10'));
+    addAllowedRequest(requests, 'billingRefunds', 'billing.read', () => apiGet('/api/v1/admin/billing/refunds/readiness'));
     addAllowedRequest(requests, 'billingRenewals', 'billing.read', () => apiGet('/api/v1/admin/billing/renewals/readiness?limit=25'));
     return;
   }
@@ -6038,6 +6041,59 @@ async function cancelStaleBillingOrder(orderId) {
   }
 }
 
+async function refundFullBillingOrder(orderId) {
+  if (!requirePermission('billing.manage', 'Полный возврат платежа')) return;
+  if (!state.loaded.billingRefunds?.productionReady) {
+    setNotice(
+      'Возврат заблокирован сервером. Сначала должны быть подтверждены возвратный процесс, основной платёжный узел и боевой refund-smoke.',
+      true,
+    );
+    return;
+  }
+  const reason = window.prompt(
+    'Причина полного возврата для аудита:',
+    'Полный возврат по подтверждённому обращению пользователя.',
+  );
+  if (reason === null) return;
+  if (reason.trim().length < 12) {
+    setNotice('Причина возврата должна содержать минимум 12 символов.', true);
+    return;
+  }
+  const confirmation = window.prompt(
+    `Для подтверждения полного возврата точно введите идентификатор заказа:\n${orderId}`,
+    '',
+  );
+  if (confirmation === null) return;
+  if (confirmation.trim() !== orderId) {
+    setNotice('Идентификатор заказа не совпал. Возврат не выполнялся.', true);
+    return;
+  }
+  const confirmed = window.confirm(
+    'ЮKassa вернёт полную сумму покупателю, а backend откатит только права, созданные этим заказом. Продолжить?',
+  );
+  if (!confirmed) return;
+  try {
+    const result = await apiPost(
+      `/api/v1/admin/billing/orders/${encodeURIComponent(orderId)}/refund-full`,
+      {
+        reason: reason.trim(),
+        confirmOrderId: confirmation.trim(),
+      },
+    );
+    state.loaded.billingRefunds = result.refundReadiness || state.loaded.billingRefunds;
+    state.loaded.billingReconciliation = result.reconciliation || state.loaded.billingReconciliation;
+    await loadDashboardData();
+    const refund = result.order?.refund || {};
+    setNotice(
+      refund.status === 'succeeded'
+        ? 'Полный возврат подтверждён ЮKassa; права пользователя восстановлены по снимку.'
+        : `Возврат принят со статусом ${escapeUi(refund.status, 'неизвестно')}.`,
+    );
+  } catch (error) {
+    setNotice(`Полный возврат не выполнен: ${error.message}`, true);
+  }
+}
+
 function renderPromoCodes() {
   const container = $('promoList');
   if (!container) return;
@@ -6128,6 +6184,7 @@ function renderOrdersTable() {
   const rows = state.loaded.orders || [];
   const reconciliation = state.loaded.billingReconciliation || {};
   const paymentSmoke = state.loaded.billingPaymentSmoke || {};
+  const refunds = state.loaded.billingRefunds || {};
   const renewals = state.loaded.billingRenewals || {};
   const summary = reconciliation.summary || {};
   const issueCounts = reconciliation.issueCounts || {};
@@ -6145,9 +6202,24 @@ function renderOrdersTable() {
       order.status === 'pending'
       && issueCodes.has('stale_pending_order')
       && issueCodes.has('yookassa_payment_not_created');
-    if (!canCancelSafely) return '<span class="muted">—</span>';
+    const canRequestFullRefund =
+      order.status === 'activated'
+      && order.provider === 'yookassa'
+      && !['succeeded', 'partial_succeeded'].includes(order.refund?.status);
+    if (!canCancelSafely && !canRequestFullRefund) return '<span class="muted">—</span>';
     if (!can('billing.manage')) return readonlyActionsHtml('billing.manage');
-    return `<button class="small-button danger" type="button" data-order-cancel-stale="${escapeHtml(order.orderId || order.id)}">Отменить зависший</button>`;
+    const actions = [];
+    if (canCancelSafely) {
+      actions.push(`<button class="small-button danger" type="button" data-order-cancel-stale="${escapeHtml(order.orderId || order.id)}">Отменить зависший</button>`);
+    }
+    if (canRequestFullRefund) {
+      actions.push(
+        refunds.productionReady
+          ? `<button class="small-button danger" type="button" data-order-refund-full="${escapeHtml(order.orderId || order.id)}">Полный возврат</button>`
+          : '<button class="small-button" type="button" disabled title="Возвратный контур выключен сервером">Возврат закрыт</button>',
+      );
+    }
+    return actions.join(' ');
   };
   const issuePills = Object.entries(issueCounts)
     .map(([code, count]) => `<span class="status-pill ${count ? 'yellow' : 'muted'}">${escapeHtml(code)}: ${escapeHtml(count)}</span>`)
@@ -6251,6 +6323,42 @@ function renderOrdersTable() {
         </p>
       `
       : '<p class="muted">Готовность тестового платежа пока не загружена.</p>';
+  }
+  const refundContainer = $('billingRefundSummary');
+  if (refundContainer) {
+    const failedRefundChecks = (refunds.checks || []).filter((check) => !check.ok);
+    refundContainer.innerHTML = refunds.ok
+      ? `
+        <div class="check-row">
+          ${statusDot(Boolean(refunds.productionReady), !refunds.productionReady)}
+          <div>
+            <strong>${refunds.productionReady ? 'Полный возврат технически готов' : 'Возвраты закрыты сервером'}</strong>
+            <span>
+              режим=${escapeUi(refunds.mode, 'только проверка')},
+              провайдер=${escapeUi(refunds.provider, '—')},
+              основной узел=${boolLabel(refunds.policy?.billingPrimary)}
+            </span>
+          </div>
+          <span class="status-pill ${refunds.productionReady ? '' : 'yellow'}">
+            ${refunds.productionReady ? 'готово' : 'заблокировано'}
+          </span>
+        </div>
+        <div class="external-action-meta">
+          <span>Блокеры возврата:</span>
+          <div class="pill-list">
+            ${
+              failedRefundChecks.length
+                ? failedRefundChecks.map((check) => `<span class="status-pill yellow">${escapeHtml(check.code)}</span>`).join('')
+                : '<span class="muted">нет</span>'
+            }
+          </div>
+        </div>
+        <p class="muted">
+          Полный возврат выполняется только после точного подтверждения ID заказа.
+          Повторный запрос использует тот же ключ идемпотентности; права откатываются только при совпадении снимка подписки.
+        </p>
+      `
+      : '<p class="muted">Готовность возвратов пока не загружена.</p>';
   }
   const renewalContainer = $('billingRenewalSummary');
   if (renewalContainer) {
@@ -6899,6 +7007,7 @@ async function loadDashboardData() {
       else if (key === 'billingPromos') state.loaded.promos = value.promos || [];
       else if (key === 'billingPromoReadiness') state.loaded.promoReadiness = value;
       else if (key === 'billingPaymentSmoke') state.loaded.billingPaymentSmoke = value;
+      else if (key === 'billingRefunds') state.loaded.billingRefunds = value;
       else if (key === 'billingRenewals') state.loaded.billingRenewals = value;
       else if (key === 'auth') {
         state.loaded.auth = value.events || [];
@@ -7947,9 +8056,10 @@ async function testAdminAlert() {
   try {
     const result = await apiPost('/api/v1/admin/alerts/test', {});
     await loadDashboardData();
-    setNotice(`Тестовое оповещение Telegram отправлено: ${safeText(result?.result?.status, 'ok')}.`);
+    const provider = safeText(result?.result?.provider, 'канал');
+    setNotice(`Тестовое оповещение отправлено через ${provider}: ${safeText(result?.result?.status, 'ok')}.`);
   } catch (error) {
-    setNotice(`Оповещение Telegram пока не готово: ${error.message}`, true);
+    setNotice(`Автоматическое оповещение пока не готово: ${error.message}`, true);
   }
 }
 
@@ -8195,6 +8305,11 @@ function bindEvents() {
     const cancelStaleOrderButton = event.target.closest('[data-order-cancel-stale]');
     if (cancelStaleOrderButton) {
       cancelStaleBillingOrder(cancelStaleOrderButton.dataset.orderCancelStale);
+      return;
+    }
+    const refundFullOrderButton = event.target.closest('[data-order-refund-full]');
+    if (refundFullOrderButton) {
+      refundFullBillingOrder(refundFullOrderButton.dataset.orderRefundFull);
       return;
     }
     const openButton = event.target.closest('[data-report-open]');

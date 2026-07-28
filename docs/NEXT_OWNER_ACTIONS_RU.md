@@ -1,13 +1,40 @@
 # Green VPN Next Owner Actions
 
-Последнее обновление: 2026-05-08
+Последнее обновление: 2026-07-28 19:15 МСК
 
-Этот файл фиксирует только те действия, которые реально должен сделать владелец проекта вне кода: купить сервис, создать аккаунт, включить настройку, получить ключ или подтвердить домен. Код и backend уже подготовлены так, чтобы эти данные можно было подключить коротким server-only env-деплоем без записи секретов в репозиторий.
+Этот файл фиксирует только действия, которые после полной автономной проверки
+действительно остались за владельцем. Старые setup-подробности ниже сохранены
+как справка, но текущий список в следующем разделе имеет приоритет.
+
+## Что действительно осталось владельцу
+
+1. **Windows trust:** купить или оформить Authenticode Code Signing/Trusted
+   Signing с доступным закрытым ключом. Это не лицензия Windows 10/11.
+   Сертификат должен поддерживать Code Signing EKU и либо появиться в
+   Windows Certificate Store, либо предоставлять совместимый механизм для
+   `signtool.exe`.
+
+После появления сертификата Codex самостоятельно выберет его, соберёт и
+подпишет production/paid-beta, проведёт обратимый физический smoke, опубликует
+точные артефакты на оба control plane и проверит обновление/откат. Других
+обязательных действий владельца в текущем launch packet нет.
+
+Telegram-бот, автопродление, промо, бесплатная квота и rewarded-реклама являются
+необязательными будущими бизнес-решениями, а не блокерами релиза. SMTP alerts
+уже физически отправляются; денежные и ограничивающие функции остаются
+выключенными.
+
+Не требуют повторения: реальный платёж, email-код, восстановление аккаунта,
+Android/Windows tunnel smoke, SMTP, YooKassa, DNS/HTTPS, внешний мониторинг,
+публикация Android `0.3.15` и проверка обоих зеркал.
 
 ## Главное правило
 
 - Не писать сюда реальные пароли, токены, SMTP password, `admin_token`, YooKassa secret key, SMS API key, SSH password и WireGuard private keys.
-- Все секреты подключаются только на сервер `37.220.85.211` через `/etc/bluevpn/backend.env`.
+- Секреты подключаются только в root-owned env соответствующих control plane;
+  текущие production-узлы: Timeweb Moscow `72.56.32.197` и RUVDS Moscow
+  `176.113.81.35`. `37.220.85.211` является VPN-узлом, а не production API
+  control plane.
 - Рабочий скрипт подключения:
 
 ```powershell
@@ -25,7 +52,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\blue
 
 ## 1. DMARC для домена
 
-Статус: добавлено и проверяется green.
+Статус: **готово**, owner action не требуется. Запись опубликована и readiness
+green.
 
 Где: REG.RU -> `greenvpn.pro` -> DNS-серверы и управление зоной -> добавить TXT.
 
@@ -41,7 +69,8 @@ Value: v=DMARC1; p=none; rua=mailto:postmaster@greenvpn.pro; adkim=s; aspf=s
 
 ## 2. Yandex 360 почта
 
-Статус: частично сделано.
+Статус: **готово**, owner action не требуется. Production email/SMTP
+readiness green, физический email-code flow и восстановление доступа прошли.
 
 Уже есть:
 
@@ -51,61 +80,27 @@ Value: v=DMARC1; p=none; rua=mailto:postmaster@greenvpn.pro; adkim=s; aspf=s
 - SPF `v=spf1 redirect=_spf.yandex.net`;
 - DKIM TXT добавлен;
 - domain ownership TXT добавлен.
+- рабочий `no-reply` SMTP подключён только через server-side env;
+- support/postmaster и доменная доставка проверены;
+- `/api/v1/admin/email/readiness` production-ready.
 
-Нужно сделать:
+Пароль повторно не передавать и не ротировать без причины.
 
-- создать ящик `no-reply@greenvpn.pro`;
-- создать ящик или alias `support@greenvpn.pro`;
-- создать ящик или alias `postmaster@greenvpn.pro`;
-- сгенерировать SMTP/app password для `no-reply@greenvpn.pro`;
-- передать Codex только mailbox и app password, чтобы он применил это на сервере через env-скрипт.
+## 3. Guest-first вход
 
-Что передать Codex:
+Телефон и SMS исключены из целевого сценария. Никаких аккаунтов SMS-провайдера,
+ключей или тестовых отправок от владельца не требуется.
 
-```text
-SMTP mailbox: no-reply@greenvpn.pro
-SMTP app password: <секрет>
-Support mailbox: support@greenvpn.pro
-Postmaster mailbox: postmaster@greenvpn.pro
-```
-
-Что Codex должен сделать после получения:
-
-- записать SMTP env только на сервер;
-- перезапустить backend;
-- проверить `/api/v1/admin/email/readiness`;
-- проверить email-code flow;
-- не коммитить пароль и не писать его в docs.
-
-## 3. SMS.ru
-
-Статус: ждёт аккаунт/API key.
-
-Нужно сделать:
-
-- зарегистрироваться или войти в SMS.ru;
-- пополнить минимальный тестовый баланс;
-- получить `api_id`;
-- опционально согласовать sender name `GreenVPN`, но это можно позже.
-
-Что передать Codex:
-
-```text
-SMS.ru api_id: <секрет>
-Sender name: <пусто или согласованное имя>
-```
-
-Что Codex должен сделать после получения:
-
-- записать SMS env только на сервер;
-- убедиться, что `GREENVPN_SMS_CODE_PEPPER` задан;
-- перезапустить backend;
-- проверить `/api/v1/admin/sms/readiness`;
-- проверить phone-code start/verify на тестовом номере, если владелец разрешит тестовую SMS.
+Статус: **готово**. Физически проверены чистая установка без регистрации,
+email перед оплатой и отдельное восстановление подписки по email на Android и
+Windows. Повторный OTP или платёж для очередного smoke не нужен.
 
 ## 4. YooKassa production
 
-Статус 2026-07-11: кабинет активен, production key перевыпущен, установлен только в root-owned server env на обоих control-plane и проверен provider API. Реальный платёж 149 RUB успешно активирован.
+Статус 2026-07-27: **ручная production-оплата готова**. Кабинет активен,
+production key установлен только в root-owned env обоих control plane,
+provider API, webhook, реальный платёж, чек и активация проверены. Повторный
+платёж для smoke не нужен.
 
 Webhook в кабинете проверен 2026-07-11:
 
@@ -130,9 +125,14 @@ https://api.greenvpn.pro/payment/return
 - provider API и реальный order/payment/activation прошли;
 - Timeweb остаётся единственным billing writer, оплаченный результат синхронизирован на RUVDS;
 - `/api/v1/admin/billing/readiness` готов к текущему ручному платёжному сценарию;
-- проверить `/api/v1/admin/billing/renewals/readiness`: auto-renewal charges должны оставаться blocked/dry-run, пока production YooKassa readiness не green и pending renewal conflicts не разобраны;
-- проверить `/api/v1/admin/subscriptions/expiry-readiness`: `BLUEVPN_ENFORCE_SUBSCRIPTION_ACCESS` не включать, пока expired-active rows и expiring retention blockers не разобраны;
-- auto-renew и глобальный subscription enforcement остаются выключены.
+- `/api/v1/admin/billing/renewals/readiness` green для dry-run, но реальное
+  автоматическое списание намеренно выключено до отдельного решения владельца;
+- новые клиенты и backend используют auto-renew только как явный opt-in;
+  существующая оплаченная подписка не изменялась;
+- `BLUEVPN_ENFORCE_SUBSCRIPTION_ACCESS` остаётся выключенным: три ближайших
+  истечения являются гостевыми Trial без email, expired-active строк нет;
+- возврат и отмена реального платежа остаются owner/payment-provider gate:
+  автоматизация не должна инициировать движение денег.
 
 ## 5. Telegram alerts
 
@@ -164,49 +164,30 @@ GREENVPN_ADMIN_ALERT_MIN_SEVERITY: high
 
 ## 6. Monitoring VPS
 
-Статус: нужен отдельный маленький сервер позже.
+Статус: **готово**, новый VPS сейчас покупать не требуется.
 
-Зачем: основной сервер не должен быть единственной точкой проверки самого себя. Отдельный probe будет видеть, жив ли API/VPN/YouTube/Discord/Telegram через наши маршруты.
+- Два probe-agent покрывают все шесть обязательных targets.
+- Все три опубликованных VPN endpoint имеют healthy coverage.
+- Production monitoring readiness green.
+- Usage reporters London/NL1/NL2 работают отдельно и не меняют VPN routing.
 
-Минимально купить:
-
-- 1 дешёвый VPS у другого провайдера;
-- регион: Германия, Финляндия, Швеция или Польша;
-- Linux с systemd.
-
-Что передать Codex:
-
-```text
-Monitoring VPS host/IP: <значение>
-SSH user: <значение>
-Probe id: probe-eu-1
-Probe region: eu
-```
-
-Что Codex должен сделать:
-
-- установить `service_probe.py` через `install_probe_systemd.sh`;
-- сохранить admin token только на probe machine;
-- включить systemd timer;
-- проверить, что observations появляются в `/api/v1/admin/monitoring/service-observations`;
-- проверить, что endpoint observations появляются в `/api/v1/admin/server-health`, а `current_wg0` получает внешнее healthy-покрытие;
-- не менять пользовательский VPN-routing.
-
-Подсказка: раздел `Мониторинг` в admin/support app теперь показывает готовый external probe install bundle: команду с `--token-stdin` и `--server-health`, required targets, required endpoint coverage и verify steps. Admin token всё равно вводится только на probe VPS, не в docs и не в заметки.
-
-Разовый Windows-запуск для диагностики с текущей машины теперь тоже подготовлен, но token всё равно вводится только через stdin:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\bluevpn\scripts\windows\run_monitoring_probe_once.ps1 -ServerHealth -AdminTokenFromStdin
-```
-
-Production-вариант остаётся отдельный monitoring VPS с systemd timer, чтобы проверка `current_wg0` шла не с backend/VPN-сервера.
+Telegram-доставка alert остаётся отдельным необязательным owner action из
+раздела 5. Новый независимый probe VPS можно добавить позже для географической
+избыточности, но это не текущий release-блокер.
 
 ## 7. Update artifact and rollback artifact
 
-Статус: backend/admin готовы, installer не собирается до финального handoff или явного запроса на тест.
+Статус: **готово**.
 
-Что нужно будет передать Codex только после финальной сборки:
+Android `0.3.14` имеет точные primary/fallback bytes и серверные rollback
+каталоги. Для Windows `0.3.13` предыдущий рабочий installer `0.3.12`,
+SHA-256
+`79F5E201F8F798906C9A7FF5F837B9C5AD08B4890DEB3DF0B7F3F2E3C4EC0FE7`,
+опубликован как rollback на обоих зеркалах. Protected readiness на обоих
+control plane: `productionReady=true`, `rollbackReady=true`, blockers/warnings
+пусты.
+
+При следующей финальной сборке значения обновляются аналогично:
 
 ```text
 GREENVPN_LATEST_VERSION: <значение>
@@ -225,7 +206,7 @@ GREENVPN_ROLLBACK_SHA256: <64 hex>
 
 ## 8. Code signing certificate
 
-Статус: позже, ближе к публичной сборке.
+Статус: **текущий критический блокер массового Windows-релиза**.
 
 Нужно будет:
 
@@ -234,7 +215,9 @@ GREENVPN_ROLLBACK_SHA256: <64 hex>
 - настроить подпись `greenvpn.exe` и service executable;
 - обновить build pipeline.
 
-Это не блокирует текущий backend/admin этап.
+Backend, Android и физический Windows smoke это не блокирует, но без подписи
+нельзя считать распространение Windows готовым для холодной аудитории:
+SmartScreen/reputation warning остаётся ожидаемым.
 
 ## 9. Проверить всё одним скриптом
 
@@ -266,8 +249,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\blue
 
 Отсутствие внешнего сервиса не должно тормозить код:
 
-- если нет SMTP, email-code flow остаётся в safe/manual readiness;
-- если нет SMS.ru, phone-code flow остаётся prepared/manual;
-- если нет YooKassa keys, billing остаётся manual MVP, но бесплатная активация тарифа через public API закрыта;
+- SMTP/email-code и YooKassa уже production-ready;
+- phone/SMS flow удалён из продуктового контракта;
 - если нет Telegram token, alerts остаются manual MVP;
-- если нет monitoring VPS, probe installer готов, а backend/admin продолжают развиваться.
+- без Windows signing и rollback массовый Windows launch остаётся закрыт;
+- реклама, автосписания, промо и hard expiry включаются только отдельным
+  решением владельца после соответствующего smoke.

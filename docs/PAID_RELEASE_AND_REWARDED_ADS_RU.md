@@ -1,8 +1,44 @@
 # Green VPN: продажный контур и реклама
 
-Статус: Android-реклама работает в production, а новый freemium/Windows flow
-развёрнут только в paid-beta. Production Windows не обновлять до получения
-настоящего Yandex Web Rewarded block id и чистого callback-smoke.
+Статус: по прямому решению владельца от 2026-07-22 реклама временно отключена
+в production и paid-beta. Реализация сохранена в коде, но серверный gate,
+Android Rewarded и закрытый Windows `test_web` выключены на обоих control-plane.
+
+Обновление 2026-07-27:
+
+- production backend `0.9.141-autorenew-optin.1`, Android
+  `0.3.14+2026072702` и Windows `0.3.13+2604` не содержат активного
+  production placement/block id;
+- production и paid-beta на обоих control plane подтверждены с
+  `GREENVPN_FREE_AD_GATE_ENABLED=0`; Android/web Rewarded, `test_web` и
+  forced-disconnect timer выключены;
+- paid-beta вместо рекламы использует бесплатный тариф с выключенным
+  enforcement квоты, сохранённым переключателем `3` ГБ и профилем
+  `10` Мбит/с; usage продолжает считаться;
+- реальный Rewarded-провайдер по критериям Windows WebView2, VPN-разрешения,
+  подтверждаемого completion и доступного вывода в РФ не выбран;
+- РСЯ 23.07 прислала только промежуточный статус: вопрос о засчитывании
+  Windows WebView2-трафика всё ещё разбирают. Это не разрешение интеграции.
+  Повторно подавать отклонённую площадку до `18.08.2026 12:55` нельзя;
+- при контрольной проверке 27.07 MediaToday и ayeT не дали содержательного
+  ответа; в Spam находилось только старое закрытое письмо Monetag;
+- повторное включение рекламы возможно только после письменного разрешения
+  конкретного провайдера, настоящего placement id, изолированного paid-beta
+  smoke и отдельной команды владельца;
+- guarded renewal worker существует, но automatic charge execution выключен.
+  Missing `autoRenew` теперь fail-safe `false`.
+
+Обновление 2026-07-22:
+
+- production и paid-beta на Timeweb Moscow и RUVDS Moscow работают с
+  `GREENVPN_FREE_AD_GATE_ENABLED=0` и пустым списком рекламных платформ;
+- Android Rewarded выключен во всех контурах, Windows `test_web` выключен в
+  paid-beta, а production Windows по-прежнему не имеет рекламного flow;
+- опубликованные APK/EXE не менялись: клиент получает актуальную политику от
+  backend перед подключением;
+- таймер принудительного отключения остаётся выключенным;
+- повторное включение допускается только по новой прямой команде владельца и
+  после отдельной beta-проверки.
 
 Обновление 2026-07-19:
 

@@ -52,6 +52,10 @@ constexpr char kNaivePidPath[] =
     GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\naive-https-client.pid";
 constexpr char kNaiveHevPidPath[] =
     GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\naive-https-hev.pid";
+constexpr char kDnsttPidPath[] =
+    GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\dnstt-client.pid";
+constexpr char kDnsttHevPidPath[] =
+    GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\dnstt-hev.pid";
 constexpr char kRoutingModePath[] =
     GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\routing_mode";
 constexpr char kProcessRouterPidPath[] =
@@ -565,66 +569,23 @@ std::string QueryTunnelStatusJson() {
   const std::string hev_state = QueryPidFileProcessState(
       kHevPidPath,
       module_dir + L"\\tools\\hysteria2\\hev-socks5-tunnel.exe");
-  if (managed_protocol == "hysteria2") {
-    const std::string state =
-        hysteria_state == "running" && hev_state == "running" ? "running"
-                                                               : "stopped";
-    return std::string("{\"ok\":true,\"service\":\"") + kServiceNameUtf8 +
-           "\",\"tunnelService\":\"GreenVPNHysteria2Preview\"," +
-           "\"tunnelState\":\"" + state + "\"," +
-           "\"protocol\":\"hysteria2\"," +
-           "\"wireGuardState\":\"" + wireguard_state + "\"," +
-           "\"amneziaWgState\":\"" + amneziawg_state + "\"," +
-           "\"hysteriaClientState\":\"" + hysteria_state + "\"," +
-           "\"hysteriaTunState\":\"" + hev_state + "\"}";
-  }
   const std::string vless_xray_state = QueryPidFileProcessState(
       kVlessXrayPidPath,
       module_dir + L"\\tools\\vless-reality\\xray.exe");
   const std::string vless_hev_state = QueryPidFileProcessState(
       kVlessHevPidPath,
       module_dir + L"\\tools\\vless-reality\\hev-socks5-tunnel.exe");
-  if (managed_protocol == "vless_reality") {
-    const std::string state =
-        vless_xray_state == "running" && vless_hev_state == "running"
-            ? "running"
-            : "stopped";
-    return std::string("{\"ok\":true,\"service\":\"") + kServiceNameUtf8 +
-           "\",\"tunnelService\":\"GreenVPNVlessRealityPreview\"," +
-           "\"tunnelState\":\"" + state + "\"," +
-           "\"protocol\":\"vless_reality\"," +
-           "\"wireGuardState\":\"" + wireguard_state + "\"," +
-           "\"amneziaWgState\":\"" + amneziawg_state + "\"," +
-           "\"vlessClientState\":\"" + vless_xray_state + "\"," +
-           "\"vlessTunState\":\"" + vless_hev_state + "\"}";
-  }
   const std::string naive_state = QueryPidFileProcessState(
       kNaivePidPath, module_dir + L"\\tools\\naive-https\\naive.exe");
   const std::string naive_hev_state = QueryPidFileProcessState(
       kNaiveHevPidPath,
       module_dir + L"\\tools\\naive-https\\hev-socks5-tunnel.exe");
-  if (managed_protocol == "naive_https") {
-    const std::string state =
-        naive_state == "running" && naive_hev_state == "running" ? "running"
-                                                                     : "stopped";
-    return std::string("{\"ok\":true,\"service\":\"") + kServiceNameUtf8 +
-           "\",\"tunnelService\":\"GreenVPNNaiveHttpsPreview\"," +
-           "\"tunnelState\":\"" + state + "\"," +
-           "\"protocol\":\"naive_https\"," +
-           "\"wireGuardState\":\"" + wireguard_state + "\"," +
-           "\"amneziaWgState\":\"" + amneziawg_state + "\"," +
-           "\"naiveClientState\":\"" + naive_state + "\"," +
-           "\"naiveTunState\":\"" + naive_hev_state + "\"}";
-  }
-  const bool awg_selected = amneziawg_state == "running" ||
-                            (amneziawg_state != "missing" &&
-                             wireguard_state == "missing");
-  const char* selected_service = awg_selected
-                                     ? kAmneziaWgTunnelServiceNameUtf8
-                                     : kTunnelServiceNameUtf8;
-  const std::string& selected_state =
-      awg_selected ? amneziawg_state : wireguard_state;
-  const char* selected_protocol = awg_selected ? "amneziawg" : "wireguard_udp";
+  const std::string dnstt_state = QueryPidFileProcessState(
+      kDnsttPidPath,
+      module_dir + L"\\tools\\dnstt\\dnstt-client-windows-amd64.exe");
+  const std::string dnstt_hev_state = QueryPidFileProcessState(
+      kDnsttHevPidPath,
+      module_dir + L"\\tools\\dnstt\\hev-socks5-tunnel.exe");
   const std::string requested_routing_mode =
       ReadTrimmedAsciiFile(kRoutingModePath) == "applications" ? "applications"
                                                                : "full";
@@ -635,12 +596,59 @@ std::string QueryTunnelStatusJson() {
       kProcessRouterPidPath,
       module_dir + L"\\tools\\process-router\\ProxyBridge_CLI.exe");
 
+  std::string selected_service = kTunnelServiceNameUtf8;
+  std::string selected_state = wireguard_state;
+  std::string selected_protocol = "wireguard_udp";
+  if (managed_protocol == "hysteria2") {
+    selected_service = "GreenVPNHysteria2Preview";
+    selected_state =
+        hysteria_state == "running" && hev_state == "running" ? "running"
+                                                               : "stopped";
+    selected_protocol = "hysteria2";
+  } else if (managed_protocol == "vless_reality") {
+    selected_service = "GreenVPNVlessRealityPreview";
+    selected_state =
+        vless_xray_state == "running" && vless_hev_state == "running"
+            ? "running"
+            : "stopped";
+    selected_protocol = "vless_reality";
+  } else if (managed_protocol == "naive_https") {
+    selected_service = "GreenVPNNaiveHttpsPreview";
+    selected_state =
+        naive_state == "running" && naive_hev_state == "running" ? "running"
+                                                                  : "stopped";
+    selected_protocol = "naive_https";
+  } else if (managed_protocol == "dnstt") {
+    selected_service = "GreenVPNDnsttPreview";
+    selected_state =
+        dnstt_state == "running" && dnstt_hev_state == "running" ? "running"
+                                                                  : "stopped";
+    selected_protocol = "dnstt";
+  } else {
+    const bool awg_selected = amneziawg_state == "running" ||
+                              (amneziawg_state != "missing" &&
+                               wireguard_state == "missing");
+    if (awg_selected) {
+      selected_service = kAmneziaWgTunnelServiceNameUtf8;
+      selected_state = amneziawg_state;
+      selected_protocol = "amneziawg";
+    }
+  }
+
   return std::string("{\"ok\":true,\"service\":\"") + kServiceNameUtf8 +
          "\",\"tunnelService\":\"" + selected_service + "\"," +
          "\"tunnelState\":\"" + selected_state + "\"," +
          "\"protocol\":\"" + selected_protocol + "\"," +
          "\"wireGuardState\":\"" + wireguard_state + "\"," +
          "\"amneziaWgState\":\"" + amneziawg_state + "\"," +
+         "\"hysteriaClientState\":\"" + hysteria_state + "\"," +
+         "\"hysteriaTunState\":\"" + hev_state + "\"," +
+         "\"vlessClientState\":\"" + vless_xray_state + "\"," +
+         "\"vlessTunState\":\"" + vless_hev_state + "\"," +
+         "\"naiveClientState\":\"" + naive_state + "\"," +
+         "\"naiveTunState\":\"" + naive_hev_state + "\"," +
+         "\"dnsttClientState\":\"" + dnstt_state + "\"," +
+         "\"dnsttTunState\":\"" + dnstt_hev_state + "\"," +
          "\"routingMode\":\"" + routing_mode + "\"," +
          "\"processRouterState\":\"" + process_router_state + "\"}";
 }

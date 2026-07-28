@@ -68,6 +68,65 @@ void main() {
     expect(greenVpnNormalizePublicBillingPlanCode('green_180d'), 'green_180d');
   });
 
+  test('fixed billing plan catalog detection ignores unrelated plans', () {
+    expect(
+      greenVpnFixedBillingPlanCodesFromCatalog(const {
+        'plans': [
+          {'code': 'green_30d'},
+          {'code': 'green_90d'},
+          {'code': 'green_180d'},
+          {'code': 'legacy_plan'},
+        ],
+      }),
+      greenVpnFixedPublicBillingPlanCodes,
+    );
+    expect(
+      greenVpnCatalogHasFixedBillingPlans(const {
+        'plans': [
+          {'code': 'green_30d'},
+        ],
+      }),
+      isTrue,
+    );
+    expect(
+      greenVpnCatalogHasFixedBillingPlans(const {
+        'plan': {'code': 'paid_beta_30d'},
+      }),
+      isFalse,
+    );
+  });
+
+  test('server selection never silently enables auto-renew', () {
+    expect(
+      greenVpnSelectionAutoRenewEnabled(
+        const {'policyMode': 'public_product'},
+        paidBetaBuild: false,
+      ),
+      isFalse,
+    );
+    expect(
+      greenVpnSelectionAutoRenewEnabled(
+        const {'policyMode': 'legacy', 'autoRenew': false},
+        paidBetaBuild: false,
+      ),
+      isFalse,
+    );
+    expect(
+      greenVpnSelectionAutoRenewEnabled(
+        const {'policyMode': 'public_product', 'autoRenew': true},
+        paidBetaBuild: false,
+      ),
+      isTrue,
+    );
+    expect(
+      greenVpnSelectionAutoRenewEnabled(
+        const {'policyMode': 'public_product', 'autoRenew': true},
+        paidBetaBuild: true,
+      ),
+      isFalse,
+    );
+  });
+
   test('ordinary plan names remain readable', () {
     expect(greenVpnPublicPlanTitle('Premium'), 'Premium');
     expect(greenVpnPublicPlanTitle('Base'), 'Базовый');
@@ -96,11 +155,52 @@ void main() {
     );
     expect(
       greenVpnHasPaidEntitlement(
+        isActive: true,
+        planCode: 'free_quota',
+        monthlyPriceRub: 0,
+      ),
+      isFalse,
+    );
+    expect(
+      greenVpnHasPaidEntitlement(
         isActive: false,
         planCode: 'green_30d',
         monthlyPriceRub: 249,
       ),
       isFalse,
+    );
+  });
+
+  test('free tier state and quota presentation follow server payload', () {
+    expect(
+      greenVpnIsFreeTierSubscription(const {
+        'planCode': 'free_quota',
+        'isActive': true,
+      }),
+      isTrue,
+    );
+    expect(
+      greenVpnTrafficUsageSummary(const {
+        'usedGb': 1.25,
+        'trafficLimitGb': 3,
+        'remainingGb': 1.75,
+        'overLimit': false,
+      }),
+      '1.3 из 3 ГБ • осталось 1.8 ГБ',
+    );
+    expect(
+      greenVpnTrafficUsageProgress(const {'usedGb': 1.5, 'trafficLimitGb': 3}),
+      0.5,
+    );
+    expect(
+      greenVpnTrafficUsageSummary(const {'usedGb': 12, 'trafficLimitGb': null}),
+      contains('лимит временно отключён'),
+    );
+    expect(
+      greenVpnIsFreeQuotaExhaustedMessage(
+        'Бесплатный лимит на этот месяц исчерпан.',
+      ),
+      isTrue,
     );
   });
 
@@ -135,6 +235,17 @@ void main() {
     );
   });
 
+  test('expired sessions recover guests without forcing account login', () {
+    expect(
+      greenVpnExpiredSessionAction(isGuest: true),
+      GreenVpnExpiredSessionAction.refreshGuest,
+    );
+    expect(
+      greenVpnExpiredSessionAction(isGuest: false),
+      GreenVpnExpiredSessionAction.requireAccountSignIn,
+    );
+  });
+
   test('public errors keep useful text and remove backend internals', () {
     expect(
       greenVpnPublicErrorMessage(
@@ -162,6 +273,15 @@ void main() {
         statusCode: 403,
       ),
       'Режим «Только для соцсетей» доступен по подписке.',
+    );
+    expect(
+      greenVpnPublicErrorMessage(
+        rawError: 'Ошибка сервера (403)',
+        responseBody:
+            '{"detail":{"code":"free_quota_exhausted","message":"internal"}}',
+        statusCode: 403,
+      ),
+      contains('Бесплатный лимит'),
     );
     expect(
       greenVpnPublicErrorMessage(

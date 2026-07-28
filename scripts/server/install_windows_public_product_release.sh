@@ -12,6 +12,8 @@ PRODUCTION_SHA256=""
 TEST_SHA256=""
 PRODUCTION_REQUIRED=1
 TEST_REQUIRED=0
+PRODUCTION_SIGNATURE_REPORT=""
+TEST_SIGNATURE_REPORT=""
 
 PRODUCTION_ENV="/etc/bluevpn/backend.env"
 TEST_ENV="/etc/bluevpn/paid-beta.env"
@@ -40,6 +42,12 @@ Required arguments:
 Optional arguments:
   --production-required 0|1  (default: 1)
   --test-required 0|1        (default: 0)
+  --production-signature-report PATH
+  --test-signature-report PATH
+
+Signature reports must be the JSON output from sign_release_artifacts.ps1.
+When supplied, both reports are required and are cryptographically bound to
+the exact production/test SHA256 values before trusted metadata is published.
 
 The default is dry-run. Apply mode preserves installer/env rollback files,
 switches aliases atomically, restarts only local backend services, and verifies
@@ -59,6 +67,8 @@ while [[ $# -gt 0 ]]; do
     --test-sha256) TEST_SHA256="${2:?missing test SHA256}"; shift 2 ;;
     --production-required) PRODUCTION_REQUIRED="${2:?missing production required flag}"; shift 2 ;;
     --test-required) TEST_REQUIRED="${2:?missing test required flag}"; shift 2 ;;
+    --production-signature-report) PRODUCTION_SIGNATURE_REPORT="${2:?missing production signature report}"; shift 2 ;;
+    --test-signature-report) TEST_SIGNATURE_REPORT="${2:?missing test signature report}"; shift 2 ;;
     --apply) APPLY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -89,11 +99,93 @@ TEST_SHA256="${TEST_SHA256^^}"
 for path in "$PRODUCTION_EXE" "$TEST_EXE" "$PRODUCTION_ENV" "$TEST_ENV" "$TEST_STATIC_MANIFEST" "$PRODUCTION_DB" "$TEST_DB"; do
   [[ -f "$path" && ! -L "$path" ]] || { echo "Missing or unsafe file: $path" >&2; exit 2; }
 done
+if [[ -n "$PRODUCTION_SIGNATURE_REPORT" || -n "$TEST_SIGNATURE_REPORT" ]]; then
+  [[ -n "$PRODUCTION_SIGNATURE_REPORT" && -n "$TEST_SIGNATURE_REPORT" ]] || {
+    echo "Both production and test signature reports are required" >&2
+    exit 2
+  }
+  for path in "$PRODUCTION_SIGNATURE_REPORT" "$TEST_SIGNATURE_REPORT"; do
+    [[ -f "$path" && ! -L "$path" ]] || { echo "Missing or unsafe signature report: $path" >&2; exit 2; }
+  done
+fi
 
 actual_production="$(sha256sum "$PRODUCTION_EXE" | awk '{print toupper($1)}')"
 actual_test="$(sha256sum "$TEST_EXE" | awk '{print toupper($1)}')"
 [[ "$actual_production" == "$PRODUCTION_SHA256" ]] || { echo "Production EXE hash mismatch" >&2; exit 2; }
 [[ "$actual_test" == "$TEST_SHA256" ]] || { echo "Test EXE hash mismatch" >&2; exit 2; }
+
+SIGNED_RELEASE=0
+SIGNATURE_STATUS="NotSigned"
+SIGNING_PROVIDER=""
+SIGNING_PUBLISHER=""
+SIGNING_THUMBPRINT=""
+if [[ -n "$PRODUCTION_SIGNATURE_REPORT" ]]; then
+  mapfile -t signature_metadata < <(
+    python3 - \
+      "$PRODUCTION_SIGNATURE_REPORT" "$TEST_SIGNATURE_REPORT" \
+      "$PRODUCTION_SHA256" "$TEST_SHA256" <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+production_report, test_report, production_sha, test_sha = sys.argv[1:]
+
+
+def validate(label, path_raw, expected_sha):
+    payload = json.loads(pathlib.Path(path_raw).read_text(encoding="utf-8-sig"))
+    files = payload.get("files")
+    if (
+        payload.get("ok") is not True
+        or payload.get("mode") != "sign-and-verify"
+        or payload.get("unsignedCount") != 0
+        or payload.get("publisherMismatchCount") != 0
+        or payload.get("fileCount") != 1
+        or not isinstance(files, list)
+        or len(files) != 1
+    ):
+        raise SystemExit(f"{label} signature report is not a successful one-file signing report")
+    item = files[0]
+    publisher = str(payload.get("expectedPublisher") or "").strip()
+    thumbprint = re.sub(r"\s+", "", str(payload.get("certificateThumbprint") or "")).upper()
+    signer_thumbprint = re.sub(r"\s+", "", str(item.get("signerThumbprint") or "")).upper()
+    issuer = str(item.get("signerIssuer") or "").strip()
+    status = str(item.get("status") or "").strip()
+    if not publisher or not re.fullmatch(r"[0-9A-F]{40}", thumbprint):
+        raise SystemExit(f"{label} signature identity is incomplete")
+    if (
+        str(item.get("sha256") or "").upper() != expected_sha
+        or item.get("signed") is not True
+        or item.get("publisherMatches") is not True
+        or status != "Valid"
+        or signer_thumbprint != thumbprint
+        or not issuer
+    ):
+        raise SystemExit(f"{label} signature report does not match the exact trusted artifact")
+    for value in (publisher, thumbprint, issuer, status):
+        if "\n" in value or "\r" in value:
+            raise SystemExit(f"{label} signature metadata contains an invalid newline")
+    return publisher, thumbprint, issuer, status
+
+
+production = validate("production", production_report, production_sha)
+test = validate("test", test_report, test_sha)
+if production != test:
+    raise SystemExit("Production and test installers must use the same trusted signing identity")
+for value in production:
+    print(value)
+PY
+  )
+  [[ ${#signature_metadata[@]} -eq 4 ]] || {
+    echo "Unable to read trusted signature metadata" >&2
+    exit 2
+  }
+  SIGNING_PUBLISHER="${signature_metadata[0]}"
+  SIGNING_THUMBPRINT="${signature_metadata[1]}"
+  SIGNING_PROVIDER="${signature_metadata[2]}"
+  SIGNATURE_STATUS="${signature_metadata[3]}"
+  SIGNED_RELEASE=1
+fi
 
 echo "mode=$([[ $APPLY -eq 1 ]] && echo apply || echo dry-run)"
 echo "role=$ROLE"
@@ -104,6 +196,8 @@ echo "production_sha256=$PRODUCTION_SHA256"
 echo "test_sha256=$TEST_SHA256"
 echo "production_required=$PRODUCTION_REQUIRED"
 echo "test_required=$TEST_REQUIRED"
+echo "signed_release=$SIGNED_RELEASE"
+echo "signature_status=$SIGNATURE_STATUS"
 [[ $APPLY -eq 1 ]] || exit 0
 [[ $EUID -eq 0 ]] || { echo "Run apply mode as root" >&2; exit 1; }
 
@@ -201,7 +295,8 @@ aliases_switched=1
 python3 - \
   "$PRODUCTION_ENV" "$TEST_ENV" "$VERSION" "$TEST_VERSION" \
   "$PRODUCTION_URL" "$TEST_URL" "$PRODUCTION_SHA256" "$TEST_SHA256" \
-  "$PRODUCTION_REQUIRED" "$TEST_REQUIRED" "$released_at" <<'PY'
+  "$PRODUCTION_REQUIRED" "$TEST_REQUIRED" "$released_at" \
+  "$SIGNED_RELEASE" "$SIGNING_PROVIDER" "$SIGNING_PUBLISHER" "$SIGNING_THUMBPRINT" <<'PY'
 import os
 import pathlib
 import re
@@ -219,6 +314,10 @@ import sys
     production_required,
     test_required,
     released_at,
+    signed_release,
+    signing_provider,
+    signing_publisher,
+    signing_thumbprint,
 ) = sys.argv[1:]
 assignment = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
 changelog = (
@@ -252,6 +351,11 @@ stable = {
     "GREENVPN_UPDATE_RELEASED_AT": released_at,
     "GREENVPN_UPDATE_CHANGELOG": changelog,
     "GREENVPN_PUBLIC_WINDOWS_DOWNLOAD_URL": production_url,
+    "GREENVPN_WINDOWS_CODE_SIGNING_PROVIDER": signing_provider if signed_release == "1" else "",
+    "GREENVPN_WINDOWS_CODE_SIGNING_PUBLISHER": signing_publisher if signed_release == "1" else "",
+    "GREENVPN_WINDOWS_CODE_SIGNING_CERT_THUMBPRINT": signing_thumbprint if signed_release == "1" else "",
+    "GREENVPN_WINDOWS_SIGNED_INSTALLER_URL": production_url if signed_release == "1" else "",
+    "GREENVPN_WINDOWS_SIGNED_INSTALLER_SHA256": production_sha if signed_release == "1" else "",
 }
 paid_beta = {
     **stable,
@@ -267,13 +371,27 @@ rewrite(production_path, stable)
 rewrite(test_path, paid_beta)
 PY
 
-python3 - "$TEST_STATIC_MANIFEST" "$TEST_VERSION" "$BUILD_NUMBER" "$TEST_SHA256" "$TEST_EXE" "$released_at" <<'PY'
+python3 - \
+  "$TEST_STATIC_MANIFEST" "$TEST_VERSION" "$BUILD_NUMBER" "$TEST_SHA256" \
+  "$TEST_EXE" "$released_at" "$SIGNED_RELEASE" "$SIGNATURE_STATUS" \
+  "$SIGNING_PUBLISHER" "$SIGNING_THUMBPRINT" <<'PY'
 import json
 import os
 import pathlib
 import sys
 
-path_raw, version, build_number, sha256, installer_raw, generated_at = sys.argv[1:]
+(
+    path_raw,
+    version,
+    build_number,
+    sha256,
+    installer_raw,
+    generated_at,
+    signed_release,
+    signature_status,
+    signing_publisher,
+    signing_thumbprint,
+) = sys.argv[1:]
 path = pathlib.Path(path_raw)
 installer = pathlib.Path(installer_raw)
 payload = json.loads(path.read_text(encoding="utf-8"))
@@ -295,8 +413,10 @@ windows.update(
         "buildNumber": build_number,
         "sizeBytes": installer.stat().st_size,
         "sha256": sha256,
-        "signed": False,
-        "signatureStatus": "NotSigned",
+        "signed": signed_release == "1",
+        "signatureStatus": signature_status,
+        "signerPublisher": signing_publisher if signed_release == "1" else "",
+        "signerThumbprint": signing_thumbprint if signed_release == "1" else "",
     }
 )
 temporary = path.with_name(path.name + ".windows-release.tmp")
@@ -426,7 +546,7 @@ systemctl restart "$PRODUCTION_SERVICE"
 systemctl restart "$TEST_SERVICE"
 for port in 8000 8010; do
   ready=0
-  for _ in $(seq 1 45); do
+  for _ in $(seq 1 90); do
     if curl -fsS --max-time 3 "http://127.0.0.1:${port}/healthz" >/dev/null; then
       ready=1
       break
@@ -462,12 +582,14 @@ PY
 
 [[ "$(sha256sum "$PRODUCTION_DOWNLOADS/GreenVPN_Setup.exe" | awk '{print toupper($1)}')" == "$PRODUCTION_SHA256" ]]
 [[ "$(sha256sum "$TEST_DOWNLOADS/GreenVPN_Setup.exe" | awk '{print toupper($1)}')" == "$TEST_SHA256" ]]
-python3 - "$TEST_STATIC_MANIFEST" "$TEST_VERSION" "$TEST_SHA256" <<'PY'
+python3 - \
+  "$TEST_STATIC_MANIFEST" "$TEST_VERSION" "$TEST_SHA256" \
+  "$SIGNED_RELEASE" "$SIGNATURE_STATUS" "$SIGNING_THUMBPRINT" <<'PY'
 import json
 import pathlib
 import sys
 
-path, version, sha256 = sys.argv[1:]
+path, version, sha256, signed_release, signature_status, signing_thumbprint = sys.argv[1:]
 payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
 windows = next(
     (item for item in payload.get("artifacts", []) if item.get("platform") == "windows"),
@@ -477,6 +599,12 @@ if payload.get("windowsAppVersion") != version:
     raise SystemExit("paid-beta static manifest version mismatch")
 if str(windows.get("sha256") or "").upper() != sha256:
     raise SystemExit("paid-beta static manifest hash mismatch")
+if windows.get("signed") is not (signed_release == "1"):
+    raise SystemExit("paid-beta static manifest signature flag mismatch")
+if windows.get("signatureStatus") != signature_status:
+    raise SystemExit("paid-beta static manifest signature status mismatch")
+if signed_release == "1" and str(windows.get("signerThumbprint") or "").upper() != signing_thumbprint:
+    raise SystemExit("paid-beta static manifest signer thumbprint mismatch")
 print("test_static_manifest_ready=true")
 PY
 trap - ERR

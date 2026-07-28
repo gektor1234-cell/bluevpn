@@ -1,9 +1,9 @@
 param(
-    [string]$OutDir = 'C:\BlueVPN_Builds\public_product_final_candidate_20260716',
-    [string]$AppVersion = '0.3.0',
-    [string]$AndroidBuildNumber = '2026071601',
+    [string]$OutDir = 'C:\BlueVPN_Builds\public_product_final_candidate_20260729_b2906',
+    [string]$AppVersion = '0.3.18',
+    [string]$AndroidBuildNumber = '2026072906',
     [ValidateRange(0, 65535)]
-    [int]$WindowsBuildNumber = 1601
+    [int]$WindowsBuildNumber = 2906
 )
 
 Set-StrictMode -Version Latest
@@ -29,11 +29,11 @@ if (Test-Path -LiteralPath $OutDir) {
 New-Item -ItemType Directory -Path $OutDir | Out-Null
 
 $androidPackage = 'pro.greenvpn.app.finalcandidate'
-$apiBaseUrl = 'https://api.greenvpn.pro/paid-beta-api'
-$apiFallbackBaseUrls = 'https://176-113-81-35.sslip.io/paid-beta-api'
+$apiBaseUrl = 'https://api.greenvpn.pro'
+$apiFallbackBaseUrls = 'https://176-113-81-35.sslip.io'
 
 & (Join-Path $PSScriptRoot 'build_android_apk.ps1') `
-    -Mode debug `
+    -Mode release `
     -EnableAwg2Preview `
     -EnableHysteria2Preview `
     -EnableVlessRealityPreview `
@@ -47,10 +47,10 @@ $apiFallbackBaseUrls = 'https://176-113-81-35.sslip.io/paid-beta-api'
     -Awg2PreviewBuildNumber $AndroidBuildNumber `
     -Awg2PreviewApiBaseUrl $apiBaseUrl `
     -Awg2PreviewApiFallbackBaseUrls $apiFallbackBaseUrls
-if ($LASTEXITCODE -ne 0) { throw 'Android final candidate build failed.' }
+if ($LASTEXITCODE -ne 0) { throw 'Android final candidate release build failed.' }
 
-$sourceApk = (Resolve-Path 'build\app\outputs\flutter-apk\app-debug.apk').Path
-$androidArtifact = Join-Path $OutDir "GreenVPN_Android_${AppVersion}_final_candidate_${AndroidBuildNumber}_debug.apk"
+$sourceApk = (Resolve-Path 'build\app\outputs\flutter-apk\app-release.apk').Path
+$androidArtifact = Join-Path $OutDir "GreenVPN_Android_${AppVersion}_final_candidate_${AndroidBuildNumber}.apk"
 Copy-Item -LiteralPath $sourceApk -Destination $androidArtifact
 
 & (Join-Path $PSScriptRoot 'verify_android_hysteria2_preview_apk.ps1') `
@@ -71,11 +71,14 @@ $windowsOut = Join-Path $OutDir 'windows'
     -AppVersion $AppVersion `
     -WindowsBuildName $AppVersion `
     -WindowsBuildNumber $WindowsBuildNumber `
+    -ApiBaseUrl $apiBaseUrl `
+    -ApiFallbackBaseUrls $apiFallbackBaseUrls `
     -PublicProductCandidate `
     -SkipChecks
 if ($LASTEXITCODE -ne 0) { throw 'Windows final candidate build failed.' }
 
-$windowsArtifact = Join-Path $windowsOut 'GreenVPN_Windows_0.3.0_final_candidate.zip'
+$safeAppVersion = $AppVersion -replace '[^A-Za-z0-9._-]', '_'
+$windowsArtifact = Join-Path $windowsOut "GreenVPN_Windows_${safeAppVersion}_final_candidate.zip"
 if (-not (Test-Path -LiteralPath $windowsArtifact -PathType Leaf)) {
     throw "Windows final candidate ZIP is missing: $windowsArtifact"
 }
@@ -84,7 +87,7 @@ $head = (& git rev-parse HEAD).Trim()
 $branch = (& git branch --show-current).Trim()
 $artifactRows = @(
     foreach ($entry in @(
-        [pscustomobject]@{ platform = 'android'; path = $androidArtifact; signedForProduction = $false },
+        [pscustomobject]@{ platform = 'android'; path = $androidArtifact; signedForProduction = $true },
         [pscustomobject]@{ platform = 'windows'; path = $windowsArtifact; signedForProduction = $false }
     )) {
         $item = Get-Item -LiteralPath $entry.path
@@ -117,13 +120,15 @@ $manifest = [ordered]@{
     customerLocations = @('auto', 'NL', 'GB-when-ready')
     transportCascade = [ordered]@{
         android = @('stable', 'protected-udp', 'quic', 'tls', 'https', 'dns')
-        windows = @('stable', 'protected-udp', 'quic', 'tls', 'https')
+        windows = @('stable', 'protected-udp', 'quic', 'tls', 'https', 'dns')
     }
     billing = [ordered]@{
         adsEnabled = $false
         forcedDisconnectTimerEnabled = $false
         plansRub = @(249, 649, 1099)
-        realPaymentSmokeCompleted = $true
+        historicalTechnicalPaymentSmokeCompleted = $true
+        paidSalesEnabled = $false
+        taxReceiptReady = $false
     }
     api = [ordered]@{
         primary = $apiBaseUrl

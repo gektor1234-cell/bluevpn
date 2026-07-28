@@ -32,7 +32,9 @@ $requiredSources = @(
     'scripts\ops\greenvpn_sqlite_state_sync.py',
     'scripts\ops\greenvpn_prune_operational_history.py',
     'scripts\ops\install_operational_retention_timer.sh',
-    'scripts\server\install_paid_beta_backend_release.sh'
+    'scripts\server\install_paid_beta_backend_release.sh',
+    'scripts\server\install_public_product_backend_release.sh',
+    'scripts\server\configure_paid_beta_free_tier.sh'
 )
 foreach ($relative in $requiredSources) {
     if (-not (Test-Path -LiteralPath (Join-Path $repo $relative) -PathType Leaf)) {
@@ -53,6 +55,8 @@ foreach ($name in @(
     Copy-Item -LiteralPath (Join-Path $repo "scripts\ops\$name") -Destination (Join-Path $stage "ops\$name")
 }
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\server\install_paid_beta_backend_release.sh') -Destination (Join-Path $stage 'install.sh')
+Copy-Item -LiteralPath (Join-Path $repo 'scripts\server\install_public_product_backend_release.sh') -Destination (Join-Path $stage 'install-public.sh')
+Copy-Item -LiteralPath (Join-Path $repo 'scripts\server\configure_paid_beta_free_tier.sh') -Destination (Join-Path $stage 'configure-free-tier.sh')
 
 python -m py_compile `
     (Join-Path $stage 'backend\app\main.py') `
@@ -84,6 +88,14 @@ try {
     & $bash -n scripts/server/install_paid_beta_backend_release.sh
     if ($LASTEXITCODE -ne 0) {
         throw 'Installer shell validation failed for backend-only bundle.'
+    }
+    & $bash -n scripts/server/install_public_product_backend_release.sh
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Public installer shell validation failed for backend-only bundle.'
+    }
+    & $bash -n scripts/server/configure_paid_beta_free_tier.sh
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Free-tier configurator shell validation failed for backend-only bundle.'
     }
 }
 finally {

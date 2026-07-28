@@ -55,7 +55,7 @@ APK содержит по три ABI для HEV и JNI bridge, MIT/BSD notices �
 
 ## Физический тест
 
-Устройство: Samsung SM-A226B, serial `R9WT10CDC2J`.
+Устройство: Samsung SM-A226B; идентификатор устройства не сохраняется.
 
 Отчёт:
 `C:\Users\gekto\GreenVPN_Checkpoints\android_hysteria2_preview_physical_20260712.json`.

@@ -12,40 +12,52 @@ param(
     [string]$FallbackSiteBaseUrl = "https://176-113-81-35.sslip.io",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedAndroidVersion = "0.3.7",
+    [string]$ExpectedAndroidVersion = "0.3.15",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedAndroidSha256 = "CAE9680C1BC0E59AD2046BEAC46779D782AD5F2D542EA6BB5847DBDBDDD96431",
+    [string]$ExpectedAndroidSha256 = "72C4672355722EB4111EAA36BC6794EB71F9E20F3DB6818093489B8A59F48288",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestAndroidSha256 = "2B016FCB70A8C50DD6D5F86DD2B326CFB82D636AA9CB39D1FB8BC25B38A91AFC",
+    [string]$ExpectedTestAndroidSha256 = "B12BEC69AA0F0C04F17C7E536C97AD8EA3F88FA38BD9BA8FBAFAA070033572D4",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedAndroidBuildNumber = "2026071902",
+    [string]$ExpectedAndroidBuildNumber = "2026072704",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestAndroidVersion = "0.3.9-paid-beta.1902",
+    [bool]$ExpectedAndroidRequired = $false,
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestAndroidBuildNumber = "2026071902",
+    [string]$ExpectedTestAndroidVersion = "0.3.15",
+
+    [Parameter(Mandatory = $false)]
+    [string]$ExpectedTestAndroidBuildNumber = "2026072704",
+
+    [Parameter(Mandatory = $false)]
+    [string]$ExpectedTestAndroidApplicationId = "pro.greenvpn.app.rc",
+
+    [Parameter(Mandatory = $false)]
+    [string]$ExpectedTestAndroidAppLabel = "Green VPN",
 
     [Parameter(Mandatory = $false)]
     [bool]$ExpectedTestAndroidRequired = $false,
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedWindowsVersion = "0.3.6",
+    [string]$ExpectedWindowsVersion = "0.3.17",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedWindowsSha256 = "0A9297141199C3F9C2F971FF2B98B3C48B9CB3C4D939249C4B1DF6AA52F063FA",
+    [string]$ExpectedWindowsSha256 = "518A6BD61CBFD1C46B7460439963D2D6D48448BF2A7B14A1397D192D335934C4",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestWindowsVersion = "0.3.9-paid-beta.1902",
+    [bool]$ExpectedWindowsRequired = $false,
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestWindowsSha256 = "CE282C7BC56082F53DA030F047DA83F7FDD64315DD9C4FFE823B9C023BDBA8FC",
+    [string]$ExpectedTestWindowsVersion = "0.3.17",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestWindowsBuildNumber = "1902",
+    [string]$ExpectedTestWindowsSha256 = "21CDE69380BB288A63E1D5BC56A7715A95B3DBF664B93EBE4E3002D65C987AC3",
+
+    [Parameter(Mandatory = $false)]
+    [string]$ExpectedTestWindowsBuildNumber = "2608",
 
     [Parameter(Mandatory = $false)]
     [bool]$ExpectedTestWindowsRequired = $false,
@@ -193,6 +205,11 @@ function Get-PaidBetaStaticManifestCheck {
         $androidBuildOk = ([string]$android.buildNumber) -eq $ExpectedTestAndroidBuildNumber
         $androidSha256Ok = ([string]$android.sha256).ToUpperInvariant() -eq $ExpectedTestAndroidSha256.ToUpperInvariant()
         $androidSizeOk = [int64]$android.sizeBytes -gt 0
+        $androidApplicationIdOk = ([string]$value.androidApplicationId) -eq $ExpectedTestAndroidApplicationId
+        $androidAppLabelOk = ([string]$value.androidAppLabel) -eq $ExpectedTestAndroidAppLabel
+        $isolationOk = ([string]$value.channel) -eq "paid-beta" -and
+            $value.isolated -eq $true -and
+            $value.productionPublished -eq $false
         $windowsVersionOk = ([string]$value.windowsAppVersion) -eq $ExpectedTestWindowsVersion -and
             ([string]$windows.version) -eq $ExpectedTestWindowsVersion
         $windowsBuildOk = ([string]$windows.buildNumber) -eq $ExpectedTestWindowsBuildNumber
@@ -205,6 +222,9 @@ function Get-PaidBetaStaticManifestCheck {
                 $androidBuildOk -and
                 $androidSha256Ok -and
                 $androidSizeOk -and
+                $androidApplicationIdOk -and
+                $androidAppLabelOk -and
+                $isolationOk -and
                 $windowsVersionOk -and
                 $windowsBuildOk -and
                 $windowsSha256Ok -and
@@ -222,6 +242,16 @@ function Get-PaidBetaStaticManifestCheck {
             androidSha256Ok = $androidSha256Ok
             androidSizeBytes = $android.sizeBytes
             androidSizeOk = $androidSizeOk
+            androidApplicationId = $value.androidApplicationId
+            expectedAndroidApplicationId = $ExpectedTestAndroidApplicationId
+            androidApplicationIdOk = $androidApplicationIdOk
+            androidAppLabel = $value.androidAppLabel
+            expectedAndroidAppLabel = $ExpectedTestAndroidAppLabel
+            androidAppLabelOk = $androidAppLabelOk
+            channel = $value.channel
+            isolated = $value.isolated
+            productionPublished = $value.productionPublished
+            isolationOk = $isolationOk
             windowsVersion = $value.windowsAppVersion
             expectedWindowsVersion = $ExpectedTestWindowsVersion
             windowsVersionOk = $windowsVersionOk
@@ -258,7 +288,7 @@ $manifestChecks = @(
         -ExpectedChannel "stable" `
         -ExpectedVersion $ExpectedAndroidVersion `
         -ExpectedSha256 $ExpectedAndroidSha256 `
-        -ExpectedRequired $true
+        -ExpectedRequired $ExpectedAndroidRequired
     Get-UpdateManifestCheck `
         -Name "android-production-fallback-manifest" `
         -Uri "$fallbackApi/api/v1/updates/manifest?platform=android&channel=stable&currentVersion=0.0.0&clientId=ops-check-android-production-fallback" `
@@ -267,7 +297,7 @@ $manifestChecks = @(
         -ExpectedChannel "stable" `
         -ExpectedVersion $ExpectedAndroidVersion `
         -ExpectedSha256 $ExpectedAndroidSha256 `
-        -ExpectedRequired $true
+        -ExpectedRequired $ExpectedAndroidRequired
     Get-UpdateManifestCheck `
         -Name "android-test-primary-manifest" `
         -Uri "$api/paid-beta-api/api/v1/updates/manifest?platform=android&channel=paid-beta&currentVersion=0.0.0&clientId=ops-check-android-test-primary" `
@@ -294,7 +324,7 @@ $manifestChecks = @(
         -ExpectedChannel "stable" `
         -ExpectedVersion $ExpectedWindowsVersion `
         -ExpectedSha256 $ExpectedWindowsSha256 `
-        -ExpectedRequired $true
+        -ExpectedRequired $ExpectedWindowsRequired
     Get-UpdateManifestCheck `
         -Name "windows-production-fallback-manifest" `
         -Uri "$fallbackApi/api/v1/updates/manifest?platform=windows&channel=stable&currentVersion=0.0.0&clientId=ops-check-windows-production-fallback" `
@@ -303,7 +333,7 @@ $manifestChecks = @(
         -ExpectedChannel "stable" `
         -ExpectedVersion $ExpectedWindowsVersion `
         -ExpectedSha256 $ExpectedWindowsSha256 `
-        -ExpectedRequired $true
+        -ExpectedRequired $ExpectedWindowsRequired
     Get-UpdateManifestCheck `
         -Name "windows-test-primary-manifest" `
         -Uri "$api/paid-beta-api/api/v1/updates/manifest?platform=windows&channel=paid-beta&currentVersion=0.0.0&clientId=ops-check-windows-test-primary" `
@@ -341,8 +371,7 @@ $staticManifestChecks = @(
 )
 
 $allChecks = @($manifestChecks + $staticManifestChecks + $downloadChecks)
-
-Write-GreenVpnJson -InputObject ([pscustomobject]@{
+$result = [pscustomobject]@{
     ok = -not [bool](@($allChecks | Where-Object { -not $_.ok }).Count)
     apiBaseUrl = $api
     siteBaseUrl = $site
@@ -351,4 +380,9 @@ Write-GreenVpnJson -InputObject ([pscustomobject]@{
     manifests = $manifestChecks
     staticManifests = $staticManifestChecks
     downloads = $downloadChecks
-})
+}
+
+Write-GreenVpnJson -InputObject $result
+if (-not $result.ok) {
+    exit 1
+}

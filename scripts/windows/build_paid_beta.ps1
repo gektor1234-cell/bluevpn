@@ -1,19 +1,23 @@
 param(
     [ValidateSet("android", "windows", "both")]
     [string]$Mode = "both",
-    [string]$AppVersion = "0.3.0-paid-beta.5",
-    [string]$WindowsAppVersion = "0.3.0-paid-beta.10",
+    [string]$AppVersion = "0.3.18-paid-beta.1",
+    [string]$WindowsAppVersion = "0.3.18-paid-beta.1",
     [ValidateRange(0, 65535)]
-    [int]$WindowsBuildNumber = 0,
-    [string]$AndroidBuildName = "0.3.0",
-    [string]$AndroidBuildNumber = "2026071005",
+    [int]$WindowsBuildNumber = 2906,
+    [string]$AndroidBuildName = "0.3.18",
+    [string]$AndroidBuildNumber = "2026072906",
     [string]$AndroidApplicationId = "pro.greenvpn.app.beta",
     [string]$AndroidAppLabel = "Green VPN Beta",
     [string]$ApiBaseUrl = "https://api.greenvpn.pro/paid-beta-api",
     [string]$ApiFallbackBaseUrls = "https://176-113-81-35.sslip.io/paid-beta-api",
     [string]$ClientMarker = "green-vpn-paid-beta-v1",
-    [string]$OutDir = "C:\BlueVPN_Builds\paid_beta_20260710",
+    [string]$OutDir = "C:\BlueVPN_Builds\paid_beta_20260729_b2906",
     [bool]$EnableTransportCascade = $true,
+    [string]$WindowsCodeSigningCertificateThumbprint = $env:GREENVPN_WINDOWS_CODE_SIGNING_CERT_THUMBPRINT,
+    [string]$WindowsCodeSigningPublisher = $env:GREENVPN_WINDOWS_CODE_SIGNING_PUBLISHER,
+    [string]$WindowsCodeSigningTimestampUrl = 'http://timestamp.digicert.com',
+    [switch]$RequireWindowsCodeSigning,
     [switch]$PublicProductCandidate,
     [switch]$EnableAndroidRewardedAds,
     [switch]$SkipChecks
@@ -39,17 +43,30 @@ $expectedClientMarker = if ($PublicProductCandidate) {
 if ($ClientMarker -ne $expectedClientMarker) {
     throw "Unexpected client marker for this build mode."
 }
-if ($PublicProductCandidate -and $Mode -ne "android") {
-    throw "Public-product test candidate is supported only for Android."
-}
 if ($AndroidApplicationId -eq "pro.greenvpn.app") {
     throw "Paid beta Android must not replace the production application ID."
 }
 if ($AndroidApplicationId -notmatch '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$') {
     throw "Invalid paid beta Android application ID: $AndroidApplicationId"
 }
-if ([string]::IsNullOrWhiteSpace($AndroidAppLabel) -or $AndroidAppLabel -eq "Green VPN") {
-    throw "Paid beta Android must use a distinct launcher label."
+if ($Mode -in @("android", "both")) {
+    if ($PublicProductCandidate) {
+        if ($AndroidAppLabel -ne "Green VPN") {
+            throw "Public-product candidate must use the Green VPN launcher label."
+        }
+        if ($AppVersion -match "(?i)(preview|beta)") {
+            throw "Public-product candidate version must not expose preview or beta markers."
+        }
+    } elseif ([string]::IsNullOrWhiteSpace($AndroidAppLabel) -or $AndroidAppLabel -eq "Green VPN") {
+        throw "Paid beta Android must use a distinct launcher label."
+    }
+}
+if (
+    $PublicProductCandidate -and
+    $Mode -in @("windows", "both") -and
+    $WindowsAppVersion -match "(?i)(preview|beta)"
+) {
+    throw "Public-product Windows candidate version must not expose preview or beta markers."
 }
 if (-not (Get-Command flutter -ErrorAction SilentlyContinue)) {
     throw "flutter was not found in PATH."
@@ -113,6 +130,10 @@ if ($Mode -in @("android", "both")) {
         }
 
         if ($EnableTransportCascade) {
+            & (Join-Path $PSScriptRoot "build_android_awg2_native.ps1") -VerifyOnly
+            if ($LASTEXITCODE -ne 0) { throw "Pinned Android AWG native verification failed" }
+            & (Join-Path $PSScriptRoot "build_android_hysteria2_native.ps1") -VerifyOnly
+            if ($LASTEXITCODE -ne 0) { throw "Pinned Android Hysteria native verification failed" }
             & (Join-Path $PSScriptRoot "prepare_android_awg2_preview.ps1")
             & (Join-Path $PSScriptRoot "prepare_android_hysteria2_preview.ps1")
             & (Join-Path $PSScriptRoot "prepare_android_vless_reality_preview.ps1")
@@ -120,15 +141,33 @@ if ($Mode -in @("android", "both")) {
             & (Join-Path $PSScriptRoot "prepare_android_dnstt_preview.ps1")
         }
 
+        if (-not $SkipChecks) {
+            $lintTasks = @(':app:lintRelease')
+            if ($EnableTransportCascade) {
+                $lintTasks += ':awg_tunnel_preview:lint'
+                $lintTasks += ':hysteria_tunnel_preview:lint'
+            }
+            Push-Location (Join-Path $repo 'android')
+            try {
+                & '.\gradlew.bat' @lintTasks '--rerun-tasks' '--stacktrace' | Out-Host
+                if ($LASTEXITCODE -ne 0) { throw "Android paid beta lint failed" }
+            }
+            finally {
+                Pop-Location
+            }
+        }
+
         flutter build apk --release --no-pub `
+            --target-platform android-arm64,android-x64 `
             --build-name $AndroidBuildName `
             --build-number $AndroidBuildNumber `
             --dart-define="GREENVPN_APP_VERSION=$AppVersion" `
             --dart-define="GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=false" `
             --dart-define="GREENVPN_PAID_BETA_BUILD=$(((-not $PublicProductCandidate)).ToString().ToLowerInvariant())" `
             --dart-define="GREENVPN_PUBLIC_PRODUCT_BUILD=$($PublicProductCandidate.ToString().ToLowerInvariant())" `
+            --dart-define="GREENVPN_UPDATE_CHANNEL=paid-beta" `
             --dart-define="GREENVPN_PUBLIC_PRODUCT_CLIENT_MARKER=green-vpn-public-product-v1" `
-            --dart-define="GREENVPN_PAID_BETA_CLIENT_MARKER=$ClientMarker" `
+            --dart-define="GREENVPN_PAID_BETA_CLIENT_MARKER=green-vpn-paid-beta-v1" `
             --dart-define="GREENVPN_YANDEX_REWARDED_ADS_ENABLED=$($EnableAndroidRewardedAds.ToString().ToLowerInvariant())" `
             --dart-define="GREENVPN_AWG2_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" `
             --dart-define="GREENVPN_HYSTERIA2_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" `
@@ -164,6 +203,22 @@ if ($Mode -in @("android", "both")) {
     if ($null -eq $apksigner) { throw "apksigner.bat not found" }
     & $apksigner.FullName verify --verbose --print-certs $androidPath | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "Android paid beta signature verification failed" }
+    $certificateOutput = & $apksigner.FullName verify --print-certs $androidPath
+    if ($LASTEXITCODE -ne 0) { throw "Unable to inspect Android paid beta signer" }
+    $expectedSignerPath = Join-Path $repo "android\release_signer_sha256.txt"
+    if (-not (Test-Path -LiteralPath $expectedSignerPath -PathType Leaf)) {
+        throw "Expected Android release signer file is missing."
+    }
+    $expectedSigner = (Get-Content -LiteralPath $expectedSignerPath -Raw).Trim().ToLowerInvariant()
+    if ($expectedSigner -notmatch '^[0-9a-f]{64}$') {
+        throw "Expected Android release signer SHA-256 is invalid."
+    }
+    $certificateLine = $certificateOutput |
+        Select-String -Pattern 'certificate SHA-256 digest:\s*([0-9a-fA-F]{64})' |
+        Select-Object -First 1
+    if (-not $certificateLine) { throw "Android paid beta signer fingerprint was not reported" }
+    $actualSigner = $certificateLine.Matches[0].Groups[1].Value.ToLowerInvariant()
+    if ($actualSigner -ne $expectedSigner) { throw "Unexpected Android paid beta release signer" }
 
     $aapt = Get-ChildItem -LiteralPath (Join-Path $androidSdk "build-tools") `
         -Filter "aapt.exe" -Recurse | Sort-Object FullName -Descending | Select-Object -First 1
@@ -188,6 +243,10 @@ if ($Mode -in @("android", "both")) {
             -ExpectedVersionCode $AndroidBuildNumber
         if ($LASTEXITCODE -ne 0) { throw "Android dnstt verifier failed" }
     }
+    & (Join-Path $PSScriptRoot "verify_android_16kb_compatibility.ps1") `
+        -ApkPath $androidPath `
+        -JsonOutput (Join-Path $OutDir "android-16kb-compatibility.json") | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "Android 16 KB compatibility verification failed" }
 
     $item = Get-Item -LiteralPath $androidPath
     $artifacts.Add([pscustomobject]@{
@@ -205,7 +264,11 @@ if ($Mode -in @("android", "both")) {
 }
 
 if ($Mode -in @("windows", "both")) {
-    $windowsName = "GreenVPN_Beta_Setup_${safeWindowsVersion}.exe"
+    $windowsName = if ($PublicProductCandidate) {
+        "GreenVPN_Setup_${safeWindowsVersion}.exe"
+    } else {
+        "GreenVPN_Beta_Setup_${safeWindowsVersion}.exe"
+    }
     & (Join-Path $PSScriptRoot "build_installer.ps1") `
         -ProjectRoot $repo `
         -OutBase $OutDir `
@@ -215,9 +278,16 @@ if ($Mode -in @("windows", "both")) {
         -ApiBaseUrl $ApiBaseUrl `
         -ApiFallbackBaseUrls $ApiFallbackBaseUrls `
         -TrialOnlyNoAdsBuild $false `
-        -PaidBetaBuild $true `
-        -WindowsRuntimeScope 'paid-beta'
-    if ($LASTEXITCODE -ne 0) { throw "Windows paid beta installer build failed" }
+        -PaidBetaBuild (-not $PublicProductCandidate) `
+        -PublicProductBuild ([bool]$PublicProductCandidate) `
+        -EnableTransportCascade $EnableTransportCascade `
+        -WindowsRuntimeScope $(if ($PublicProductCandidate) { 'stable' } else { 'paid-beta' }) `
+        -UpdateChannelOverride 'paid-beta' `
+        -CertificateThumbprint $WindowsCodeSigningCertificateThumbprint `
+        -CodeSigningExpectedPublisher $WindowsCodeSigningPublisher `
+        -CodeSigningTimestampUrl $WindowsCodeSigningTimestampUrl `
+        -RequireCodeSigning:$RequireWindowsCodeSigning
+    if (-not $?) { throw "Windows paid beta installer build failed" }
 
     $windowsPath = Join-Path $OutDir $windowsName
     $item = Get-Item -LiteralPath $windowsPath
@@ -232,6 +302,8 @@ if ($Mode -in @("windows", "both")) {
         sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $item.FullName).Hash
         signed = $signature.Status -eq "Valid"
         signatureStatus = $signature.Status.ToString()
+        signerSubject = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { "" }
+        signerThumbprint = if ($signature.SignerCertificate) { $signature.SignerCertificate.Thumbprint } else { "" }
     })
 }
 

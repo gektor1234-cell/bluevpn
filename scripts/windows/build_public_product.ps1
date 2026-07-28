@@ -1,17 +1,21 @@
 param(
     [ValidateSet("android", "windows", "both")]
     [string]$Mode = "both",
-    [string]$AppVersion = "0.3.0",
-    [string]$WindowsAppVersion = "0.3.0",
+    [string]$AppVersion = "0.3.18",
+    [string]$WindowsAppVersion = "0.3.18",
     [ValidateRange(0, 65535)]
-    [int]$WindowsBuildNumber = 0,
-    [string]$AndroidBuildNumber = "2026071101",
+    [int]$WindowsBuildNumber = 2906,
+    [string]$AndroidBuildNumber = "2026072906",
     [string]$AndroidApplicationId = "pro.greenvpn.app",
     [string]$AndroidAppLabel = "Green VPN",
     [string]$ApiBaseUrl = "https://api.greenvpn.pro",
     [string]$ApiFallbackBaseUrls = "https://176-113-81-35.sslip.io",
-    [string]$OutDir = "C:\BlueVPN_Builds\public_product_20260711",
+    [string]$OutDir = "C:\BlueVPN_Builds\public_product_20260729_b2906",
     [bool]$EnableTransportCascade = $true,
+    [string]$WindowsCodeSigningCertificateThumbprint = $env:GREENVPN_WINDOWS_CODE_SIGNING_CERT_THUMBPRINT,
+    [string]$WindowsCodeSigningPublisher = $env:GREENVPN_WINDOWS_CODE_SIGNING_PUBLISHER,
+    [string]$WindowsCodeSigningTimestampUrl = 'http://timestamp.digicert.com',
+    [switch]$RequireWindowsCodeSigning,
     [switch]$EnableAndroidRewardedAds,
     [switch]$SkipChecks
 )
@@ -86,6 +90,10 @@ if ($Mode -in @("android", "both")) {
         $env:Path = "$jdkDir\bin;$androidSdk\platform-tools;$env:Path"
 
         if ($EnableTransportCascade) {
+            & (Join-Path $PSScriptRoot "build_android_awg2_native.ps1") -VerifyOnly
+            if ($LASTEXITCODE -ne 0) { throw "Pinned Android AWG native verification failed" }
+            & (Join-Path $PSScriptRoot "build_android_hysteria2_native.ps1") -VerifyOnly
+            if ($LASTEXITCODE -ne 0) { throw "Pinned Android Hysteria native verification failed" }
             & (Join-Path $PSScriptRoot "prepare_android_awg2_preview.ps1")
             & (Join-Path $PSScriptRoot "prepare_android_hysteria2_preview.ps1")
             & (Join-Path $PSScriptRoot "prepare_android_vless_reality_preview.ps1")
@@ -93,7 +101,24 @@ if ($Mode -in @("android", "both")) {
             & (Join-Path $PSScriptRoot "prepare_android_dnstt_preview.ps1")
         }
 
+        if (-not $SkipChecks) {
+            $lintTasks = @(':app:lintRelease')
+            if ($EnableTransportCascade) {
+                $lintTasks += ':awg_tunnel_preview:lint'
+                $lintTasks += ':hysteria_tunnel_preview:lint'
+            }
+            Push-Location (Join-Path $repo 'android')
+            try {
+                & '.\gradlew.bat' @lintTasks '--rerun-tasks' '--stacktrace' | Out-Host
+                if ($LASTEXITCODE -ne 0) { throw "Android public product lint failed" }
+            }
+            finally {
+                Pop-Location
+            }
+        }
+
         flutter build apk --release --no-pub `
+            --target-platform android-arm64,android-x64 `
             --build-name $AppVersion `
             --build-number $AndroidBuildNumber `
             --dart-define="GREENVPN_APP_VERSION=$AppVersion" `
@@ -164,6 +189,10 @@ if ($Mode -in @("android", "both")) {
             -ExpectedVersionCode $AndroidBuildNumber
         if ($LASTEXITCODE -ne 0) { throw "Android dnstt verifier failed" }
     }
+    & (Join-Path $PSScriptRoot "verify_android_16kb_compatibility.ps1") `
+        -ApkPath $androidPath `
+        -JsonOutput (Join-Path $OutDir "android-16kb-compatibility.json") | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "Android 16 KB compatibility verification failed" }
 
     $item = Get-Item -LiteralPath $androidPath
     $artifacts.Add([pscustomobject]@{
@@ -186,8 +215,13 @@ if ($Mode -in @("windows", "both")) {
         -TrialOnlyNoAdsBuild $false `
         -PaidBetaBuild $false `
         -PublicProductBuild $true `
-        -WindowsRuntimeScope stable
-    if ($LASTEXITCODE -ne 0) { throw "Windows public product build failed" }
+        -EnableTransportCascade $EnableTransportCascade `
+        -WindowsRuntimeScope stable `
+        -CertificateThumbprint $WindowsCodeSigningCertificateThumbprint `
+        -CodeSigningExpectedPublisher $WindowsCodeSigningPublisher `
+        -CodeSigningTimestampUrl $WindowsCodeSigningTimestampUrl `
+        -RequireCodeSigning:$RequireWindowsCodeSigning
+    if (-not $?) { throw "Windows public product build failed" }
     $item = Get-Item -LiteralPath $windowsPath
     $signature = Get-AuthenticodeSignature -LiteralPath $item.FullName
     $artifacts.Add([pscustomobject]@{
@@ -195,23 +229,27 @@ if ($Mode -in @("windows", "both")) {
         path = $item.FullName; sizeBytes = $item.Length
         sha256 = (Get-FileHash $item.FullName -Algorithm SHA256).Hash
         signed = $signature.Status -eq "Valid"; signatureStatus = $signature.Status.ToString()
+        signerSubject = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { "" }
+        signerThumbprint = if ($signature.SignerCertificate) { $signature.SignerCertificate.Thumbprint } else { "" }
     })
 }
 
-$effectiveTransportCascade = $EnableTransportCascade -and $Mode -ne "windows"
+$effectiveTransportCascade = $EnableTransportCascade
 $manifest = [ordered]@{
     channel = "stable"
     publicProduct = $true
     productionPublished = $false
     appVersion = $AppVersion
     windowsAppVersion = $WindowsAppVersion
-    trialDays = 3
+    freeAccessPolicy = "server-configured"
+    trialDays = $null
     plans = [object[]]@(
         [pscustomobject]@{ code = 'green_30d'; periodDays = 30; priceRub = 249 }
         [pscustomobject]@{ code = 'green_90d'; periodDays = 90; priceRub = 649 }
         [pscustomobject]@{ code = 'green_180d'; periodDays = 180; priceRub = 1099 }
     )
-    autoRenew = $true
+    autoRenew = $false
+    autoRenewRequiresExplicitConsent = $true
     adsEnabled = [bool]$EnableAndroidRewardedAds
     transportCascade = $effectiveTransportCascade
     generatedAt = (Get-Date).ToUniversalTime().ToString("o")

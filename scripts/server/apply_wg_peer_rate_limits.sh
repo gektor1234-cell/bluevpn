@@ -4,6 +4,8 @@ set -euo pipefail
 IFACE="wg0"
 ROOT_MBPS="1000"
 RESERVED_MBPS="250"
+FREE_MBPS="10"
+FREE_BURST_MBPS="20"
 APPLY="0"
 PEER_FILE=""
 PEERS=()
@@ -12,12 +14,14 @@ usage() {
   cat <<'USAGE'
 Usage:
   apply_wg_peer_rate_limits.sh [--apply] [--iface wg0] [--root-mbps 1000] [--reserved-mbps 250] \
+    [--free-mbps 10] [--free-burst-mbps 20] \
     --peer 10.8.0.2=paid_standard --peer 10.8.0.3=free_ad
 
-  apply_wg_peer_rate_limits.sh --apply --file /etc/greenvpn/peer-rate-limits.txt
+  apply_wg_peer_rate_limits.sh --apply --free-mbps 10 --free-burst-mbps 20 \
+    --file /etc/greenvpn/peer-rate-limits.txt
 
 Peer classes:
-  free_ad        5mbit sustained, 20mbit burst
+  free_ad        configurable sustained/burst, defaults to 10/20mbit
   paid_light     25mbit sustained, 100mbit burst
   paid_standard  50mbit sustained, 150mbit burst
   paid_plus      100mbit sustained, 250mbit burst
@@ -47,6 +51,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --reserved-mbps)
       RESERVED_MBPS="${2:-}"
+      shift 2
+      ;;
+    --free-mbps)
+      FREE_MBPS="${2:-}"
+      shift 2
+      ;;
+    --free-burst-mbps)
+      FREE_BURST_MBPS="${2:-}"
       shift 2
       ;;
     --peer)
@@ -88,8 +100,19 @@ if [[ ${#PEERS[@]} -eq 0 ]]; then
   exit 2
 fi
 
-if ! [[ "$ROOT_MBPS" =~ ^[0-9]+$ ]] || ! [[ "$RESERVED_MBPS" =~ ^[0-9]+$ ]]; then
-  echo "--root-mbps and --reserved-mbps must be integers." >&2
+if ! [[ "$ROOT_MBPS" =~ ^[0-9]+$ ]] \
+  || ! [[ "$RESERVED_MBPS" =~ ^[0-9]+$ ]] \
+  || ! [[ "$FREE_MBPS" =~ ^[0-9]+$ ]] \
+  || ! [[ "$FREE_BURST_MBPS" =~ ^[0-9]+$ ]]; then
+  echo "Bandwidth values must be integers." >&2
+  exit 2
+fi
+if (( FREE_MBPS < 1 || FREE_MBPS > 1000 )); then
+  echo "--free-mbps must be between 1 and 1000." >&2
+  exit 2
+fi
+if (( FREE_BURST_MBPS < FREE_MBPS || FREE_BURST_MBPS > 2000 )); then
+  echo "--free-burst-mbps must be between free-mbps and 2000." >&2
   exit 2
 fi
 
@@ -111,7 +134,7 @@ run() {
 
 class_params() {
   case "$1" in
-    free_ad)        echo "10 5 20" ;;
+    free_ad)        echo "10 ${FREE_MBPS} ${FREE_BURST_MBPS}" ;;
     paid_light)     echo "20 25 100" ;;
     paid_standard)  echo "30 50 150" ;;
     paid_plus)      echo "40 100 250" ;;

@@ -54,6 +54,22 @@ class PaidBetaPolicyTests(unittest.TestCase):
     def setUp(self) -> None:
         main.PAID_BETA_ENABLED = True
         main.PAID_BETA_BILLING_PRIMARY = True
+        main.FREE_TIER_ENABLED = False
+        main.FREE_TIER_QUOTA_ENFORCED = True
+        main.FREE_TIER_MONTHLY_LIMIT_GB = 3
+        main.FREE_TIER_MAX_DEVICES = 1
+        main.FREE_TIER_SPEED_MBPS = 10
+        main.FREE_TIER_BURST_MBPS = 20
+        main.FREE_TIER_RATE_LIMIT_ENFORCED = False
+        main.PAID_SALES_ENABLED = True
+        main.TAX_RECEIPT_MODE = "yookassa_54fz"
+        main.TAX_RECEIPT_WORKFLOW_CONFIRMED = True
+        main.TAX_RECEIPT_VAT_CODE = 1
+        main.TAX_RECEIPT_PAYMENT_SUBJECT = "service"
+        main.TAX_RECEIPT_PAYMENT_MODE = "full_payment"
+        main.REFUND_WORKFLOW_CONFIRMED = True
+        main.REFUND_EXECUTION_ENABLED = True
+        main.REFUND_BILLING_PRIMARY = True
         with main.db() as conn:
             conn.execute("DELETE FROM beta_funnel_events")
             conn.execute("DELETE FROM beta_invite_redemptions")
@@ -67,11 +83,22 @@ class PaidBetaPolicyTests(unittest.TestCase):
             conn.execute("DELETE FROM device_transport_assignments")
             conn.execute("DELETE FROM client_endpoint_assignments")
             conn.execute("DELETE FROM client_route_events")
+            conn.execute("DELETE FROM device_traffic_usage")
             conn.execute("DELETE FROM devices")
             conn.execute("DELETE FROM users")
             conn.execute(
-                "INSERT INTO users(email, password_hash, created_at) VALUES (?, ?, ?)",
-                ("beta@example.test", main.hash_password("test-password"), main.utc_now_iso()),
+                """
+                INSERT INTO users(
+                    email, password_hash, email_verified, email_verified_at, created_at
+                )
+                VALUES (?, ?, 1, ?, ?)
+                """,
+                (
+                    "beta@example.test",
+                    main.hash_password("test-password"),
+                    main.utc_now_iso(),
+                    main.utc_now_iso(),
+                ),
             )
             self.user_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
             main.create_trial_subscription(conn, self.user_id)
@@ -84,6 +111,57 @@ class PaidBetaPolicyTests(unittest.TestCase):
             enabled=True,
             source="test-suite",
         )
+
+    def expire_subscription(self) -> None:
+        with main.db() as conn:
+            conn.execute(
+                """
+                UPDATE subscriptions
+                SET expires_at = ?, is_active = 1, updated_at = ?
+                WHERE user_id = ?
+                """,
+                (
+                    "2020-01-01T00:00:00+00:00",
+                    main.utc_now_iso(),
+                    self.user_id,
+                ),
+            )
+            conn.commit()
+
+    def add_traffic_usage(
+        self,
+        *,
+        used_bytes: int,
+        period_key: str | None = None,
+        device_uid: str = "free-tier-traffic-device",
+    ) -> None:
+        now = main.utc_now_iso()
+        with main.db() as conn:
+            conn.execute(
+                """
+                INSERT INTO device_traffic_usage (
+                    user_id, device_uid, server_id, peer_ip, period_key,
+                    rx_bytes, tx_bytes, last_rx_bytes, last_tx_bytes,
+                    last_report_at, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    self.user_id,
+                    device_uid,
+                    "test-nl",
+                    "10.8.0.200",
+                    period_key or main.traffic_period_key(),
+                    used_bytes,
+                    0,
+                    used_bytes,
+                    0,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
 
     def create_invite(self, *, max_uses: int = 1):
         return main.create_paid_beta_invite_batch(
@@ -729,6 +807,341 @@ class PaidBetaPolicyTests(unittest.TestCase):
         self.assertFalse(bootstrap["adGate"]["enabled"])
         self.assertFalse(bootstrap["adGate"]["sessionTimerEnabled"])
 
+    def test_free_tier_flag_off_preserves_expired_beta_paywall(self) -> None:
+        self.enroll_beta()
+        self.expire_subscription()
+
+        bootstrap = self.bootstrap(
+            paid_beta=True,
+            device_uid="expired-beta-free-tier-off",
+        )
+
+        self.assertFalse(bootstrap["canConnect"])
+        self.assertEqual(bootstrap["reason"], "subscription_inactive")
+        self.assertFalse(bootstrap["accessPolicy"]["freeTier"])
+        self.assertEqual(bootstrap["subscription"]["planCode"], "paid_beta_trial")
+
+    def test_expired_beta_gets_configurable_free_tier(self) -> None:
+        self.enroll_beta()
+        self.expire_subscription()
+        main.FREE_TIER_ENABLED = True
+        main.FREE_TIER_MONTHLY_LIMIT_GB = 7
+
+        bootstrap = self.bootstrap(
+            paid_beta=True,
+            device_uid="expired-beta-free-tier-on",
+        )
+        profile = main.subscription_me(
+            authorization=f"Bearer {self.access_token}",
+        )
+
+        self.assertTrue(bootstrap["canConnect"])
+        self.assertIsNone(bootstrap["reason"])
+        self.assertTrue(bootstrap["accessPolicy"]["freeTier"])
+        self.assertFalse(bootstrap["accessPolicy"]["quotaExhausted"])
+        self.assertEqual(bootstrap["accessPolicy"]["maxDevices"], 1)
+        self.assertEqual(bootstrap["subscription"]["planCode"], "free_quota")
+        self.assertEqual(bootstrap["subscription"]["trafficLimitGb"], 7)
+        self.assertFalse(bootstrap["adGate"]["enabled"])
+        self.assertTrue(profile["isFreeTier"])
+        self.assertEqual(profile["trafficUsage"]["trafficLimitGb"], 7)
+
+    def test_free_tier_quota_can_be_disabled_without_losing_usage(self) -> None:
+        self.enroll_beta()
+        self.expire_subscription()
+        self.add_traffic_usage(used_bytes=8 * (1024 ** 3))
+        main.FREE_TIER_ENABLED = True
+        main.FREE_TIER_QUOTA_ENFORCED = False
+
+        bootstrap = self.bootstrap(
+            paid_beta=True,
+            device_uid="free-tier-unlimited-test",
+        )
+
+        self.assertTrue(bootstrap["canConnect"])
+        self.assertIsNone(bootstrap["trafficUsage"]["trafficLimitGb"])
+        self.assertIsNone(bootstrap["trafficUsage"]["remainingGb"])
+        self.assertFalse(bootstrap["trafficUsage"]["overLimit"])
+        self.assertEqual(bootstrap["trafficUsage"]["usedGb"], 8.0)
+        self.assertFalse(bootstrap["subscription"]["freeTier"]["quotaEnforced"])
+
+    def test_default_subscription_is_permanent_free(self) -> None:
+        main.FREE_TIER_ENABLED = True
+        with main.db() as conn:
+            conn.execute(
+                """
+                INSERT INTO users(email, password_hash, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    "new-free@example.test",
+                    main.hash_password("test-password"),
+                    main.utc_now_iso(),
+                    main.utc_now_iso(),
+                ),
+            )
+            user_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+            main.create_default_subscription(conn, user_id)
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM subscriptions WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+
+        self.assertEqual(row["plan_code"], main.FREE_TIER_PLAN_CODE)
+        self.assertEqual(row["plan_name"], main.FREE_TIER_PLAN_NAME)
+        self.assertTrue(row["is_active"])
+        self.assertIsNone(row["expires_at"])
+        self.assertEqual(row["monthly_price_rub"], 0)
+        self.assertFalse(row["auto_renew"])
+
+    def test_startup_migration_converts_only_latest_stable_trial_to_free(self) -> None:
+        main.FREE_TIER_ENABLED = True
+        result = main.migrate_stable_trials_to_free()
+        row = main.get_subscription_row(self.user_id)
+
+        self.assertEqual(result["updated"], 1)
+        self.assertEqual(row["plan_code"], main.FREE_TIER_PLAN_CODE)
+        self.assertTrue(row["is_active"])
+        self.assertIsNone(row["expires_at"])
+        self.assertEqual(row["monthly_price_rub"], 0)
+
+    def test_paid_sales_flag_blocks_order_before_provider_call(self) -> None:
+        self.enroll_beta()
+        main.PAID_SALES_ENABLED = False
+
+        with self.assertRaises(main.HTTPException) as raised:
+            main.create_billing_order_for_user(
+                self.user_id,
+                self.beta_payload(),
+            )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail["code"],
+            "paid_sales_not_ready",
+        )
+        with main.db() as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM billing_orders"
+            ).fetchone()[0]
+        self.assertEqual(count, 0)
+
+    def test_yookassa_payment_contains_confirmed_receipt_contract(self) -> None:
+        self.enroll_beta()
+        provider_payment = {
+            "id": "payment-with-receipt",
+            "status": "pending",
+            "paid": False,
+            "receipt_registration": "pending",
+            "confirmation": {
+                "confirmation_url": "https://pay.example.test/confirm",
+            },
+        }
+        with (
+            patch.object(main, "YOOKASSA_SHOP_ID", "shop"),
+            patch.object(main, "YOOKASSA_SECRET_KEY", "secret"),
+            patch.object(
+                main,
+                "YOOKASSA_RETURN_URL",
+                "https://api.example.test/payment/return",
+            ),
+            patch.object(
+                main,
+                "YOOKASSA_WEBHOOK_URL",
+                "https://api.example.test/api/v1/billing/yookassa/webhook",
+            ),
+            patch.object(main, "PUBLIC_BASE_URL", "https://api.example.test"),
+            patch.object(
+                main,
+                "yookassa_request",
+                return_value=provider_payment,
+            ) as request_payment,
+        ):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.beta_payload(),
+            )
+
+        payload = request_payment.call_args.args[1]
+        item = payload["receipt"]["items"][0]
+        self.assertEqual(
+            payload["receipt"]["customer"]["email"],
+            "beta@example.test",
+        )
+        self.assertEqual(item["payment_subject"], "service")
+        self.assertEqual(item["payment_mode"], "full_payment")
+        self.assertEqual(item["vat_code"], 1)
+        self.assertEqual(
+            item["amount"]["value"],
+            f"{order['amountRub']}.00",
+        )
+        self.assertEqual(order["taxReceipt"]["status"], "pending")
+
+    def test_exhausted_free_quota_blocks_bootstrap_and_new_config(self) -> None:
+        self.enroll_beta()
+        self.expire_subscription()
+        self.add_traffic_usage(used_bytes=3 * (1024 ** 3))
+        main.FREE_TIER_ENABLED = True
+
+        bootstrap = self.bootstrap(
+            paid_beta=True,
+            device_uid="free-tier-exhausted",
+        )
+
+        self.assertFalse(bootstrap["canConnect"])
+        self.assertEqual(bootstrap["reason"], "free_quota_exhausted")
+        self.assertTrue(bootstrap["accessPolicy"]["quotaExhausted"])
+        self.assertTrue(bootstrap["trafficUsage"]["overLimit"])
+
+        with self.assertRaises(main.HTTPException) as denied:
+            main.client_config(
+                main.ClientConfigIn(
+                    deviceUid="free-tier-exhausted",
+                    releaseChannel="paid-beta",
+                    clientMarker="green-vpn-paid-beta-v1",
+                ),
+                authorization=f"Bearer {self.access_token}",
+            )
+        self.assertEqual(denied.exception.status_code, 403)
+        self.assertEqual(
+            denied.exception.detail["code"],
+            "free_quota_exhausted",
+        )
+        self.assertTrue(denied.exception.detail["trafficUsage"]["overLimit"])
+
+    def test_quota_denial_does_not_replace_an_existing_device(self) -> None:
+        self.enroll_beta()
+        self.expire_subscription()
+        main.FREE_TIER_ENABLED = True
+        first_uid = "free-tier-existing-device"
+        second_uid = "free-tier-denied-new-device"
+
+        first = self.bootstrap(
+            paid_beta=True,
+            device_uid=first_uid,
+        )
+        self.assertTrue(first["canConnect"])
+        self.add_traffic_usage(used_bytes=3 * (1024 ** 3))
+
+        second = self.bootstrap(
+            paid_beta=True,
+            device_uid=second_uid,
+        )
+
+        self.assertFalse(second["canConnect"])
+        with main.db() as conn:
+            rows = conn.execute(
+                """
+                SELECT device_uid, is_enabled
+                FROM devices
+                WHERE user_id = ?
+                ORDER BY device_uid
+                """,
+                (self.user_id,),
+            ).fetchall()
+        enabled = {row["device_uid"]: bool(row["is_enabled"]) for row in rows}
+        self.assertTrue(enabled[first_uid])
+        self.assertTrue(enabled[second_uid])
+
+    def test_free_quota_resets_by_utc_calendar_month(self) -> None:
+        self.enroll_beta()
+        self.expire_subscription()
+        self.add_traffic_usage(
+            used_bytes=20 * (1024 ** 3),
+            period_key="2020-01",
+        )
+        main.FREE_TIER_ENABLED = True
+
+        bootstrap = self.bootstrap(
+            paid_beta=True,
+            device_uid="free-tier-new-month",
+        )
+
+        self.assertTrue(bootstrap["canConnect"])
+        self.assertEqual(
+            bootstrap["trafficUsage"]["periodKey"],
+            main.traffic_period_key(),
+        )
+        self.assertEqual(bootstrap["trafficUsage"]["usedBytes"], 0)
+        self.assertFalse(bootstrap["trafficUsage"]["overLimit"])
+
+    def test_active_trial_has_priority_over_free_tier(self) -> None:
+        self.enroll_beta()
+        self.add_traffic_usage(used_bytes=20 * (1024 ** 3))
+        main.FREE_TIER_ENABLED = True
+
+        bootstrap = self.bootstrap(
+            paid_beta=True,
+            device_uid="active-trial-not-free-tier",
+        )
+
+        self.assertTrue(bootstrap["canConnect"])
+        self.assertFalse(bootstrap["accessPolicy"]["freeTier"])
+        self.assertEqual(bootstrap["subscription"]["planCode"], "paid_beta_trial")
+        self.assertEqual(bootstrap["accessPolicy"]["maxDevices"], 2)
+        self.assertIsNone(bootstrap["trafficUsage"]["trafficLimitGb"])
+
+    def test_rate_limit_plan_labels_expired_beta_as_free_tier(self) -> None:
+        self.enroll_beta()
+        self.expire_subscription()
+        main.FREE_TIER_ENABLED = True
+        main.FREE_TIER_RATE_LIMIT_ENFORCED = True
+        device_uid = "free-tier-rate-plan"
+        self.bootstrap(
+            paid_beta=True,
+            device_uid=device_uid,
+        )
+        with main.db() as conn:
+            conn.execute(
+                "UPDATE devices SET assigned_ip = ? WHERE device_uid = ?",
+                ("10.8.0.210", device_uid),
+            )
+            conn.commit()
+
+        plan = main.build_wg_peer_rate_limit_plan()
+        peer = next(
+            item for item in plan["peers"] if item["deviceUid"] == device_uid
+        )
+
+        self.assertTrue(peer["freeTier"])
+        self.assertEqual(peer["planCode"], "free_quota")
+        self.assertEqual(peer["priorityClass"], "free_ad")
+        self.assertEqual(peer["speedSustainedMbps"], 10)
+        self.assertEqual(peer["trafficUsage"]["trafficLimitGb"], 3)
+        self.assertIn("--free-mbps 10", plan["dryRunCommand"])
+        self.assertIn("--free-burst-mbps 20", plan["dryRunCommand"])
+        self.assertIn("--free-mbps 10", plan["applyCommand"])
+
+    def test_free_tier_rate_limit_is_fail_closed_when_flag_is_off(self) -> None:
+        self.enroll_beta()
+        self.expire_subscription()
+        main.FREE_TIER_ENABLED = True
+        main.FREE_TIER_RATE_LIMIT_ENFORCED = False
+        device_uid = "free-tier-rate-plan-disabled"
+        self.bootstrap(paid_beta=True, device_uid=device_uid)
+        with main.db() as conn:
+            conn.execute(
+                "UPDATE devices SET assigned_ip = ? WHERE device_uid = ?",
+                ("10.8.0.211", device_uid),
+            )
+            conn.commit()
+
+        plan = main.build_wg_peer_rate_limit_plan()
+        peer = next(
+            item for item in plan["peers"] if item["deviceUid"] == device_uid
+        )
+
+        self.assertEqual(peer["priorityClass"], "unlimited")
+        self.assertFalse(peer["rateLimitEnforced"])
+        self.assertIsNone(peer["scriptLine"])
+        self.assertFalse(plan["applyAllowed"])
+        self.assertIsNone(plan["applyCommand"])
+        self.assertEqual(
+            plan["applyBlockedReason"],
+            "free_tier_rate_limit_disabled",
+        )
+
     def test_bootstrap_exposes_safe_auto_replacement_reason(self) -> None:
         self.enroll_beta()
         device_uid = "auto-replaced-windows-device"
@@ -936,13 +1349,90 @@ class PaidBetaPolicyTests(unittest.TestCase):
         return main.TariffSelectionIn(**values)
 
     def test_public_product_catalog_has_three_fixed_terms(self) -> None:
-        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+        with (
+            patch.object(main, "PUBLIC_PRODUCT_ENABLED", True),
+            patch.object(main, "PAID_SALES_ENABLED", False),
+            patch.object(main, "TAX_RECEIPT_WORKFLOW_CONFIRMED", False),
+        ):
             catalog = main.build_public_product_tariff_catalog()
 
         self.assertEqual(catalog["pricingModel"], "fixed_term_plans")
         self.assertEqual(
             [(plan["periodDays"], plan["priceRub"]) for plan in catalog["plans"]],
             [(30, 249), (90, 649), (180, 1099)],
+        )
+        self.assertFalse(catalog["autoRenew"])
+        self.assertFalse(catalog["paidSalesEnabled"])
+        self.assertFalse(catalog["paymentsProductionReady"])
+        self.assertFalse(catalog["taxReceiptProductionReady"])
+        self.assertIn("Бесплатный тариф", catalog["checkoutMessage"])
+        self.assertTrue(
+            any(
+                "явного согласия" in note.lower()
+                for note in catalog["notes"]
+            )
+        )
+
+    def test_missing_promo_campaign_is_safe_when_no_risky_promo_is_active(self) -> None:
+        with main.db() as conn:
+            conn.execute("DELETE FROM promo_codes")
+            conn.commit()
+
+        readiness = main.billing_promo_launch_readiness_payload()
+
+        self.assertFalse(readiness["safeToRunLaunchCampaign"])
+        self.assertFalse(readiness["requiresAttention"])
+        self.assertEqual(readiness["summary"]["activeRisky"], 0)
+
+    def test_admin_alerts_fall_back_to_existing_smtp_channel(self) -> None:
+        with (
+            patch.object(main, "ADMIN_ALERTS_ENABLED", True),
+            patch.object(main, "TELEGRAM_ALERT_BOT_TOKEN", ""),
+            patch.object(main, "TELEGRAM_ALERT_CHAT_ID", ""),
+            patch.object(main, "SMTP_HOST", "smtp.example.test"),
+            patch.object(main, "SMTP_FROM", "no-reply@example.test"),
+            patch.object(main, "ADMIN_ALERT_EMAIL", "ops@example.test"),
+            patch.object(main, "send_smtp_email") as send_email,
+        ):
+            readiness = main.admin_alert_readiness()
+            result = main.send_admin_alert("test incident")
+
+        self.assertTrue(readiness["productionReady"])
+        self.assertEqual(readiness["provider"], "smtp")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["provider"], "smtp")
+        send_email.assert_called_once_with(
+            "ops@example.test",
+            "[Green VPN] Incident alert",
+            "test incident",
+        )
+
+    def test_free_trial_without_email_is_not_an_expiry_blocker(self) -> None:
+        expires_at = (main.utc_now() + main.timedelta(days=2)).isoformat()
+        with main.db() as conn:
+            conn.execute(
+                "UPDATE users SET email_verified = 0 WHERE id = ?",
+                (self.user_id,),
+            )
+            conn.execute(
+                "UPDATE subscriptions SET expires_at = ? WHERE user_id = ?",
+                (expires_at, self.user_id),
+            )
+            conn.commit()
+
+        readiness = main.subscription_expiry_readiness_payload()
+        candidate = next(
+            item
+            for item in readiness["candidates"]
+            if item["userId"] == self.user_id
+        )
+
+        self.assertTrue(candidate["trialLike"])
+        self.assertFalse(candidate["billable"])
+        self.assertFalse(candidate["requiresManualReview"])
+        self.assertNotIn(
+            "retention_contact_unverified",
+            {issue["code"] for issue in candidate["issues"]},
         )
 
     def test_server_provisioning_allows_public_eligible_managed_entries(self) -> None:
@@ -994,6 +1484,81 @@ class PaidBetaPolicyTests(unittest.TestCase):
             if item["requestServerId"] == "current_wg0"
         )
         self.assertTrue(current_case["allowed"])
+
+    def test_server_provisioning_accepts_dynamic_managed_default(self) -> None:
+        catalog = {
+            "defaultServerId": "london-public",
+            "servers": [
+                {
+                    "id": "current_wg0",
+                    "endpoint": {
+                        "host": main.WG_ENDPOINT_HOST,
+                        "port": main.WG_ENDPOINT_PORT,
+                    },
+                },
+                {
+                    "id": "london-public",
+                    "endpoint": {"host": "203.0.113.20", "port": 443},
+                },
+            ],
+        }
+        entries = [
+            {
+                "serverId": "current_wg0",
+                "host": main.WG_ENDPOINT_HOST,
+                "port": main.WG_ENDPOINT_PORT,
+                "clientConfigReady": True,
+                "publicEligible": True,
+                "clientConfigProfile": "remote_ssh_wg0",
+            },
+            {
+                "serverId": "london-public",
+                "host": "203.0.113.20",
+                "port": 443,
+                "clientConfigReady": True,
+                "publicEligible": True,
+                "clientConfigProfile": "remote_ssh_wg0",
+            },
+        ]
+
+        readiness = main.build_server_provisioning_readiness(catalog, entries)
+
+        self.assertTrue(readiness["safeForCurrentClient"])
+        self.assertEqual(
+            readiness["clientConfigContract"]["endpoint"],
+            "203.0.113.20:443",
+        )
+        endpoint_check = next(
+            item
+            for item in readiness["checks"]
+            if item["code"] == "client_config_builder_matches_public_default"
+        )
+        self.assertTrue(endpoint_check["ok"])
+
+    def test_server_provisioning_rejects_dynamic_default_endpoint_mismatch(self) -> None:
+        catalog = {
+            "defaultServerId": "london-public",
+            "servers": [
+                {
+                    "id": "london-public",
+                    "endpoint": {"host": "203.0.113.21", "port": 443},
+                },
+            ],
+        }
+        entries = [
+            {
+                "serverId": "london-public",
+                "host": "203.0.113.20",
+                "port": 443,
+                "clientConfigReady": True,
+                "publicEligible": True,
+                "clientConfigProfile": "remote_ssh_wg0",
+            },
+        ]
+
+        readiness = main.build_server_provisioning_readiness(catalog, entries)
+
+        self.assertFalse(readiness["safeForCurrentClient"])
 
     def test_server_provisioning_rejects_visible_managed_entry_without_gate(self) -> None:
         catalog = {
@@ -1497,6 +2062,20 @@ class PaidBetaPolicyTests(unittest.TestCase):
         self.assertEqual(quote["monthlyPriceRub"], 249)
         self.assertTrue(quote["autoRenew"])
 
+    def test_public_product_defaults_auto_renew_to_explicit_opt_in(self) -> None:
+        payload = main.TariffSelectionIn(
+            clientMarker="green-vpn-public-product-v1",
+            releaseChannel="public-product",
+            billingPlanCode="green_30d",
+        )
+        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+            normalized = main.normalize_tariff_selection(payload)
+            quote = main.quote_tariff(normalized)
+
+        self.assertFalse(normalized["autoRenew"])
+        self.assertFalse(quote["autoRenew"])
+        self.assertFalse(quote["summary"]["autoRenew"])
+
     def test_public_product_quotes_selected_term_and_ignores_old_constructor_fields(self) -> None:
         with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
             normalized = main.normalize_tariff_selection(
@@ -1719,6 +2298,219 @@ class PaidBetaPolicyTests(unittest.TestCase):
 
         self.assertFalse(result["enabled"])
         self.assertEqual(result["executed"], 0)
+
+    def test_full_refund_is_idempotent_and_restores_previous_entitlement(self) -> None:
+        before = main.billing_subscription_snapshot(
+            main.get_subscription_row(self.user_id)
+        )
+        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(plan_code="green_30d"),
+            )
+            main.mark_billing_order_paid_and_activate(
+                order["orderId"],
+                provider_payment_id="refund-payment-1",
+                provider_payment_method_id="refund-saved-method-1",
+            )
+        with main.db() as conn:
+            conn.execute(
+                """
+                UPDATE billing_orders
+                SET provider = 'yookassa'
+                WHERE public_id = ?
+                """,
+                (order["orderId"],),
+            )
+            conn.commit()
+
+        provider_payment = {
+            "id": "refund-payment-1",
+            "status": "succeeded",
+            "paid": True,
+            "refundable": True,
+            "amount": {"value": "249.00", "currency": "RUB"},
+            "metadata": {"orderId": order["orderId"]},
+        }
+
+        def create_refund(path, payload, idempotence_key):
+            self.assertEqual(path, "/refunds")
+            self.assertEqual(payload["payment_id"], "refund-payment-1")
+            self.assertEqual(payload["amount"], {"value": "249.00", "currency": "RUB"})
+            self.assertTrue(idempotence_key.startswith("greenvpn-refund-"))
+            return {
+                "id": "refund-1",
+                "status": "succeeded",
+                "payment_id": "refund-payment-1",
+                "amount": {"value": "249.00", "currency": "RUB"},
+                "receipt_registration": "succeeded",
+            }
+
+        with (
+            patch.object(
+                main,
+                "refund_execution_readiness",
+                return_value={"productionReady": True, "requiredActions": []},
+            ),
+            patch.object(
+                main,
+                "yookassa_get_payment",
+                return_value=provider_payment,
+            ),
+            patch.object(
+                main,
+                "yookassa_request",
+                side_effect=create_refund,
+            ) as provider_call,
+        ):
+            first = main.execute_full_refund_for_order(
+                order["orderId"],
+                reason="Owner-approved full refund regression test",
+            )
+            second = main.execute_full_refund_for_order(
+                order["orderId"],
+                reason="Owner-approved full refund regression test",
+            )
+
+        self.assertEqual(provider_call.call_count, 1)
+        self.assertFalse(first["reused"])
+        self.assertTrue(first["entitlementRolledBack"])
+        self.assertTrue(second["reused"])
+        self.assertFalse(second["providerCalled"])
+        refunded = main.get_billing_order_row(order["orderId"])
+        self.assertEqual(refunded["status"], "refunded")
+        self.assertEqual(refunded["refund_status"], "succeeded")
+        self.assertEqual(refunded["refund_amount_rub"], 249)
+        self.assertEqual(refunded["refund_receipt_status"], "succeeded")
+        self.assertEqual(refunded["refund_entitlement_status"], "rolled_back")
+        restored = main.billing_subscription_snapshot(
+            main.get_subscription_row(self.user_id)
+        )
+        for key in (
+            "id",
+            "userId",
+            "planCode",
+            "planName",
+            "maxDevices",
+            "isActive",
+            "expiresAt",
+            "monthlyPriceRub",
+            "selectionJson",
+            "autoRenew",
+            "providerPaymentMethodId",
+        ):
+            self.assertEqual(restored[key], before[key])
+        public_order = main.public_billing_order_status(
+            main.billing_order_status(refunded)
+        )
+        self.assertNotIn("activationSubscriptionId", public_order)
+        self.assertNotIn("providerId", public_order["refund"])
+        self.assertNotIn("error", public_order["refund"])
+
+    def test_full_refund_stops_before_provider_when_entitlement_changed(self) -> None:
+        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(plan_code="green_30d"),
+            )
+            main.mark_billing_order_paid_and_activate(
+                order["orderId"],
+                provider_payment_id="refund-payment-changed",
+            )
+        with main.db() as conn:
+            current = conn.execute(
+                "SELECT * FROM subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+                (self.user_id,),
+            ).fetchone()
+            changed_expiry = (
+                main.parse_dt(current["expires_at"]) + timedelta(days=30)
+            ).isoformat()
+            conn.execute(
+                "UPDATE subscriptions SET expires_at = ? WHERE id = ?",
+                (changed_expiry, current["id"]),
+            )
+            conn.execute(
+                "UPDATE billing_orders SET provider = 'yookassa' WHERE public_id = ?",
+                (order["orderId"],),
+            )
+            conn.commit()
+
+        with (
+            patch.object(
+                main,
+                "refund_execution_readiness",
+                return_value={"productionReady": True, "requiredActions": []},
+            ),
+            patch.object(main, "yookassa_get_payment") as provider_call,
+        ):
+            with self.assertRaises(main.HTTPException) as raised:
+                main.execute_full_refund_for_order(
+                    order["orderId"],
+                    reason="Entitlement changed refund regression test",
+                )
+
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(
+            raised.exception.detail["code"],
+            "refund_entitlement_changed",
+        )
+        provider_call.assert_not_called()
+
+    def test_full_refund_is_inert_on_fallback_billing_node(self) -> None:
+        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(plan_code="green_30d"),
+            )
+            main.mark_billing_order_paid_and_activate(
+                order["orderId"],
+                provider_payment_id="refund-payment-fallback",
+            )
+        with main.db() as conn:
+            conn.execute(
+                "UPDATE billing_orders SET provider = 'yookassa' WHERE public_id = ?",
+                (order["orderId"],),
+            )
+            conn.commit()
+
+        with (
+            patch.object(main, "REFUND_BILLING_PRIMARY", False),
+            patch.object(main, "yookassa_get_payment") as provider_call,
+        ):
+            with self.assertRaises(main.HTTPException) as raised:
+                main.execute_full_refund_for_order(
+                    order["orderId"],
+                    reason="Fallback billing node must never refund",
+                )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail["code"],
+            "refund_execution_not_ready",
+        )
+        provider_call.assert_not_called()
+
+    def test_paid_order_creation_is_blocked_when_refund_policy_is_closed(self) -> None:
+        with (
+            patch.object(main, "PUBLIC_PRODUCT_ENABLED", True),
+            patch.object(main, "REFUND_EXECUTION_ENABLED", False),
+        ):
+            with self.assertRaises(main.HTTPException) as raised:
+                main.create_billing_order_for_user(
+                    self.user_id,
+                    self.public_product_payload(),
+                )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail["code"],
+            "paid_sales_not_ready",
+        )
+        with main.db() as conn:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM billing_orders").fetchone()[0],
+                0,
+            )
 
     def test_public_product_fallback_rejects_order_before_mutation(self) -> None:
         with (
@@ -2084,6 +2876,15 @@ class OperationalReadinessRegressionTests(unittest.TestCase):
     def setUp(self) -> None:
         main.PAID_BETA_ENABLED = True
         main.PAID_BETA_BILLING_PRIMARY = True
+        main.PAID_SALES_ENABLED = True
+        main.TAX_RECEIPT_MODE = "yookassa_54fz"
+        main.TAX_RECEIPT_WORKFLOW_CONFIRMED = True
+        main.TAX_RECEIPT_VAT_CODE = 1
+        main.TAX_RECEIPT_PAYMENT_SUBJECT = "service"
+        main.TAX_RECEIPT_PAYMENT_MODE = "full_payment"
+        main.REFUND_WORKFLOW_CONFIRMED = True
+        main.REFUND_EXECUTION_ENABLED = True
+        main.REFUND_BILLING_PRIMARY = True
         with main.db() as conn:
             conn.execute("DELETE FROM admin_audit_log")
             conn.execute("DELETE FROM beta_invite_redemptions")
@@ -2094,10 +2895,16 @@ class OperationalReadinessRegressionTests(unittest.TestCase):
             conn.execute("DELETE FROM devices")
             conn.execute("DELETE FROM users")
             conn.execute(
-                "INSERT INTO users(email, password_hash, created_at) VALUES (?, ?, ?)",
+                """
+                INSERT INTO users(
+                    email, password_hash, email_verified, email_verified_at, created_at
+                )
+                VALUES (?, ?, 1, ?, ?)
+                """,
                 (
                     "operations@example.test",
                     main.hash_password("test-password"),
+                    main.utc_now_iso(),
                     main.utc_now_iso(),
                 ),
             )
@@ -2367,6 +3174,374 @@ class AdminAuthSecurityTests(unittest.TestCase):
         )
 
 
+class UserAuthFlowReadinessTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        main.init_db()
+
+    def readiness(self, *, email_ready: bool) -> dict:
+        email = {
+            "productionReady": email_ready,
+            "provider": "smtp",
+        }
+        auth_codes = {
+            "checks": [
+                {
+                    "code": "auth_code_pepper",
+                    "ok": True,
+                }
+            ]
+        }
+        with patch.object(
+            main,
+            "email_confirmation_readiness",
+            return_value=email,
+        ), patch.object(
+            main,
+            "auth_code_readiness",
+            return_value=auth_codes,
+        ), patch.object(
+            main,
+            "email_sender_configured",
+            return_value=email_ready,
+        ), patch.object(
+            main,
+            "DEV_AUTH_CODES",
+            False,
+        ):
+            return main.user_auth_flow_readiness(limit=1)
+
+    def test_user_auth_flow_requires_email_delivery_before_checkout(self) -> None:
+        readiness = self.readiness(email_ready=False)
+
+        self.assertFalse(readiness["productionReady"])
+        self.assertFalse(readiness["publicAuthReady"])
+        checkout_check = next(
+            check
+            for check in readiness["checks"]
+            if check["code"] == "checkout_email_code"
+        )
+        self.assertFalse(checkout_check["ok"])
+        self.assertIn(checkout_check["message"], readiness["requiredActions"])
+
+    def test_user_auth_flow_is_guest_first_without_phone_method(self) -> None:
+        readiness = self.readiness(email_ready=True)
+
+        self.assertTrue(readiness["productionReady"])
+        self.assertTrue(readiness["publicAuthReady"])
+        self.assertEqual(readiness["primaryMethod"], "guest")
+        self.assertNotIn(
+            "phone_code",
+            {method["code"] for method in readiness["methods"]},
+        )
+        self.assertNotIn(
+            "phone",
+            " ".join(
+                str(value)
+                for value in readiness["bootstrapContract"].values()
+            ).lower(),
+        )
+
+
+class GuestFirstAuthTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        main.init_db()
+
+    def setUp(self) -> None:
+        self.device_uid = "guest-first-auth-test-device"
+        self.guest_email = main.internal_email_for_guest_device(self.device_uid)
+        self.checkout_email = "guest-checkout@example.test"
+        with main.db() as conn:
+            conn.execute(
+                "DELETE FROM devices WHERE device_uid = ?",
+                (self.device_uid,),
+            )
+            rows = conn.execute(
+                "SELECT id FROM users WHERE email IN (?, ?)",
+                (self.guest_email, self.checkout_email),
+            ).fetchall()
+            for row in rows:
+                user_id = int(row["id"])
+                conn.execute("DELETE FROM tokens WHERE user_id = ?", (user_id,))
+                conn.execute(
+                    "DELETE FROM email_login_codes WHERE user_id = ?",
+                    (user_id,),
+                )
+                conn.execute(
+                    "DELETE FROM email_outbox WHERE user_id = ?",
+                    (user_id,),
+                )
+                conn.execute(
+                    "DELETE FROM auth_events WHERE user_id = ?",
+                    (user_id,),
+                )
+                conn.execute(
+                    "DELETE FROM subscriptions WHERE user_id = ?",
+                    (user_id,),
+                )
+                conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            conn.commit()
+
+    @staticmethod
+    def request(path: str):
+        return main.Request(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "https",
+                "path": path,
+                "raw_path": path.encode("ascii"),
+                "query_string": b"",
+                "headers": [(b"user-agent", b"GreenVPN guest auth test")],
+                "client": ("127.0.0.1", 43210),
+                "server": ("api.greenvpn.pro", 443),
+                "root_path": "",
+            }
+        )
+
+    def test_guest_is_automatic_and_payment_requires_verified_email(self) -> None:
+        guest = main.auth_guest(
+            main.GuestSessionIn(
+                deviceUid=self.device_uid,
+                platform="windows",
+                appVersion="test",
+            ),
+            self.request("/api/v1/auth/guest"),
+        )
+
+        self.assertTrue(guest["isGuest"])
+        self.assertEqual(guest["email"], "")
+        guest_user = main.get_user_by_token(f"Bearer {guest['accessToken']}")
+        with self.assertRaises(main.HTTPException) as blocked:
+            main.create_billing_order_for_user(
+                int(guest_user["id"]),
+                main.TariffSelectionIn(),
+            )
+        self.assertEqual(blocked.exception.status_code, 409)
+        self.assertEqual(
+            blocked.exception.detail["code"],
+            "email_verification_required",
+        )
+
+        with patch.object(main, "DEV_AUTH_CODES", True), patch.object(
+            main,
+            "email_sender_configured",
+            return_value=True,
+        ), patch.object(main, "send_smtp_email", return_value=None):
+            started = main.auth_checkout_email_start(
+                main.CheckoutEmailStartIn(email=self.checkout_email),
+                self.request("/api/v1/auth/checkout/email/start"),
+                authorization=f"Bearer {guest['accessToken']}",
+            )
+            verified = main.auth_checkout_email_verify(
+                main.CheckoutEmailVerifyIn(
+                    email=self.checkout_email,
+                    code=started["devCode"],
+                    deviceUid=self.device_uid,
+                    platform="windows",
+                    appVersion="test",
+                ),
+                self.request("/api/v1/auth/checkout/email/verify"),
+                authorization=f"Bearer {guest['accessToken']}",
+            )
+
+        self.assertFalse(verified["isGuest"])
+        self.assertTrue(verified["emailVerified"])
+        self.assertEqual(verified["email"], self.checkout_email)
+        with self.assertRaises(main.HTTPException) as rotated:
+            main.get_user_by_token(f"Bearer {guest['accessToken']}")
+        self.assertEqual(rotated.exception.status_code, 401)
+        verified_user = main.get_user_by_token(
+            f"Bearer {verified['accessToken']}"
+        )
+        self.assertEqual(int(verified_user["id"]), int(guest_user["id"]))
+
+    def test_public_auth_routes_do_not_expose_phone_login(self) -> None:
+        paths = {route.path for route in main.app.routes}
+        self.assertIn("/api/v1/auth/guest", paths)
+        self.assertIn("/api/v1/auth/access/email/start", paths)
+        self.assertIn("/api/v1/auth/access/email/verify", paths)
+        self.assertIn("/api/v1/auth/checkout/email/start", paths)
+        self.assertIn("/api/v1/auth/checkout/email/verify", paths)
+        self.assertFalse(
+            any(path.startswith("/api/v1/auth/phone") for path in paths)
+        )
+
+    def test_existing_email_restores_account_and_transfers_device(self) -> None:
+        with main.db() as conn:
+            now = main.utc_now_iso()
+            conn.execute(
+                """
+                INSERT INTO users(
+                    email, password_hash, email_verified, email_verified_at,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, 1, ?, ?, ?)
+                """,
+                (
+                    self.checkout_email,
+                    main.hash_password("existing-password"),
+                    now,
+                    now,
+                    now,
+                ),
+            )
+            existing_user_id = int(
+                conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            )
+            main.create_trial_subscription(conn, existing_user_id)
+            conn.commit()
+
+        guest = main.auth_guest(
+            main.GuestSessionIn(
+                deviceUid=self.device_uid,
+                platform="android",
+                appVersion="test",
+            ),
+            self.request("/api/v1/auth/guest"),
+        )
+        guest_user = main.get_user_by_token(f"Bearer {guest['accessToken']}")
+        main.ensure_device_row(
+            int(guest_user["id"]),
+            self.device_uid,
+            "Android test",
+            "android",
+            "test",
+        )
+
+        with patch.object(main, "DEV_AUTH_CODES", True), patch.object(
+            main,
+            "email_sender_configured",
+            return_value=True,
+        ), patch.object(main, "send_smtp_email", return_value=None):
+            started = main.auth_checkout_email_start(
+                main.CheckoutEmailStartIn(email=self.checkout_email),
+                self.request("/api/v1/auth/checkout/email/start"),
+                authorization=f"Bearer {guest['accessToken']}",
+            )
+            verified = main.auth_checkout_email_verify(
+                main.CheckoutEmailVerifyIn(
+                    email=self.checkout_email,
+                    code=started["devCode"],
+                    deviceUid=self.device_uid,
+                    platform="android",
+                    appVersion="test",
+                ),
+                self.request("/api/v1/auth/checkout/email/verify"),
+                authorization=f"Bearer {guest['accessToken']}",
+            )
+
+        restored_user = main.get_user_by_token(
+            f"Bearer {verified['accessToken']}"
+        )
+        self.assertEqual(int(restored_user["id"]), existing_user_id)
+        with main.db() as conn:
+            owner = conn.execute(
+                "SELECT user_id FROM devices WHERE device_uid = ?",
+                (self.device_uid,),
+            ).fetchone()
+        self.assertEqual(int(owner["user_id"]), existing_user_id)
+        with self.assertRaises(main.HTTPException) as rotated:
+            main.get_user_by_token(f"Bearer {guest['accessToken']}")
+        self.assertEqual(rotated.exception.status_code, 401)
+
+    def test_access_restore_transfers_device_without_creating_order(self) -> None:
+        with main.db() as conn:
+            now = main.utc_now_iso()
+            conn.execute(
+                """
+                INSERT INTO users(
+                    email, password_hash, email_verified, email_verified_at,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, 1, ?, ?, ?)
+                """,
+                (
+                    self.checkout_email,
+                    main.hash_password("existing-password"),
+                    now,
+                    now,
+                    now,
+                ),
+            )
+            existing_user_id = int(
+                conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            )
+            main.create_trial_subscription(conn, existing_user_id)
+            orders_before = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM billing_orders WHERE user_id = ?",
+                    (existing_user_id,),
+                ).fetchone()[0]
+            )
+            conn.commit()
+
+        guest = main.auth_guest(
+            main.GuestSessionIn(
+                deviceUid=self.device_uid,
+                platform="windows",
+                appVersion="test",
+            ),
+            self.request("/api/v1/auth/guest"),
+        )
+        guest_user = main.get_user_by_token(f"Bearer {guest['accessToken']}")
+        main.ensure_device_row(
+            int(guest_user["id"]),
+            self.device_uid,
+            "Windows test",
+            "windows",
+            "test",
+        )
+
+        with patch.object(main, "DEV_AUTH_CODES", True), patch.object(
+            main,
+            "email_sender_configured",
+            return_value=True,
+        ), patch.object(main, "send_smtp_email", return_value=None):
+            started = main.auth_access_email_start(
+                main.CheckoutEmailStartIn(email=self.checkout_email),
+                self.request("/api/v1/auth/access/email/start"),
+                authorization=f"Bearer {guest['accessToken']}",
+            )
+            verified = main.auth_access_email_verify(
+                main.CheckoutEmailVerifyIn(
+                    email=self.checkout_email,
+                    code=started["devCode"],
+                    deviceUid=self.device_uid,
+                    platform="windows",
+                    appVersion="test",
+                ),
+                self.request("/api/v1/auth/access/email/verify"),
+                authorization=f"Bearer {guest['accessToken']}",
+            )
+
+        restored_user = main.get_user_by_token(
+            f"Bearer {verified['accessToken']}"
+        )
+        self.assertEqual(int(restored_user["id"]), existing_user_id)
+        self.assertEqual(verified["flow"], "access_restore")
+        self.assertEqual(verified["loginMethod"], "access_email")
+        with main.db() as conn:
+            owner = conn.execute(
+                "SELECT user_id FROM devices WHERE device_uid = ?",
+                (self.device_uid,),
+            ).fetchone()
+            orders_after = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM billing_orders WHERE user_id = ?",
+                    (existing_user_id,),
+                ).fetchone()[0]
+            )
+        self.assertEqual(int(owner["user_id"]), existing_user_id)
+        self.assertEqual(orders_after, orders_before)
+        with self.assertRaises(main.HTTPException) as rotated:
+            main.get_user_by_token(f"Bearer {guest['accessToken']}")
+        self.assertEqual(rotated.exception.status_code, 401)
+
+
 class ServerHealthReadinessPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -2446,6 +3621,38 @@ class ServerHealthReadinessPolicyTests(unittest.TestCase):
         self.assertEqual(readiness["requiredEndpointIds"], ["public-nl"])
         self.assertEqual(readiness["coveredEndpointIds"], ["public-nl"])
         self.assertEqual(readiness["missingEndpointIds"], [])
+
+
+class WindowsTrustOwnerBoundaryTests(unittest.TestCase):
+    def test_owner_only_supplies_signing_access_and_automation_derives_release_metadata(
+        self,
+    ) -> None:
+        action = next(
+            item
+            for item in main.external_action_specs()
+            if item["code"] == "windows_trust"
+        )
+
+        self.assertEqual(len(action["ownerInputs"]), 1)
+        self.assertTrue(action["ownerInputs"][0]["secret"])
+        output_keys = {
+            item["envKey"]
+            for item in action["automationOutputs"]
+        }
+        self.assertEqual(
+            output_keys,
+            {
+                "GREENVPN_WINDOWS_CODE_SIGNING_PROVIDER",
+                "GREENVPN_WINDOWS_CODE_SIGNING_PUBLISHER",
+                "GREENVPN_WINDOWS_CODE_SIGNING_CERT_THUMBPRINT",
+                "GREENVPN_WINDOWS_SIGNED_INSTALLER_URL",
+                "GREENVPN_WINDOWS_SIGNED_INSTALLER_SHA256",
+            },
+        )
+        self.assertIn(
+            "finalize_windows_trusted_release.ps1 -Apply",
+            " ".join(action["applySteps"]),
+        )
 
 
 if __name__ == "__main__":

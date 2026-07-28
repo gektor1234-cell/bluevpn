@@ -6,6 +6,8 @@ EXPECTED_PUBLIC_IP=""
 APPROVED_EXISTING_HOST=""
 CANARY_HOST="5.129.216.42"
 CANARY_DOMAIN="nl2.vpn.greenvpn.pro"
+CERTIFICATE_FILE=""
+CERTIFICATE_KEY_FILE=""
 CANARY_PORT="2443"
 SERVICE_NAME="greenvpn-hysteria2-canary"
 CONFIG_FILE="/etc/greenvpn-transport/hysteria2-canary.yaml"
@@ -20,17 +22,21 @@ HYSTERIA_URL="https://github.com/apernet/hysteria/releases/download/${HYSTERIA_T
 
 usage() {
   cat <<'USAGE'
-Bootstrap the owner-approved Hysteria2 canary on Green VPN NL2.
+Bootstrap the owner-approved Hysteria2 canary on a Green VPN data plane.
 
-Default mode is dry-run. Apply requires all three explicit arguments:
-  bootstrap_hysteria2_canary.sh --expected-public-ip 5.129.216.42 \
-      --approved-existing-host 5.129.216.42 --apply
+Default mode is dry-run. Apply requires an exact approved host/domain passport:
+  bootstrap_hysteria2_canary.sh --canary-host 37.220.85.211 \
+      --canary-domain nl1.vpn.greenvpn.pro \
+      --certificate-file /etc/letsencrypt/live/nl1.vpn.greenvpn.pro/fullchain.pem \
+      --certificate-key-file /etc/letsencrypt/live/nl1.vpn.greenvpn.pro/privkey.pem \
+      --expected-public-ip 37.220.85.211 \
+      --approved-existing-host 37.220.85.211 --apply
 
 The script:
-  - refuses every host except the exact NL2 public IP;
+  - accepts only the three exact Green VPN data-plane passports;
   - pins the official Hysteria app/v2.9.3 linux-amd64 GitHub SHA-256;
   - uses only UDP/2443 and a dedicated systemd service;
-  - obtains a trusted TLS certificate for nl2.vpn.greenvpn.pro via ACME HTTP;
+  - uses a supplied trusted certificate, or the existing NL2 built-in ACME flow;
   - creates separate auth and Salamander material with root-only permissions;
   - preserves wg0, AWG2, DNS, nginx, backend, databases and public catalog;
   - keeps a root-only client profile for controlled preview smoke tests;
@@ -52,6 +58,22 @@ while [[ $# -gt 0 ]]; do
       APPROVED_EXISTING_HOST="${2:?missing approved existing host}"
       shift 2
       ;;
+    --canary-host)
+      CANARY_HOST="${2:?missing canary host}"
+      shift 2
+      ;;
+    --canary-domain)
+      CANARY_DOMAIN="${2:?missing canary domain}"
+      shift 2
+      ;;
+    --certificate-file)
+      CERTIFICATE_FILE="${2:?missing certificate file}"
+      shift 2
+      ;;
+    --certificate-key-file)
+      CERTIFICATE_KEY_FILE="${2:?missing certificate key file}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -65,19 +87,69 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "${EUID}" -ne 0 ]]; then
-  echo "Run as root on NL2." >&2
+  echo "Run as root on the approved VPN data plane." >&2
+  exit 1
+fi
+for command in curl getent openssl readlink sha256sum stat systemctl ss; do
+  command -v "${command}" >/dev/null 2>&1 || {
+    echo "Required command is missing: ${command}" >&2
+    exit 1
+  }
+done
+
+case "${CANARY_HOST}|${CANARY_DOMAIN}" in
+  "5.129.216.42|nl2.vpn.greenvpn.pro"|"37.220.85.211|nl1.vpn.greenvpn.pro"|"88.218.250.86|88-218-250-86.sslip.io")
+    ;;
+  *)
+    echo "Unsupported Green VPN Hysteria2 host/domain passport." >&2
+    exit 1
+    ;;
+esac
+if [[ -n "${CERTIFICATE_FILE}" || -n "${CERTIFICATE_KEY_FILE}" ]]; then
+  if [[ -z "${CERTIFICATE_FILE}" || -z "${CERTIFICATE_KEY_FILE}" \
+    || ! -f "${CERTIFICATE_FILE}" || ! -f "${CERTIFICATE_KEY_FILE}" ]]; then
+    echo "Both trusted certificate files are required." >&2
+    exit 1
+  fi
+  CERTIFICATE_FILE_RESOLVED="$(readlink -f -- "${CERTIFICATE_FILE}")"
+  CERTIFICATE_KEY_FILE_RESOLVED="$(readlink -f -- "${CERTIFICATE_KEY_FILE}")"
+  for certificate_path in "${CERTIFICATE_FILE_RESOLVED}" "${CERTIFICATE_KEY_FILE_RESOLVED}"; do
+    case "${certificate_path}" in
+      /etc/letsencrypt/archive/*|/etc/greenvpn-transport/*)
+        ;;
+      *)
+        echo "Certificate path escaped the approved roots." >&2
+        exit 1
+        ;;
+    esac
+  done
+  [[ "$(stat -c '%U' "${CERTIFICATE_FILE_RESOLVED}")" == "root" \
+    && "$(stat -c '%U' "${CERTIFICATE_KEY_FILE_RESOLVED}")" == "root" ]] \
+    || { echo "Certificate material must be root-owned." >&2; exit 1; }
+  (( $(stat -c '%a' "${CERTIFICATE_KEY_FILE_RESOLVED}") % 10 == 0 )) \
+    || { echo "Certificate private key is accessible to other users." >&2; exit 1; }
+  openssl x509 -in "${CERTIFICATE_FILE}" -noout -checkhost "${CANARY_DOMAIN}" >/dev/null 2>&1 \
+    || { echo "Certificate does not cover ${CANARY_DOMAIN}." >&2; exit 1; }
+  openssl x509 -in "${CERTIFICATE_FILE}" -noout -checkend 604800 >/dev/null 2>&1 \
+    || { echo "Certificate expires in less than seven days." >&2; exit 1; }
+elif [[ "${CANARY_HOST}" != "5.129.216.42" ]]; then
+  echo "Non-NL2 data planes require explicit trusted certificate paths." >&2
+  exit 1
+fi
+if [[ "$(getent ahostsv4 "${CANARY_DOMAIN}" | awk 'NR==1 {print $1}')" != "${CANARY_HOST}" ]]; then
+  echo "Canary domain does not resolve to the approved exact host." >&2
   exit 1
 fi
 
 PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org || true)"
 if [[ "${PUBLIC_IP}" != "${CANARY_HOST}" ]]; then
-  echo "Refusing Hysteria2 bootstrap outside exact NL2 host." >&2
+  echo "Refusing Hysteria2 bootstrap outside the approved exact host." >&2
   exit 1
 fi
 if [[ "${APPLY}" -eq 1 ]]; then
   if [[ "${EXPECTED_PUBLIC_IP}" != "${CANARY_HOST}" \
     || "${APPROVED_EXISTING_HOST}" != "${CANARY_HOST}" ]]; then
-    echo "Apply requires exact NL2 expected/approved host values." >&2
+    echo "Apply requires exact expected/approved host values." >&2
     exit 1
   fi
 fi
@@ -98,6 +170,7 @@ echo "listen=udp/${CANARY_PORT}"
 echo "service=${SERVICE_NAME}.service"
 echo "hysteria_version=${HYSTERIA_VERSION}"
 echo "hysteria_sha256=${HYSTERIA_LINUX_AMD64_SHA256}"
+echo "tls_source=$([[ -n "${CERTIFICATE_FILE}" ]] && echo external_trusted_certificate || echo built_in_acme)"
 echo "port_state=${PORT_STATE}"
 echo "mode=$([[ "${APPLY}" -eq 1 ]] && echo apply || echo dry-run)"
 echo "stable_wireguard=not_changed"
@@ -149,15 +222,23 @@ chmod 0600 "${MATERIAL_ROOT}/auth.secret" "${MATERIAL_ROOT}/obfs.secret"
 AUTH_SECRET="$(tr -d '\r\n' < "${MATERIAL_ROOT}/auth.secret")"
 OBFS_SECRET="$(tr -d '\r\n' < "${MATERIAL_ROOT}/obfs.secret")"
 
-cat > "${CONFIG_FILE}" <<EOF
-listen: 0.0.0.0:${CANARY_PORT}
-acme:
+if [[ -n "${CERTIFICATE_FILE}" ]]; then
+  TLS_SERVER_CONFIG="tls:
+  cert: ${CERTIFICATE_FILE}
+  key: ${CERTIFICATE_KEY_FILE}"
+else
+  TLS_SERVER_CONFIG="acme:
   domains:
     - ${CANARY_DOMAIN}
   ca: letsencrypt
   listenHost: 0.0.0.0
   dir: ${MATERIAL_ROOT}/acme
-  type: http
+  type: http"
+fi
+
+cat > "${CONFIG_FILE}" <<EOF
+listen: 0.0.0.0:${CANARY_PORT}
+${TLS_SERVER_CONFIG}
 auth:
   type: password
   password: ${AUTH_SECRET}
@@ -220,7 +301,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
   --config-file "${CONFIG_FILE}" \
   --service-name "${SERVICE_NAME}" \
   --listen-port "${CANARY_PORT}" \
-  --endpoint-id nl2-hysteria2-canary \
+  --endpoint-id "$(case "${CANARY_HOST}" in 37.220.85.211) echo nl1-hysteria2-canary ;; 88.218.250.86) echo gb1-hysteria2-canary ;; *) echo nl2-hysteria2-canary ;; esac)" \
   --transport quic \
   --approved-existing-host "${CANARY_HOST}" \
   --json

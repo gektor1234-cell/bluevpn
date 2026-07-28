@@ -1,7 +1,8 @@
 param(
     [string]$Adb = "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe",
-    [string]$Serial = 'R9WT10CDC2J',
+    [Parameter(Mandatory = $true)][string]$Serial,
     [string]$Package = 'pro.greenvpn.app.transportpreview',
+    [ValidateRange(1, 100)][int]$ExpectedCheckCount = 10,
     [string]$ReportPath = 'C:\Users\gekto\GreenVPN_Checkpoints\android_transport_contract_probe_20260712.json'
 )
 
@@ -54,7 +55,7 @@ if ($directory) { New-Item -ItemType Directory -Force -Path $directory | Out-Nul
 $safeReport | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $ReportPath -Encoding UTF8
 & $Adb -s $Serial shell run-as $Package rm -f $resultFile | Out-Null
 
-if (-not $safeReport.success -or $safeReport.checks.Count -ne 10) {
+if (-not $safeReport.success -or $safeReport.checks.Count -ne $ExpectedCheckCount) {
     throw "Android transport contract probe failed: $($safeReport.error)"
 }
 if (@($safeReport.checks | Where-Object { -not $_.valid -or $_.httpStatus -ne 200 }).Count -ne 0) {

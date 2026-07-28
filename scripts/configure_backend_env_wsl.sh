@@ -154,27 +154,9 @@ if ask_yes_no "Configure Yandex 360 SMTP email confirmation now?" "n"; then
   add_env "GREENVPN_EMAIL_CONFIRMATION_TTL_HOURS" "24"
 fi
 
-if ask_yes_no "Configure SMS.ru phone confirmation now?" "n"; then
-  sms_api_id="$(read_required_secret "SMS.ru api_id")"
-  sms_api_id="$(printf '%s' "${sms_api_id}" | tr -d '[:space:]')"
-  if [[ -z "${sms_api_id}" ]]; then
-    echo "[Green VPN env] SMS.ru api_id cannot be only whitespace." >&2
-    exit 1
-  fi
-  sms_from="$(read_value "Approved sender name (optional)" "")"
-  sms_test_mode="0"
-  if ask_yes_no "Keep SMS.ru in test mode for this deploy?" "n"; then
-    sms_test_mode="1"
-  fi
-
-  add_env "GREENVPN_SMS_PROVIDER" "smsru"
-  add_env "GREENVPN_SMS_RU_API_ID" "${sms_api_id}"
-  add_env "GREENVPN_SMS_FROM" "${sms_from}"
-  add_env "GREENVPN_SMS_RU_TEST_MODE" "${sms_test_mode}"
-  add_env "GREENVPN_SMS_CODE_PEPPER" "$(generate_secret)"
-  add_env "GREENVPN_SMS_CONFIRMATION_TTL_MINUTES" "10"
-  add_env "GREENVPN_SMS_RESEND_COOLDOWN_SECONDS" "60"
-fi
+echo "[Green VPN env] Direct SMS setup is skipped."
+echo "[Green VPN env] SMS.ru refused VPN traffic and SMS Aero cannot deliver honest VPN-branded messages."
+echo "[Green VPN env] Enable a phone provider only after written approval for Green VPN and a paid-beta OTP smoke."
 
 if ask_yes_no "Configure YooKassa production payments now?" "n"; then
   shop_id="$(read_value "YOOKASSA_SHOP_ID" "")"

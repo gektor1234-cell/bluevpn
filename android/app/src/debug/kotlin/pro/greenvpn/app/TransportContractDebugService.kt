@@ -7,8 +7,10 @@ import android.os.IBinder
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import com.wireguard.android.backend.Tunnel
+import com.wireguard.config.Config
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
@@ -28,9 +30,20 @@ class TransportContractDebugService : Service() {
         const val GCM_TAG_BITS = 128
 
         val CANDIDATES = linkedMapOf(
+            "current_wg0" to "wireguard_udp",
+            "ruvds-2584554-ld8" to "wireguard_udp",
+            "tw-7879598-nl1" to "wireguard_udp",
+            "gb1-awg2-canary" to "amneziawg",
+            "nl1-awg2-canary" to "amneziawg",
             "nl2-awg2-canary" to "amneziawg",
+            "gb1-hysteria2-canary" to "hysteria2",
+            "nl1-hysteria2-canary" to "hysteria2",
             "nl2-hysteria2-canary" to "hysteria2",
+            "gb1-vless-reality-xhttp-canary" to "vless_reality",
+            "nl1-vless-reality-xhttp-canary" to "vless_reality",
             "nl2-vless-reality-xhttp-canary" to "vless_reality",
+            "gb1-naive-https-canary" to "naive_https",
+            "nl1-naive-https-canary" to "naive_https",
             "nl2-naive-https-canary" to "naive_https",
             "nl2-dnstt-canary" to "dnstt",
         )
@@ -261,19 +274,62 @@ class TransportContractDebugService : Service() {
         require(returnedServerId == serverId) { "server_mismatch" }
         require(configText.length in 16..1_048_576) { "config_missing" }
 
+        GreenVpnRuntimeFailoverService.disarm(this)
+        GreenVpnConnectionOperationGate.awaitIdle()
+        disconnectStandardTunnel()
         GreenVpnDnsttPreview.disconnect(this)
         GreenVpnNaiveHttpsPreview.disconnect(this)
         GreenVpnVlessRealityPreview.disconnect(this)
         GreenVpnHysteria2Preview.disconnect(this)
         GreenVpnAwg2Preview.disconnect(this)
+        check(GreenVpnNetworkTransition.waitForInactive(this, 2_500L)) {
+            "previous_route_still_active"
+        }
+        GreenVpnNetworkTransition.markInactive(this)
         val connected = when (protocol) {
             "amneziawg" -> GreenVpnAwg2Preview.connect(
                 this,
                 GreenVpnAwg2Preview.parseConfig(configText),
             )
+            "hysteria2" -> GreenVpnHysteria2Preview.connect(
+                this,
+                GreenVpnHysteria2Preview.validateConfig(configText),
+            )
+            "vless_reality" -> GreenVpnVlessRealityPreview.connect(
+                this,
+                GreenVpnVlessRealityPreview.validateConfig(configText),
+            )
+            "naive_https" -> GreenVpnNaiveHttpsPreview.connect(
+                this,
+                GreenVpnNaiveHttpsPreview.validateConfig(configText),
+            )
+            "dnstt" -> GreenVpnDnsttPreview.connect(
+                this,
+                GreenVpnDnsttPreview.validateConfig(configText),
+            )
+            "wireguard_udp" -> {
+                val parsed = Config.parse(
+                    ByteArrayInputStream(configText.toByteArray(StandardCharsets.UTF_8)),
+                )
+                GreenVpnWireGuardRuntime.backend(this).setState(
+                    GreenVpnWireGuardRuntime.tunnel,
+                    Tunnel.State.UP,
+                    parsed,
+                ) == Tunnel.State.UP
+            }
             else -> error("unsupported_debug_connect_protocol")
         }
         check(connected) { "engine_connect_failed" }
+        GreenVpnNetworkTransition.markActive(this)
+        writeSecureString(
+            this,
+            LAST_ROUTE_SUCCESS_KEY,
+            JSONObject()
+                .put("serverId", returnedServerId)
+                .put("protocol", protocol)
+                .put("verifiedAtMs", System.currentTimeMillis())
+                .toString(),
+        )
         check(GreenVpnRuntimeFailoverService.arm(this, returnedServerId, protocol)) {
             "runtime_failover_arm_failed"
         }
@@ -291,9 +347,14 @@ class TransportContractDebugService : Service() {
             .put("deviceUid", deviceId)
             .put("mode", "full")
             .put("serverId", serverId)
-            .put("releaseChannel", "paid-beta")
-            .put("clientMarker", "green-vpn-paid-beta-v1")
+            .put(
+                "releaseChannel",
+                BuildConfig.GREENVPN_RELEASE_CHANNEL.trim().ifEmpty { "stable" },
+            )
             .put("supportedProtocols", JSONArray(SUPPORTED_PROTOCOLS))
+        BuildConfig.GREENVPN_CLIENT_MARKER.trim().takeIf { it.isNotEmpty() }?.let {
+            payload.put("clientMarker", it)
+        }
         val connection = (URL("$baseUrl/api/v1/client/config").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000
@@ -328,9 +389,14 @@ class TransportContractDebugService : Service() {
             .put("deviceUid", deviceId)
             .put("mode", "full")
             .put("serverId", serverId)
-            .put("releaseChannel", "paid-beta")
-            .put("clientMarker", "green-vpn-paid-beta-v1")
+            .put(
+                "releaseChannel",
+                BuildConfig.GREENVPN_RELEASE_CHANNEL.trim().ifEmpty { "stable" },
+            )
             .put("supportedProtocols", JSONArray(SUPPORTED_PROTOCOLS))
+        BuildConfig.GREENVPN_CLIENT_MARKER.trim().takeIf { it.isNotEmpty() }?.let {
+            payload.put("clientMarker", it)
+        }
         val connection = (URL("$baseUrl/api/v1/client/config").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5000

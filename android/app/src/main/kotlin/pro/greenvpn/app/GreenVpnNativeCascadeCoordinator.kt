@@ -165,9 +165,15 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
             }
             if (connected) GreenVpnNetworkTransition.markActive(appContext)
             if (!connected || !continueRequested()) {
-                disconnectAll()
+                val stopped = disconnectAll()
                 recordRouteFailure(fetched.serverId, fetched.protocol)
                 if (!continueRequested()) return GreenVpnNativeCascadeResult(false, error = "cancelled")
+                if (!stopped) {
+                    return GreenVpnNativeCascadeResult(
+                        false,
+                        error = "previous_route_still_active",
+                    )
+                }
                 continue
             }
 
@@ -178,8 +184,14 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
             }
             if (!probe.ok) {
                 lastError = probe.error.ifEmpty { "route_probe_failed" }
-                disconnectAll()
+                val stopped = disconnectAll()
                 recordRouteFailure(fetched.serverId, fetched.protocol)
+                if (!stopped) {
+                    return GreenVpnNativeCascadeResult(
+                        false,
+                        error = "previous_route_still_active",
+                    )
+                }
                 continue
             }
 
@@ -203,7 +215,7 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
     private fun backend(): GoBackend = GreenVpnWireGuardRuntime.backend(appContext)
 
     private fun connectVpn(configText: String, protocol: String): Boolean {
-        disconnectAll()
+        check(disconnectAll()) { "previous_route_still_active" }
         return when (protocol) {
             "dnstt" -> GreenVpnDnsttPreview.connect(
                 appContext,

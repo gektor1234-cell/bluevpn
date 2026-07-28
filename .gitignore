@@ -25,7 +25,7 @@ Desktop/BlueVPN_Reports/
 # temp / misc
 query
 public_demo_site/downloads/
-android/transport_preview/awg_tunnel/
+prototypes/
 
 # local operator secrets / provider API files
 *.local.ps1

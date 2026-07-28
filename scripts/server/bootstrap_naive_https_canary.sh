@@ -13,8 +13,8 @@ CLIENT_CONFIG_FILE="/etc/greenvpn-transport/naive-https-canary.client.json"
 MATERIAL_ROOT="/etc/greenvpn-naive-https-canary"
 CONFIG_FILE="${MATERIAL_ROOT}/Caddyfile"
 INSTALL_ROOT="/opt/greenvpn-canary/naive-https"
-CERT_FILE="/etc/greenvpn-transport/hysteria2-canary/acme/certificates/acme-v02.api.letsencrypt.org-directory/nl2.vpn.greenvpn.pro/nl2.vpn.greenvpn.pro.crt"
-CERT_KEY_FILE="/etc/greenvpn-transport/hysteria2-canary/acme/certificates/acme-v02.api.letsencrypt.org-directory/nl2.vpn.greenvpn.pro/nl2.vpn.greenvpn.pro.key"
+CERT_FILE=""
+CERT_KEY_FILE=""
 
 GO_VERSION="1.26.5"
 GO_ARCHIVE_SHA256="5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053"
@@ -28,15 +28,19 @@ NAIVE_LINUX_ARCHIVE_URL="https://github.com/klzgrad/naiveproxy/releases/download
 
 usage() {
   cat <<'USAGE'
-Bootstrap the owner-approved Naive HTTPS canary on Green VPN NL2.
+Bootstrap the owner-approved Naive HTTPS canary on a Green VPN data plane.
 
-Default mode is dry-run. Apply requires the exact NL2 tuple:
-  bootstrap_naive_https_canary.sh --expected-public-ip 5.129.216.42 \
-      --approved-existing-host 5.129.216.42 --apply
+Default mode is dry-run. Apply requires an exact approved host/domain passport:
+  bootstrap_naive_https_canary.sh --canary-host 37.220.85.211 \
+      --canary-domain nl1.vpn.greenvpn.pro \
+      --certificate-file /etc/letsencrypt/live/nl1.vpn.greenvpn.pro/fullchain.pem \
+      --certificate-key-file /etc/letsencrypt/live/nl1.vpn.greenvpn.pro/privkey.pem \
+      --expected-public-ip 37.220.85.211 \
+      --approved-existing-host 37.220.85.211 --apply
 
-The initial canary listens on TCP/8443 so VLESS REALITY TCP/443 and all
-stable transports remain untouched. It uses the existing trusted
-nl2.vpn.greenvpn.pro certificate and never prints proxy credentials.
+The canary listens on TCP/8443 so VLESS REALITY and all stable transports
+remain untouched. It uses only an approved trusted certificate and never
+prints proxy credentials.
 USAGE
 }
 
@@ -45,16 +49,34 @@ while [[ $# -gt 0 ]]; do
     --apply) APPLY=1; shift ;;
     --expected-public-ip) EXPECTED_PUBLIC_IP="${2:?missing expected public ip}"; shift 2 ;;
     --approved-existing-host) APPROVED_EXISTING_HOST="${2:?missing approved existing host}"; shift 2 ;;
+    --canary-host) CANARY_HOST="${2:?missing canary host}"; shift 2 ;;
+    --canary-domain) CANARY_DOMAIN="${2:?missing canary domain}"; shift 2 ;;
+    --certificate-file) CERT_FILE="${2:?missing certificate file}"; shift 2 ;;
+    --certificate-key-file) CERT_KEY_FILE="${2:?missing certificate key file}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
 if [[ "${EUID}" -ne 0 ]]; then
-  echo "Run as root on NL2." >&2
+  echo "Run as root on the approved VPN data plane." >&2
   exit 1
 fi
-for command in curl openssl python3 sha256sum systemctl ss tar; do
+case "${CANARY_HOST}|${CANARY_DOMAIN}|${CANARY_PORT}" in
+  "5.129.216.42|nl2.vpn.greenvpn.pro|8443")
+    if [[ -z "${CERT_FILE}" && -z "${CERT_KEY_FILE}" ]]; then
+      CERT_FILE="/etc/greenvpn-transport/hysteria2-canary/acme/certificates/acme-v02.api.letsencrypt.org-directory/nl2.vpn.greenvpn.pro/nl2.vpn.greenvpn.pro.crt"
+      CERT_KEY_FILE="/etc/greenvpn-transport/hysteria2-canary/acme/certificates/acme-v02.api.letsencrypt.org-directory/nl2.vpn.greenvpn.pro/nl2.vpn.greenvpn.pro.key"
+    fi
+    ;;
+  "37.220.85.211|nl1.vpn.greenvpn.pro|8443"|"88.218.250.86|88-218-250-86.sslip.io|8443")
+    ;;
+  *)
+    echo "Unsupported Green VPN Naive HTTPS host/domain/port passport." >&2
+    exit 1
+    ;;
+esac
+for command in curl getent openssl python3 readlink sha256sum stat systemctl ss tar; do
   command -v "${command}" >/dev/null 2>&1 || {
     echo "Required command is missing: ${command}" >&2
     exit 1
@@ -63,29 +85,46 @@ done
 
 PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org || true)"
 if [[ "${PUBLIC_IP}" != "${CANARY_HOST}" ]]; then
-  echo "Refusing Naive HTTPS bootstrap outside exact NL2 host." >&2
+  echo "Refusing Naive HTTPS bootstrap outside the approved exact host." >&2
   exit 1
 fi
 if [[ "${APPLY}" -eq 1 && ( \
   "${EXPECTED_PUBLIC_IP}" != "${CANARY_HOST}" \
   || "${APPROVED_EXISTING_HOST}" != "${CANARY_HOST}" ) ]]; then
-  echo "Apply requires exact NL2 expected/approved host values." >&2
+  echo "Apply requires exact expected/approved host values." >&2
   exit 1
 fi
 if [[ "$(getent ahostsv4 "${CANARY_DOMAIN}" | awk 'NR==1 {print $1}')" != "${CANARY_HOST}" ]]; then
-  echo "Canary domain does not resolve to the exact NL2 host." >&2
+  echo "Canary domain does not resolve to the approved exact host." >&2
   exit 1
 fi
 if [[ ! -s "${CERT_FILE}" || ! -s "${CERT_KEY_FILE}" ]]; then
-  echo "Trusted NL2 certificate material is missing." >&2
+  echo "Trusted certificate material is missing." >&2
   exit 1
 fi
+CERT_FILE_RESOLVED="$(readlink -f -- "${CERT_FILE}")"
+CERT_KEY_FILE_RESOLVED="$(readlink -f -- "${CERT_KEY_FILE}")"
+for certificate_path in "${CERT_FILE_RESOLVED}" "${CERT_KEY_FILE_RESOLVED}"; do
+  case "${certificate_path}" in
+    /etc/letsencrypt/archive/*|/etc/greenvpn-transport/*)
+      ;;
+    *)
+      echo "Certificate path escaped the approved roots." >&2
+      exit 1
+      ;;
+  esac
+done
+[[ "$(stat -c '%U' "${CERT_FILE_RESOLVED}")" == "root" \
+  && "$(stat -c '%U' "${CERT_KEY_FILE_RESOLVED}")" == "root" ]] \
+  || { echo "Certificate material must be root-owned." >&2; exit 1; }
+(( $(stat -c '%a' "${CERT_KEY_FILE_RESOLVED}") % 10 == 0 )) \
+  || { echo "Certificate private key is accessible to other users." >&2; exit 1; }
 if ! openssl x509 -in "${CERT_FILE}" -noout -checkend 604800 >/dev/null 2>&1; then
-  echo "Trusted NL2 certificate expires in less than seven days." >&2
+  echo "Trusted certificate expires in less than seven days." >&2
   exit 1
 fi
 if ! openssl x509 -in "${CERT_FILE}" -noout -checkhost "${CANARY_DOMAIN}" >/dev/null 2>&1; then
-  echo "Trusted NL2 certificate does not cover the canary domain." >&2
+  echo "Trusted certificate does not cover the canary domain." >&2
   exit 1
 fi
 
@@ -224,8 +263,10 @@ if [[ ! -s "${MATERIAL_ROOT}/password" ]]; then
 fi
 install -m 0640 -o root -g "${SERVICE_GROUP}" "${CERT_FILE}" "${MATERIAL_ROOT}/server.crt"
 install -m 0640 -o root -g "${SERVICE_GROUP}" "${CERT_KEY_FILE}" "${MATERIAL_ROOT}/server.key"
+printf '%s\n' "${CANARY_DOMAIN}" > "${MATERIAL_ROOT}/certificate-domain"
 chown root:"${SERVICE_GROUP}" "${MATERIAL_ROOT}/username" "${MATERIAL_ROOT}/password"
-chmod 0640 "${MATERIAL_ROOT}/username" "${MATERIAL_ROOT}/password"
+chown root:"${SERVICE_GROUP}" "${MATERIAL_ROOT}/certificate-domain"
+chmod 0640 "${MATERIAL_ROOT}/username" "${MATERIAL_ROOT}/password" "${MATERIAL_ROOT}/certificate-domain"
 USERNAME="$(tr -d '\r\n' < "${MATERIAL_ROOT}/username")"
 PASSWORD="$(tr -d '\r\n' < "${MATERIAL_ROOT}/password")"
 
@@ -253,15 +294,16 @@ EOF
 chown root:"${SERVICE_GROUP}" "${CONFIG_FILE}"
 chmod 0640 "${CONFIG_FILE}"
 
-python3 - "${CLIENT_CONFIG_FILE}" "${CANARY_DOMAIN}" "${CANARY_PORT}" "${USERNAME}" "${PASSWORD}" <<'PY'
+python3 - "${CLIENT_CONFIG_FILE}" "${CANARY_DOMAIN}" "${CANARY_HOST}" "${CANARY_PORT}" "${USERNAME}" "${PASSWORD}" <<'PY'
 import json
 import os
 import sys
 
-path, host, port, username, password = sys.argv[1:]
+path, host, endpoint_ip, port, username, password = sys.argv[1:]
 config = {
     "listen": "socks://127.0.0.1:1982",
     "proxy": f"https://{username}:{password}@{host}:{port}",
+    "endpointIp": endpoint_ip,
 }
 temporary = path + ".tmp"
 with open(temporary, "w", encoding="utf-8") as handle:
@@ -326,7 +368,7 @@ for _ in $(seq 1 60); do
 done
 TRACE="$(curl -fsS --max-time 30 --socks5-hostname 127.0.0.1:1982 https://1.1.1.1/cdn-cgi/trace)"
 if ! grep -Fx "ip=${CANARY_HOST}" <<<"${TRACE}" >/dev/null; then
-  echo "Naive HTTPS data-plane smoke did not return NL2 egress." >&2
+  echo "Naive HTTPS data-plane smoke did not return the expected egress." >&2
   exit 1
 fi
 kill "${SMOKE_PID}" >/dev/null 2>&1 || true

@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $false)]
-    [string]$ApiBaseUrl = "http://37.220.85.211:8000",
+    [string]$ApiBaseUrl = "https://api.greenvpn.pro",
 
     [Parameter(Mandatory = $false)]
     [string]$AdminToken = $env:BLUEVPN_ADMIN_TOKEN,

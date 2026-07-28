@@ -9,6 +9,8 @@ VERSION=""
 BUILD_NUMBER=""
 PRODUCTION_SHA256=""
 TEST_SHA256=""
+PRODUCTION_REQUIRED=1
+TEST_REQUIRED=0
 
 PRODUCTION_ENV="/etc/bluevpn/backend.env"
 TEST_ENV="/etc/bluevpn/paid-beta.env"
@@ -33,6 +35,10 @@ Required arguments:
   --production-sha256 SHA256
   --test-sha256 SHA256
 
+Optional arguments:
+  --production-required 0|1  (default: 1)
+  --test-required 0|1        (default: 0)
+
 The default is dry-run. Apply mode preserves APK/env rollback files, switches
 aliases atomically, restarts only local backend services, and verifies both
 update manifests before success.
@@ -48,6 +54,8 @@ while [[ $# -gt 0 ]]; do
     --build-number) BUILD_NUMBER="${2:?missing build number}"; shift 2 ;;
     --production-sha256) PRODUCTION_SHA256="${2:?missing production SHA256}"; shift 2 ;;
     --test-sha256) TEST_SHA256="${2:?missing test SHA256}"; shift 2 ;;
+    --production-required) PRODUCTION_REQUIRED="${2:?missing production required flag}"; shift 2 ;;
+    --test-required) TEST_REQUIRED="${2:?missing test required flag}"; shift 2 ;;
     --apply) APPLY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -68,6 +76,8 @@ esac
 
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9._-]*$ ]] || { echo "Invalid version" >&2; exit 2; }
 [[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]] || { echo "Invalid build number" >&2; exit 2; }
+[[ "$PRODUCTION_REQUIRED" =~ ^[01]$ ]] || { echo "Invalid production required flag" >&2; exit 2; }
+[[ "$TEST_REQUIRED" =~ ^[01]$ ]] || { echo "Invalid test required flag" >&2; exit 2; }
 PRODUCTION_SHA256="${PRODUCTION_SHA256^^}"
 TEST_SHA256="${TEST_SHA256^^}"
 [[ "$PRODUCTION_SHA256" =~ ^[0-9A-F]{64}$ ]] || { echo "Invalid production SHA256" >&2; exit 2; }
@@ -91,6 +101,8 @@ echo "version=$VERSION"
 echo "build_number=$BUILD_NUMBER"
 echo "production_sha256=$PRODUCTION_SHA256"
 echo "test_sha256=$TEST_SHA256"
+echo "production_required=$PRODUCTION_REQUIRED"
+echo "test_required=$TEST_REQUIRED"
 [[ $APPLY -eq 1 ]] || exit 0
 [[ $EUID -eq 0 ]] || { echo "Run apply mode as root" >&2; exit 1; }
 
@@ -198,17 +210,29 @@ aliases_switched=1
 
 python3 - \
   "$PRODUCTION_ENV" "$TEST_ENV" "$VERSION" "$PRODUCTION_URL" "$TEST_URL" \
-  "$PRODUCTION_SHA256" "$TEST_SHA256" "$released_at" <<'PY'
+  "$PRODUCTION_SHA256" "$TEST_SHA256" "$PRODUCTION_REQUIRED" "$TEST_REQUIRED" \
+  "$released_at" <<'PY'
 import os
 import pathlib
 import re
 import sys
 
-production_path, test_path, version, production_url, test_url, production_sha, test_sha, released_at = sys.argv[1:]
+(
+    production_path,
+    test_path,
+    version,
+    production_url,
+    test_url,
+    production_sha,
+    test_sha,
+    production_required,
+    test_required,
+    released_at,
+) = sys.argv[1:]
 assignment = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
 changelog = (
-    f"Green VPN {version}: реклама перед новым подключением бесплатного режима; "
-    "платные тарифы остаются без рекламы; VPN не отключается по таймеру."
+    f"Green VPN {version}: старт без входа; email запрашивается только перед оплатой; "
+    "тарифы на 1, 3 и 6 месяцев; автопродление включается только явно."
 )
 
 def rewrite(path_raw, updates):
@@ -231,14 +255,14 @@ stable = {
     "GREENVPN_ANDROID_LATEST_VERSION": version,
     "GREENVPN_ANDROID_UPDATE_URL": production_url,
     "GREENVPN_ANDROID_UPDATE_SHA256": production_sha,
-    "GREENVPN_ANDROID_UPDATE_REQUIRED": "1",
+    "GREENVPN_ANDROID_UPDATE_REQUIRED": production_required,
     "GREENVPN_ANDROID_UPDATE_RELEASED_AT": released_at,
     "GREENVPN_ANDROID_UPDATE_CHANGELOG": changelog,
     "GREENVPN_ANDROID_UPDATE_ROLLOUT": "100",
     "GREENVPN_ANDROID_PREVIEW_LATEST_VERSION": version,
     "GREENVPN_ANDROID_PREVIEW_UPDATE_URL": production_url,
     "GREENVPN_ANDROID_PREVIEW_UPDATE_SHA256": production_sha,
-    "GREENVPN_ANDROID_PREVIEW_UPDATE_REQUIRED": "1",
+    "GREENVPN_ANDROID_PREVIEW_UPDATE_REQUIRED": production_required,
     "GREENVPN_ANDROID_PREVIEW_UPDATE_RELEASED_AT": released_at,
     "GREENVPN_ANDROID_PREVIEW_UPDATE_CHANGELOG": changelog,
     "GREENVPN_ANDROID_PREVIEW_UPDATE_ROLLOUT": "100",
@@ -248,7 +272,7 @@ paid_beta = {
     "GREENVPN_ANDROID_PAID_BETA_LATEST_VERSION": version,
     "GREENVPN_ANDROID_PAID_BETA_UPDATE_URL": test_url,
     "GREENVPN_ANDROID_PAID_BETA_UPDATE_SHA256": test_sha,
-    "GREENVPN_ANDROID_PAID_BETA_UPDATE_REQUIRED": "1",
+    "GREENVPN_ANDROID_PAID_BETA_UPDATE_REQUIRED": test_required,
     "GREENVPN_ANDROID_PAID_BETA_UPDATE_RELEASED_AT": released_at,
     "GREENVPN_ANDROID_PAID_BETA_UPDATE_CHANGELOG": changelog,
 }
@@ -299,8 +323,8 @@ value.update(
         "isolated": True,
         "productionPublished": False,
         "appVersion": version,
-        "androidApplicationId": "pro.greenvpn.app.beta",
-        "androidAppLabel": "Green VPN Test",
+        "androidApplicationId": "pro.greenvpn.app.rc",
+        "androidAppLabel": "Green VPN",
         "generatedAt": released_at,
         "artifacts": artifacts,
     }
@@ -318,7 +342,8 @@ db_modified=1
 python3 - \
   "$PRODUCTION_DB" "$TEST_DB" "$VERSION" "$BUILD_NUMBER" \
   "$PRODUCTION_URL" "$TEST_URL" "$PRODUCTION_SHA256" "$TEST_SHA256" \
-  "$PRODUCTION_APK" "$TEST_APK" "$released_at" <<'PY'
+  "$PRODUCTION_APK" "$TEST_APK" "$PRODUCTION_REQUIRED" "$TEST_REQUIRED" \
+  "$released_at" <<'PY'
 import json
 import pathlib
 import sqlite3
@@ -335,22 +360,33 @@ import sys
     test_sha,
     production_apk,
     test_apk,
+    production_required,
+    test_required,
     released_at,
 ) = sys.argv[1:]
 
 changelog = json.dumps(
     [
-        "Исправлена обработка истекшей сессии.",
-        "Улучшена совместимость с Android 10 и новыми версиями Android.",
+        "Теперь пользоваться VPN можно без регистрации.",
+        "Email запрашивается перед оплатой или для восстановления подписки.",
+        "Автопродление включается только по явному выбору.",
     ],
     ensure_ascii=False,
 )
 
-for db_raw, channel, url, sha256, artifact_raw in (
-    (production_db, "stable", production_url, production_sha, production_apk),
-    (test_db, "paid-beta", test_url, test_sha, test_apk),
+for db_raw, channel, url, sha256, artifact_raw, required_raw in (
+    (
+        production_db,
+        "stable",
+        production_url,
+        production_sha,
+        production_apk,
+        production_required,
+    ),
+    (test_db, "paid-beta", test_url, test_sha, test_apk, test_required),
 ):
     artifact = pathlib.Path(artifact_raw)
+    required = 1 if required_raw == "1" else 0
     conn = sqlite3.connect(db_raw, timeout=60)
     try:
         if conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
@@ -372,13 +408,13 @@ for db_raw, channel, url, sha256, artifact_raw in (
                 size_bytes, is_required, min_supported_version, rollout_percent,
                 changelog_json, status, created_at, updated_at, published_at, retired_at
             )
-            VALUES ('android', ?, ?, ?, ?, ?, ?, 1, '', 100, ?, 'published', ?, ?, ?, NULL)
+            VALUES ('android', ?, ?, ?, ?, ?, ?, ?, '', 100, ?, 'published', ?, ?, ?, NULL)
             ON CONFLICT(platform, channel, version) DO UPDATE SET
                 build_number = excluded.build_number,
                 download_url = excluded.download_url,
                 sha256 = excluded.sha256,
                 size_bytes = excluded.size_bytes,
-                is_required = 1,
+                is_required = excluded.is_required,
                 min_supported_version = '',
                 rollout_percent = 100,
                 changelog_json = excluded.changelog_json,
@@ -394,6 +430,7 @@ for db_raw, channel, url, sha256, artifact_raw in (
                 url,
                 sha256,
                 artifact.stat().st_size,
+                required,
                 changelog,
                 released_at,
                 released_at,
@@ -413,7 +450,7 @@ PY
 systemctl restart "$PRODUCTION_SERVICE"
 systemctl restart "$TEST_SERVICE"
 for port in 8000 8010; do
-  for _ in $(seq 1 45); do
+  for _ in $(seq 1 90); do
     curl -fsS --max-time 3 "http://127.0.0.1:${port}/healthz" >/dev/null && break
     sleep 1
   done
@@ -422,22 +459,24 @@ done
 
 production_manifest="$(curl -fsS --max-time 20 "http://127.0.0.1:8000/api/v1/updates/manifest?platform=android&channel=stable&currentVersion=0.2.44&clientId=release-install")"
 test_manifest="$(curl -fsS --max-time 20 "http://127.0.0.1:8010/api/v1/updates/manifest?platform=android&channel=paid-beta&currentVersion=0.3.0-paid-beta.6&clientId=release-install")"
-python3 - "$VERSION" "$PRODUCTION_SHA256" "$TEST_SHA256" "$production_manifest" "$test_manifest" <<'PY'
+python3 - \
+  "$VERSION" "$PRODUCTION_SHA256" "$TEST_SHA256" \
+  "$PRODUCTION_REQUIRED" "$TEST_REQUIRED" "$production_manifest" "$test_manifest" <<'PY'
 import json
 import sys
 
-version, production_sha, test_sha, production_raw, test_raw = sys.argv[1:]
-for label, raw, expected_sha in (
-    ("production", production_raw, production_sha),
-    ("test", test_raw, test_sha),
+version, production_sha, test_sha, production_required, test_required, production_raw, test_raw = sys.argv[1:]
+for label, raw, expected_sha, expected_required in (
+    ("production", production_raw, production_sha, production_required == "1"),
+    ("test", test_raw, test_sha, test_required == "1"),
 ):
     manifest = json.loads(raw).get("manifest") or {}
     if manifest.get("latestVersion") != version:
         raise SystemExit(f"{label} manifest version mismatch")
     if str(manifest.get("sha256") or "").upper() != expected_sha:
         raise SystemExit(f"{label} manifest hash mismatch")
-    if manifest.get("required") is not True or manifest.get("fileReady") is not True:
-        raise SystemExit(f"{label} manifest is not mandatory and ready")
+    if manifest.get("required") is not expected_required or manifest.get("fileReady") is not True:
+        raise SystemExit(f"{label} manifest readiness mismatch")
 print("production_manifest_ready=true")
 print("test_manifest_ready=true")
 PY

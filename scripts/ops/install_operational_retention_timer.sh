@@ -14,7 +14,7 @@ Install the bounded Green VPN operational-history retention timer.
 Usage:
   install_operational_retention_timer.sh --source-script PATH [--apply]
 
-The default is a dry run. Apply mode installs a hardened daily timer and runs
+The default is a dry run. Apply mode installs a hardened six-hour timer and runs
 one retention pass for production and paid-beta SQLite databases. It never
 touches account, subscription, payment, support-report, or catalog records.
 EOF
@@ -107,11 +107,14 @@ RestrictSUIDSGID=true
 EOF
 cat >"$TIMER_UNIT" <<'EOF'
 [Unit]
-Description=Run Green VPN operational-history retention daily
+Description=Run Green VPN operational-history retention every six hours
 
 [Timer]
-OnCalendar=*-*-* 03:20:00 UTC
-RandomizedDelaySec=30m
+OnCalendar=*-*-* 01:20:00 UTC
+OnCalendar=*-*-* 07:20:00 UTC
+OnCalendar=*-*-* 13:20:00 UTC
+OnCalendar=*-*-* 19:20:00 UTC
+RandomizedDelaySec=20m
 Persistent=true
 Unit=greenvpn-operational-retention.service
 

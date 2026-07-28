@@ -53,6 +53,7 @@ function Invoke-PaymentSafetyWithLocalToken {
   $paths = @(
     "/api/v1/admin/billing/readiness",
     "/api/v1/admin/billing/payment-smoke/readiness",
+    "/api/v1/admin/billing/refunds/readiness",
     "/api/v1/admin/billing/renewals/readiness",
     "/api/v1/admin/subscriptions/expiry-readiness"
   )
@@ -86,6 +87,7 @@ token = token_path.read_text(encoding="utf-8").strip()
 paths = [
     "/api/v1/admin/billing/readiness",
     "/api/v1/admin/billing/payment-smoke/readiness",
+    "/api/v1/admin/billing/refunds/readiness",
     "/api/v1/admin/billing/renewals/readiness",
     "/api/v1/admin/subscriptions/expiry-readiness",
 ]
@@ -124,6 +126,7 @@ function Convert-PaymentSafetyPayload {
 
   $payment = $Responses."/api/v1/admin/billing/readiness"
   $smoke = $Responses."/api/v1/admin/billing/payment-smoke/readiness"
+  $refunds = $Responses."/api/v1/admin/billing/refunds/readiness"
   $renewals = $Responses."/api/v1/admin/billing/renewals/readiness"
   $expiry = $Responses."/api/v1/admin/subscriptions/expiry-readiness"
 
@@ -138,6 +141,9 @@ function Convert-PaymentSafetyPayload {
     productionPaymentReady = [bool]$smoke.productionPaymentReady
     safeToRunSmoke = [bool]$smoke.safeToRunSmoke
     smokeCompleted = [bool]$smoke.smokeCompleted
+    refundProductionReady = [bool]$refunds.productionReady
+    refundExecutionEnabled = [bool]$refunds.policy.executionEnabled
+    refundBillingPrimary = [bool]$refunds.policy.billingPrimary
     renewalSafeToEnableCharges = [bool]$renewals.safeToEnableAutoRenewalCharges
     renewalPaymentSmokeReady = [bool]$renewals.paymentSmokeReady
     renewalRequiresPaymentSmoke = [bool]$renewals.policy.requiresPaymentSmoke
@@ -146,6 +152,7 @@ function Convert-PaymentSafetyPayload {
     expiryRequiresPaymentSmoke = [bool]$expiry.policy.requiresPaymentSmoke
     safeForAutomaticBilling = (
       [bool]$smoke.productionReady -and
+      [bool]$refunds.productionReady -and
       [bool]$renewals.safeToEnableAutoRenewalCharges -and
       [bool]$expiry.safeToEnableExpiryEnforcement
     )
@@ -166,6 +173,7 @@ function Convert-PaymentSafetyPayload {
       noProviderPaymentMethodIds = $true
       requiresPaymentSmokeBeforeAutoRenewal = $true
       requiresPaymentSmokeBeforeExpiryEnforcement = $true
+      requiresOwnerConfirmedFullRefundSmoke = $true
     }
   }
 
@@ -178,6 +186,7 @@ function Write-PaymentSafetySummary {
   Write-Output "Green VPN payment launch safety"
   Write-Output "version: $($Payload.version)"
   Write-Output "productionPaymentReady=$($Payload.productionPaymentReady); safeToRunSmoke=$($Payload.safeToRunSmoke); smokeCompleted=$($Payload.smokeCompleted)"
+  Write-Output "refundProductionReady=$($Payload.refundProductionReady); refundExecutionEnabled=$($Payload.refundExecutionEnabled); refundBillingPrimary=$($Payload.refundBillingPrimary)"
   Write-Output "renewalSafeToEnableCharges=$($Payload.renewalSafeToEnableCharges); renewalPaymentSmokeReady=$($Payload.renewalPaymentSmokeReady); renewalRequiresPaymentSmoke=$($Payload.renewalRequiresPaymentSmoke)"
   Write-Output "expirySafeToEnableEnforcement=$($Payload.expirySafeToEnableEnforcement); expiryPaymentSmokeReady=$($Payload.expiryPaymentSmokeReady); expiryRequiresPaymentSmoke=$($Payload.expiryRequiresPaymentSmoke)"
   Write-Output "safeForAutomaticBilling=$($Payload.safeForAutomaticBilling)"

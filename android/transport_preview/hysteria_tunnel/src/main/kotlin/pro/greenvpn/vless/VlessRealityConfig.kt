@@ -11,9 +11,13 @@ import java.util.UUID
 
 internal object VlessRealityConfig {
     const val SOCKS_PORT = 1981
-    private const val CANARY_HOST = "5.129.216.42"
     private const val DNS_UPSTREAM = "1.1.1.1"
     private const val CANARY_SNI = "www.amazon.com"
+    private val guardedEndpoints = mapOf(
+        "5.129.216.42" to 443,
+        "37.220.85.211" to 443,
+        "88.218.250.86" to 9443,
+    )
     private val shortIdPattern = Regex("^(?:[0-9a-fA-F]{2}){1,8}$")
 
     fun validate(configText: String): String {
@@ -21,7 +25,8 @@ internal object VlessRealityConfig {
         return configText.trim() + "\n"
     }
 
-    fun routeExclusions(): Set<String> = setOf(CANARY_HOST, DNS_UPSTREAM)
+    fun routeExclusions(configText: String): Set<String> =
+        setOf(guardedEndpoint(loadAndValidate(configText)).first, DNS_UPSTREAM)
 
     fun renderRuntime(configText: String): String {
         val root = loadAndValidate(configText)
@@ -146,12 +151,12 @@ internal object VlessRealityConfig {
         val vnext = outbound.requiredObject("settings").requiredArray("vnext")
         require(vnext.size() == 1) { "Exactly one VLESS endpoint is required" }
         val endpoint = vnext[0].requiredObject()
-        val host = endpoint.string("address")
+        val (host, port) = guardedEndpoint(root)
         val address = InetAddress.getByName(host)
-        require(address is Inet4Address && host == CANARY_HOST && !address.isAnyLocalAddress) {
+        require(address is Inet4Address && address.hostAddress == host && !address.isAnyLocalAddress) {
             "VLESS REALITY endpoint is not the guarded canary"
         }
-        require(endpoint.int("port") == 443) { "VLESS REALITY endpoint must use TCP/443" }
+        require(endpoint.int("port") == port) { "VLESS REALITY endpoint port is not allowlisted" }
         val users = endpoint.requiredArray("users")
         require(users.size() == 1) { "Exactly one VLESS user is required" }
         val user = users[0].requiredObject()
@@ -176,6 +181,19 @@ internal object VlessRealityConfig {
             "XHTTP mode is invalid"
         }
         return root
+    }
+
+    private fun guardedEndpoint(root: JsonObject): Pair<String, Int> {
+        val endpoint = root.requiredArray("outbounds")[0].requiredObject()
+            .requiredObject("settings")
+            .requiredArray("vnext")[0].requiredObject()
+        val host = endpoint.string("address")
+        val expectedPort = guardedEndpoints[host]
+            ?: throw IllegalArgumentException("VLESS REALITY endpoint is not allowlisted")
+        require(endpoint.int("port") == expectedPort) {
+            "VLESS REALITY endpoint port is not allowlisted"
+        }
+        return host to expectedPort
     }
 
     private fun containsPrivateMaterial(value: JsonElement): Boolean {

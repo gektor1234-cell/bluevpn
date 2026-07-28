@@ -1,6 +1,6 @@
 param(
     [string]$Adb = "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe",
-    [string]$Serial = 'R9WT10CDC2J',
+    [Parameter(Mandatory = $true)][string]$Serial,
     [string]$Package = 'pro.greenvpn.app.transportpreview',
     [string]$ProbePackage = 'pro.greenvpn.transportprobe',
     [string]$SourceConfig = 'C:\Users\gekto\GreenVPN_Checkpoints\transport_canary_dnstt_20260712\dnstt-canary.client.json',

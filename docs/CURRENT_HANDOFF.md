@@ -1,6 +1,6 @@
 # Green VPN Current Handoff
 
-Updated: 2026-07-19.
+Updated: 2026-07-28 MSK.
 
 This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
@@ -15,28 +15,328 @@ This is the current operational entry point. Read it together with
    client profiles.
 3. Never touch Friendly Linnet `5.129.237.163` without a new explicit owner
    instruction.
-4. Android 0.3.7 is already public and mandatory. Do not republish or roll it
-   back without a verified artifact, alternate-node health and an atomic backup.
-5. AWG2, Hysteria2, VLESS REALITY/XHTTP, Naive HTTPS and dnstt remain isolated
-   to NL2 `5.129.216.42`. The rollout runbook is documentation, not permission
-   to deploy them elsewhere.
-6. Rewarded ads are enabled for free Android 0.3.5 and newer connections.
-   Paid-beta `0.3.9` additionally has a closed Windows `test_web` flow. Paid
-   subscriptions are exempt. Production Windows must remain exempt until a
-   real Yandex desktop Rewarded block is approved and physically verified. The
-   forced VPN disconnect timer must remain disabled unless the owner gives a
-   new explicit instruction.
+4. Android `0.3.15+2026072704` and Windows `0.3.17+2608` are public and
+   optional. Do not republish, force or roll them back without a verified exact
+   artifact, alternate-node health and an atomic backup.
+5. Public-product uses WireGuard UDP, AmneziaWG, Hysteria2, VLESS REALITY/XHTTP
+   and Naive HTTPS on NL1, London and NL2. dnstt is the last-resort transport on
+   NL2 only. Do not add nodes or change this order without a new guarded rollout.
+6. Rewarded ads are temporarily disabled by the owner's 2026-07-22 instruction
+   in production and paid-beta on both control planes. Keep the master gate,
+   Android Rewarded, web Rewarded and beta `test_web` disabled until a new
+   explicit owner instruction. The forced VPN disconnect timer must also remain
+   disabled.
 7. Billing has one writer: Timeweb. RUVDS serves failover reads/auth/config but
    must reject first-payment creation and must not run the renewal executor.
 8. Server maintenance is one node at a time after alternate control/data planes
    pass readiness. The owner Windows PC must not be rebooted by automation.
-9. Windows 0.3.6 is temporarily public and mandatory by explicit owner decision,
-   but remains unsigned. Keep the `NotSigned` status visible in operations and
-   expect Windows SmartScreen/reputation warnings until a signed successor is
-   released.
+9. Windows 0.3.17 is public and optional, but remains unsigned. Keep the
+   `NotSigned` status visible in operations and expect Windows
+   SmartScreen/reputation warnings until a signed successor is released.
 10. The admin console is a protected operator surface. Keep Nginx Basic Auth,
     `noindex`, frame denial, staff authentication, RBAC and audit enabled; never
     expose bootstrap tokens or payment/tunnel secrets in the UI or exports.
+11. Stable production uses Android `0.3.15` and Windows `0.3.17`; paid-beta
+   remains optional. Android exact-release tunnelling, the complete Android
+   transport matrix and Windows runtime failover are physically verified. Do
+   not repeat OTP, payment or Windows network actions merely for another
+   automated check.
+
+## Launch Closure, 2026-07-28 20:12 MSK
+
+- Production and paid-beta backend `0.9.148-owner-boundary.1` are active on
+  Timeweb and RUVDS. Both SQLite databases pass `PRAGMA quick_check`; Timeweb
+  remains the only production billing writer.
+- The protected owner launch packet has exactly one owner blocker and one
+  pending owner action: `windows_trust`. All other launch areas are either
+  ready or intentionally disabled by policy.
+- The missing item is an Authenticode code-signing certificate with a usable
+  private key. This is not a Windows 10/11 operating-system license. Windows SDK
+  `signtool.exe` is already installed; local preflight currently finds zero
+  valid code-signing certificates.
+- `scripts/windows/finalize_windows_trusted_release.ps1` now auto-detects a
+  valid Code Signing EKU certificate, builds production and isolated paid-beta
+  installers, signs the Green VPN app/service before payload compression,
+  signs the bootstrap, signs the final IExpress EXE only after resource
+  updates, verifies publisher/timestamp/hash and emits immutable JSON evidence.
+- `scripts/server/install_windows_public_product_release.sh` accepts both
+  signing reports, binds them to the exact production/test SHA-256 values and
+  publishes trusted metadata only when both reports prove the same valid
+  signing identity. Unsigned publication clears trusted metadata instead of
+  producing a false-green readiness result.
+- The exact public Android `0.3.15+2026072704` artifact also passed a clean
+  Android 16/API 36 emulator install, cold launch, production tunnel,
+  recognized NL1 egress, API/YouTube probes and clean disconnect. The generated
+  guest/device was removed through guarded admin cleanup, both databases were
+  synchronized and the emulator was left without Green VPN or probe packages.
+- Paid-beta and production catalog summaries now match:
+  `managedTotal=18`, `managedActive=16`, `managedHealthy=16`,
+  `clientConfigReady=17`, `publicClientServers=3`, `eligible=3`.
+- NL2 certificate synchronization was already installed and healthy:
+  source/destination certificates match, the timer is active, both Naive HTTPS
+  and Hysteria services are active and the certificate expires
+  2026-10-09. No TLS mutation was needed.
+- Guarded release-backup retention is active on both control planes. RUVDS disk
+  use fell from 80% to 77%; Timeweb from 58% to 46%. The latest rollback sets
+  remain retained.
+- Final live verification passed on both control planes: production and
+  paid-beta SQLite databases return `PRAGMA quick_check=ok`, both backend
+  services and both database-sync timers are active, and systemd reports zero
+  failed units.
+- The full pre-certificate checkpoint is
+  `C:\Users\gekto\GreenVPN_Checkpoints\launch_closure_20260728_193808`.
+  Its Git all-refs bundle is complete; encrypted local/server archives pass
+  `7z t` and match their recorded SHA-256 values. Plaintext staging and remote
+  temporary snapshot files are absent.
+- Real SMTP alert delivery passed in production and paid-beta. Telegram is
+  optional and is not a launch blocker.
+- Rewarded ads, forced disconnect, hard expiry, production renewal execution
+  and paid-beta quota enforcement remain disabled. No payment, OTP, KYC,
+  contract or renewal charge was initiated during closure.
+
+## Current Public Transport Cascade, 2026-07-28 MSK
+
+- Production backend `0.9.148-owner-boundary.1` is active on both control
+  planes. Catalog identity is `2026-07-28-public-transport-v1`. The
+  public-product catalog contains 16 routes on each control plane:
+  3 WireGuard UDP, 3 AmneziaWG, 3 Hysteria2, 3 VLESS REALITY, 3 Naive HTTPS and
+  1 dnstt.
+- The fixed client order is:
+  `wireguard_udp -> amneziawg -> hysteria2 -> vless_reality -> naive_https -> dnstt`.
+  Within one protocol, healthy low-latency routes win. A failed candidate must
+  be fully disconnected; the cascade stops fail-closed if clean-down cannot be
+  proven.
+- Android production is signed `0.3.15+2026072704`, package
+  `pro.greenvpn.app`, size `76764418`, SHA-256
+  `72C4672355722EB4111EAA36BC6794EB71F9E20F3DB6818093489B8A59F48288`.
+  Android paid-beta is signed `0.3.15+2026072704`, package
+  `pro.greenvpn.app.rc`, size `76764470`, SHA-256
+  `B12BEC69AA0F0C04F17C7E536C97AD8EA3F88FA38BD9BA8FBAFAA070033572D4`.
+  Both are optional and published through both control planes.
+- Android physical proof passed all 16 exact routes, production API, external
+  egress, YouTube and clean-down. Injected AmneziaWG failure recovered through
+  Hysteria2 with no engine overlap. A separate Quick Settings proof passed all
+  six protocol groups in strict order, restored WireGuard after cooldown reset
+  and finished with no VPN record or transport process.
+- Windows production is unsigned `0.3.17+2608`, size `55388672`, SHA-256
+  `518A6BD61CBFD1C46B7460439963D2D6D48448BF2A7B14A1397D192D335934C4`.
+  Windows paid-beta is unsigned `0.3.17+2608`, size `55372800`, SHA-256
+  `21CDE69380BB288A63E1D5BC56A7715A95B3DBF664B93EBE4E3002D65C987AC3`.
+  Both are optional and published through both control planes. The exact stable
+  installer was installed on the owner PC. Its service survived app exit; an
+  injected active WireGuard service failure recovered to another guarded route
+  with verified egress, no transport overlap and complete cleanup.
+- Publication verification passed eight dynamic manifests, two static
+  manifests, all eight exact download hashes, public surface `31/31`, release
+  gate `0 warnings / 0 errors`, backend `162/162`, Flutter tests, Android
+  native tests/lint and the tracked/untracked/history secret scan.
+- `check_public_download_manifests.ps1` is pinned to this release and exits
+  nonzero on any mismatch. `verify_public_release_download_hashes.ps1` supports
+  a named partial retry and recursively removes its own temporary directory
+  without masking the original download or hash failure.
+- Windows publication evidence is
+  `C:\BlueVPN_Builds\public_product_20260728_windows_runtime_failover_acl_6\publication-evidence.json`;
+  the post-publication surface report is in the same directory as
+  `public_surface_after_publish.json`.
+- Current physical evidence:
+  `C:\BlueVPN_Builds\public_product_transport_cascade_20260727_b2704\android_public_product_transport_matrix_physical_public_product.json`,
+  `C:\BlueVPN_Builds\public_product_transport_cascade_20260727_b2704\android_quick_tile_strict_cascade_physical.json`
+  and
+  `C:\BlueVPN_Builds\public_product_transport_cascade_20260727_b2704\android_exact_release_smoke.json`.
+  Windows exact-installer execution is recorded in
+  `C:\BlueVPN_Builds\public_product_20260728_windows_runtime_failover_acl_6\windows_runtime_failover_physical.json`;
+  the corrected payload-verification and runtime-failover proof is
+  `C:\BlueVPN_Builds\public_product_20260728_windows_runtime_failover_acl_6\windows_runtime_failover_physical_retry1.json`.
+- Android rollback backups:
+  RUVDS `/root/greenvpn-apk-release-backups/20260727T220440Z-ruvds-0.3.15-2026072704`;
+  Timeweb `/root/greenvpn-apk-release-backups/20260727T220752Z-timeweb-0.3.15-2026072704`.
+- Backend rollback backups:
+  RUVDS
+  `/root/greenvpn-public-product-backups/20260728T162921Z-ruvds-0.9.148-owner-boundary.1`;
+  Timeweb
+  `/root/greenvpn-public-product-backups/20260728T163058Z-timeweb-0.9.148-owner-boundary.1`.
+- Paid-beta backend rollback backups:
+  RUVDS
+  `/root/greenvpn-paid-beta-backend-backups/20260728T162846Z-paid-beta-backend-owner-boundary-20260728-r1`;
+  Timeweb
+  `/root/greenvpn-paid-beta-backend-backups/20260728T163037Z-paid-beta-backend-owner-boundary-20260728-r1`.
+- Windows rollback backups:
+  RUVDS
+  `/root/greenvpn-windows-release-backups/20260728T133211Z-ruvds-0.3.17-2608`;
+  Timeweb
+  `/root/greenvpn-windows-release-backups/20260728T133747Z-timeweb-0.3.17-2608`.
+- Rewarded advertising, forced disconnect and hard expiry enforcement remain
+  disabled. Production renewal execution is disabled. A pre-existing guarded
+  Timeweb paid-beta renewal timer remains enabled every 15 minutes; all 327
+  runs audited through 2026-07-28 17:00 MSK reported `executed=0`, while RUVDS
+  has no renewal timer. No payment, OTP, account, renewal or advertising state
+  was changed by this Windows rollout.
+- The only external owner blocker is Windows code signing. The single-node
+  dnstt last resort and the mixed dirty working tree remain internal
+  engineering risks, not owner actions. TLS synchronization, Android 16
+  compatibility, paid-beta catalog parity and guarded disk retention are
+  verified.
+- Repository closure is still outstanding. The transport branch is ahead of
+  origin and has a large mixed working tree; it is not a reproducible release
+  anchor. Several legacy build/smoke scripts retain dated version defaults and
+  must either require explicit release parameters or move into a clearly
+  historical namespace before the next release.
+
+## Latest Production Closure Check, 2026-07-27
+
+- Production backend `0.9.141-autorenew-optin.1` is active on Timeweb Moscow
+  and RUVDS Moscow. Missing `autoRenew` now defaults to `false`; only an
+  explicit client opt-in returns `true`. Timeweb remains the sole billing
+  writer. The existing paid subscription, saved payment method flag and
+  activated order were not changed.
+- Mandatory Android is signed `0.3.14+2026072702`, package
+  `pro.greenvpn.app`, size `76760042`, SHA-256
+  `FE7BF607CA5D37E85C6BB6AC569AD0DBF9DE5C42C73337DDCC54A161877D99EE`.
+  Optional paid-beta is package `pro.greenvpn.app.rc`, size `76760194`,
+  SHA-256
+  `FA1F8EC851D5F0EDC92C27EF0DCB945CB036CEF56762D173CB39AD9E7E611232`.
+  Both exact artifacts are published through both control planes.
+- Physical Android smoke passed guest-first launch, tariff display
+  `249/649/1099` RUB, auto-renew off by default, explicit account restore,
+  connect, real tunnel traffic, clean disconnect and no crash/ANR. Measured
+  download was `30.176` Mbit/s. The phone was left disconnected with stable
+  `0.3.14` installed and its local data preserved.
+- Mandatory Windows remains unsigned `0.3.13+2604`, SHA-256
+  `4BBF8334D528780DE9AB36CDEF21D60010EC0E8EA0FBBA17753C6828A304CF30`.
+  Production provisioning, fresh handshake, traffic, DNS/no-leak probes and
+  clean disconnect passed. The owner's independent
+  `AmneziaWGTunnel$device20_full` service was restored to `Running`; the
+  Green VPN smoke failsafe task was removed.
+- Exact-byte checks passed for all four Android URLs. Eight dynamic manifests,
+  two static manifests, eight download endpoints, public-surface `31/31`,
+  external readiness `12 green / 0 yellow / 0 red`, and the strict release
+  gate `0 warnings / 0 errors` passed.
+- Paid-beta free tier is enabled with quota enforcement off, stored limit
+  `3` GB, one device and `10` Mbit/s profile. London, NL1 and NL2 usage
+  reporters have active timers and last result `success`. Both paid-beta
+  databases agree on `21` traffic rows and byte totals
+  `rx=17136`, `tx=38932`.
+- Production expiry enforcement remains off. The only current expiry warning
+  is three unreviewed guest Trial subscriptions inside the seven-day window,
+  all without a verified retention email; there are no expired-active
+  subscriptions. Do not turn this expected guest state into a hard block.
+- Rewarded advertising and the forced disconnect timer remain disabled in
+  every contour. Automatic renewal charge execution also remains disabled.
+  Enabling ads, charges, a launch promotion or hard expiry enforcement is a
+  separate owner/business decision.
+- Windows rollback readiness is green. Previous production installer
+  `0.3.12`, SHA-256
+  `79F5E201F8F798906C9A7FF5F837B9C5AD08B4890DEB3DF0B7F3F2E3C4EC0FE7`,
+  is published as a dedicated rollback through both mirrors. The sole
+  critical Windows distribution blocker is now the unsigned installer.
+  Telegram alerts additionally need an owner-created bot token/chat id, but
+  monitoring itself is green.
+- Evidence:
+  - Windows:
+    `C:\BlueVPN_Builds\windows_0.3.13_final_smoke_20260727\production-network-transition-report.json`;
+  - Android physical smoke:
+    `C:\BlueVPN_Builds\android_autorenew_optin_production_20260727_b2702\physical_stable_smoke`;
+  - Android public verification:
+    `C:\BlueVPN_Builds\android_autorenew_optin_production_20260727_b2702\public_release_verification`.
+- Production backend rollback:
+  - RUVDS:
+    `/root/greenvpn-public-product-backups/20260727T044740Z-ruvds-0.9.141-autorenew-optin.1`;
+  - Timeweb:
+    `/root/greenvpn-public-product-backups/20260727T044850Z-timeweb-0.9.141-autorenew-optin.1`.
+- Android rollback:
+  - RUVDS:
+    `/root/greenvpn-apk-release-backups/20260727T045823Z-ruvds-0.3.14-2026072702`;
+  - Timeweb:
+    `/root/greenvpn-apk-release-backups/20260727T050009Z-timeweb-0.3.14-2026072702`.
+- Windows rollback configuration:
+  - RUVDS:
+    `/root/greenvpn-release-rollback-backups/20260727T052740Z-ruvds-production-windows-0.3.12`;
+  - Timeweb:
+    `/root/greenvpn-release-rollback-backups/20260727T052815Z-timeweb-production-windows-0.3.12`.
+
+## Latest Android Checkout Check, 2026-07-27
+
+- The owner approved Android-only work. Windows was not launched, installed,
+  rebuilt or connected.
+- Side-by-side RC `pro.greenvpn.app.rc` is locally installed as
+  `0.3.14+2026072701`. Production `pro.greenvpn.app` remains
+  `0.3.13+2026072604`.
+- RC APK:
+  `C:\BlueVPN_Builds\android_autorenew_optin_20260727\GreenVPN_Android_0.3.14_2026072701.apk`,
+  SHA-256
+  `92B97AB029373348B7FDC963AB759C6D603FE8F45E7F22CA2DF9EC6B1C3EDE7D`.
+  It is not a production publication.
+- Exact clean-device behavior passed: guest-first launch, free profile,
+  249/649/1099 RUB plans, auto-renew off by default, payment email gate before
+  order creation, no OTP, no order, no charge and no VPN transition.
+- Paid-beta backend on both control planes is
+  `0.9.141-autorenew-optin.1`, release
+  `paid-beta-backend-autorenew-optin-20260727-r1`. Missing `autoRenew` now
+  defaults to false server-side. Production backend was not changed.
+- Backend `148/148`, Flutter `58 passed / 6 platform skips`, analysis,
+  APK signing and physical UI checks passed. Both paid-beta databases pass
+  `PRAGMA quick_check`; services and sync timers are active; primary and
+  fallback public paid-beta health are green.
+- All temporary guests and VPN peers created during this smoke were removed
+  and synchronized. RC is stopped with cleared local data.
+- The real paid account remains active and identical on both production
+  databases through `2026-08-24T23:13:22.297175+00:00`, with
+  `auto_renew=1` and one activated 249 RUB order. Production Android currently
+  has a guest local session; use the standalone existing-account email sign-in
+  to restore it. Do not create another payment.
+- Backend rollback:
+  Timeweb
+  `/root/greenvpn-paid-beta-backend-backups/20260727T035234Z-paid-beta-backend-autorenew-optin-20260727-r1`;
+  RUVDS
+  `/root/greenvpn-paid-beta-backend-backups/20260727T035243Z-paid-beta-backend-autorenew-optin-20260727-r1`.
+
+## Latest Owner Restore And Site Check, 2026-07-26
+
+- The owner completed the real standalone production sign-in on Windows
+  `0.3.13`. Timeweb and RUVDS contain the same successful Windows
+  `checkout_email_verify` event for the same existing account. The local
+  Windows client persisted the session and received HTTP 200 from
+  `/api/v1/subscription/me`.
+- The account is verified and has active `green_30d` access through
+  `2026-08-24T23:13:22.297175+00:00`, five devices and `auto_renew=1`.
+  Android `0.3.13` physically shows
+  `Текущий: Green VPN — 1 месяц`; Android and Windows resolve to the same
+  backend account.
+- Restore did not create a new payment: the account still has one existing
+  activated 249 RUB order and zero orders created in the last six hours.
+  Windows was not connected, so its device/config row is intentionally not
+  counted until first provisioning. No VPN route was changed.
+- The main-site sentence beginning
+  `Попробуйте Green VPN бесплатно 3 дня` was removed entirely. Both servers
+  have identical `index.html` SHA-256
+  `AF112FD5C5EE9DD58CBD509DE4E15EE6A949CB12D01CEBFD8E4BB7906C07B9B0`.
+  The public primary page returns 200, retains both client downloads and
+  contains neither the removed sentence nor the intermediate neutral text.
+- Site rollback:
+  - RUVDS: `/root/greenvpn-main-site-backups/20260726T065207Z`;
+  - Timeweb: `/root/greenvpn-main-site-backups/20260726T065359Z`.
+- The RUVDS storage incident is resolved. Root use fell from 97% with about
+  635 MB free to 67% with about 6.3 GB free; steady-state I/O wait is 0% and
+  local production/paid-beta health is HTTP 200 at about 3 ms. Timeweb is 53%
+  used with about 18 GB free. No host/backend restart, reboot, route change or
+  business-record deletion occurred.
+- Root cause was continuous full SQLite replication (30-second production and
+  10-second paid-beta timers), unbounded release backups and 21 days of
+  high-volume probe observations. Observation retention is now seven days
+  with `30000/12000/30000` row caps; release backup retention keeps four
+  recent directories in each allowlisted high-volume root.
+- Sync is serialized locally, queued for up to 240 seconds, limited by a
+  five-minute service timeout and staggered by calendar. Timeweb runs
+  production at `:00/:10/:20/:30/:40/:50` and paid-beta at `:02/:32` UTC;
+  RUVDS runs production at `:05/:15/:25/:35/:45/:55` and paid-beta at
+  `:17/:47` UTC.
+- All four databases passed `PRAGMA quick_check`, manual sync completed in all
+  four directions with zero conflicts/errors, and the failed RUVDS probes
+  passed after recovery. The first staggered calendar cycles passed on
+  Timeweb production/paid-beta and RUVDS production; the external public
+  surface passed `31/31`. Current sync rollback:
+  Timeweb `/root/greenvpn-db-sync-safety-backups/20260726T075834Z`;
+  RUVDS `/root/greenvpn-db-sync-safety-backups/20260726T075840Z`.
 
 ## Repository
 
@@ -70,6 +370,337 @@ This is the current operational entry point. Read it together with
 - Generated binaries belong in `C:\BlueVPN_Builds`, encrypted restore points in
   `C:\Users\gekto\GreenVPN_Checkpoints`, and secrets outside Git.
 
+## Current Production Account Restore 0.3.13, 2026-07-26
+
+- The owner explicitly approved installation on Android and Windows and
+  publication through both production sites. Production backend is
+  `0.9.140-account-restore.1` on Timeweb Moscow and RUVDS Moscow; Timeweb is
+  still the only billing writer.
+- Mandatory production artifacts:
+  - Android `0.3.13+2026072604`, package `pro.greenvpn.app`, signed, SHA-256
+    `C296936053773BFCF8F8BB9E9A1CD2267A669832FCD451112F9DC4429B8C1629`;
+  - Windows `0.3.13+2604`, unsigned, SHA-256
+    `4BBF8334D528780DE9AB36CDEF21D60010EC0E8EA0FBBA17753C6828A304CF30`.
+- Both production manifests use `required=true`. Both isolated paid-beta
+  manifests retain the exact `.rc`/test artifacts with `required=false`.
+  Rewarded ads and the forced disconnect timer remain disabled everywhere.
+- Android and Windows were installed and physically checked. Both expose a
+  standalone `Уже есть подписка? / Войти по email` action distinct from
+  checkout. Android was left disconnected and stopped. Green VPN on Windows
+  was left disconnected; the independent `pc_valentine` WireGuard route was
+  preserved unchanged. Windows services are automatic and running.
+- Deployment itself used no purchase email, OTP, new order or payment. The
+  later owner-driven sign-in verified restoration on both platforms without a
+  new order. The remaining owner-only product check is Windows
+  provisioning/connect-disconnect.
+- Release-time verification passed: external manifest/download checker `18/18`; complete
+  production downloads from both sites match exact hashes; public-surface
+  probe `31/31`; all production and paid-beta database quick checks; two-way
+  manual sync; matching release-row digests; active services and zero failed
+  units. The resolved storage-incident section above is the current operational
+  health snapshot.
+- Rollback:
+  - backend RUVDS:
+    `/root/greenvpn-public-product-backups/20260726T010132Z-ruvds-0.9.140-account-restore.1`;
+  - backend Timeweb:
+    `/root/greenvpn-public-product-backups/20260726T010847Z-timeweb-0.9.140-account-restore.1`;
+  - Android RUVDS:
+    `/root/greenvpn-apk-release-backups/20260726T010937Z-ruvds-0.3.13-2026072604`;
+  - Android Timeweb:
+    `/root/greenvpn-apk-release-backups/20260726T012414Z-timeweb-0.3.13-2026072604`;
+  - Windows RUVDS:
+    `/root/greenvpn-windows-release-backups/20260726T011630Z-ruvds-0.3.13-2604`;
+  - Windows Timeweb:
+    `/root/greenvpn-windows-release-backups/20260726T012434Z-timeweb-0.3.13-2604`.
+- Operational-retention snapshots:
+  RUVDS `/root/greenvpn-operational-retention-backups/20260726T010307Z`;
+  Timeweb `/root/greenvpn-operational-retention-backups/20260726T010854Z`.
+- The unsigned Windows installer remains the main distribution trust defect.
+
+## Previous Isolated Account-Restore Candidate 0.3.13, 2026-07-26
+
+- This is the pre-promotion checkpoint. Production was still mandatory
+  `0.3.12`; both isolated paid-beta control planes published `0.3.13` with
+  `required=false`.
+- The product journeys are deliberately independent:
+  - guest start/refresh does not require email;
+  - standalone `Войти по email` restores an existing account/subscription and
+    does not create an order or open YooKassa;
+  - `Оплатить` remains only for a new purchase and verifies email first;
+  - expired guest state refreshes as guest, while expired account state asks
+    for sign-in.
+- Exact client artifacts:
+  - Android `0.3.13+2026072604`, package `pro.greenvpn.app.rc`, signed,
+    SHA-256
+    `82772195710B468E0CF45B468D0AB36B95365A8C8541B47098951B44413BBEBA`;
+  - Windows `0.3.13+2604`, unsigned, SHA-256
+    `6E4A33C902FE47FD9B14173B12426F25C9F1F601D6CA94321EDC883D5EF0A507`.
+- Paid-beta backend is `0.9.140-account-restore.1`, release
+  `paid-beta-backend-account-restore-20260726-r2`, on both nodes. Dedicated
+  access recovery endpoints are
+  `/api/v1/auth/access/email/start` and
+  `/api/v1/auth/access/email/verify`; backend archive SHA-256 is
+  `BF0854C3BEC78853B5C52120106EA9875620BB34394D92B7A77913AACDE19384`.
+- Verification passed: Flutter analyze; Flutter
+  `57 passed / 6 platform skips`; backend `86/86`; Python compile;
+  `git diff --check`; local release gate `0 errors / 0 warnings`; exact
+  primary/fallback downloads; both database quick checks; conflict-free manual
+  sync; active services/timers; public-surface probe `31/31`.
+- Exact Android b2604 physical UI passed:
+  - Home shows `Бесплатный` and a standalone existing-subscription sign-in;
+  - Tariff shows `Бесплатный тариф`, 249/649/1099 RUB and standalone sign-in;
+  - Settings shows `Бесплатный профиль / Без регистрации` and restore action;
+  - restore dialog says `Войти в аккаунт`, asks for the subscription email and
+    contains no payment/receipt language;
+  - the phone was left disconnected.
+- Windows physical installation is intentionally pending. The owner PC has an
+  active `pc_valentine` WireGuard tunnel; the candidate shares the stable
+  single-instance/service identity, so installation could interrupt the
+  route. A portable launch raised the already running stable `0.3.12` process
+  and therefore was not counted as b2604 evidence. No Windows adapter, route
+  or service state was changed.
+- Rollback:
+  - backend Timeweb:
+    `/root/greenvpn-paid-beta-backend-backups/20260725T235341Z-paid-beta-backend-account-restore-20260726-r2`;
+  - backend RUVDS:
+    `/root/greenvpn-paid-beta-backend-backups/20260725T235423Z-paid-beta-backend-account-restore-20260726-r2`;
+  - client Timeweb:
+    `/root/greenvpn-paid-beta-client-release-backups/20260726T002604Z-timeweb-0.3.13-0.3.13`;
+  - client RUVDS:
+    `/root/greenvpn-paid-beta-client-release-backups/20260726T002627Z-ruvds-0.3.13-0.3.13`.
+- Remaining owner-only sequence:
+  1. use the real purchase email and OTP in standalone sign-in;
+  2. verify paid entitlement with no new order/YooKassa page;
+  3. verify the same entitlement on the second platform;
+  4. approve a short Windows VPN interruption window and install/smoke the
+     exact b2604 installer;
+  5. only then decide on a separately approved production promotion.
+
+## Previous Production Guest-First 0.3.12, 2026-07-26
+
+- The owner explicitly approved production publication. Both Timeweb Moscow
+  and RUVDS Moscow now publish mandatory stable `0.3.12` clients:
+  - Android `0.3.12+2026072506`, package `pro.greenvpn.app`, signed, SHA-256
+    `6FEBDE9FDBC6E2624FC57F8C18459B432A4F54D3A73A7CC18CB1302777CFCC33`;
+  - Windows `0.3.12+2506`, unsigned, SHA-256
+    `79F5E201F8F798906C9A7FF5F837B9C5AD08B4890DEB3DF0B7F3F2E3C4EC0FE7`.
+- The isolated paid-beta artifacts remain `0.3.12` with `required=false`:
+  Android SHA-256
+  `B3EFBB0ECEC7108993BE2776B23CAEF013F62952E5BCA7761DBA34F1671801DA`
+  and Windows SHA-256
+  `F8AE5B1439D21BF2B3EE0EF39843FA54501AF50DEC6F3D4CFD016D04824F2BC8`.
+  Paid-beta Android keeps package `pro.greenvpn.app.rc`.
+- Production backend is `0.9.139-guest-first.1` on both control planes. Public
+  bootstrap uses `guest` as primary, `email_code` as fallback and exposes only
+  `guest`, `email_code` and `email_password`; no phone method is present.
+  Billing remains single-writer on Timeweb.
+- `https://greenvpn.pro/`, its privacy page and the fallback backend landing
+  now describe the same contract: automatic guest profile, email only before
+  payment or account recovery, three tariffs at 249/649/1099 RUB and no claim
+  that advertising is active. Rewarded advertising and the forced disconnect
+  timer remain disabled in production and paid-beta on both nodes.
+- Exact production Android passed owner-device physical smoke: clean guest
+  start, all three tariffs, payment-time email gate, Android VPN permission,
+  connected and validated real tunnel, public API reachability and clean
+  disconnect. The phone was left disconnected.
+- The exact production Windows installer replaced the paid-beta payload.
+  Registry/application identity is `0.3.12+2506`, installed payload hashes
+  match the stable artifact, `GreenVPNService` is automatic and running, and
+  the application process launches and responds. Desktop visual capture failed
+  in the automation layer and no Windows tunnel transition was performed
+  because that would alter the owner's Windows network. Do not represent this
+  as a completed Windows tunnel smoke. The installer is unsigned.
+- Verification after publication:
+  - backend tests `144/144`;
+  - final local release gate `0` errors and `0` warnings;
+  - eight API manifests, two static paid-beta manifests and eight download
+    checks pass;
+  - full primary/fallback production downloads match the exact SHA-256 values;
+  - public-surface probe `31/31`;
+  - both production databases have `26` users and `26` subscriptions, both
+    paid-beta databases have `5` users, all pass `PRAGMA quick_check`;
+  - manual sync succeeds in both directions, services and timers are active,
+    and fresh backend warning count is zero.
+- Release automation defect caught during publication:
+  `install_android_public_product_release.sh` previously hard-coded
+  `required=true` for paid-beta and the obsolete
+  `pro.greenvpn.app.beta` identity. It now takes explicit production/test
+  required flags, defaults paid-beta to `false`, publishes
+  `pro.greenvpn.app.rc`, verifies the result and waits up to 90 seconds for
+  backend health. The first RUVDS Android attempt was superseded by the
+  corrected atomic deployment before final verification.
+- Current rollback:
+  - backend RUVDS:
+    `/root/greenvpn-public-product-backups/20260725T223750Z-ruvds-0.9.139-guest-first.1`;
+  - backend Timeweb:
+    `/root/greenvpn-public-product-backups/20260725T224049Z-timeweb-0.9.139-guest-first.1`;
+  - main site RUVDS:
+    `/root/greenvpn-main-site-backups/20260725T223241Z`;
+  - main site Timeweb:
+    `/root/greenvpn-main-site-backups/20260725T223437Z`;
+  - Android RUVDS corrected deployment:
+    `/root/greenvpn-apk-release-backups/20260725T221755Z-ruvds-0.3.12-2026072506`;
+  - Android Timeweb:
+    `/root/greenvpn-apk-release-backups/20260725T222248Z-timeweb-0.3.12-2026072506`;
+  - Windows RUVDS:
+    `/root/greenvpn-windows-release-backups/20260725T222005Z-ruvds-0.3.12-2506`;
+  - Windows Timeweb:
+    `/root/greenvpn-windows-release-backups/20260725T222307Z-timeweb-0.3.12-2506`.
+- Release bundles:
+  - final backend archive SHA-256
+    `25C3901BB2CD4E7BB65F0B2B78F63477E3268B153B87A49E2DC98E50B2BA2F41`;
+  - final backend `main.py` SHA-256
+    `6DC9BF293140D4E8C75D209D3F4D3DBF2BD409356A61246ACEB906B95D19B200`;
+  - main-site archive SHA-256
+    `461B22BD5BEB6E916993D7CABDA7610F220D6EDEF64AD4A965BFD691C92A6277`.
+
+## Superseded Paid-Beta Release Candidate 0.3.11, 2026-07-25
+
+- Exact public paid-beta artifacts are now published through both control
+  planes, but production was not changed:
+  - Android `0.3.11+2026072505`,
+    package `pro.greenvpn.app.rc`, label `Green VPN`, SHA-256
+    `04F82EFA95B1D5F2D12BD81EC8B77204C79B674EDBAA0E4FA990F7AEC184BFCE`;
+  - Windows `0.3.11+2505`, unsigned, SHA-256
+    `A416F9E6C7DDD8BC9A22289344CD9F756A0F7B570A8ADDA4B83D34F99F55859F`.
+- Both API manifests, both static manifests, all eight primary/fallback
+  download checks and full-byte downloads through both public ingress routes
+  match. The static manifests have `isolated=true`,
+  `productionPublished=false`, package `pro.greenvpn.app.rc` and label
+  `Green VPN`. The public-surface probe passes 31/31.
+- The exact Android artifact passed owner-device physical smoke: no visible
+  `Beta`, email-code delivery, temporary password login, free mode with the
+  traffic cap disabled, the 249/649/1099 RUB tariff selector, real Android VPN
+  permission, validated `tun0`, public API reachability and clean disconnect.
+  The temporary account and peer were removed; both candidate databases have
+  zero smoke users and pass `PRAGMA quick_check`.
+- The exact Windows installer is installed as `Green VPN 0.3.11`; the service
+  is automatic and running, and the application opens on the unified
+  authentication screen without visible `Beta`. It remains unsigned, and no
+  Windows VPN/network smoke was performed because automation must not alter the
+  owner's Windows network.
+- Paid-beta backend was subsequently updated to
+  `0.9.136-guest-first.1` on both nodes. The published `0.3.11` artifacts are
+  unchanged; email-code and password recovery remain available, while public
+  phone/SMS authentication has been removed.
+- Client rollback directories:
+  - RUVDS:
+    `/root/greenvpn-paid-beta-client-release-backups/20260725T191930Z-ruvds-0.3.11-0.3.11`;
+  - Timeweb:
+    `/root/greenvpn-paid-beta-client-release-backups/20260725T192136Z-timeweb-0.3.11-0.3.11`.
+- Production remains backend `0.9.129-site-quality.1`, Android `0.3.7` SHA-256
+  `CAE9680C1BC0E59AD2046BEAC46779D782AD5F2D542EA6BB5847DBDBDDD96431`
+  and Windows `0.3.6` SHA-256
+  `0A9297141199C3F9C2F971FF2B98B3C48B9CB3C4D939249C4B1DF6AA52F063FA`
+  on both nodes. Do not promote 0.3.11 to production without separate owner
+  approval.
+
+## Previous Isolated Paid-Beta Guest-First 0.3.12, 2026-07-25
+
+- Source implements the new guest-first contract:
+  - a clean install creates an anonymous server session automatically;
+  - phone/SMS login is absent from client UI, public auth routes, bootstrap and
+    release readiness;
+  - a verified email code is required immediately before billing order
+    creation;
+  - a new email upgrades the same guest, while an existing email restores the
+    existing account and transfers the current device;
+  - guest tokens are revoked when the guest is upgraded or switched;
+  - backend rejects guest/unverified billing with
+    `email_verification_required`.
+- Exact isolated artifacts remain published through both paid-beta control
+  planes with `required=false`. The same guest-first version has since been
+  published separately to production:
+  - Android `0.3.12+2026072506`, package `pro.greenvpn.app.rc`, label
+    `Green VPN`, signed, SHA-256
+    `B3EFBB0ECEC7108993BE2776B23CAEF013F62952E5BCA7761DBA34F1671801DA`;
+  - Windows `0.3.12+2506`, unsigned, SHA-256
+    `F8AE5B1439D21BF2B3EE0EF39843FA54501AF50DEC6F3D4CFD016D04824F2BC8`.
+- Artifact manifest:
+  `C:\BlueVPN_Builds\guest_first_20260725_0.3.12\paid-beta-artifacts.json`.
+  It records `isolated=true`, `productionPublished=false`, paid-beta API
+  origins and Rewarded ads disabled.
+- Verification: Flutter analyze passed, all Flutter tests passed
+  (`52 passed`, `6 platform skips`), backend policy suite passed (`85/85`),
+  local release gate passed with `0` errors and `0` warnings, APK signature and
+  transport verifiers passed.
+- Both API manifests and both static manifests match `0.3.12`, report
+  `isolated=true`, `productionPublished=false`, `fileReady=true` and
+  `required=false`. Full Android and Windows downloads through both public
+  ingress routes are byte-identical to the expected hashes. The independent
+  public-surface probe passes `31/31`.
+- Physical Android smoke used the exact primary public download after removing
+  all five older Green VPN test/stable packages. A clean launch created a guest
+  session and opened the VPN screen without an email gate or visible `Beta`.
+  The 249/649/1099 RUB tariff selector is present, and pressing payment opens
+  `Email для оплаты`. Android VPN permission, a validated tunnel, public API
+  reachability and a clean disconnect passed. The device is left disconnected
+  with only `pro.greenvpn.app.rc` version `0.3.12` installed.
+- The old Windows `0.3.6` installation was removed and the exact primary public
+  `0.3.12` installer was installed. Registry version is `0.3.12`, executable
+  version is `0.3.12+2506`, `GreenVPNService` is automatic and running, and a
+  clean launch opens the guest VPN screen without an email gate or visible
+  `Beta`. Windows tunnel smoke remains owner-only because it changes the
+  owner's network. The installer remains unsigned.
+- The matching backend is deployed only to paid-beta on Timeweb Moscow and
+  RUVDS Moscow as `0.9.136-guest-first.1`, release
+  `paid-beta-backend-guest-first-20260725-r1`. Both public paid-beta health
+  routes and bootstraps agree on `guest` as the primary method and expose only
+  `guest`, `email_code` and `email_password`; no phone method is present.
+- Backend rollback directories:
+  - RUVDS Moscow:
+    `/root/greenvpn-paid-beta-backend-backups/20260725T201136Z-paid-beta-backend-guest-first-20260725-r1`;
+  - Timeweb Moscow:
+    `/root/greenvpn-paid-beta-backend-backups/20260725T201321Z-paid-beta-backend-guest-first-20260725-r1`.
+- Client rollback directories:
+  - RUVDS Moscow:
+    `/root/greenvpn-paid-beta-client-release-backups/20260725T203532Z-ruvds-0.3.12-0.3.12`;
+  - Timeweb Moscow:
+    `/root/greenvpn-paid-beta-client-release-backups/20260725T203648Z-timeweb-0.3.12-0.3.12`.
+- Both paid-beta services and DB sync timers are active. A guest endpoint smoke
+  succeeded; its single temporary user was removed through the admin API and
+  the tombstone was synchronized to both nodes. Both databases pass
+  `PRAGMA quick_check`, manual sync completed with exit status `0`, and the
+  secretless public-surface probe passes `31/31`.
+- Remaining paid-beta-only owner gates are real email-code delivery from the
+  payment gate and a Windows VPN/network transition. Do not create a payment
+  or change the owner's Windows route without explicit action-time approval.
+- Production promotion was separately approved and completed on 2026-07-26;
+  the current production state is recorded above.
+
+## Rewarded Ads Temporarily Disabled, 2026-07-22
+
+- The owner explicitly requested that advertising inside Green VPN be disabled
+  for now. No client binary was republished: the server-side gate is the
+  authoritative control and existing clients fetch it before a connection.
+- Production and paid-beta on Timeweb Moscow `72.56.32.197` and RUVDS Moscow
+  `176.113.81.35` now run with `GREENVPN_FREE_AD_GATE_ENABLED=0`, an empty
+  `GREENVPN_FREE_AD_GATE_PLATFORMS`,
+  `GREENVPN_YANDEX_REWARDED_ANDROID_ENABLED=0`,
+  `GREENVPN_YANDEX_REWARDED_WEB_ENABLED=0` and
+  `GREENVPN_FREE_AD_TEST_WEB_ENABLED=0`. The session timer remains disabled.
+- Environment files and the actual `/proc` environments of all four running
+  services match. Production and paid-beta health are green on both public
+  routes, all four SQLite databases pass `PRAGMA quick_check`, both database
+  sync timers are active, recent service error logs are empty, and the
+  secretless public-surface probe passes 31/31.
+- Runtime rollback directories:
+  - RUVDS production:
+    `/root/greenvpn-rewarded-ads-backups/20260722T202003Z-production`;
+  - RUVDS paid-beta Android:
+    `/root/greenvpn-rewarded-ads-backups/20260722T202014Z-paid-beta`;
+  - RUVDS paid-beta Windows:
+    `/root/greenvpn-rewarded-ads-backups/20260722T202022Z-paid-beta-windows`;
+  - Timeweb production:
+    `/root/greenvpn-rewarded-ads-backups/20260722T202149Z-production`;
+  - Timeweb paid-beta Android:
+    `/root/greenvpn-rewarded-ads-backups/20260722T202157Z-paid-beta`;
+  - Timeweb paid-beta Windows:
+    `/root/greenvpn-rewarded-ads-backups/20260722T202205Z-paid-beta-windows`.
+- The ad SDK, challenge tables and provider integration remain dormant in the
+  current source and binaries. Do not remove or reactivate them without a new
+  product decision and a fresh beta-to-production gate.
+
 ## Current Freemium And Windows Ads Candidate, 2026-07-19
 
 - Production clients remain unchanged at Android `0.3.7` and Windows `0.3.6`;
@@ -88,16 +719,15 @@ This is the current operational entry point. Read it together with
   It is installed at `C:\Program Files\Green VPN Beta`, its app and
   `GreenVPNBetaService` are running, and the common desktop and Start menu
   shortcuts exist. The app opened the preserved paid session without a crash.
-- Paid-beta ad policy is identical on both control planes:
-  `platforms=android,windows`, one rewarded view gives one connection,
-  session timer is off, Android uses its real Yandex Mobile Ads unit, and
-  Windows uses the explicit beta-only `test_web` provider. Production has no
-  test provider and still allows only Android.
+- Paid-beta retains the same implemented ad contract on both control planes,
+  but its runtime gate and platform allow-list are now disabled. Android
+  Rewarded and Windows `test_web` are both off. Production also has an empty
+  advertising platform allow-list and no test provider.
 - `0.9.131` fixes the environment contract found during final verification:
   both deploy and runtime use `GREENVPN_FREE_AD_TEST_WEB_ENABLED`; the old
   `GREENVPN_AD_TEST_WEB_ENABLED` remains only as a compatibility fallback.
   `/proc` inspection of both running paid-beta services confirms the canonical
-  flag is `1` and effective.
+  flag is now `0` and effective.
 - Current Windows beta account is paid, so live bootstrap correctly reports no
   ad requirement. The free contract is covered without adding another live
   account: 130 backend tests and 46 Flutter tests verify UI/server entitlement,
@@ -464,13 +1094,16 @@ material. KZ is not in DNS, catalogs or assignment state.
 ## Stable public contour
 
 - Site/API: `https://greenvpn.pro`, `https://api.greenvpn.pro`.
-- Backend: `0.9.129-site-quality.1` on both RU control planes.
-- Android: `0.3.7`, build `2026071902`, package `pro.greenvpn.app`, SHA-256
-  `CAE9680C1BC0E59AD2046BEAC46779D782AD5F2D542EA6BB5847DBDBDDD96431`.
-- Android update is mandatory on Timeweb and RUVDS Moscow; both manifests report
-  `required=true` and `fileReady=true`.
-- Windows: `0.3.6+1808`, mandatory, unsigned, SHA-256
-  `0A9297141199C3F9C2F971FF2B98B3C48B9CB3C4D939249C4B1DF6AA52F063FA`.
+- Backend: `0.9.140-account-restore.1` on both RU control planes.
+- Android: `0.3.13+2026072604`, package `pro.greenvpn.app`, SHA-256
+  `C296936053773BFCF8F8BB9E9A1CD2267A669832FCD451112F9DC4429B8C1629`.
+- Windows: `0.3.13+2604`, mandatory, unsigned, SHA-256
+  `4BBF8334D528780DE9AB36CDEF21D60010EC0E8EA0FBBA17753C6828A304CF30`.
+- Android and Windows updates are mandatory on Timeweb and RUVDS Moscow; all
+  stable manifests report `required=true` and `fileReady=true`.
+- Authentication starts with an automatic guest profile. Email confirmation
+  is required only before payment or for recovery; public phone/SMS login is
+  absent.
 - Public catalog contains only stable client-compatible endpoints. Server/provider
   implementation details are not shown in the client.
 - Both production control planes publish the same three physical stable routes;
@@ -478,23 +1111,25 @@ material. KZ is not in DNS, catalogs or assignment state.
 - Login, bootstrap, catalog, downloads, legal routes and update manifests are
   available through primary and fallback Russian ingress.
 
-## Paid public candidate
+## Isolated paid-beta contour
 
-- Paths remain isolated at `/paid-beta` and `/paid-beta-api` until promotion.
-- Both paid-beta control planes currently report backend `0.9.131-freemium.2`.
+- Paths remain isolated at `/paid-beta` and `/paid-beta-api`.
+- Both paid-beta control planes currently report backend
+  `0.9.140-account-restore.1`.
 - Both SQLite databases pass `PRAGMA quick_check`.
 - The public-product client marker permits the final public candidate to create
   a 249 RUB order for accounts previously enrolled in the paid-beta cohort;
   unmarked legacy clients remain rejected.
-- Android test release: `0.3.7+2026071902`, package
-  `pro.greenvpn.app.beta`, side-by-side with stable, SHA-256
-  `910D7C8D03E224484050EFB4AE845C0B2DD6FC592B85B7A3FF8B1475DE21E5C5`.
-- Windows candidate: `0.3.6-paid-beta.1808`, SHA-256
-  `19BCCFB0866CAC69F78B9F6A3BFBC8C9A0AFE293876D95E3091179FEEBAB2AF4`.
+- Android test release: `0.3.13+2026072604`, package
+  `pro.greenvpn.app.rc`, side-by-side with stable, SHA-256
+  `82772195710B468E0CF45B468D0AB36B95365A8C8541B47098951B44413BBEBA`.
+- Windows candidate: `0.3.13+2604`, SHA-256
+  `6E4A33C902FE47FD9B14173B12426F25C9F1F601D6CA94321EDC883D5EF0A507`.
   It is published on both RU nodes, technically tested, unsigned and optional.
-- Product model: trial 3 days; 249/649/1099 RUB for 30/90/180 days; free Android
-  connections require rewarded ads, paid plans have no ads, and there is no
-  disconnect timer; auto-renew is opt-out after YooKassa approval.
+- Product model: automatic guest start, trial 3 days and 249/649/1099 RUB for
+  30/90/180 days. Paid-beta free tier is enabled with quota enforcement
+  disabled and a 10 Mbit/s configured speed. Rewarded ads and the disconnect
+  timer are disabled. Auto-renew requires explicit payment-method consent.
 - The real 249 RUB provider-backed payment smoke and the subsequent unlink
   smoke are complete. The paid period remains active through 2026-09-09;
   `auto_renew=0` and the saved payment method is absent on both synchronized
@@ -671,15 +1306,19 @@ material. KZ is not in DNS, catalogs or assignment state.
 
 1. Obtain an Authenticode code-signing certificate and build a higher-version
    signed Windows successor.
-2. Approve one UAC prompt on an owner-controlled PC to perform the last physical
-   install/launch smoke of the exact public Windows 0.3.6 download.
-3. Raise the SMS.ru daily production limit and perform one positive login-code
-   delivery.
+2. On an owner-controlled Windows PC, confirm the visible `0.3.12` guest screen
+   and explicitly approve one real connect/disconnect tunnel transition. The
+   exact installer, payload and service are already installed and verified.
+3. Before buying traffic for paid conversion, complete one owner-driven
+   payment journey: guest start, real email code, YooKassa payment, receipt,
+   entitlement on both platforms and refund/cancellation handling. Automation
+   must not enter the OTP or approve the payment.
 4. Supply the Telegram monitoring bot token and destination chat id and perform
    one alert-delivery smoke.
-5. In Yandex Partner, the owner must add the published application-store URL
-   and complete the payout/legal profile before the displayed deadline. This
-   requires personal bank, identity and tax data and cannot be automated.
+5. Advertising remains an optional later monetization project, not a launch
+   dependency. Keep it disabled until a provider gives written approval for
+   the exact VPN/WebView2 rewarded flow, payout terms are usable in Russia and
+   a real isolated callback smoke succeeds.
 
 Do not perform a real payment, enter SMS/bank codes or accept legal terms on
 behalf of the owner.

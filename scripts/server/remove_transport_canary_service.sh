@@ -14,6 +14,11 @@ PROTECTED_HOST_IPS=(
   "176.113.81.35"
   "5.129.237.163"
 )
+APPROVED_DATA_PLANE_IPS=(
+  "37.220.85.211"
+  "5.129.216.42"
+  "88.218.250.86"
+)
 
 usage() {
   cat <<'USAGE'
@@ -22,7 +27,7 @@ Green VPN guarded transport canary rollback.
 Usage:
   remove_transport_canary_service.sh --protocol PROTOCOL [--service-name NAME]
       [--expected-public-ip IP] [--apply]
-      [--approved-existing-host 5.129.216.42]
+      [--approved-existing-host EXACT_DATA_PLANE_IP]
 
 The default mode is dry-run. Apply mode:
   - is permanently refused on known production/control-plane hosts;
@@ -90,34 +95,29 @@ fi
 PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org || true)"
 for protected_ip in "${PROTECTED_HOST_IPS[@]}"; do
   if [[ "$PUBLIC_IP" == "$protected_ip" && "$APPLY" -eq 1 ]]; then
-    approved_nl2_awg=0
-    approved_nl2_hysteria=0
-    approved_nl2_vless=0
-    if [[ "$PUBLIC_IP" == "5.129.216.42" \
-      && "$APPROVED_EXISTING_HOST" == "5.129.216.42" \
-      && "$PROTOCOL" == "amneziawg" \
-      && "$SERVICE_NAME" == "greenvpn-amneziawg-canary" ]]; then
-      approved_nl2_awg=1
+    approved_data_plane=0
+    for approved_ip in "${APPROVED_DATA_PLANE_IPS[@]}"; do
+      [[ "${PUBLIC_IP}" == "${approved_ip}" ]] && approved_data_plane=1
+    done
+    approved_tuple=0
+    if [[ "${APPROVED_EXISTING_HOST}" == "${PUBLIC_IP}" ]]; then
+      case "${PROTOCOL}" in
+        amneziawg)
+          [[ "${SERVICE_NAME}" == "greenvpn-amneziawg-canary" ]] && approved_tuple=1
+          ;;
+        hysteria2)
+          [[ "${SERVICE_NAME}" == "greenvpn-hysteria2-canary" ]] && approved_tuple=1
+          ;;
+        vless_reality)
+          [[ "${SERVICE_NAME}" == "greenvpn-vless-reality-canary" ]] && approved_tuple=1
+          ;;
+      esac
     fi
-    if [[ "$PUBLIC_IP" == "5.129.216.42" \
-      && "$APPROVED_EXISTING_HOST" == "5.129.216.42" \
-      && "$PROTOCOL" == "hysteria2" \
-      && "$SERVICE_NAME" == "greenvpn-hysteria2-canary" ]]; then
-      approved_nl2_hysteria=1
-    fi
-    if [[ "$PUBLIC_IP" == "5.129.216.42" \
-      && "$APPROVED_EXISTING_HOST" == "5.129.216.42" \
-      && "$PROTOCOL" == "vless_reality" \
-      && "$SERVICE_NAME" == "greenvpn-vless-reality-canary" ]]; then
-      approved_nl2_vless=1
-    fi
-    if [[ "$approved_nl2_awg" -ne 1 \
-      && "$approved_nl2_hysteria" -ne 1 \
-      && "$approved_nl2_vless" -ne 1 ]]; then
+    if [[ "${approved_data_plane}" -ne 1 || "${approved_tuple}" -ne 1 ]]; then
       echo "Refusing canary rollback mutation on protected Green VPN host ${protected_ip}." >&2
       exit 1
     fi
-    echo "Owner-approved narrow NL2 ${PROTOCOL} rollback exception accepted."
+    echo "Owner-approved data-plane ${PROTOCOL} rollback tuple accepted."
   fi
 done
 if [[ "$APPLY" -eq 1 ]]; then

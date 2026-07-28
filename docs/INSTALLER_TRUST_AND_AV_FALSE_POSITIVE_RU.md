@@ -1,6 +1,6 @@
 # Installer trust и ложное срабатывание AV
 
-Дата: 2026-05-10
+Обновлено: 2026-07-28
 
 ## Что произошло
 
@@ -38,6 +38,15 @@
   - умеет писать JSON-отчёт через `-ReportPath`;
   - умеет `-VerifyOnly -SkipSignToolVerify`, чтобы до покупки сертификата/Windows SDK проверить текущий статус через `Get-AuthenticodeSignature`;
   - release gate теперь проверяет наличие этого tooling и PowerShell syntax.
+- Добавлен fail-closed orchestration:
+  `scripts/windows/finalize_windows_trusted_release.ps1`.
+  Он автоматически выбирает валидный Code Signing EKU certificate с private
+  key, подписывает собственные app/service EXE до архивации, bootstrap и
+  финальный installer после изменения ресурсов, проверяет publisher/timestamp/
+  SHA-256 и сохраняет отдельные JSON reports.
+- Серверный installer релиза принимает production/test signature reports и
+  записывает trusted metadata только после совпадения обоих отчётов с точными
+  хэшами и одной signing identity.
 
 ## Как это делают нормальные VPN
 
@@ -56,15 +65,18 @@
    - Подойдет OV/EV code signing certificate или Microsoft Artifact Signing/Trusted Signing, если аккаунт и валидация доступны.
    - Важно: по актуальной документации Microsoft EV больше не дает автоматический обход SmartScreen; репутация все равно набирается по подписанному издателю/хэшу.
 2. Установить сертификат в Windows Certificate Store на build-машине, подключить провайдерский токен или настроить cloud signing.
-3. Подписывать все Windows-артефакты:
+3. Подписывать все собственные Windows-артефакты:
    - `greenvpn.exe`;
    - `greenvpn_service.exe`;
-   - DLL/EXE в release-папке;
+   - `install_bootstrap.exe`;
    - финальный installer/MSI/EXE.
+   Сторонние движки/драйверы не переподписывать от имени Green VPN без
+   отдельной проверки лицензии, provenance и pinned hashes.
 4. После подписи прогонять:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\sign_release_artifacts.ps1 -CertificateThumbprint <CERT_SHA1_THUMBPRINT> -Path .\build\windows\x64\runner\Release
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  .\scripts\windows\finalize_windows_trusted_release.ps1 -Apply
 ```
 
    Для промежуточной проверки без реальной подписи и без Windows SDK:

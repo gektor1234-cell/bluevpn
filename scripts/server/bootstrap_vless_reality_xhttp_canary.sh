@@ -22,16 +22,17 @@ REALITY_SERVER_NAME="www.amazon.com"
 
 usage() {
   cat <<'USAGE'
-Bootstrap the owner-approved VLESS REALITY/XHTTP canary on Green VPN NL2.
+Bootstrap the owner-approved VLESS REALITY/XHTTP canary on a Green VPN data plane.
 
-Default mode is dry-run. Apply requires all three explicit arguments:
-  bootstrap_vless_reality_xhttp_canary.sh --expected-public-ip 5.129.216.42 \
-      --approved-existing-host 5.129.216.42 --apply
+Default mode is dry-run. Apply requires an exact approved host/port passport:
+  bootstrap_vless_reality_xhttp_canary.sh --canary-host 37.220.85.211 \
+      --canary-port 443 --expected-public-ip 37.220.85.211 \
+      --approved-existing-host 37.220.85.211 --apply
 
 The script:
-  - refuses every host except the exact NL2 public IP;
+  - accepts only the three exact Green VPN data-plane host/port passports;
   - pins the official Xray-core v26.7.11 Linux archive and binary SHA-256;
-  - listens only on TCP/443; existing WireGuard UDP/443 is unaffected;
+  - uses TCP/443 on NL1/NL2 and TCP/9443 on London;
   - creates one root-only VLESS identity, REALITY keypair, short ID and XHTTP path;
   - keeps root-only base/full client profiles for controlled preview tests;
   - preserves wg0, AWG2, Hysteria2, DNS, backend, databases and public catalog;
@@ -54,6 +55,14 @@ while [[ $# -gt 0 ]]; do
       APPROVED_EXISTING_HOST="${2:?missing approved existing host}"
       shift 2
       ;;
+    --canary-host)
+      CANARY_HOST="${2:?missing canary host}"
+      shift 2
+      ;;
+    --canary-port)
+      CANARY_PORT="${2:?missing canary port}"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -67,9 +76,24 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "${EUID}" -ne 0 ]]; then
-  echo "Run as root on NL2." >&2
+  echo "Run as root on the approved VPN data plane." >&2
   exit 1
 fi
+case "${CANARY_HOST}|${CANARY_PORT}" in
+  "5.129.216.42|443")
+    ENDPOINT_ID="nl2-vless-reality-xhttp-canary"
+    ;;
+  "37.220.85.211|443")
+    ENDPOINT_ID="nl1-vless-reality-xhttp-canary"
+    ;;
+  "88.218.250.86|9443")
+    ENDPOINT_ID="gb1-vless-reality-xhttp-canary"
+    ;;
+  *)
+    echo "Unsupported Green VPN VLESS host/port passport." >&2
+    exit 1
+    ;;
+esac
 for command in curl unzip openssl python3 sha256sum systemctl ss; do
   command -v "${command}" >/dev/null 2>&1 || {
     echo "Required command is missing: ${command}" >&2
@@ -79,13 +103,13 @@ done
 
 PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org || true)"
 if [[ "${PUBLIC_IP}" != "${CANARY_HOST}" ]]; then
-  echo "Refusing VLESS REALITY bootstrap outside exact NL2 host." >&2
+  echo "Refusing VLESS REALITY bootstrap outside the approved exact host." >&2
   exit 1
 fi
 if [[ "${APPLY}" -eq 1 ]]; then
   if [[ "${EXPECTED_PUBLIC_IP}" != "${CANARY_HOST}" \
     || "${APPROVED_EXISTING_HOST}" != "${CANARY_HOST}" ]]; then
-    echo "Apply requires exact NL2 expected/approved host values." >&2
+    echo "Apply requires exact expected/approved host values." >&2
     exit 1
   fi
 fi
@@ -319,7 +343,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
   --config-file "${CONFIG_FILE}" \
   --service-name "${SERVICE_NAME}" \
   --listen-port "${CANARY_PORT}" \
-  --endpoint-id nl2-vless-reality-xhttp-canary \
+  --endpoint-id "${ENDPOINT_ID}" \
   --transport reality \
   --approved-existing-host "${CANARY_HOST}" \
   --json

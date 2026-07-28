@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "product": "Green VPN",
+  "appVersion": "0.3.18",
+  "androidBuildNumber": "2026072906",
+  "windowsBuildNumber": 2906,
+  "backendVersion": "0.9.151-source-anchor.1",
+  "api": {
+    "primary": "https://api.greenvpn.pro",
+    "fallbacks": [
+      "https://176-113-81-35.sslip.io"
+    ],
+    "paidBetaPath": "/paid-beta-api"
+  },
+  "android": {
+    "productionApplicationId": "pro.greenvpn.app",
+    "paidBetaApplicationId": "pro.greenvpn.app.beta",
+    "releaseAbis": [
+      "arm64-v8a",
+      "x86_64"
+    ],
+    "pageSizeBytes": 16384
+  },
+  "billing": {
+    "paidSalesEnabled": false,
+    "refundExecutionEnabled": false,
+    "autoRenewEnabled": false,
+    "rewardedAdsEnabled": false
+  },
+  "publication": {
+    "productionPublished": false,
+    "ownerApprovalRequired": true
+  }
+}

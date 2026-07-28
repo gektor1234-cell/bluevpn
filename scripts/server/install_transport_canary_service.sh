@@ -17,6 +17,11 @@ PROTECTED_HOST_IPS=(
   "176.113.81.35"
   "5.129.237.163"
 )
+APPROVED_DATA_PLANE_IPS=(
+  "37.220.85.211"
+  "5.129.216.42"
+  "88.218.250.86"
+)
 
 usage() {
   cat <<'EOF'
@@ -27,7 +32,7 @@ Default mode is dry-run. It never publishes a transport to users.
 Usage:
   install_transport_canary_service.sh --protocol PROTOCOL --binary PATH --config-file PATH [--apply]
       [--service-name NAME] [--expected-public-ip IP]
-      [--approved-existing-host 5.129.216.42]
+      [--approved-existing-host EXACT_DATA_PLANE_IP]
 
 Supported PROTOCOL values:
   amneziawg
@@ -49,9 +54,9 @@ Examples:
 
 Safety:
   - intended for a separate canary node;
-  - refuses apply mode on every known production/control-plane host;
-  - the only narrow exceptions are the owner-approved NL2 AWG2, Hysteria2 and
-    VLESS REALITY/XHTTP canaries, each bound to one exact service/config tuple;
+  - refuses apply mode on every control-plane and personal host;
+  - permits only the three owner-approved VPN data planes and only for an exact
+    transport service/config tuple;
   - apply mode requires --expected-public-ip to prevent wrong-host deployment;
   - requires trusted/pinned binaries to be installed before this script runs;
   - requires a root-owned config file that is not world-readable;
@@ -183,40 +188,44 @@ if ! [[ "${SERVICE_NAME}" =~ ^[a-zA-Z0-9_.@-]+$ ]]; then
 fi
 
 PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org || true)"
+is_approved_data_plane() {
+  local candidate="$1"
+  local approved
+  for approved in "${APPROVED_DATA_PLANE_IPS[@]}"; do
+    [[ "${candidate}" == "${approved}" ]] && return 0
+  done
+  return 1
+}
+
+is_approved_transport_tuple() {
+  [[ "${APPROVED_EXISTING_HOST}" == "${PUBLIC_IP}" ]] || return 1
+  case "${PROTOCOL}" in
+    amneziawg)
+      [[ "${SERVICE_NAME}" == "greenvpn-amneziawg-canary" \
+        && "${CONFIG_FILE}" == "/etc/greenvpn-transport/awgcanary0.conf" ]]
+      ;;
+    hysteria2)
+      [[ "${SERVICE_NAME}" == "greenvpn-hysteria2-canary" \
+        && "${CONFIG_FILE}" == "/etc/greenvpn-transport/hysteria2-canary.yaml" ]]
+      ;;
+    vless_reality)
+      [[ "${SERVICE_NAME}" == "greenvpn-vless-reality-canary" \
+        && "${CONFIG_FILE}" == "/etc/greenvpn-transport/vless-reality-xhttp-canary.json" ]]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 for protected_ip in "${PROTECTED_HOST_IPS[@]}"; do
   if [[ "${PUBLIC_IP}" == "${protected_ip}" && "${APPLY}" -eq 1 ]]; then
-    approved_nl2_awg=0
-    approved_nl2_hysteria=0
-    approved_nl2_vless=0
-    if [[ "${PUBLIC_IP}" == "5.129.216.42" \
-      && "${APPROVED_EXISTING_HOST}" == "5.129.216.42" \
-      && "${PROTOCOL}" == "amneziawg" \
-      && "${SERVICE_NAME}" == "greenvpn-amneziawg-canary" \
-      && "${CONFIG_FILE}" == "/etc/greenvpn-transport/awgcanary0.conf" ]]; then
-      approved_nl2_awg=1
-    fi
-    if [[ "${PUBLIC_IP}" == "5.129.216.42" \
-      && "${APPROVED_EXISTING_HOST}" == "5.129.216.42" \
-      && "${PROTOCOL}" == "hysteria2" \
-      && "${SERVICE_NAME}" == "greenvpn-hysteria2-canary" \
-      && "${CONFIG_FILE}" == "/etc/greenvpn-transport/hysteria2-canary.yaml" ]]; then
-      approved_nl2_hysteria=1
-    fi
-    if [[ "${PUBLIC_IP}" == "5.129.216.42" \
-      && "${APPROVED_EXISTING_HOST}" == "5.129.216.42" \
-      && "${PROTOCOL}" == "vless_reality" \
-      && "${SERVICE_NAME}" == "greenvpn-vless-reality-canary" \
-      && "${CONFIG_FILE}" == "/etc/greenvpn-transport/vless-reality-xhttp-canary.json" ]]; then
-      approved_nl2_vless=1
-    fi
-    if [[ "${approved_nl2_awg}" -ne 1 \
-      && "${approved_nl2_hysteria}" -ne 1 \
-      && "${approved_nl2_vless}" -ne 1 ]]; then
+    if ! is_approved_data_plane "${PUBLIC_IP}" || ! is_approved_transport_tuple; then
       echo "Refusing to install canary service on protected Green VPN host ${protected_ip}." >&2
-      echo "Use a separate test-only canary node." >&2
+      echo "Only an exact approved data-plane transport tuple is accepted." >&2
       exit 1
     fi
-    echo "Owner-approved narrow NL2 ${PROTOCOL} canary exception accepted."
+    echo "Owner-approved data-plane ${PROTOCOL} canary tuple accepted."
   fi
 done
 if [[ "${APPLY}" -eq 1 ]]; then

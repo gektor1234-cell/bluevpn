@@ -20,10 +20,40 @@ foreach ($tool in @($aapt2, $zipalign, $apksigner, $apkanalyzer)) {
 }
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$expectedHysteria = [ordered]@{
-    'lib/arm64-v8a/libhysteria.so' = '0A019366C970C5298835E155A2923E35A42E7C72505EFC93F9D3F21D2D8C9454'
-    'lib/armeabi-v7a/libhysteria.so' = 'F900A64CAF83916228E17D61CFB8937A3E2D49228B955DDBB9D508AEC44D761A'
-    'lib/x86_64/libhysteria.so' = '0CB45CBBF3E1D5CC0B2B9F54750D8D491CEDB4B11C203A944C3BE587C554A353'
+$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$nativeManifestPath = Join-Path $repo (
+    'android\transport_preview\hysteria_tunnel\HYSTERIA-NATIVE-MANIFEST.json'
+)
+if (-not (Test-Path -LiteralPath $nativeManifestPath -PathType Leaf)) {
+    throw "Tracked Hysteria2 native manifest is missing: $nativeManifestPath"
+}
+$nativeManifest = Get-Content -LiteralPath $nativeManifestPath -Raw -Encoding UTF8 |
+    ConvertFrom-Json
+if (
+    [int]$nativeManifest.schemaVersion -ne 1 -or
+    $nativeManifest.hysteriaVersion -ne 'app/v2.9.3' -or
+    $nativeManifest.sourceCommit -ne '2d973f9513ef661d1922d6d14acb37945caef47d' -or
+    $nativeManifest.goVersion -ne 'go1.25.1' -or
+    $nativeManifest.ndkRevision -ne '28.2.13676358' -or
+    [int]$nativeManifest.androidApi -ne 26 -or
+    [int]$nativeManifest.pageSizeBytes -ne 16384 -or
+    [int]$nativeManifest.reproducibilityPasses -lt 2
+) {
+    throw 'Tracked Hysteria2 native manifest does not satisfy the pinned 16 KB reproducibility contract.'
+}
+
+$packagedAbis = @('arm64-v8a', 'x86_64')
+$expectedHysteria = [ordered]@{}
+foreach ($abi in $packagedAbis) {
+    $manifestRows = @($nativeManifest.files | Where-Object { $_.abi -eq $abi })
+    if ($manifestRows.Count -ne 1) {
+        throw "Tracked Hysteria2 native manifest must contain exactly one row for ABI $abi."
+    }
+    $row = $manifestRows[0]
+    if ($row.file -ne 'libhysteria.so' -or [string]::IsNullOrWhiteSpace($row.sha256)) {
+        throw "Tracked Hysteria2 native manifest row is incomplete for ABI $abi."
+    }
+    $expectedHysteria["lib/$abi/libhysteria.so"] = ([string]$row.sha256).ToUpperInvariant()
 }
 $requiredAssets = @(
     'assets/HYSTERIA_APP_MIT.txt',
@@ -51,12 +81,25 @@ try {
             throw "Hysteria2 binary hash mismatch in APK: $($entry.Key) actual=$actual"
         }
     }
-    if ($names -contains 'lib/x86/libhysteria.so') {
-        throw 'Flutter preview APK unexpectedly contains an unsupported x86 Hysteria2 binary.'
+    $actualHysteriaEntries = @($names | Where-Object { $_ -match '^lib/[^/]+/libhysteria\.so$' })
+    $unexpectedHysteriaEntries = @(
+        $actualHysteriaEntries |
+            Where-Object { -not $expectedHysteria.Contains($_) }
+    )
+    if ($actualHysteriaEntries.Count -ne $expectedHysteria.Count -or $unexpectedHysteriaEntries.Count -ne 0) {
+        throw "Flutter preview APK contains unexpected Hysteria2 ABI entries: $($actualHysteriaEntries -join ', ')"
     }
     foreach ($library in @('libhev-socks5-tunnel.so', 'libgreenvpn-hysteria-bridge.so')) {
-        $count = @($names | Where-Object { $_ -match "^lib/(arm64-v8a|armeabi-v7a|x86_64)/$([regex]::Escape($library))$" }).Count
-        if ($count -ne 3) { throw "Android Hysteria2 runtime ABI coverage is incomplete: $library count=$count" }
+        foreach ($abi in $packagedAbis) {
+            $entryName = "lib/$abi/$library"
+            if ($names -notcontains $entryName) {
+                throw "Android Hysteria2 runtime ABI coverage is incomplete: $entryName"
+            }
+        }
+        $actualEntries = @($names | Where-Object { $_ -match "^lib/[^/]+/$([regex]::Escape($library))$" })
+        if ($actualEntries.Count -ne $packagedAbis.Count) {
+            throw "Android Hysteria2 runtime contains unsupported ABI entries: $library count=$($actualEntries.Count)"
+        }
     }
     foreach ($asset in $requiredAssets) {
         if ($names -notcontains $asset) { throw "Android Hysteria2 license/provenance asset is missing: $asset" }

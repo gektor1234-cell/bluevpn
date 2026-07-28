@@ -1,4 +1,5 @@
 import json
+import importlib.util
 import sqlite3
 import subprocess
 import sys
@@ -11,6 +12,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PRUNE_SCRIPT = (
     PROJECT_ROOT / "scripts" / "ops" / "greenvpn_prune_operational_history.py"
 )
+SPEC = importlib.util.spec_from_file_location("greenvpn_operational_retention", PRUNE_SCRIPT)
+assert SPEC and SPEC.loader
+RETENTION = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(RETENTION)
 
 
 class OperationalRetentionTests(unittest.TestCase):
@@ -102,6 +107,45 @@ class OperationalRetentionTests(unittest.TestCase):
             self.assertEqual(observations, [("2099-01-01T00:00:00+00:00",)])
             self.assertEqual(users, 1)
             self.assertEqual(quick_check, "ok")
+
+    def test_row_limit_removes_oldest_observations(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="greenvpn-retention-limit-",
+            ignore_cleanup_errors=True,
+        ) as root:
+            database = Path(root) / "bluevpn.db"
+            with sqlite3.connect(database) as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE service_availability_observations (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        created_at TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.executemany(
+                    "INSERT INTO service_availability_observations(created_at) VALUES (?)",
+                    [
+                        (f"2099-01-01T00:00:0{index}+00:00",)
+                        for index in range(1, 6)
+                    ],
+                )
+                conn.commit()
+                rows_before, candidates, deleted = RETENTION.delete_oldest_over_limit(
+                    conn,
+                    "service_availability_observations",
+                    "created_at",
+                    max_rows=2,
+                    batch_size=100,
+                )
+                remaining = conn.execute(
+                    "SELECT id FROM service_availability_observations ORDER BY id"
+                ).fetchall()
+
+            self.assertEqual(rows_before, 5)
+            self.assertEqual(candidates, 3)
+            self.assertEqual(deleted, 3)
+            self.assertEqual(remaining, [(4,), (5,)])
 
 
 if __name__ == "__main__":

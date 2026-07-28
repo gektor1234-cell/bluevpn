@@ -197,8 +197,15 @@ class GreenVpnQuickTileService : TileService() {
                             "candidate_rejected protocol=${fetched.protocol} connected=$connected " +
                                 transportFailureSummary(fetched.protocol)
                         )
-                        try { disconnectVpn() } catch (_: Exception) {}
+                        val stopped = try { disconnectVpn() } catch (_: Exception) { false }
                         recordRouteFailure(candidate)
+                        if (!stopped) {
+                            debugLog(
+                                "candidate_cleanup_failed protocol=${fetched.protocol}; " +
+                                    "cascade_stopped"
+                            )
+                            break
+                        }
                         continue
                     }
 
@@ -238,7 +245,12 @@ class GreenVpnQuickTileService : TileService() {
                         if (cachedConnected) {
                             connectedConfig = FetchedConfig(cachedConfig, cachedProtocol, "cached")
                         } else {
-                            try { disconnectVpn() } catch (_: Exception) {}
+                            val stopped = try { disconnectVpn() } catch (_: Exception) { false }
+                            if (!stopped) {
+                                debugLog(
+                                    "cached_candidate_cleanup_failed protocol=$cachedProtocol"
+                                )
+                            }
                         }
                     }
                 }

@@ -48,6 +48,17 @@ class VlessRealityConfigTest {
     @Test
     fun validIssuedConfigPassesWithoutMutation() {
         assertEquals(validConfig().trim() + "\n", VlessRealityConfig.validate(validConfig()))
+        assertEquals(setOf("5.129.216.42", "1.1.1.1"), VlessRealityConfig.routeExclusions(validConfig()))
+    }
+
+    @Test
+    fun acceptsEveryGuardedDataPlanePassport() {
+        VlessRealityConfig.validate(validConfig().replace("5.129.216.42", "37.220.85.211"))
+        VlessRealityConfig.validate(
+            validConfig()
+                .replace("5.129.216.42", "88.218.250.86")
+                .replace("\"port\": 443", "\"port\": 9443")
+        )
     }
 
     @Test(expected = IllegalArgumentException::class)
@@ -66,8 +77,13 @@ class VlessRealityConfigTest {
     }
 
     @Test(expected = IllegalArgumentException::class)
-    fun rejectsEndpointDrift() {
+    fun rejectsUnknownEndpoint() {
         VlessRealityConfig.validate(validConfig().replace("5.129.216.42", "203.0.113.42"))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun rejectsGuardedEndpointOnWrongPort() {
+        VlessRealityConfig.validate(validConfig().replace("\"port\": 443", "\"port\": 9443"))
     }
 
     @Test(expected = IllegalArgumentException::class)

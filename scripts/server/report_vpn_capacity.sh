@@ -2,6 +2,7 @@
 set -euo pipefail
 
 IFACE="wg0"
+WG_TOOL="wg"
 SERVER_ID="current_wg0"
 API_BASE="https://api.greenvpn.pro"
 TOKEN_FILE=""
@@ -23,6 +24,7 @@ Options:
   --token-file PATH          Root-only file with admin token. Required for --apply.
   --server-id ID             Managed server_catalog serverId to update.
   --iface IFACE              WireGuard interface, default wg0.
+  --wg-tool PATH             WireGuard-compatible CLI, default wg.
   --api-base URL             Backend API base, default https://api.greenvpn.pro.
   --planned-mbps N           Optional planned link bandwidth override.
   --reserved-mbps N          Optional reserved bandwidth override.
@@ -54,6 +56,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --iface)
       IFACE="${2:-}"
+      shift 2
+      ;;
+    --wg-tool)
+      WG_TOOL="${2:-}"
       shift 2
       ;;
     --api-base)
@@ -117,8 +123,13 @@ if [[ ! -r "$rx_path" || ! -r "$tx_path" ]]; then
   exit 2
 fi
 
-if ! command -v wg >/dev/null 2>&1; then
-  echo "wg command is required." >&2
+if [[ "$WG_TOOL" == */* ]]; then
+  if [[ ! -x "$WG_TOOL" ]]; then
+    echo "WireGuard tool is not executable: ${WG_TOOL}" >&2
+    exit 2
+  fi
+elif ! command -v "$WG_TOOL" >/dev/null 2>&1; then
+  echo "WireGuard tool is required: ${WG_TOOL}" >&2
   exit 2
 fi
 
@@ -135,7 +146,7 @@ fi
 current_load_mbps="$(awk -v bytes="$delta_bytes" -v sec="$SAMPLE_SECONDS" 'BEGIN { printf "%d", ((bytes * 8) / sec / 1000000) + 0.5 }')"
 
 now_epoch="$(date +%s)"
-peer_rows="$(wg show "$IFACE" dump | awk 'NR > 1')"
+peer_rows="$("$WG_TOOL" show "$IFACE" dump | awk 'NR > 1')"
 assigned_users="0"
 active_clients="0"
 if [[ -n "$peer_rows" ]]; then

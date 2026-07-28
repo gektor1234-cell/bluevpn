@@ -1,6 +1,7 @@
 param(
     [string]$PayloadZip = "",
     [string]$InstallDir = "$env:ProgramFiles\Green VPN Beta",
+    [string]$OwnerSid = "",
     [switch]$NoLaunch
 )
 
@@ -29,6 +30,30 @@ function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Resolve-InstallingUserSid {
+    param([string]$CandidateSid)
+
+    $value = $CandidateSid.Trim()
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        $value = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    }
+    try {
+        $sid = [Security.Principal.SecurityIdentifier]::new($value)
+    } catch {
+        throw "Invalid Windows account SID supplied to the beta installer."
+    }
+    if (-not $sid.IsAccountSid() -or $sid.Value -in @(
+        'S-1-1-0',
+        'S-1-5-11',
+        'S-1-5-18',
+        'S-1-5-32-544',
+        'S-1-5-32-545'
+    )) {
+        throw "The beta installer owner must be an individual Windows account."
+    }
+    return $sid.Value
 }
 
 function Remove-CallerLegacyInstall {
@@ -80,9 +105,26 @@ function Remove-BetaService {
 }
 
 function Ensure-BetaProgramData {
+    param([Parameter(Mandatory=$true)][string]$UserSid)
+
     New-Item -ItemType Directory -Force -Path $programDataRoot | Out-Null
     attrib -H -S -R $programDataRoot 2>$null | Out-Null
-    icacls $programDataRoot /inheritance:e /grant '*S-1-5-11:(OI)(CI)M' '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+    & icacls.exe $programDataRoot /grant:r `
+        ('*' + $UserSid + ':(OI)(CI)M') `
+        '*S-1-5-18:(OI)(CI)F' `
+        '*S-1-5-32-544:(OI)(CI)F' /T /C | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to seed protected Green VPN Beta state ACLs.' }
+    & icacls.exe $programDataRoot /inheritance:r /T /C | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to disable inherited Green VPN Beta state ACLs.' }
+    & icacls.exe $programDataRoot /remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' /T /C | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to remove broad Green VPN Beta state access.' }
+    & icacls.exe $programDataRoot /grant:r `
+        ('*' + $UserSid + ':(OI)(CI)M') `
+        '*S-1-5-18:(OI)(CI)F' `
+        '*S-1-5-32-544:(OI)(CI)F' /T /C | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to apply protected Green VPN Beta state ACLs.' }
+    & icacls.exe $programDataRoot /setowner ('*' + $UserSid) /T /C | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to bind Green VPN Beta state to the installing Windows account.' }
 
     $tokenPath = Join-Path $programDataRoot 'service_token'
     $token = ''
@@ -100,7 +142,13 @@ function Ensure-BetaProgramData {
         }
     }
     attrib +H $tokenPath 2>$null | Out-Null
-    icacls $tokenPath /inheritance:r /grant '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-11:R' | Out-Null
+    & icacls.exe $tokenPath /inheritance:r /remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to remove broad Green VPN Beta service token access.' }
+    & icacls.exe $tokenPath /grant:r `
+        '*S-1-5-18:F' `
+        '*S-1-5-32-544:F' `
+        ('*' + $UserSid + ':R') | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to protect the Green VPN Beta service token.' }
 }
 
 function Install-BetaService {
@@ -226,12 +274,15 @@ if (-not (Test-Path -LiteralPath $PayloadZip)) {
 }
 
 if (-not (Test-IsAdministrator)) {
-    $launchAfterInstall = -not $NoLaunch
+    $launchAfterInstall = -not $NoLaunch -and
+        $env:GREENVPN_INSTALLER_SKIP_APP_LAUNCH -ne '1'
+    $callerSid = Resolve-InstallingUserSid -CandidateSid $OwnerSid
     $arguments = @(
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'RemoteSigned',
         '-File', ('"' + $PSCommandPath + '"'),
         '-PayloadZip', ('"' + $PayloadZip + '"'),
         '-InstallDir', ('"' + $InstallDir + '"'),
+        '-OwnerSid', ('"' + $callerSid + '"'),
         '-NoLaunch'
     )
     $process = Start-Process -FilePath 'powershell.exe' -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList $arguments
@@ -248,6 +299,7 @@ if (-not (Test-IsAdministrator)) {
     exit $process.ExitCode
 }
 
+$installingUserSid = Resolve-InstallingUserSid -CandidateSid $OwnerSid
 $installRoot = [System.IO.Path]::GetFullPath($InstallDir)
 $allowedRoot = [System.IO.Path]::GetFullPath($env:ProgramFiles).TrimEnd('\') + '\'
 if (-not (($installRoot.TrimEnd('\') + '\').StartsWith($allowedRoot, [System.StringComparison]::OrdinalIgnoreCase))) {
@@ -426,7 +478,7 @@ exit /b %ERRORLEVEL%
     New-ItemProperty -Path $uninstallKey -Name 'NoModify' -PropertyType DWord -Value 1 -Force | Out-Null
     New-ItemProperty -Path $uninstallKey -Name 'NoRepair' -PropertyType DWord -Value 1 -Force | Out-Null
 
-    Ensure-BetaProgramData
+    Ensure-BetaProgramData -UserSid $installingUserSid
     Install-BetaService -ServiceExe $serviceExe -TaskScript $taskScript
 
     foreach ($requiredPath in @(
@@ -446,7 +498,10 @@ exit /b %ERRORLEVEL%
     Remove-Item -LiteralPath $installErrorLog -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $backupRoot -Recurse -Force -ErrorAction SilentlyContinue
     Remove-CallerLegacyInstall
-    if (-not $NoLaunch) {
+    if (
+        -not $NoLaunch -and
+        $env:GREENVPN_INSTALLER_SKIP_APP_LAUNCH -ne '1'
+    ) {
         Start-Process -FilePath $exe -WorkingDirectory $installRoot
     }
 } catch {

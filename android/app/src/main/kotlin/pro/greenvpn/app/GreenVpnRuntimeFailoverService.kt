@@ -1,5 +1,6 @@
 package pro.greenvpn.app
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,9 +8,11 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import androidx.core.app.ServiceCompat
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
@@ -320,6 +323,7 @@ class GreenVpnRuntimeFailoverService : Service() {
         updateNotification()
     }
 
+    @SuppressLint("ForegroundServiceType")
     private fun ensureForeground() {
         val manager = getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -331,7 +335,17 @@ class GreenVpnRuntimeFailoverService : Service() {
                 ),
             )
         }
-        startForeground(NOTIFICATION_ID, buildNotification())
+        val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        } else {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MANIFEST
+        }
+        ServiceCompat.startForeground(
+            this,
+            NOTIFICATION_ID,
+            buildNotification(),
+            serviceType,
+        )
     }
 
     private fun updateNotification() {

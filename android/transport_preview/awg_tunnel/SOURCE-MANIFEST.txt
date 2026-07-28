@@ -1,0 +1,17 @@
+version=2.0.1
+sourceCommit=fb64e74ba5a0a54e9185b8776bcb8088afb772c9
+officialApkSha256=313A42014BD54C487E4592CEB64F023C588817F8C4EAEB465163F25C1E70AD33
+goModule=github.com/amnezia-vpn/amneziawg-go@v0.2.18
+goToolchain=go1.25.1
+androidNdk=28.2.13676358
+androidApi=26
+elfMaxPageSize=16384
+socketDirectory=/data/data/pro.greenvpn.app/cache/amneziawg
+buildScript=scripts/windows/build_android_awg2_native.ps1
+arm64-v8a.sha256=C7EB9426709EA41939730F00040C310C0D4941808162127D2B25AF34728BF96A
+armeabi-v7a.sha256=0CBA97BA24E364D4418A141A7720D02DE3C1383B7301EC9488BF7513E6798264
+x86.sha256=88670A68D0D40691955B6425FC6C90A156E4E8A89883792D8173CB31099BD549
+x86_64.sha256=503DEC4AFC463B1D52EC0FD3A61EA0C892B48FB83A25797F2B9FF5DD9585B405
+packagedNativeLibrary=libawg2-go.so
+excludedNativeLibraries=libwg.so,libwg-quick.so
+engineProcess=:greenvpn_awg2
