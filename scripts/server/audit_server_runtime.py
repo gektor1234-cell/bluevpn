@@ -25,6 +25,7 @@ KNOWN_SERVICES = (
     "greenvpn-service-probe.service",
     "greenvpn-paid-beta-service-probe.service",
     "wg-quick@wg0.service",
+    "danted.service",
     "greenvpn-amneziawg-canary.service",
     "greenvpn-hysteria2-canary.service",
     "greenvpn-vless-reality-canary.service",

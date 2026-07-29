@@ -1,6 +1,53 @@
 # Green VPN Release State
 
-## Current Launch Closure (2026-07-28 19:15 MSK)
+## Current Release Closure (2026-07-29 MSK)
+
+| Layer | Current state |
+|---|---|
+| Production backend | `0.9.152-release-ready.1` on Timeweb and RUVDS |
+| Published Android | `0.3.15+2026072704`, unchanged |
+| Published Windows | `0.3.17+2608`, unchanged and unsigned |
+| Verified Android candidate | `0.3.19+2026072914`, signed, not published |
+| Verified Windows candidate | `0.3.19+2914`, exact installer physically checked, not published and `NotSigned` |
+| Product contract | permanent Free, guest-first |
+| Free enforcement | quota off, rate off; stored policy `3 GB`, one device, `10/20 Mbit/s` |
+| Money gates | sales/refunds/tax confirmation/renewal charges off |
+| Advertising | Rewarded and forced disconnect off |
+| Data plane | 16-route six-stage cascade physically green |
+| Legacy foreign API | removed; `8000` closed and HTTP tombstone `410` |
+
+The candidate source anchor is clean commit
+`c52ba7d6b3f3cfbda49e63515013ab9a37eaf48a`.
+Exact candidate hashes:
+
+- Android APK:
+  `16A48F555D2640717A87D3B8927A08F859F05A1169E4DA3D02ED324218A5D990`;
+- Windows installer:
+  `6D5E33B0EAB146C9E2EAA78E8B5F6636B9BCBDDC11D387A07C5B71CB6E9894FB`;
+- Windows transport ZIP:
+  `F0337840FB021AD4758B420203DAB47A0B52447399DA1AB911AF7B657C1D7D4D`.
+
+Exact Android candidate, exact paid-beta Android, all 16 routes, Quick Tile,
+background failover, exact Windows payload `63/63`, five Windows alternate
+transports and production runtime failover passed. NL2 was updated and
+rebooted one node at a time; all services are active and no temporary recovery
+automation remains.
+
+Both paid-beta env files now carry explicit off values for quota/rate
+enforcement, sales, tax confirmation, refunds, renewal charges and all
+Rewarded/test gates. A keyed value-blind comparison also proves exact
+primary/fallback functional parity for the catalog, release, feature-flag and
+owner-action tables in both contours.
+
+`0.3.19` has deliberately not been published. The only remaining external
+gates for a Free direct release are an Authenticode signing identity and an
+explicit owner production publication/final-smoke approval. Paid sales remain
+closed until the owner resolves the legal/tax/KYC receipt process. See
+`FULL_PROJECT_CLOSURE_2026_07_29_RU.md`.
+
+All sections below are historical snapshots and are not current instructions.
+
+## Historical Launch Closure (2026-07-28 19:15 MSK)
 
 Production and paid-beta backend `0.9.148-owner-boundary.1` are active on both
 control planes. The protected owner packet reports exactly one owner blocker:

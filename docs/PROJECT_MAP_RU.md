@@ -1,6 +1,6 @@
 # Карта проекта Green VPN
 
-Актуально на 2026-07-13. Этот файл отвечает на вопрос «где менять конкретную
+Актуально на 2026-07-29. Этот файл отвечает на вопрос «где менять конкретную
 функцию». Текущее состояние production и запреты всегда сверяются с
 `CURRENT_HANDOFF.md`.
 
@@ -20,11 +20,11 @@
 | Контур | Основной узел | Резерв | Назначение |
 | --- | --- | --- | --- |
 | Production API | Timeweb Москва | RUVDS Москва | вход, bootstrap, каталог, подписки, обновления |
-| Paid/public candidate API | Timeweb Москва `/paid-beta-api` | RUVDS Москва `/paid-beta-api` | тарифы, YooKassa, транспортный preview |
-| Stable VPN | NL1, London, NL2 | выбор через API | стабильные клиентские туннели |
-| Transport preview | только NL2 | отсутствует | AWG2, Hysteria2, VLESS, Naive, dnstt |
+| Paid-beta API | Timeweb Москва `/paid-beta-api` | RUVDS Москва `/paid-beta-api` | изолированный exact-candidate smoke; денежные mutation выключены |
+| Public VPN | NL1, London, NL2 | выбор через API | WireGuard, AWG, H2, VLESS и Naive на трёх узлах |
+| Last-resort transport | NL2 | отсутствует | dnstt, только последняя ступень |
 | SMTP login codes | Timeweb Москва | RUVDS Москва | отправка email-кодов |
-| Billing writer | Timeweb paid/public | RUVDS read/fallback | создание платежей и автопродление |
+| Billing writer | Timeweb production | RUVDS read/fallback | mutation возможны только после отдельного sales gate; сейчас выключены |
 
 ## Серверный инвентарь
 
@@ -34,7 +34,7 @@
 | `176.113.81.35` | RUVDS Москва, fallback control plane | billing mutations запрещены |
 | `37.220.85.211` | NL1 stable VPN | только stable data plane |
 | `88.218.250.86` | London stable VPN/WARP | обслуживать отдельно от control plane |
-| `5.129.216.42` | NL2 stable VPN + hidden preview | единственный разрешённый multiprotocol canary |
+| `5.129.216.42` | NL2 public VPN + dnstt last resort | единственный dnstt-узел |
 | `5.129.237.163` | внешний исключённый узел | не изменять |
 
 KZ `94.198.221.206` выведен из эксплуатации. Для аварийного возврата сохранён

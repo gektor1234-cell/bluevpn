@@ -1,15 +1,20 @@
 # Green VPN documentation index
 
-Updated: 2026-07-13.
+Updated: 2026-07-29.
 
 This is the only entry point for project documentation. If two documents
 conflict, use the first applicable item in the precedence list below.
 
-Current summary: stable production is healthy, the paid public candidate runs
-backend r22 on both Russian control planes, server cleanup/security repair is
-complete, and public monitoring is green. Launch still waits for YooKassa
-recurring-payment approval, a real save/unlink smoke and Windows Authenticode
-signing. Exact details are in `CURRENT_HANDOFF.md`.
+Current summary: production and paid-beta backend `0.9.152-release-ready.1`
+are healthy on both Russian control planes. The product contract is permanent
+Free with guest-first access; quota and rate enforcement, paid sales, refunds,
+automatic renewals, rewarded ads and forced disconnect are fail-closed.
+Android/Windows `0.3.19` exact candidates and the six-stage transport cascade
+have passed physical checks, but they are not published. The remaining
+external gates are Windows Authenticode, explicit production publication
+approval and, only before paid sales, the owner's legal/tax/KYC decision.
+Exact details are in `CURRENT_HANDOFF.md` and
+`FULL_PROJECT_CLOSURE_2026_07_29_RU.md`.
 
 ## Source-of-truth order
 
@@ -50,6 +55,8 @@ stale document. Never copy secrets from an old checkpoint or report.
 ## Product and launch
 
 - `GREENVPN_WORKING_MODEL_RU.md` - product behavior.
+- `FULL_PROJECT_CLOSURE_2026_07_29_RU.md` - current end-to-end closure,
+  evidence and owner-only gates.
 - `BUSINESS_PRICING_STRATEGY_RU.md` - pricing rationale.
 - `UNIT_ECONOMICS_AND_CAPACITY_RU.md` - cost and capacity model.
 - `PUBLIC_PRODUCT_CANDIDATE_2026_07_11_RU.md` - public candidate evidence.

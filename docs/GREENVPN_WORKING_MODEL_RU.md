@@ -1,6 +1,6 @@
 # Green VPN: working model
 
-Дата фиксации: 2026-07-05.
+Дата фиксации: 2026-07-29.
 
 Этот файл - текущий источник правды по логике Green VPN. Он не содержит секретов.
 
@@ -13,13 +13,29 @@
 - FriendlyLynet / Friendly Linnet не трогать.
 - Основной сайт и stable-контур не трогать без явной команды владельца, потому что там сидят реальные пользователи.
 
+## Замороженный Product Contract
+
+- Базовый продукт - постоянный Free, а не трехдневный Trial.
+- Первый запуск - гостевой, без логина, SMS и обязательного email.
+- Email требуется только перед оплатой либо для восстановления ранее
+  привязанного доступа.
+- Free policy управляется сервером: месячный лимит, число устройств, профиль
+  скорости и enforcement меняются без обновления приложения.
+- Текущее live-состояние: stored quota `3 GB/month`, one device,
+  `10 Mbit/s` base / `20 Mbit/s` burst; quota enforcement и rate enforcement
+  выключены, поэтому лимит трафика сейчас снят.
+- Paid sales, refund execution, tax confirmation and automatic renewal charges
+  fail closed. Rewarded ads and forced disconnect also remain off.
+- Три платных срока `249/649/1099 RUB` сохранены в каталоге, но реальный
+  checkout нельзя открывать до отдельного legal/tax owner gate.
+
 ## Контуры
 
 ### Stable/main
 
 - Сайт: `https://greenvpn.pro`.
 - API: `https://api.greenvpn.pro`.
-- Назначение: рабочий no-ads/trial-only продукт для реальных пользователей.
+- Назначение: рабочий no-ads permanent-Free продукт для реальных пользователей.
 - Stable не должен внезапно получать рекламу, тестовые проверки, экспериментальные серверы или рискованные update-манифесты.
 
 ### Preview/test
@@ -33,16 +49,15 @@
 
 ### Login
 
-1. Пользователь вводит email.
-2. Клиент вызывает `POST /api/v1/auth/email/code/start`.
-3. Backend создает короткий email-код и отправляет письмо через SMTP.
-4. Пользователь вводит код.
-5. Клиент вызывает `POST /api/v1/auth/email/code/verify`.
-6. Backend возвращает access/session token.
-7. Клиент сохраняет сессию локально.
-8. Подготовка VPN-конфига не должна блокировать сам факт входа. Она должна идти после входа, фоном или при первом подключении.
-
-Текущая проблема: отправка email-кода на backend выполняется синхронно и может ждать SMTP до таймаута. Из-за этого кнопка `Получить код` кажется зависшей, а при сбое SMTP/API пользователь получает 503.
+1. При первом запуске клиент автоматически создаёт guest session.
+2. Пользователь может подключиться в Free без email, телефона или пароля.
+3. Перед checkout либо при восстановлении клиент вызывает
+   `POST /api/v1/auth/email/code/start`.
+4. Backend отправляет короткий email-код через SMTP.
+5. Клиент подтверждает код через `POST /api/v1/auth/email/code/verify`.
+6. Backend связывает guest/paid account и возвращает session token.
+7. Клиент хранит session в защищённом хранилище платформы.
+8. Ошибка SMTP не должна ломать уже работающий гостевой Free.
 
 ### Bootstrap/config
 
@@ -69,10 +84,12 @@
 
 ### Ads/adgate
 
-- Stable: рекламы нет.
-- Preview/test: реклама может быть включена через server-side managed config.
+- Stable и paid-beta: рекламы сейчас нет.
+- Будущая реклама может включаться только server-side после письменного
+  разрешения провайдера и отдельного paid-beta smoke.
 - Рекламу и таймер бесплатной сессии надо уметь отключать с backend без обновления приложения.
-- При включенной рекламе config можно готовить параллельно с просмотром рекламы, но VPN включается только после rewarded-события.
+- Fake completion, autoplay, скрытые показы, автоклики и client-only grant
+  запрещены. Один подтверждённый grant может дать только одно подключение.
 
 ### Updates
 
@@ -124,16 +141,18 @@ Client API stickiness after 2026-07-05:
 ### Timeweb
 
 - `Friendly Linnet` / `5.129.237.163`: личный/no-touch.
-- `Intelligent Smew` / `37.220.85.211`: origin/backend/current node по старым документам.
-- `Friendly Cetus` / `72.56.32.197`: site/proxy/monitoring.
-- `GreenVPN NL1 VPN 20260511` / `5.129.216.42`: рабочий NL VPN node.
+- `37.220.85.211`: NL1 VPN data plane; legacy backend полностью удалён.
+- `Friendly Cetus` / `72.56.32.197`: primary Russian control plane,
+  site/proxy/monitoring and only billing writer when sales are allowed.
+- `GreenVPN NL1 VPN 20260511` / `5.129.216.42`: NL2 VPN data plane и
+  единственный dnstt last-resort node.
 - `tw-kz1-test-01` / `94.198.221.206`: тестовый KZ, держать вне stable до повторяемого smoke.
 
 ### RUVDS
 
 - `ruvds-m9-control-01` / `176.113.81.35`: Russian fallback control-plane/API/download mirror, not a VPN node.
-- `ruvds-2584554-ld8` / `88.218.250.86:443`: London WireGuard node; legacy fallback API only for old already-built clients.
-- Manual WireGuard на London работал, поэтому если наше Android-приложение через London не дает трафик, проверять надо app-generated config, AllowedIPs/per-app/native layer и route/DNS, а не только сервер.
+- `ruvds-2584554-ld8` / `88.218.250.86`: London VPN data plane;
+  legacy backend удалён, direct `8000` закрыт.
 
 ### Serverspace
 

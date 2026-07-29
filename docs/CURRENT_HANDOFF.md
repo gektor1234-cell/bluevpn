@@ -1,6 +1,6 @@
 # Green VPN Current Handoff
 
-Updated: 2026-07-28 MSK.
+Updated: 2026-07-29 MSK.
 
 This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
@@ -36,13 +36,69 @@ This is the current operational entry point. Read it together with
 10. The admin console is a protected operator surface. Keep Nginx Basic Auth,
     `noindex`, frame denial, staff authentication, RBAC and audit enabled; never
     expose bootstrap tokens or payment/tunnel secrets in the UI or exports.
-11. Stable production uses Android `0.3.15` and Windows `0.3.17`; paid-beta
-   remains optional. Android exact-release tunnelling, the complete Android
-   transport matrix and Windows runtime failover are physically verified. Do
-   not repeat OTP, payment or Windows network actions merely for another
-   automated check.
+11. Stable production still publishes Android `0.3.15` and Windows `0.3.17`.
+    Clean-source `0.3.19+2026072914/2914` is a verified local candidate, not a
+    published update. Do not conflate candidate proof with publication.
 
-## Launch Closure, 2026-07-28 20:12 MSK
+## Authoritative Closure, 2026-07-29
+
+This section overrides older `Current` sections below when they conflict.
+The complete evidence map is
+`FULL_PROJECT_CLOSURE_2026_07_29_RU.md`.
+
+- Source anchor for the candidate is clean commit
+  `c52ba7d6b3f3cfbda49e63515013ab9a37eaf48a`. Application version is
+  `0.3.19`, Android build `2026072914`, Windows build `2914`.
+- Production and paid-beta backend `0.9.152-release-ready.1` are active on
+  Timeweb `72.56.32.197` and RUVDS `176.113.81.35`. Both databases pass
+  `PRAGMA quick_check`; synchronization and probes are healthy.
+- The frozen product contract is permanent Free and guest-first. Email is
+  requested only before payment or to restore an existing account. The stored
+  Free policy is `3 GB/month`, one device and `10/20 Mbit/s`, but quota and rate
+  enforcement are disabled. These values and enforcement flags are server-side
+  and do not require a client rebuild.
+- Paid sales, refund execution, tax workflow confirmation, automatic renewal
+  charges, rewarded ads and forced disconnect are disabled on both contours.
+  Paid-beta now records every related deny value explicitly in both root-only
+  env files instead of relying on backend defaults. Rollback copies are under
+  `/root/greenvpn-paid-beta-explicit-failclosed-backups/20260729T072608Z`
+  on Timeweb and
+  `/root/greenvpn-paid-beta-explicit-failclosed-backups/20260729T072610Z`
+  on RUVDS.
+  The stale Timeweb paid-beta renewal timer was disabled and a manual run
+  proved `enabled=False`, `executed=0`, `failed=0`.
+- A keyed value-blind comparison proves exact Timeweb/RUVDS functional parity
+  inside production and inside paid-beta for the server catalog, app releases,
+  feature flags and owner-action statuses. Expected node-local health
+  timestamps are not treated as contract drift.
+- Old backends on NL1 `37.220.85.211` and London `88.218.250.86` are removed.
+  Their unit is `not-found`, port `8000` is closed, port 80 returns deliberate
+  `410`, and legacy DB/env copies were deleted only after the encrypted
+  checkpoint passed a full archive test.
+- Exact signed Android candidate SHA-256 is
+  `16A48F555D2640717A87D3B8927A08F859F05A1169E4DA3D02ED324218A5D990`.
+  Guest launch, UI, real VPN, background retention and clean disconnect passed.
+- Exact Windows candidate installer SHA-256 is
+  `6D5E33B0EAB146C9E2EAA78E8B5F6636B9BCBDDC11D387A07C5B71CB6E9894FB`.
+  All `63/63` installed payload files match, the five alternate transports
+  passed, runtime failure recovered without overlap, and the temporary network
+  failsafe was removed. The installer remains `NotSigned`.
+- Android post-maintenance proof passed all `16/16` routes and strict Quick
+  Tile order
+  `wireguard_udp -> amneziawg -> hysteria2 -> vless_reality -> naive_https -> dnstt`.
+  Test packages, VPN state, cooldown and temporary tile were removed.
+- NL2 received pending `glibc` and kernel maintenance, rebooted successfully,
+  and no longer requires reboot. A deterministic systemd dependency now starts
+  `danted` after `wg0`; all transports are active and failed units are zero.
+- Public downloads were not changed. All eight currently published bodies
+  still match their manifests. Production publication of `0.3.19` requires a
+  separate explicit owner approval.
+- Remaining owner gates are limited to Authenticode certificate access,
+  explicit final production publication/smoke approval, and legal/tax/KYC
+  decisions only if paid sales will be enabled. Google Play and rewarded ads
+  are optional future scopes, not Free direct-release blockers.
+
+## Historical Launch Closure, 2026-07-28 20:12 MSK
 
 - Production and paid-beta backend `0.9.148-owner-boundary.1` are active on
   Timeweb and RUVDS. Both SQLite databases pass `PRAGMA quick_check`; Timeweb
