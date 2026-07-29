@@ -15,7 +15,7 @@ This is the current operational entry point. Read it together with
    client profiles.
 3. Never touch Friendly Linnet `5.129.237.163` without a new explicit owner
    instruction.
-4. Android `0.3.15+2026072704` and Windows `0.3.17+2608` are public and
+4. Android `0.3.19+2026072914` and Windows `0.3.17+2608` are public and
    optional. Do not republish, force or roll them back without a verified exact
    artifact, alternate-node health and an atomic backup.
 5. Public-product uses WireGuard UDP, AmneziaWG, Hysteria2, VLESS REALITY/XHTTP
@@ -36,9 +36,10 @@ This is the current operational entry point. Read it together with
 10. The admin console is a protected operator surface. Keep Nginx Basic Auth,
     `noindex`, frame denial, staff authentication, RBAC and audit enabled; never
     expose bootstrap tokens or payment/tunnel secrets in the UI or exports.
-11. Stable production still publishes Android `0.3.15` and Windows `0.3.17`.
-    Clean-source `0.3.19+2026072914/2914` is a verified local candidate, not a
-    published update. Do not conflate candidate proof with publication.
+11. Stable production publishes Android `0.3.19` and Windows `0.3.17`.
+    Clean-source Windows `0.3.19+2914` is a verified local candidate, but it is
+    not published because it remains unsigned. Do not conflate candidate proof
+    with a trusted Windows publication.
 
 ## Authoritative Closure, 2026-07-29
 
@@ -75,9 +76,12 @@ The complete evidence map is
   Their unit is `not-found`, port `8000` is closed, port 80 returns deliberate
   `410`, and legacy DB/env copies were deleted only after the encrypted
   checkpoint passed a full archive test.
-- Exact signed Android candidate SHA-256 is
+- The side-by-side Android final-candidate SHA-256 is
   `16A48F555D2640717A87D3B8927A08F859F05A1169E4DA3D02ED324218A5D990`.
-  Guest launch, UI, real VPN, background retention and clean disconnect passed.
+  The exact production-package APK SHA-256 is
+  `BCA7CF6A4AB2381A6EB44836726AFC07B460B87F0789BA88DC81CF84CD37F4FB`.
+  It passed an upgrade over public `0.3.15`, launch, real VPN through NL1,
+  production API, YouTube and clean disconnect before publication.
 - Exact Windows candidate installer SHA-256 is
   `6D5E33B0EAB146C9E2EAA78E8B5F6636B9BCBDDC11D387A07C5B71CB6E9894FB`.
   All `63/63` installed payload files match, the five alternate transports
@@ -90,13 +94,20 @@ The complete evidence map is
 - NL2 received pending `glibc` and kernel maintenance, rebooted successfully,
   and no longer requires reboot. A deterministic systemd dependency now starts
   `danted` after `wg0`; all transports are active and failed units are zero.
-- Public downloads were not changed. All eight currently published bodies
-  still match their manifests. Production publication of `0.3.19` requires a
-  separate explicit owner approval.
-- Remaining owner gates are limited to Authenticode certificate access,
-  explicit final production publication/smoke approval, and legal/tax/KYC
-  decisions only if paid sales will be enabled. Google Play and rewarded ads
-  are optional future scopes, not Free direct-release blockers.
+- Android production and paid-beta `0.3.19+2026072914` are published through
+  Timeweb and RUVDS as optional updates. Production SHA-256 is
+  `BCA7CF6A4AB2381A6EB44836726AFC07B460B87F0789BA88DC81CF84CD37F4FB`;
+  paid-beta SHA-256 is
+  `99EB6C2D44C955F43441039B5375CEC5AF925D19EDAFEE1D17042FAE6E2ED8A7`.
+  Eight full public download hashes and public surface `31/31` passed.
+- Android rollback backups are
+  `/root/greenvpn-apk-release-backups/20260729T094454Z-timeweb-0.3.19-2026072914`
+  and
+  `/root/greenvpn-apk-release-backups/20260729T094418Z-ruvds-0.3.19-2026072914`.
+- The remaining Free-release owner gate is Authenticode certificate access for
+  a signed Windows `0.3.19` successor and the short owner smoke after that
+  publication. Legal/tax/KYC decisions apply only if paid sales are enabled.
+  Google Play and rewarded ads are optional future scopes.
 
 ## Historical Launch Closure, 2026-07-28 20:12 MSK
 

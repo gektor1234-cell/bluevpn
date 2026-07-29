@@ -5,9 +5,9 @@
 | Layer | Current state |
 |---|---|
 | Production backend | `0.9.152-release-ready.1` on Timeweb and RUVDS |
-| Published Android | `0.3.15+2026072704`, unchanged |
+| Published Android | `0.3.19+2026072914`, signed and optional on Timeweb/RUVDS |
 | Published Windows | `0.3.17+2608`, unchanged and unsigned |
-| Verified Android candidate | `0.3.19+2026072914`, signed, not published |
+| Published paid-beta Android | `0.3.19+2026072914`, package `pro.greenvpn.app.beta`, optional |
 | Verified Windows candidate | `0.3.19+2914`, exact installer physically checked, not published and `NotSigned` |
 | Product contract | permanent Free, guest-first |
 | Free enforcement | quota off, rate off; stored policy `3 GB`, one device, `10/20 Mbit/s` |
@@ -20,18 +20,21 @@ The candidate source anchor is clean commit
 `c52ba7d6b3f3cfbda49e63515013ab9a37eaf48a`.
 Exact candidate hashes:
 
-- Android APK:
-  `16A48F555D2640717A87D3B8927A08F859F05A1169E4DA3D02ED324218A5D990`;
+- Android production APK:
+  `BCA7CF6A4AB2381A6EB44836726AFC07B460B87F0789BA88DC81CF84CD37F4FB`;
+- Android paid-beta APK:
+  `99EB6C2D44C955F43441039B5375CEC5AF925D19EDAFEE1D17042FAE6E2ED8A7`;
 - Windows installer:
   `6D5E33B0EAB146C9E2EAA78E8B5F6636B9BCBDDC11D387A07C5B71CB6E9894FB`;
 - Windows transport ZIP:
   `F0337840FB021AD4758B420203DAB47A0B52447399DA1AB911AF7B657C1D7D4D`.
 
-Exact Android candidate, exact paid-beta Android, all 16 routes, Quick Tile,
-background failover, exact Windows payload `63/63`, five Windows alternate
-transports and production runtime failover passed. NL2 was updated and
-rebooted one node at a time; all services are active and no temporary recovery
-automation remains.
+The exact production-package Android APK passed upgrade over public `0.3.15`,
+launch, real NL1 egress, production API, YouTube and clean disconnect. Exact
+paid-beta Android, all 16 routes, Quick Tile, background failover, exact
+Windows payload `63/63`, five Windows alternate transports and production
+runtime failover also passed. NL2 was updated and rebooted one node at a time;
+all services are active and no temporary recovery automation remains.
 
 Both paid-beta env files now carry explicit off values for quota/rate
 enforcement, sales, tax confirmation, refunds, renewal charges and all
@@ -39,11 +42,21 @@ Rewarded/test gates. A keyed value-blind comparison also proves exact
 primary/fallback functional parity for the catalog, release, feature-flag and
 owner-action tables in both contours.
 
-`0.3.19` has deliberately not been published. The only remaining external
-gates for a Free direct release are an Authenticode signing identity and an
-explicit owner production publication/final-smoke approval. Paid sales remain
-closed until the owner resolves the legal/tax/KYC receipt process. See
-`FULL_PROJECT_CLOSURE_2026_07_29_RU.md`.
+Android production and paid-beta `0.3.19` are now published as optional updates
+through both control planes. Full body hashes pass `8/8`, public surface passes
+`31/31`, both control planes have zero failed units and all four databases pass
+`PRAGMA quick_check`. Rollback backups are:
+
+- Timeweb:
+  `/root/greenvpn-apk-release-backups/20260729T094454Z-timeweb-0.3.19-2026072914`;
+- RUVDS:
+  `/root/greenvpn-apk-release-backups/20260729T094418Z-ruvds-0.3.19-2026072914`.
+
+Windows `0.3.19` has deliberately not been published: the exact production and
+paid-beta installers remain `NotSigned`, and no valid local Authenticode
+identity/private key exists. Windows public `0.3.17` remains optional and
+unchanged. Paid sales remain closed until the owner resolves the legal/tax/KYC
+receipt process. See `FULL_PROJECT_CLOSURE_2026_07_29_RU.md`.
 
 All sections below are historical snapshots and are not current instructions.
 

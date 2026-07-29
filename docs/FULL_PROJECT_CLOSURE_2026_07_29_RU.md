@@ -2,6 +2,25 @@
 
 Дата: 29.07.2026, Europe/Moscow
 
+## Дополнение после разрешения на публикацию
+
+Владелец разрешил production-публикацию 29.07.2026. Android production и
+paid-beta `0.3.19+2026072914` опубликованы как optional через Timeweb и RUVDS.
+Точный production APK
+`BCA7CF6A4AB2381A6EB44836726AFC07B460B87F0789BA88DC81CF84CD37F4FB`
+перед публикацией прошёл upgrade поверх `0.3.15`, реальный VPN, API, YouTube и
+чистое отключение. Paid-beta APK
+`99EB6C2D44C955F43441039B5375CEC5AF925D19EDAFEE1D17042FAE6E2ED8A7`
+ранее прошёл отдельный physical smoke.
+
+После публикации манифесты, static paid-beta manifests и полные тела проходят
+`8/8`, public surface проходит `31/31`, оба control plane имеют zero failed
+units, а четыре базы проходят `PRAGMA quick_check`.
+
+Windows `0.3.19` не опубликован: production и paid-beta EXE имеют
+`Authenticode=NotSigned`, а действующего Code Signing certificate/private key
+на компьютере нет. Публичный Windows остаётся `0.3.17+2608`.
+
 ## Итог
 
 Все автономно выполнимые блокеры аудита 28.07 закрыты. Green VPN имеет чистый

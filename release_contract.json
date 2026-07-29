@@ -29,6 +29,10 @@
   },
   "publication": {
     "productionPublished": false,
+    "androidProductionPublished": true,
+    "androidPaidBetaPublished": true,
+    "windowsProductionPublished": false,
+    "windowsPaidBetaPublished": false,
     "ownerApprovalRequired": true
   }
 }

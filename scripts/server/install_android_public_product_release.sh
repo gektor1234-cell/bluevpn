@@ -11,6 +11,8 @@ PRODUCTION_SHA256=""
 TEST_SHA256=""
 PRODUCTION_REQUIRED=1
 TEST_REQUIRED=0
+TEST_APPLICATION_ID="pro.greenvpn.app.beta"
+TEST_APP_LABEL="Green VPN Beta"
 
 PRODUCTION_ENV="/etc/bluevpn/backend.env"
 TEST_ENV="/etc/bluevpn/paid-beta.env"
@@ -38,6 +40,8 @@ Required arguments:
 Optional arguments:
   --production-required 0|1  (default: 1)
   --test-required 0|1        (default: 0)
+  --test-application-id ID    (default: pro.greenvpn.app.beta)
+  --test-app-label LABEL      (default: Green VPN Beta)
 
 The default is dry-run. Apply mode preserves APK/env rollback files, switches
 aliases atomically, restarts only local backend services, and verifies both
@@ -56,6 +60,8 @@ while [[ $# -gt 0 ]]; do
     --test-sha256) TEST_SHA256="${2:?missing test SHA256}"; shift 2 ;;
     --production-required) PRODUCTION_REQUIRED="${2:?missing production required flag}"; shift 2 ;;
     --test-required) TEST_REQUIRED="${2:?missing test required flag}"; shift 2 ;;
+    --test-application-id) TEST_APPLICATION_ID="${2:?missing test application ID}"; shift 2 ;;
+    --test-app-label) TEST_APP_LABEL="${2:?missing test app label}"; shift 2 ;;
     --apply) APPLY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -78,6 +84,15 @@ esac
 [[ "$BUILD_NUMBER" =~ ^[0-9]+$ ]] || { echo "Invalid build number" >&2; exit 2; }
 [[ "$PRODUCTION_REQUIRED" =~ ^[01]$ ]] || { echo "Invalid production required flag" >&2; exit 2; }
 [[ "$TEST_REQUIRED" =~ ^[01]$ ]] || { echo "Invalid test required flag" >&2; exit 2; }
+[[ "$TEST_APPLICATION_ID" =~ ^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$ ]] || {
+  echo "Invalid test application ID" >&2
+  exit 2
+}
+[[ "$TEST_APPLICATION_ID" != "pro.greenvpn.app" ]] || {
+  echo "Production Android application ID is forbidden in paid-beta" >&2
+  exit 2
+}
+[[ -n "${TEST_APP_LABEL//[[:space:]]/}" ]] || { echo "Invalid test app label" >&2; exit 2; }
 PRODUCTION_SHA256="${PRODUCTION_SHA256^^}"
 TEST_SHA256="${TEST_SHA256^^}"
 [[ "$PRODUCTION_SHA256" =~ ^[0-9A-F]{64}$ ]] || { echo "Invalid production SHA256" >&2; exit 2; }
@@ -103,6 +118,8 @@ echo "production_sha256=$PRODUCTION_SHA256"
 echo "test_sha256=$TEST_SHA256"
 echo "production_required=$PRODUCTION_REQUIRED"
 echo "test_required=$TEST_REQUIRED"
+echo "test_application_id=$TEST_APPLICATION_ID"
+echo "test_app_label=$TEST_APP_LABEL"
 [[ $APPLY -eq 1 ]] || exit 0
 [[ $EUID -eq 0 ]] || { echo "Run apply mode as root" >&2; exit 1; }
 
@@ -285,14 +302,14 @@ chmod 600 "$PRODUCTION_ENV" "$TEST_ENV"
 
 python3 - \
   "$TEST_STATIC_MANIFEST" "$VERSION" "$BUILD_NUMBER" "$TEST_SHA256" \
-  "$TEST_APK" "$released_at" <<'PY'
+  "$TEST_APK" "$released_at" "$TEST_APPLICATION_ID" "$TEST_APP_LABEL" <<'PY'
 import json
 import os
 import pathlib
 import sys
 
 path = pathlib.Path(sys.argv[1])
-version, build_number, sha256, apk_raw, released_at = sys.argv[2:]
+version, build_number, sha256, apk_raw, released_at, application_id, app_label = sys.argv[2:]
 apk = pathlib.Path(apk_raw)
 value = {}
 if path.exists():
@@ -323,8 +340,8 @@ value.update(
         "isolated": True,
         "productionPublished": False,
         "appVersion": version,
-        "androidApplicationId": "pro.greenvpn.app.rc",
-        "androidAppLabel": "Green VPN",
+        "androidApplicationId": application_id,
+        "androidAppLabel": app_label,
         "generatedAt": released_at,
         "artifacts": artifacts,
     }
@@ -481,13 +498,15 @@ print("production_manifest_ready=true")
 print("test_manifest_ready=true")
 PY
 
-python3 - "$TEST_STATIC_MANIFEST" "$VERSION" "$BUILD_NUMBER" "$TEST_SHA256" "$TEST_APK" <<'PY'
+python3 - \
+  "$TEST_STATIC_MANIFEST" "$VERSION" "$BUILD_NUMBER" "$TEST_SHA256" "$TEST_APK" \
+  "$TEST_APPLICATION_ID" "$TEST_APP_LABEL" <<'PY'
 import json
 import pathlib
 import sys
 
 path = pathlib.Path(sys.argv[1])
-version, build_number, sha256, apk_raw = sys.argv[2:]
+version, build_number, sha256, apk_raw, application_id, app_label = sys.argv[2:]
 apk = pathlib.Path(apk_raw)
 value = json.loads(path.read_text(encoding="utf-8-sig"))
 android = next(
@@ -506,6 +525,10 @@ if str(android.get("sha256") or "").upper() != sha256:
     raise SystemExit("static paid-beta Android manifest hash mismatch")
 if int(android.get("sizeBytes") or 0) != apk.stat().st_size:
     raise SystemExit("static paid-beta Android manifest size mismatch")
+if value.get("androidApplicationId") != application_id:
+    raise SystemExit("static paid-beta Android application ID mismatch")
+if value.get("androidAppLabel") != app_label:
+    raise SystemExit("static paid-beta Android app label mismatch")
 print("test_static_manifest_ready=true")
 PY
 

@@ -12,31 +12,31 @@ param(
     [string]$FallbackSiteBaseUrl = "https://176-113-81-35.sslip.io",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedAndroidVersion = "0.3.15",
+    [string]$ExpectedAndroidVersion = "0.3.19",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedAndroidSha256 = "72C4672355722EB4111EAA36BC6794EB71F9E20F3DB6818093489B8A59F48288",
+    [string]$ExpectedAndroidSha256 = "BCA7CF6A4AB2381A6EB44836726AFC07B460B87F0789BA88DC81CF84CD37F4FB",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestAndroidSha256 = "B12BEC69AA0F0C04F17C7E536C97AD8EA3F88FA38BD9BA8FBAFAA070033572D4",
+    [string]$ExpectedTestAndroidSha256 = "99EB6C2D44C955F43441039B5375CEC5AF925D19EDAFEE1D17042FAE6E2ED8A7",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedAndroidBuildNumber = "2026072704",
+    [string]$ExpectedAndroidBuildNumber = "2026072914",
 
     [Parameter(Mandatory = $false)]
     [bool]$ExpectedAndroidRequired = $false,
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestAndroidVersion = "0.3.15",
+    [string]$ExpectedTestAndroidVersion = "0.3.19",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestAndroidBuildNumber = "2026072704",
+    [string]$ExpectedTestAndroidBuildNumber = "2026072914",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestAndroidApplicationId = "pro.greenvpn.app.rc",
+    [string]$ExpectedTestAndroidApplicationId = "pro.greenvpn.app.beta",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestAndroidAppLabel = "Green VPN",
+    [string]$ExpectedTestAndroidAppLabel = "Green VPN Beta",
 
     [Parameter(Mandatory = $false)]
     [bool]$ExpectedTestAndroidRequired = $false,
