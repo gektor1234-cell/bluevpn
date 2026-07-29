@@ -15,8 +15,8 @@ This is the current operational entry point. Read it together with
    client profiles.
 3. Never touch Friendly Linnet `5.129.237.163` without a new explicit owner
    instruction.
-4. Android `0.3.19+2026072914` and Windows `0.3.19+2914` are public and
-   optional. Windows paid-beta `0.3.19-paid-beta.1+2914` is also public and
+4. Android `0.3.19+2026072914` and Windows `0.3.20+2921` are public and
+   optional. Windows paid-beta `0.3.20-paid-beta.1+2921` is also public and
    optional. Do not republish, force or roll them back without a verified exact
    artifact, alternate-node health and an atomic backup.
 5. Public-product uses WireGuard UDP, AmneziaWG, Hysteria2, VLESS REALITY/XHTTP
@@ -31,17 +31,78 @@ This is the current operational entry point. Read it together with
    must reject first-payment creation and must not run the renewal executor.
 8. Server maintenance is one node at a time after alternate control/data planes
    pass readiness. The owner Windows PC must not be rebooted by automation.
-9. Windows 0.3.19 is public and optional, but remains unsigned by explicit
+9. Windows 0.3.20 is public and optional, but remains unsigned by explicit
    owner instruction with the SmartScreen risk accepted. Keep the `NotSigned`
    status visible in operations and expect Windows SmartScreen/reputation
    warnings until a higher signed successor is released.
 10. The admin console is a protected operator surface. Keep Nginx Basic Auth,
     `noindex`, frame denial, staff authentication, RBAC and audit enabled; never
     expose bootstrap tokens or payment/tunnel secrets in the UI or exports.
-11. Stable production publishes Android `0.3.19` and Windows `0.3.19`.
-    Clean-source Windows `0.3.19+2914` is physically verified and published,
-    but it is not a trusted/signed Windows release. Do not conflate successful
-    unsigned publication with Authenticode trust.
+11. Stable production publishes Android `0.3.19` and Windows `0.3.20`.
+    Clean-source Windows `0.3.20+2921` is published after focused physical
+    latency proof, but it is not a trusted/signed Windows release. Do not
+    conflate successful unsigned publication with Authenticode trust.
+
+## Windows Connection Latency Hotfix, 2026-07-29
+
+This section overrides the older Windows release values below. The clean source
+anchor is `790c4b66aa9eb1dacaecca388d4dba93185e28a9`.
+
+- Two real owner-click runs on public `0.3.19` took `93.7` and `96.3` seconds.
+  Catalog/config preparation was only about `5-7` seconds. Most delay came from
+  an approximately `59` second WireGuard wait, repeated heavyweight diagnostics
+  and a serial post-connect probe.
+- Windows WireGuard confirmation is now bounded, repeated status checks are
+  lightweight, YouTube probes run concurrently and the last successful route is
+  preferred for 24 hours.
+- A separate root cause made the app miss an already-running external VPN:
+  PowerShell diagnostics used `runInShell: true`, which returned exit code zero
+  but dropped the service-list output. Direct `powershell.exe -NoProfile
+  -NonInteractive` execution preserves the output. A competing VPN now produces
+  one explicit failure and stops the route cascade without cooling down routes.
+- Exact installed `0.3.20+2921` physically detected the owner's active AmneziaWG
+  in `11.277` seconds, attempted one candidate only, started no second route and
+  left every Green VPN component stopped. AmneziaWG remained `Running` and
+  public health remained HTTP `200`. This proof comes from the primary
+  application log. Four generic UI smoke-wrapper attempts failed to observe the
+  localized competing-VPN result, although each cleanup passed; do not cite
+  those wrapper JSON files as successful physical reports.
+- With AmneziaWG temporarily paused, the immediately preceding candidate using
+  the same successful-connect path established the system tunnel and a YouTube
+  `204` probe in about `9.9` seconds. Exact `2921` success was not repeated
+  automatically because the owner Amnezia process runs at higher Windows
+  integrity and cannot be paused from the non-elevated Codex process. The
+  `2921` product change after that proof is limited to competing-VPN detection
+  and early cascade termination.
+- Production installer:
+  `C:\BlueVPN_Builds\public_product_20260729_b2921\GreenVPN_Setup_0.3.20.exe`,
+  `55393280` bytes,
+  SHA-256 `96F6AE8EBAD2F597693D824625125CC97CB39DEC3E1B7D8E352D335EF5F49D24`.
+- Paid-beta installer:
+  `C:\BlueVPN_Builds\paid_beta_20260729_b2921\GreenVPN_Beta_Setup_0.3.20-paid-beta.1.exe`,
+  `55374848` bytes,
+  SHA-256 `A9EAEDB0FBA007ADB1B28FFDD993011C04741E97EAAE859FD4A9D1F833176D18`.
+  Both installers are `NotSigned`.
+- Production and paid-beta Windows artifacts are optional on Timeweb Moscow and
+  RUVDS. Atomic rollback directories are
+  `/root/greenvpn-windows-release-backups/20260729T195124Z-timeweb-0.3.20-2921`
+  and
+  `/root/greenvpn-windows-release-backups/20260729T194711Z-ruvds-0.3.20-2921`.
+- Validation passed: Flutter analyze, `68` passed / `6` skipped tests, release
+  gate `0` warnings / `0` errors, production and paid-beta package audits,
+  dynamic/static manifests, exact public bodies `8/8` and public surface
+  `31/31`. Both services are active on both control planes. Guarded retention
+  kept the new RUVDS rollback and reduced root use from `85%` to `79%`.
+- Android, backend feature flags, billing, Rewarded ads and forced disconnect
+  were not changed. The local PC is left with `0.3.20+2921` installed, Green VPN
+  disconnected and the owner's AmneziaWG service running.
+- Separate confirmed residual: the Windows public-product build sends
+  `channel=public-product` to `/api/v1/updates/manifest`, while both current
+  backends accept `stable` for the published Windows release and return HTTP
+  `400` for `public-product`. Direct site downloads and the published files are
+  healthy, but in-app update discovery for this build is not. Resolve this with
+  a separately tested server alias or a higher client build; do not silently
+  replace the already-published `0.3.20` bytes.
 
 ## Authoritative Closure, 2026-07-29
 

@@ -42,22 +42,22 @@ param(
     [bool]$ExpectedTestAndroidRequired = $false,
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedWindowsVersion = "0.3.19",
+    [string]$ExpectedWindowsVersion = "0.3.20",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedWindowsSha256 = "6D5E33B0EAB146C9E2EAA78E8B5F6636B9BCBDDC11D387A07C5B71CB6E9894FB",
+    [string]$ExpectedWindowsSha256 = "96F6AE8EBAD2F597693D824625125CC97CB39DEC3E1B7D8E352D335EF5F49D24",
 
     [Parameter(Mandatory = $false)]
     [bool]$ExpectedWindowsRequired = $false,
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestWindowsVersion = "0.3.19-paid-beta.1",
+    [string]$ExpectedTestWindowsVersion = "0.3.20-paid-beta.1",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestWindowsSha256 = "E1451CED069941A431B383E74B20B8E938CD2758C99CBD129F45A731AF1B44D1",
+    [string]$ExpectedTestWindowsSha256 = "A9EAEDB0FBA007ADB1B28FFDD993011C04741E97EAAE859FD4A9D1F833176D18",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestWindowsBuildNumber = "2914",
+    [string]$ExpectedTestWindowsBuildNumber = "2921",
 
     [Parameter(Mandatory = $false)]
     [bool]$ExpectedTestWindowsRequired = $false,

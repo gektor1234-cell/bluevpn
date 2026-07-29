@@ -6,9 +6,9 @@
 |---|---|
 | Production backend | `0.9.152-release-ready.1` on Timeweb and RUVDS |
 | Published Android | `0.3.19+2026072914`, signed and optional on Timeweb/RUVDS |
-| Published Windows | `0.3.19+2914`, physically verified, optional and `NotSigned` |
+| Published Windows | `0.3.20+2921`, latency hotfix, optional and `NotSigned` |
 | Published paid-beta Android | `0.3.19+2026072914`, package `pro.greenvpn.app.beta`, optional |
-| Published paid-beta Windows | `0.3.19-paid-beta.1+2914`, optional and `NotSigned` |
+| Published paid-beta Windows | `0.3.20-paid-beta.1+2921`, optional and `NotSigned` |
 | Product contract | permanent Free, guest-first |
 | Free enforcement | quota off, rate off; stored policy `3 GB`, one device, `10/20 Mbit/s` |
 | Money gates | sales/refunds/tax confirmation/renewal charges off |
@@ -16,27 +16,55 @@
 | Data plane | 16-route six-stage cascade physically green |
 | Legacy foreign API | removed; `8000` closed and HTTP tombstone `410` |
 
-The candidate source anchor is clean commit
-`c52ba7d6b3f3cfbda49e63515013ab9a37eaf48a`.
-Exact release hashes:
+The current Windows source anchor is clean commit
+`790c4b66aa9eb1dacaecca388d4dba93185e28a9`. Android remains published from
+the earlier `0.3.19+2026072914` release. Exact current release hashes:
 
-- Android production APK:
+- Android production APK, unchanged:
   `BCA7CF6A4AB2381A6EB44836726AFC07B460B87F0789BA88DC81CF84CD37F4FB`;
-- Android paid-beta APK:
+- Android paid-beta APK, unchanged:
   `99EB6C2D44C955F43441039B5375CEC5AF925D19EDAFEE1D17042FAE6E2ED8A7`;
-- Windows installer:
-  `6D5E33B0EAB146C9E2EAA78E8B5F6636B9BCBDDC11D387A07C5B71CB6E9894FB`;
-- Windows paid-beta installer:
-  `E1451CED069941A431B383E74B20B8E938CD2758C99CBD129F45A731AF1B44D1`;
-- Windows transport ZIP:
-  `F0337840FB021AD4758B420203DAB47A0B52447399DA1AB911AF7B657C1D7D4D`.
+- Windows production installer, `55393280` bytes:
+  `96F6AE8EBAD2F597693D824625125CC97CB39DEC3E1B7D8E352D335EF5F49D24`;
+- Windows paid-beta installer, `55374848` bytes:
+  `A9EAEDB0FBA007ADB1B28FFDD993011C04741E97EAAE859FD4A9D1F833176D18`.
 
-The exact production-package Android APK passed upgrade over public `0.3.15`,
-launch, real NL1 egress, production API, YouTube and clean disconnect. Exact
-paid-beta Android, all 16 routes, Quick Tile, background failover, exact
-Windows payload `63/63`, five Windows alternate transports and production
-runtime failover also passed. NL2 was updated and rebooted one node at a time;
-all services are active and no temporary recovery automation remains.
+Two real owner-click runs on public Windows `0.3.19` took `93.7` and `96.3`
+seconds. Catalog/config preparation took only about `5-7` seconds; the remaining
+delay was an approximately `59` second WireGuard wait, heavyweight diagnostics
+on every status poll and a serial YouTube probe. The hotfix bounds WireGuard
+confirmation, makes repeated status checks lightweight, runs YouTube probes in
+parallel and prefers the last successful route for 24 hours.
+
+A second defect caused an active external VPN to be missed because diagnostic
+PowerShell was started through `runInShell: true`; the process exited zero but
+lost service-list output. Direct non-interactive `powershell.exe` execution now
+preserves output. Exact installed Windows `0.3.20+2921` detected the owner's
+active AmneziaWG in `11.277` seconds, tried one candidate only, started no second
+route, left all Green VPN components stopped and preserved AmneziaWG. The
+primary application log is the evidence source. Four generic UI smoke-wrapper
+runs failed to recognize the localized result despite successful cleanup and
+must not be represented as passing reports.
+
+With AmneziaWG paused, the immediately preceding candidate established the same
+successful-connect path plus a YouTube `204` probe in about `9.9` seconds. Exact
+`2921` clean-path smoke was not repeated because the external Amnezia process
+runs at higher Windows integrity and cannot be paused by the non-elevated Codex
+process. The only product delta after the clean-path proof is the
+competing-VPN detector and early cascade stop.
+
+Validation passed: Flutter analyze, `68` passed / `6` skipped tests, release
+gate `0` warnings / `0` errors, both package audits, dynamic/static manifests,
+all exact public bodies `8/8` and public surface `31/31`. Both Windows updates
+are optional. The exact production and paid-beta installers remain
+`NotSigned`; the owner explicitly accepted SmartScreen/reputation risk.
+
+Known separate residual: the Windows public-product build requests
+`/api/v1/updates/manifest` with `channel=public-product`, which both current
+backends reject with HTTP `400`; `channel=stable` correctly returns the
+published `0.3.20` manifest. Website downloads are healthy, but in-app update
+discovery is not. This requires a separately tested server alias or a
+higher-version client build and is not part of the connection-latency hotfix.
 
 Both paid-beta env files now carry explicit off values for quota/rate
 enforcement, sales, tax confirmation, refunds, renewal charges and all
@@ -44,10 +72,9 @@ Rewarded/test gates. A keyed value-blind comparison also proves exact
 primary/fallback functional parity for the catalog, release, feature-flag and
 owner-action tables in both contours.
 
-Android and Windows production/paid-beta `0.3.19` release artifacts are
-published as optional updates through both control planes. Dynamic and static
-manifests pass, full body hashes pass `8/8`, public surface passes `31/31`,
-both control planes have zero failed units and all four databases pass
+Android `0.3.19` and Windows `0.3.20` production/paid-beta release artifacts
+are published as optional updates through both control planes. Both backend
+services are active on each control plane and all databases pass
 `PRAGMA quick_check`.
 
 Android rollback backups:
@@ -60,11 +87,11 @@ Android rollback backups:
 Windows rollback backups:
 
 - Timeweb:
-  `/root/greenvpn-windows-release-backups/20260729T145410Z-timeweb-0.3.19-2914`;
+  `/root/greenvpn-windows-release-backups/20260729T195124Z-timeweb-0.3.20-2921`;
 - RUVDS:
-  `/root/greenvpn-windows-release-backups/20260729T145347Z-ruvds-0.3.19-2914`.
+  `/root/greenvpn-windows-release-backups/20260729T194711Z-ruvds-0.3.20-2921`.
 
-Windows `0.3.19` was published by explicit owner instruction with the
+Windows `0.3.20` was published by explicit owner instruction with the
 SmartScreen/reputation risk accepted. The exact production and paid-beta
 installers remain `NotSigned`; no false trusted-signature metadata was
 published. Authenticode remains a future trust improvement for a

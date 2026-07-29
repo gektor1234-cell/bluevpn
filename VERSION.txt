@@ -3,7 +3,7 @@ Android build: 2026072921
 Windows build: 2921
 Platforms: Android, Windows
 Source backend: 0.9.152-release-ready.1
-Status: verified source anchor; production publication requires owner approval
+Status: Windows production and paid-beta published; Android remains on 0.3.19
 Production sales: disabled
 Refund execution: disabled
 Auto-renew: disabled
