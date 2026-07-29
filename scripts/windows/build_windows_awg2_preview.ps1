@@ -5,6 +5,7 @@ param(
     [string]$XrayRoot = 'C:\Users\gekto\GreenVPN_Checkpoints\third_party\xray-core-v26.7.11\windows-64',
     [string]$NaiveRoot = 'C:\Users\gekto\GreenVPN_Checkpoints\naiveproxy_v150.0.7871.63-1\win-extract\naiveproxy-v150.0.7871.63-1-win-x64',
     [string]$DnsttRoot = 'C:\Users\gekto\GreenVPN_Checkpoints\transport_canary_dnstt_20260712',
+    [string]$ProcessRouterRoot = '',
     [string]$OutDir = 'C:\BlueVPN_Builds\windows_transport_preview_20260712_naive',
     [string]$AppVersion = '0.3.0-transport-preview.3',
     [string]$WindowsBuildName = '0.3.0',
@@ -20,6 +21,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+if ([string]::IsNullOrWhiteSpace($ProcessRouterRoot)) {
+    $ProcessRouterRoot = Join-Path $repo 'third_party\windows\process_router'
+}
 if ($WindowsBuildName -notmatch '^\d+\.\d+\.\d+$') {
     throw "WindowsBuildName must be a numeric x.y.z version: $WindowsBuildName"
 }
@@ -68,6 +72,12 @@ $expectedDnsttHashes = @{
     'msys-2.0.dll' = '6C0DE43EFC0F14D871CC9F3FA803B9BD1E74802F45B3C8AFFE3DACC21B2EEA18'
     'wintun.dll' = 'E5DA8447DC2C320EDC0FC52FA01885C103DE8C118481F683643CACC3220DAFCE'
 }
+$expectedProcessRouterHashes = @{
+    'ProxyBridge_CLI.exe' = '71AE1A872B49F795BB9E341FF910C5B303AFCE0BAB1E54CFC5436032EB7E08C9'
+    'ProxyBridgeCore.dll' = '736B75A06AD748254D711446E0D4239189A991C7AABCE739EF7DD7B9CA7EBF7E'
+    'WinDivert.dll' = 'C1E060EE19444A259B2162F8AF0F3FE8C4428A1C6F694DCE20DE194AC8D7D9A2'
+    'WinDivert64.sys' = '8DA085332782708D8767BCACE5327A6EC7283C17CFB85E40B03CD2323A90DDC2'
+}
 
 if (-not (Test-Path -LiteralPath $licensePath)) {
     throw "Missing AmneziaWG Windows license notice: $licensePath"
@@ -83,6 +93,26 @@ if (-not (Test-Path -LiteralPath $naiveLicensePath)) {
 }
 if (-not (Test-Path -LiteralPath $dnsttLicensePath)) {
     throw "Missing dnstt license notice: $dnsttLicensePath"
+}
+foreach ($name in $expectedProcessRouterHashes.Keys) {
+    $path = Join-Path $ProcessRouterRoot $name
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "Missing process-router payload: $path"
+    }
+    if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $expectedProcessRouterHashes[$name]) {
+        throw "Process-router payload hash mismatch: $name"
+    }
+}
+$processRouterDriverSignature = Get-AuthenticodeSignature -LiteralPath (
+    Join-Path $ProcessRouterRoot 'WinDivert64.sys'
+)
+if ($processRouterDriverSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+    throw "Process-router driver signature invalid: $($processRouterDriverSignature.Status)"
+}
+foreach ($name in @('PROXYBRIDGE_LICENSE.txt', 'WINDIVERT_LICENSE.txt', 'PROVENANCE.md')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $ProcessRouterRoot $name) -PathType Leaf)) {
+        throw "Missing process-router license/provenance file: $name"
+    }
 }
 
 foreach ($name in $expectedHashes.Keys) {
@@ -240,12 +270,15 @@ $hysteriaDir = Join-Path $toolsDir 'hysteria2'
 $vlessDir = Join-Path $toolsDir 'vless-reality'
 $naiveDir = Join-Path $toolsDir 'naive-https'
 $dnsttDir = Join-Path $toolsDir 'dnstt'
+$processRouterDir = Join-Path $toolsDir 'process-router'
 New-Item -ItemType Directory -Force -Path $awgDir | Out-Null
 New-Item -ItemType Directory -Force -Path $hysteriaDir | Out-Null
 New-Item -ItemType Directory -Force -Path $vlessDir | Out-Null
 New-Item -ItemType Directory -Force -Path $naiveDir | Out-Null
 New-Item -ItemType Directory -Force -Path $dnsttDir | Out-Null
+New-Item -ItemType Directory -Force -Path $processRouterDir | Out-Null
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\greenvpn_transport_preview_vpn_task.ps1') -Destination $toolsDir -Force
+Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\greenvpn_selective_routing.ps1') -Destination $toolsDir -Force
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\greenvpn_hysteria2_watchdog.ps1') -Destination $toolsDir -Force
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\greenvpn_vless_reality_watchdog.ps1') -Destination $toolsDir -Force
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\greenvpn_naive_https_watchdog.ps1') -Destination $toolsDir -Force
@@ -255,6 +288,20 @@ foreach ($name in $expectedHysteriaHashes.Keys) { Copy-Item -LiteralPath $hyster
 foreach ($name in $expectedVlessHashes.Keys) { Copy-Item -LiteralPath $vlessRuntimeSources[$name] -Destination $vlessDir -Force }
 foreach ($name in $expectedNaiveHashes.Keys) { Copy-Item -LiteralPath $naiveRuntimeSources[$name] -Destination $naiveDir -Force }
 foreach ($name in $expectedDnsttHashes.Keys) { Copy-Item -LiteralPath $dnsttRuntimeSources[$name] -Destination $dnsttDir -Force }
+foreach ($name in $expectedProcessRouterHashes.Keys) {
+    Copy-Item -LiteralPath (Join-Path $ProcessRouterRoot $name) -Destination $processRouterDir -Force
+}
+foreach ($name in @('PROXYBRIDGE_LICENSE.txt', 'WINDIVERT_LICENSE.txt', 'PROVENANCE.md')) {
+    Copy-Item -LiteralPath (Join-Path $ProcessRouterRoot $name) -Destination $processRouterDir -Force
+}
+@'
+Green VPN Windows application routing uses:
+
+- ProxyBridge v3.2.0 (MIT License)
+- WinDivert v2.2.2-A (see WINDIVERT_LICENSE.txt)
+
+The corresponding license texts are distributed in this directory.
+'@ | Set-Content -LiteralPath (Join-Path $processRouterDir 'THIRD_PARTY_NOTICES.txt') -Encoding UTF8
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\install_windows_transport_preview.ps1') -Destination $OutDir -Force
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\uninstall_windows_transport_preview.ps1') -Destination $OutDir -Force
 Copy-Item -LiteralPath (Join-Path $repo 'docs\THIRD_PARTY_AWG2_WINDOWS_PREVIEW.md') -Destination $OutDir -Force

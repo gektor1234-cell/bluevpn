@@ -443,6 +443,14 @@ function Ensure-NativeFullTunnelKillSwitch {
 function Write-PrivateRuntimeFile {
     param([string]$Path, [string]$Content)
     [IO.File]::WriteAllText($Path, $Content, [Text.UTF8Encoding]::new($false))
+    Protect-PrivateRuntimeFile -Path $Path
+}
+
+function Protect-PrivateRuntimeFile {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "Private runtime file is missing: $Path"
+    }
     & attrib.exe +H $Path 2>$null | Out-Null
     & icacls.exe $Path /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Failed to protect runtime file: $Path" }
@@ -740,6 +748,7 @@ socks5:
 misc:
   log-file: stderr
   log-level: warn
+  task-stack-size: 86016
   connect-timeout: 10000
   tcp-read-write-timeout: 300000
   udp-read-write-timeout: 60000
@@ -844,6 +853,17 @@ function New-VlessRuntimeConfigs {
         [string]::IsNullOrWhiteSpace([string]$stream.xhttpSettings.path)) {
         throw 'VLESS REALITY profile failed the safe XHTTP contract.'
     }
+    $user | Add-Member -NotePropertyName packetEncoding -NotePropertyValue 'xudp' -Force
+    $stream.xhttpSettings | Add-Member -NotePropertyName mode -NotePropertyValue 'stream-up' -Force
+    $stream.xhttpSettings | Add-Member -NotePropertyName extra -NotePropertyValue ([pscustomobject]@{
+        xmux = [pscustomobject]@{
+            maxConnections = 1
+            cMaxReuseTimes = '128-256'
+            hMaxRequestTimes = '1000-2000'
+            hMaxReusableSecs = '600-900'
+            hKeepAlivePeriod = 30
+        }
+    }) -Force
     $endpoint = Get-ManagedIpv4Endpoint
     if ([string]$server.address -ne $endpoint) { throw 'VLESS REALITY profile endpoint is inconsistent.' }
     if (-not (Test-Path -LiteralPath $EndpointRouteStatePath)) {
@@ -874,9 +894,42 @@ function New-VlessRuntimeConfigs {
     if ($existingBlock.Count -eq 0) {
         $root.outbounds = @($root.outbounds) + @($blockOutbound)
     }
+    $dnsOutbound = [pscustomobject]@{
+        protocol = 'dns'
+        tag = 'dns-out'
+        settings = [pscustomobject]@{
+            rules = @(
+                [pscustomobject]@{
+                    action = 'hijack'
+                    qType = '1,28'
+                }
+            )
+        }
+    }
+    $existingDns = @($root.outbounds | Where-Object { [string]$_.tag -eq 'dns-out' })
+    if ($existingDns.Count -eq 0) {
+        $root.outbounds = @($root.outbounds) + @($dnsOutbound)
+    }
+    $root | Add-Member -NotePropertyName dns -NotePropertyValue ([pscustomobject]@{
+        queryStrategy = 'UseIPv4'
+        servers = @(
+            [pscustomobject]@{
+                address = 'https://1.1.1.1/dns-query'
+                queryStrategy = 'UseIPv4'
+                skipFallback = $true
+                finalQuery = $true
+                tag = 'dns-upstream'
+            }
+        )
+    }) -Force
     $root | Add-Member -NotePropertyName routing -NotePropertyValue ([pscustomobject]@{
         domainStrategy = 'AsIs'
         rules = @(
+            [pscustomobject]@{
+                type = 'field'
+                port = '53'
+                outboundTag = 'dns-out'
+            },
             [pscustomobject]@{
                 type = 'field'
                 network = 'udp'
@@ -905,10 +958,17 @@ tunnel:
 socks5:
   port: $VlessSocksPort
   address: 127.0.0.1
-  udp: 'tcp'
+  udp: 'udp'
+mapdns:
+  address: 198.18.1.2
+  port: 53
+  network: 100.64.0.0
+  netmask: 255.192.0.0
+  cache-size: 10000
 misc:
   log-file: stderr
   log-level: warn
+  task-stack-size: 86016
   connect-timeout: 10000
   tcp-read-write-timeout: 300000
   udp-read-write-timeout: 60000
@@ -929,7 +989,7 @@ function Add-VlessRoutes {
         New-NetRoute -AddressFamily $family -DestinationPrefix $prefix -InterfaceIndex $InterfaceIndex `
             -NextHop $nextHop -RouteMetric $VlessRouteMetric -PolicyStore ActiveStore -ErrorAction Stop | Out-Null
     }
-    Set-DnsClientServerAddress -InterfaceIndex $InterfaceIndex -ServerAddresses @('1.1.1.1', '1.0.0.1') -ErrorAction Stop
+    Set-DnsClientServerAddress -InterfaceIndex $InterfaceIndex -ServerAddresses @('198.18.1.2') -ErrorAction Stop
     [ordered]@{
         interfaceIndex = $InterfaceIndex
         metric = $VlessRouteMetric
@@ -976,15 +1036,38 @@ function Start-VlessRealityTunnel {
     Write-GreenLog "VLESS REALITY preview started ifIndex=$($adapter.ifIndex)"
 }
 
+function Get-SafeHevDiagnostic {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return 'no stderr' }
+    $text = [IO.File]::ReadAllText($Path)
+    if ([string]::IsNullOrWhiteSpace($text)) { return 'empty stderr' }
+    $flat = ($text -replace '[\x00-\x1f]+', ' ' -replace '\s+', ' ').Trim()
+    $flat = $flat -replace '(?i)(https?://)[^/@\s]+@', '$1<redacted>@'
+    $flat = $flat -replace '(?i)(username|password|token|secret)\s*[:=]\s*\S+', '$1=<redacted>'
+    if ($flat.Length -gt 1000) { $flat = $flat.Substring(0, 1000) }
+    return $flat
+}
+
 function Wait-NaiveAdapter {
-    param([int]$Seconds = 20)
+    param(
+        [System.Diagnostics.Process]$HevProcess,
+        [int]$Seconds = 20
+    )
     $deadline = (Get-Date).AddSeconds($Seconds)
     do {
+        if ($null -ne $HevProcess) {
+            $HevProcess.Refresh()
+            if ($HevProcess.HasExited) {
+                $diagnostic = Get-SafeHevDiagnostic -Path $NaiveHevStderrPath
+                throw "Naive HTTPS HEV exited with code $($HevProcess.ExitCode): $diagnostic"
+            }
+        }
         $adapter = Get-NetAdapter -Name $NaiveTunnelName -ErrorAction SilentlyContinue
         if ($null -ne $adapter -and $adapter.Status -eq 'Up') { return $adapter }
         Start-Sleep -Milliseconds 300
     } while ((Get-Date) -lt $deadline)
-    throw 'Naive HTTPS preview adapter did not become ready.'
+    $diagnostic = Get-SafeHevDiagnostic -Path $NaiveHevStderrPath
+    throw "Naive HTTPS preview adapter did not become ready: $diagnostic"
 }
 
 function New-NaiveRuntimeConfigs {
@@ -1047,6 +1130,7 @@ mapdns:
 misc:
   log-file: stderr
   log-level: warn
+  task-stack-size: 86016
   connect-timeout: 10000
   tcp-read-write-timeout: 300000
   udp-read-write-timeout: 60000
@@ -1084,19 +1168,24 @@ function Start-NaiveHttpsTunnel {
 
     foreach ($path in @($NaiveStdoutPath, $NaiveStderrPath, $NaiveHevStdoutPath, $NaiveHevStderrPath)) {
         Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
-        Write-PrivateRuntimeFile -Path $path -Content ''
     }
     $naive = Start-Process -FilePath $NaiveExe -ArgumentList @($NaiveRuntimeConfigPath) `
         -WorkingDirectory $NaiveToolRoot -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $NaiveStdoutPath -RedirectStandardError $NaiveStderrPath
+    foreach ($path in @($NaiveStdoutPath, $NaiveStderrPath)) {
+        Protect-PrivateRuntimeFile -Path $path
+    }
     Write-PrivateRuntimeFile -Path $NaivePidPath -Content ([string]$naive.Id)
     Wait-LocalTcpPort -Port $NaiveSocksPort
 
     $hev = Start-Process -FilePath $NaiveHevExe -ArgumentList @($NaiveHevRuntimeConfigPath) `
         -WorkingDirectory $NaiveToolRoot -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $NaiveHevStdoutPath -RedirectStandardError $NaiveHevStderrPath
+    foreach ($path in @($NaiveHevStdoutPath, $NaiveHevStderrPath)) {
+        Protect-PrivateRuntimeFile -Path $path
+    }
     Write-PrivateRuntimeFile -Path $NaiveHevPidPath -Content ([string]$hev.Id)
-    $adapter = Wait-NaiveAdapter
+    $adapter = Wait-NaiveAdapter -HevProcess $hev
     Add-NaiveRoutes -InterfaceIndex ([int]$adapter.ifIndex)
 
     $watchdog = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @(
@@ -1210,6 +1299,7 @@ mapdns:
 misc:
   log-file: stderr
   log-level: warn
+  task-stack-size: 86016
   connect-timeout: 10000
   tcp-read-write-timeout: 300000
   udp-read-write-timeout: 60000
@@ -1247,7 +1337,6 @@ function Start-DnsttTunnel {
 
     foreach ($path in @($DnsttStdoutPath, $DnsttStderrPath, $DnsttHevStdoutPath, $DnsttHevStderrPath)) {
         Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
-        Write-PrivateRuntimeFile -Path $path -Content ''
     }
     $profile = Get-Content -LiteralPath $DnsttRuntimeConfigPath -Raw | ConvertFrom-Json
     $resolver = @($profile.resolvers)[0]
@@ -1258,12 +1347,18 @@ function Start-DnsttTunnel {
         "127.0.0.1:$DnsttSocksPort"
     ) -WorkingDirectory $DnsttToolRoot -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $DnsttStdoutPath -RedirectStandardError $DnsttStderrPath
+    foreach ($path in @($DnsttStdoutPath, $DnsttStderrPath)) {
+        Protect-PrivateRuntimeFile -Path $path
+    }
     Write-PrivateRuntimeFile -Path $DnsttPidPath -Content ([string]$dnstt.Id)
     Wait-LocalTcpPort -Port $DnsttSocksPort
 
     $hev = Start-Process -FilePath $DnsttHevExe -ArgumentList @($DnsttHevRuntimeConfigPath) `
         -WorkingDirectory $DnsttToolRoot -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput $DnsttHevStdoutPath -RedirectStandardError $DnsttHevStderrPath
+    foreach ($path in @($DnsttHevStdoutPath, $DnsttHevStderrPath)) {
+        Protect-PrivateRuntimeFile -Path $path
+    }
     Write-PrivateRuntimeFile -Path $DnsttHevPidPath -Content ([string]$hev.Id)
     $adapter = Wait-DnsttAdapter
     Add-DnsttRoutes -InterfaceIndex ([int]$adapter.ifIndex)

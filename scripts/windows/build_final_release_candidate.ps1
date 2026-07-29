@@ -1,9 +1,9 @@
 param(
-    [string]$OutDir = 'C:\BlueVPN_Builds\public_product_final_candidate_20260729_b2906',
-    [string]$AppVersion = '0.3.18',
-    [string]$AndroidBuildNumber = '2026072906',
+    [string]$OutDir = 'C:\BlueVPN_Builds\public_product_final_candidate_20260729_b2914',
+    [string]$AppVersion = '0.3.19',
+    [string]$AndroidBuildNumber = '2026072914',
     [ValidateRange(0, 65535)]
-    [int]$WindowsBuildNumber = 2906
+    [int]$WindowsBuildNumber = 2914
 )
 
 Set-StrictMode -Version Latest
@@ -81,6 +81,22 @@ $safeAppVersion = $AppVersion -replace '[^A-Za-z0-9._-]', '_'
 $windowsArtifact = Join-Path $windowsOut "GreenVPN_Windows_${safeAppVersion}_final_candidate.zip"
 if (-not (Test-Path -LiteralPath $windowsArtifact -PathType Leaf)) {
     throw "Windows final candidate ZIP is missing: $windowsArtifact"
+}
+$requiredWindowsPayloads = @(
+    'app\tools\greenvpn_transport_preview_vpn_task.ps1',
+    'app\tools\greenvpn_selective_routing.ps1',
+    'app\tools\process-router\ProxyBridge_CLI.exe',
+    'app\tools\process-router\ProxyBridgeCore.dll',
+    'app\tools\process-router\WinDivert.dll',
+    'app\tools\process-router\WinDivert64.sys',
+    'app\tools\process-router\PROVENANCE.md',
+    'app\tools\process-router\THIRD_PARTY_NOTICES.txt'
+)
+foreach ($relativePath in $requiredWindowsPayloads) {
+    $payloadPath = Join-Path $windowsOut $relativePath
+    if (-not (Test-Path -LiteralPath $payloadPath -PathType Leaf)) {
+        throw "Windows final candidate dependency is missing: $relativePath"
+    }
 }
 
 $head = (& git rev-parse HEAD).Trim()

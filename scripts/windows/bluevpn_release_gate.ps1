@@ -88,11 +88,19 @@ $transportPreviewUninstallPath = Join-Path $ProjectRoot "scripts\windows\uninsta
 $transportPreviewBuildPath = Join-Path $ProjectRoot "scripts\windows\build_windows_awg2_preview.ps1"
 $hysteriaWatchdogPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_hysteria2_watchdog.ps1"
 $hysteriaPhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_windows_hysteria2_preview_physical.ps1"
+$vlessWatchdogPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_vless_reality_watchdog.ps1"
+$vlessPhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_windows_vless_reality_preview_physical.ps1"
 $naiveWatchdogPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_naive_https_watchdog.ps1"
 $naiveClientSmokePath = Join-Path $ProjectRoot "scripts\windows\test_windows_naive_https_client_smoke.ps1"
+$managedSocksTunPhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_windows_socks_tun_preview_physical.ps1"
+$naivePhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_windows_naive_https_preview_physical.ps1"
+$dnsttWatchdogPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_dnstt_watchdog.ps1"
+$dnsttPhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_windows_dnstt_preview_physical.ps1"
+$transportCascadePhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_windows_transport_preview_cascade_physical.ps1"
 $androidSettingsPath = Join-Path $ProjectRoot "android\settings.gradle.kts"
 $androidAppBuildPath = Join-Path $ProjectRoot "android\app\build.gradle.kts"
 $androidAppManifestPath = Join-Path $ProjectRoot "android\app\src\main\AndroidManifest.xml"
+$androidLintConfigPath = Join-Path $ProjectRoot "android\lint.xml"
 $androidAppDebugManifestPath = Join-Path $ProjectRoot "android\app\src\debug\AndroidManifest.xml"
 $androidTransportContractServicePath = Join-Path $ProjectRoot "android\app\src\debug\kotlin\pro\greenvpn\app\TransportContractDebugService.kt"
 $androidTransportContractProbePath = Join-Path $ProjectRoot "scripts\windows\test_android_transport_contract_probe.ps1"
@@ -212,11 +220,19 @@ $transportPreviewUninstallScript = Read-Text $transportPreviewUninstallPath
 $transportPreviewBuildScript = Read-Text $transportPreviewBuildPath
 $hysteriaWatchdogScript = Read-Text $hysteriaWatchdogPath
 $hysteriaPhysicalTestScript = Read-Text $hysteriaPhysicalTestPath
+$vlessWatchdogScript = Read-Text $vlessWatchdogPath
+$vlessPhysicalTestScript = Read-Text $vlessPhysicalTestPath
 $naiveWatchdogScript = Read-Text $naiveWatchdogPath
 $naiveClientSmokeScript = Read-Text $naiveClientSmokePath
+$managedSocksTunPhysicalTestScript = Read-Text $managedSocksTunPhysicalTestPath
+$naivePhysicalTestScript = Read-Text $naivePhysicalTestPath
+$dnsttWatchdogScript = Read-Text $dnsttWatchdogPath
+$dnsttPhysicalTestScript = Read-Text $dnsttPhysicalTestPath
+$transportCascadePhysicalTestScript = Read-Text $transportCascadePhysicalTestPath
 $androidSettings = Read-Text $androidSettingsPath
 $androidAppBuild = Read-Text $androidAppBuildPath
 $androidAppManifest = Read-Text $androidAppManifestPath
+$androidLintConfig = Read-Text $androidLintConfigPath
 $androidAppDebugManifest = Read-Text $androidAppDebugManifestPath
 $androidTransportContractService = Read-Text $androidTransportContractServicePath
 $androidTransportContractProbe = Read-Text $androidTransportContractProbePath
@@ -1598,6 +1614,10 @@ $transportPreviewRouteFragments = @(
     '''88-218-250-86.sslip.io'' = ''88.218.250.86''',
     '$root.PSObject.Properties.Remove(''endpointIp'')',
     'host-resolver-rules',
+    'Get-SafeHevDiagnostic',
+    '[IO.File]::ReadAllText($Path)',
+    'Wait-NaiveAdapter -HevProcess $hev',
+    'Protect-PrivateRuntimeFile -Path $path',
     "mapdns:",
     "udp: 'tcp'",
     'greenvpn_naive_https_watchdog.ps1'
@@ -1613,6 +1633,73 @@ foreach ($fragment in $transportPreviewRouteFragments) {
     }
     else {
         Add-Error "Windows transport preview route guard missing: $fragment"
+    }
+}
+
+$transportPreviewUdpModeChecks = [ordered]@{
+    'VLESS REALITY standard SOCKS5 UDP relay' =
+        "(?s)function New-VlessRuntimeConfigs.*?udp:\s*'udp'.*?function Add-VlessRoutes"
+    'Naive HTTPS UDP-over-TCP relay' =
+        "(?s)function New-NaiveRuntimeConfigs.*?udp:\s*'tcp'.*?function Add-NaiveRoutes"
+    'dnstt UDP-over-TCP relay' =
+        "(?s)function New-DnsttRuntimeConfigs.*?udp:\s*'tcp'.*?function Add-DnsttRoutes"
+}
+foreach ($check in $transportPreviewUdpModeChecks.GetEnumerator()) {
+    if ($transportPreviewVpnTaskScript -match $check.Value) {
+        Add-Pass "Windows transport preview UDP mode is explicit: $($check.Key)"
+    }
+    else {
+        Add-Error "Windows transport preview UDP mode is invalid: $($check.Key)"
+    }
+}
+
+$transportPreviewHevStackChecks = [ordered]@{
+    'Hysteria2 HEV task stack' =
+        '(?s)function New-HysteriaRuntimeConfigs.*?task-stack-size:\s*86016.*?function Add-HysteriaRoutes'
+    'VLESS REALITY HEV task stack' =
+        '(?s)function New-VlessRuntimeConfigs.*?task-stack-size:\s*86016.*?function Add-VlessRoutes'
+    'Naive HTTPS HEV task stack' =
+        '(?s)function New-NaiveRuntimeConfigs.*?task-stack-size:\s*86016.*?function Add-NaiveRoutes'
+    'dnstt HEV task stack' =
+        '(?s)function New-DnsttRuntimeConfigs.*?task-stack-size:\s*86016.*?function Add-DnsttRoutes'
+}
+foreach ($check in $transportPreviewHevStackChecks.GetEnumerator()) {
+    if ($transportPreviewVpnTaskScript -match $check.Value) {
+        Add-Pass "Windows transport preview HEV stack is explicit: $($check.Key)"
+    }
+    else {
+        Add-Error "Windows transport preview HEV stack is invalid: $($check.Key)"
+    }
+}
+
+$unsafePrecreatedRedirectPattern = '(?s)function Start-(?:NaiveHttps|Dnstt)Tunnel.*?Write-PrivateRuntimeFile\s+-Path\s+\$path\s+-Content\s+''''.*?function'
+if ($transportPreviewVpnTaskScript -match $unsafePrecreatedRedirectPattern) {
+    Add-Error 'Windows SOCKS/TUN transports precreate hidden redirect files before Start-Process.'
+}
+else {
+    Add-Pass 'Windows SOCKS/TUN redirect files are protected only after Start-Process creates them.'
+}
+
+$transportPreviewVlessRuntimeFragments = @(
+    '-NotePropertyName packetEncoding -NotePropertyValue ''xudp''',
+    '-NotePropertyName mode -NotePropertyValue ''stream-up''',
+    'maxConnections = 1',
+    'cMaxReuseTimes = ''128-256''',
+    'hMaxRequestTimes = ''1000-2000''',
+    'hMaxReusableSecs = ''600-900''',
+    'hKeepAlivePeriod = 30',
+    'protocol = ''dns''',
+    'tag = ''dns-out''',
+    'https://1.1.1.1/dns-query',
+    'address: 198.18.1.2',
+    'Set-DnsClientServerAddress -InterfaceIndex $InterfaceIndex -ServerAddresses @(''198.18.1.2'')'
+)
+foreach ($fragment in $transportPreviewVlessRuntimeFragments) {
+    if ($transportPreviewVpnTaskScript.Contains($fragment)) {
+        Add-Pass "Windows VLESS full-tunnel hardening marker present: $fragment"
+    }
+    else {
+        Add-Error "Windows VLESS full-tunnel hardening marker missing: $fragment"
     }
 }
 
@@ -1950,6 +2037,25 @@ foreach ($fragment in @(
 }
 
 foreach ($fragment in @(
+    'greenvpn_selective_routing.ps1',
+    "Join-Path `$toolsDir 'process-router'",
+    'ProxyBridge_CLI.exe',
+    'ProxyBridgeCore.dll',
+    'WinDivert.dll',
+    'WinDivert64.sys',
+    'PROXYBRIDGE_LICENSE.txt',
+    'WINDIVERT_LICENSE.txt',
+    'THIRD_PARTY_NOTICES.txt'
+)) {
+    if ($transportPreviewBuildScript.Contains($fragment)) {
+        Add-Pass "Windows transport preview dependency marker present: $fragment"
+    }
+    else {
+        Add-Error "Windows transport preview dependency marker missing: $fragment"
+    }
+}
+
+foreach ($fragment in @(
     'Test-ExactProcess',
     '$RouteMetric = 42734',
     '$EndpointRouteMetric = 42731',
@@ -2018,21 +2124,108 @@ foreach ($fragment in @(
     }
 }
 
-foreach ($scriptPath in @($transportPreviewBuildPath, $hysteriaWatchdogPath, $hysteriaPhysicalTestPath, $naiveWatchdogPath, $naiveClientSmokePath)) {
+foreach ($check in @(
+    [pscustomobject]@{
+        Label = 'VLESS REALITY watchdog'
+        Source = $vlessWatchdogScript
+        Fragments = @('Test-ExactProcess', '$RouteMetric = 42733', 'Remove-ManagedRoutes', 'Remove-ManagedEndpointRoute')
+    },
+    [pscustomobject]@{
+        Label = 'VLESS REALITY physical smoke'
+        Source = $vlessPhysicalTestScript
+        Fragments = @("ExpectedCanaryEgress = '5.129.216.42'", 'localSocksEgress', 'watchdogCleanupPassed', 'restoredOriginalEgress')
+    },
+    [pscustomobject]@{
+        Label = 'Naive and dnstt full-tunnel physical smoke'
+        Source = $managedSocksTunPhysicalTestScript
+        Fragments = @(
+            "[ValidateSet('naive_https', 'dnstt')]",
+            "CompetingServiceName = 'AmneziaWGTunnel`$device20_full'",
+            'endpoint route recursed into the preview adapter',
+            'localSocksEgress',
+            'Failed to protect the temporary dnstt curl config.',
+            'dnsProbeOk',
+            'watchdogCleanupPassed',
+            'restoredOriginalEgress'
+        )
+    },
+    [pscustomobject]@{
+        Label = 'Naive HTTPS physical smoke wrapper'
+        Source = $naivePhysicalTestScript
+        Fragments = @('-Protocol naive_https', 'transport_canary_naive_20260712', 'ExpectedCanaryEgress')
+    },
+    [pscustomobject]@{
+        Label = 'dnstt watchdog'
+        Source = $dnsttWatchdogScript
+        Fragments = @('Test-ExactProcess', '$RouteMetric = 42735', 'Remove-ManagedRoutes', 'Remove-ManagedEndpointRoute')
+    },
+    [pscustomobject]@{
+        Label = 'dnstt physical smoke wrapper'
+        Source = $dnsttPhysicalTestScript
+        Fragments = @('-Protocol dnstt', 'transport_canary_dnstt_20260712', 'ExpectedCanaryEgress')
+    },
+    [pscustomobject]@{
+        Label = 'transport cascade physical smoke'
+        Source = $transportCascadePhysicalTestScript
+        Fragments = @(
+            'test_windows_awg2_preview_physical.ps1',
+            'test_windows_hysteria2_preview_physical.ps1',
+            'test_windows_vless_reality_preview_physical.ps1',
+            'test_windows_naive_https_preview_physical.ps1',
+            'test_windows_dnstt_preview_physical.ps1',
+            'cleanAfterEveryTransition',
+            'Assert-CleanTransitionState',
+            'restoredOriginalEgress'
+        )
+    }
+)) {
+    foreach ($fragment in $check.Fragments) {
+        if ($check.Source.Contains($fragment)) {
+            Add-Pass "Windows $($check.Label) marker present: $fragment"
+        }
+        else {
+            Add-Error "Windows $($check.Label) marker missing: $fragment"
+        }
+    }
+}
+
+foreach ($scriptPath in @(
+    $transportPreviewBuildPath,
+    $hysteriaWatchdogPath,
+    $hysteriaPhysicalTestPath,
+    $vlessWatchdogPath,
+    $vlessPhysicalTestPath,
+    $naiveWatchdogPath,
+    $naiveClientSmokePath,
+    $managedSocksTunPhysicalTestPath,
+    $naivePhysicalTestPath,
+    $dnsttWatchdogPath,
+    $dnsttPhysicalTestPath,
+    $transportCascadePhysicalTestPath
+)) {
     if (Test-Path -LiteralPath $scriptPath) {
         $tokens = $null
         $parseErrors = $null
         [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$parseErrors) | Out-Null
         if ($parseErrors -and $parseErrors.Count -gt 0) {
-            Add-Error "Windows Hysteria2 preview parser errors in ${scriptPath}: $($parseErrors[0].ToString())"
+            Add-Error "Windows transport preview parser errors in ${scriptPath}: $($parseErrors[0].ToString())"
         }
         else {
-            Add-Pass "Windows Hysteria2 preview parser check passed: $scriptPath"
+            Add-Pass "Windows transport preview parser check passed: $scriptPath"
         }
     }
 }
 
 Write-Section "ANDROID HYSTERIA2 PREVIEW CHECKS"
+
+foreach ($fragment in @('<issue id="PropertyEscape">', '<ignore path="local.properties" />')) {
+    if ($androidLintConfig.Contains($fragment)) {
+        Add-Pass "Android generated local.properties lint guard present: $fragment"
+    }
+    else {
+        Add-Error "Android generated local.properties lint guard missing: $fragment"
+    }
+}
 $androidHysteriaSourceChecks = [ordered]@{
     'Android settings conditional module' = @($androidSettings, 'GREENVPN_ANDROID_HYSTERIA2_PREVIEW_ENABLED', 'include(":hysteria_tunnel_preview")')
     'Android app conditional dependency' = @($androidAppBuild, 'GREENVPN_HYSTERIA2_PREVIEW_ENABLED', 'implementation(project(":hysteria_tunnel_preview"))')
@@ -2776,6 +2969,13 @@ if (-not [string]::IsNullOrWhiteSpace($ReleaseZip)) {
                     'app/tools/hysteria2/msys-2.0.dll',
                     'app/tools/hysteria2/wintun.dll',
                     'app/tools/greenvpn_hysteria2_watchdog.ps1',
+                    'app/tools/greenvpn_selective_routing.ps1',
+                    'app/tools/process-router/ProxyBridge_CLI.exe',
+                    'app/tools/process-router/ProxyBridgeCore.dll',
+                    'app/tools/process-router/WinDivert.dll',
+                    'app/tools/process-router/WinDivert64.sys',
+                    'app/tools/process-router/PROVENANCE.md',
+                    'app/tools/process-router/THIRD_PARTY_NOTICES.txt',
                     'HYSTERIA2_CLIENT_ENGINE_LICENSE_AND_DESIGN_2026_07_12.md',
                     'HYSTERIA_APP_MIT.txt',
                     'HEV_SOCKS5_TUNNEL_MIT.txt',
