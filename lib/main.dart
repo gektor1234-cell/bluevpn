@@ -11266,13 +11266,20 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             'toggle connect backend server=${candidate.id} ok=${res.ok} message=${res.message ?? ""}',
           );
           if (!mounted) return;
+          final competingVpnActive = greenVpnIsCompetingVpnFailureMessage(
+            res.message,
+          );
           unawaited(
             _reportRouteEvent(
               candidate,
               stage: 'connect',
               ok: res.ok,
               latencyMs: connectWatch.elapsedMilliseconds,
-              errorCode: res.ok ? null : 'connect_failed',
+              errorCode: res.ok
+                  ? null
+                  : (competingVpnActive
+                        ? 'competing_vpn_active'
+                        : 'connect_failed'),
               message: res.message,
               details: {
                 'attempt': i + 1,
@@ -11282,7 +11289,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             ),
           );
           if (!res.ok) {
-            _recordRouteFailure(candidate, 'connect');
+            if (!competingVpnActive) {
+              _recordRouteFailure(candidate, 'connect');
+            }
             lastError =
                 res.message ??
                 'не удалось подключить ${greenVpnPublicServerTitle(candidate)}';
@@ -11296,6 +11305,14 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                 context,
                 'Не удалось полностью остановить предыдущий маршрут. '
                 'Автопереключение остановлено.',
+              );
+              return;
+            }
+            if (competingVpnActive) {
+              _toast(
+                context,
+                res.message ??
+                    'Другой VPN уже активен. Отключи его и попробуй снова.',
               );
               return;
             }
@@ -19211,8 +19228,9 @@ class WireGuardRuntimeStatus {
   ) async {
     if (!Platform.isWindows) return const [];
     try {
-      final res = await Process.run('powershell', [
+      final res = await Process.run('powershell.exe', [
         '-NoProfile',
+        '-NonInteractive',
         '-Command',
         r'''
 $ErrorActionPreference="SilentlyContinue"
@@ -19254,7 +19272,7 @@ try {
 $labels | Sort-Object -Unique
 '''
             .replaceAll('__TUNNEL__', _psSingleQuoted(tunnelName)),
-      ], runInShell: true);
+      ], runInShell: false);
       if (res.exitCode != 0) return const [];
       return _parseNonEmptyLines(res);
     } catch (_) {
@@ -19267,8 +19285,9 @@ $labels | Sort-Object -Unique
   ) async {
     if (!Platform.isWindows) return const [];
     try {
-      final res = await Process.run('powershell', [
+      final res = await Process.run('powershell.exe', [
         '-NoProfile',
+        '-NonInteractive',
         '-Command',
         r'''
 $ErrorActionPreference="SilentlyContinue"
@@ -19288,7 +19307,7 @@ Get-CimInstance Win32_Service |
   Sort-Object -Unique
 '''
             .replaceAll('__SERVICE__', _psSingleQuoted(ownServiceName)),
-      ], runInShell: true);
+      ], runInShell: false);
       if (res.exitCode != 0) return const [];
       return _parseNonEmptyLines(res);
     } catch (_) {
@@ -19299,8 +19318,9 @@ Get-CimInstance Win32_Service |
   static Future<String?> _queryPrimaryDefaultRouteAlias() async {
     if (!Platform.isWindows) return null;
     try {
-      final res = await Process.run('powershell', [
+      final res = await Process.run('powershell.exe', [
         '-NoProfile',
+        '-NonInteractive',
         '-Command',
         r'''
 $ErrorActionPreference="SilentlyContinue"
@@ -19309,7 +19329,7 @@ $route = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' |
   Select-Object -First 1
 if ($route) { $route.InterfaceAlias }
 ''',
-      ], runInShell: true);
+      ], runInShell: false);
       if (res.exitCode != 0) return null;
       final lines = _parseNonEmptyLines(res);
       if (lines.isEmpty) return null;

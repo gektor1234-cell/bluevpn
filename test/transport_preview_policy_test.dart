@@ -187,6 +187,28 @@ void main() {
     },
   );
 
+  test('competing VPN failures stop the transport cascade', () {
+    expect(
+      greenVpnIsCompetingVpnFailureMessage(
+        'Другой VPN уже активен. Отключи его и попробуй снова.',
+      ),
+      isTrue,
+    );
+    expect(
+      greenVpnIsCompetingVpnFailureMessage(
+        'Another VPN is active. Disconnect it before continuing.',
+      ),
+      isTrue,
+    );
+    expect(
+      greenVpnIsCompetingVpnFailureMessage(
+        'VPN did not start (service not RUNNING).',
+      ),
+      isFalse,
+    );
+    expect(greenVpnIsCompetingVpnFailureMessage(null), isFalse);
+  });
+
   test('last successful route is preferred for only 24 hours', () {
     final now = DateTime.utc(2026, 7, 29, 20);
     expect(

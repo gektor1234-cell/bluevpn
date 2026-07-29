@@ -90,6 +90,15 @@ int greenVpnNextRuntimeFailoverFailureCount({
 bool greenVpnShouldTriggerRuntimeFailover(int failureCount) =>
     failureCount >= greenVpnRuntimeFailoverFailureThreshold;
 
+bool greenVpnIsCompetingVpnFailureMessage(String? message) {
+  final normalized = (message ?? '').trim().toLowerCase();
+  if (normalized.isEmpty) return false;
+  return normalized.contains('другой vpn') ||
+      normalized.contains('другого vpn') ||
+      normalized.contains('another vpn is active') ||
+      normalized.contains('competing vpn');
+}
+
 bool greenVpnShouldContinueWindowsWireGuardConfirmation({
   required Duration elapsed,
   required int consecutiveMissingInterfaceChecks,
