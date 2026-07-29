@@ -187,10 +187,10 @@ void main() {
     },
   );
 
-  test('last successful automatic route is preferred for only 24 hours', () {
+  test('last successful route is preferred for only 24 hours', () {
     final now = DateTime.utc(2026, 7, 29, 20);
     expect(
-      greenVpnIsFreshPreferredAutoRoute(
+      greenVpnIsFreshPreferredRoute(
         candidateId: 'gb1-awg2-canary',
         candidateProtocol: 'amneziawg',
         preferredId: 'gb1-awg2-canary',
@@ -201,7 +201,7 @@ void main() {
       isTrue,
     );
     expect(
-      greenVpnIsFreshPreferredAutoRoute(
+      greenVpnIsFreshPreferredRoute(
         candidateId: 'gb1-awg2-canary',
         candidateProtocol: 'amneziawg',
         preferredId: 'gb1-awg2-canary',
@@ -212,7 +212,7 @@ void main() {
       isFalse,
     );
     expect(
-      greenVpnIsFreshPreferredAutoRoute(
+      greenVpnIsFreshPreferredRoute(
         candidateId: 'another-route',
         candidateProtocol: 'amneziawg',
         preferredId: 'gb1-awg2-canary',

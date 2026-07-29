@@ -27,7 +27,7 @@ const Duration greenVpnWindowsWireGuardConfirmationPollInterval = Duration(
   milliseconds: 500,
 );
 const int greenVpnWindowsWireGuardMissingInterfaceLimit = 4;
-const Duration greenVpnPreferredAutoRouteTtl = Duration(hours: 24);
+const Duration greenVpnPreferredRouteTtl = Duration(hours: 24);
 
 const int greenVpnRuntimeFailoverFailureThreshold = 2;
 const int greenVpnManagedRouteIdMaxLength = 160;
@@ -108,7 +108,7 @@ String greenVpnNormalizeManagedRouteId(String value) {
   return normalized;
 }
 
-bool greenVpnIsFreshPreferredAutoRoute({
+bool greenVpnIsFreshPreferredRoute({
   required String candidateId,
   required String candidateProtocol,
   required String preferredId,
@@ -130,7 +130,7 @@ bool greenVpnIsFreshPreferredAutoRoute({
   }
 
   final age = now.toUtc().difference(preferredAt.toUtc());
-  return !age.isNegative && age <= greenVpnPreferredAutoRouteTtl;
+  return !age.isNegative && age <= greenVpnPreferredRouteTtl;
 }
 
 int greenVpnCompareTransportPreviewCandidates({

@@ -2547,9 +2547,9 @@ class Prefs {
   final bool optSmartRouting;
   final bool optDedicatedIp;
   final bool optAutoRenew;
-  final String lastSuccessfulAutoRouteId;
-  final String lastSuccessfulAutoRouteProtocol;
-  final String lastSuccessfulAutoRouteAt;
+  final String lastSuccessfulRouteId;
+  final String lastSuccessfulRouteProtocol;
+  final String lastSuccessfulRouteAt;
 
   const Prefs({
     required this.themeMode,
@@ -2568,9 +2568,9 @@ class Prefs {
     required this.optSmartRouting,
     required this.optDedicatedIp,
     required this.optAutoRenew,
-    required this.lastSuccessfulAutoRouteId,
-    required this.lastSuccessfulAutoRouteProtocol,
-    required this.lastSuccessfulAutoRouteAt,
+    required this.lastSuccessfulRouteId,
+    required this.lastSuccessfulRouteProtocol,
+    required this.lastSuccessfulRouteAt,
   });
 
   static Prefs defaults() => const Prefs(
@@ -2590,9 +2590,9 @@ class Prefs {
     optSmartRouting: true,
     optDedicatedIp: false,
     optAutoRenew: false,
-    lastSuccessfulAutoRouteId: '',
-    lastSuccessfulAutoRouteProtocol: '',
-    lastSuccessfulAutoRouteAt: '',
+    lastSuccessfulRouteId: '',
+    lastSuccessfulRouteProtocol: '',
+    lastSuccessfulRouteAt: '',
   );
 
   Prefs copyWith({
@@ -2612,9 +2612,9 @@ class Prefs {
     bool? optSmartRouting,
     bool? optDedicatedIp,
     bool? optAutoRenew,
-    String? lastSuccessfulAutoRouteId,
-    String? lastSuccessfulAutoRouteProtocol,
-    String? lastSuccessfulAutoRouteAt,
+    String? lastSuccessfulRouteId,
+    String? lastSuccessfulRouteProtocol,
+    String? lastSuccessfulRouteAt,
   }) {
     return Prefs(
       themeMode: themeMode ?? this.themeMode,
@@ -2636,13 +2636,12 @@ class Prefs {
       optSmartRouting: optSmartRouting ?? this.optSmartRouting,
       optDedicatedIp: optDedicatedIp ?? this.optDedicatedIp,
       optAutoRenew: optAutoRenew ?? this.optAutoRenew,
-      lastSuccessfulAutoRouteId:
-          lastSuccessfulAutoRouteId ?? this.lastSuccessfulAutoRouteId,
-      lastSuccessfulAutoRouteProtocol:
-          lastSuccessfulAutoRouteProtocol ??
-          this.lastSuccessfulAutoRouteProtocol,
-      lastSuccessfulAutoRouteAt:
-          lastSuccessfulAutoRouteAt ?? this.lastSuccessfulAutoRouteAt,
+      lastSuccessfulRouteId:
+          lastSuccessfulRouteId ?? this.lastSuccessfulRouteId,
+      lastSuccessfulRouteProtocol:
+          lastSuccessfulRouteProtocol ?? this.lastSuccessfulRouteProtocol,
+      lastSuccessfulRouteAt:
+          lastSuccessfulRouteAt ?? this.lastSuccessfulRouteAt,
     );
   }
 
@@ -2663,9 +2662,9 @@ class Prefs {
     'optSmartRouting': optSmartRouting,
     'optDedicatedIp': optDedicatedIp,
     'optAutoRenew': optAutoRenew,
-    'lastSuccessfulAutoRouteId': lastSuccessfulAutoRouteId,
-    'lastSuccessfulAutoRouteProtocol': lastSuccessfulAutoRouteProtocol,
-    'lastSuccessfulAutoRouteAt': lastSuccessfulAutoRouteAt,
+    'lastSuccessfulRouteId': lastSuccessfulRouteId,
+    'lastSuccessfulRouteProtocol': lastSuccessfulRouteProtocol,
+    'lastSuccessfulRouteAt': lastSuccessfulRouteAt,
   };
 
   static Prefs fromJson(Map<String, dynamic> map) {
@@ -2752,17 +2751,17 @@ class Prefs {
       optSmartRouting: b('optSmartRouting', d.optSmartRouting),
       optDedicatedIp: b('optDedicatedIp', d.optDedicatedIp),
       optAutoRenew: b('optAutoRenew', d.optAutoRenew),
-      lastSuccessfulAutoRouteId: s0(
-        'lastSuccessfulAutoRouteId',
-        d.lastSuccessfulAutoRouteId,
+      lastSuccessfulRouteId: s0(
+        'lastSuccessfulRouteId',
+        d.lastSuccessfulRouteId,
       ),
-      lastSuccessfulAutoRouteProtocol: s0(
-        'lastSuccessfulAutoRouteProtocol',
-        d.lastSuccessfulAutoRouteProtocol,
+      lastSuccessfulRouteProtocol: s0(
+        'lastSuccessfulRouteProtocol',
+        d.lastSuccessfulRouteProtocol,
       ),
-      lastSuccessfulAutoRouteAt: s0(
-        'lastSuccessfulAutoRouteAt',
-        d.lastSuccessfulAutoRouteAt,
+      lastSuccessfulRouteAt: s0(
+        'lastSuccessfulRouteAt',
+        d.lastSuccessfulRouteAt,
       ),
     );
   }
@@ -7335,9 +7334,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   String? _adaptiveRouteServerId;
   String? _adaptiveRouteProtocol;
   int? _adaptiveRouteScore;
-  String _lastSuccessfulAutoRouteId = '';
-  String _lastSuccessfulAutoRouteProtocol = '';
-  DateTime? _lastSuccessfulAutoRouteAt;
+  String _lastSuccessfulRouteId = '';
+  String _lastSuccessfulRouteProtocol = '';
+  DateTime? _lastSuccessfulRouteAt;
   bool _subscriptionActive = false;
   bool _subscriptionEntitlementResolved = false;
   String _subscriptionPlanCode = 'base';
@@ -7767,14 +7766,14 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       if (matchingServers.isNotEmpty) {
         selectedServer = matchingServers.first;
       }
-      _lastSuccessfulAutoRouteId = greenVpnNormalizeManagedRouteId(
-        p.lastSuccessfulAutoRouteId,
+      _lastSuccessfulRouteId = greenVpnNormalizeManagedRouteId(
+        p.lastSuccessfulRouteId,
       );
-      _lastSuccessfulAutoRouteProtocol = p.lastSuccessfulAutoRouteProtocol
+      _lastSuccessfulRouteProtocol = p.lastSuccessfulRouteProtocol
           .trim()
           .toLowerCase();
-      _lastSuccessfulAutoRouteAt = DateTime.tryParse(
-        p.lastSuccessfulAutoRouteAt,
+      _lastSuccessfulRouteAt = DateTime.tryParse(
+        p.lastSuccessfulRouteAt,
       )?.toUtc();
 
       // Apply social-only
@@ -7950,10 +7949,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           'optSmartRouting': true,
           'optDedicatedIp': optDedicatedIp,
           'optAutoRenew': optAutoRenew,
-          'lastSuccessfulAutoRouteId': _lastSuccessfulAutoRouteId,
-          'lastSuccessfulAutoRouteProtocol': _lastSuccessfulAutoRouteProtocol,
-          'lastSuccessfulAutoRouteAt':
-              _lastSuccessfulAutoRouteAt?.toUtc().toIso8601String() ?? '',
+          'lastSuccessfulRouteId': _lastSuccessfulRouteId,
+          'lastSuccessfulRouteProtocol': _lastSuccessfulRouteProtocol,
+          'lastSuccessfulRouteAt':
+              _lastSuccessfulRouteAt?.toUtc().toIso8601String() ?? '',
         }),
       );
     });
@@ -10454,12 +10453,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         !kIsWeb &&
         Platform.isWindows &&
         stage != 'config_fetch' &&
-        server.id == _lastSuccessfulAutoRouteId &&
-        server.protocolCode == _lastSuccessfulAutoRouteProtocol;
+        server.id == _lastSuccessfulRouteId &&
+        server.protocolCode == _lastSuccessfulRouteProtocol;
     if (failedPreferredRoute) {
-      _lastSuccessfulAutoRouteId = '';
-      _lastSuccessfulAutoRouteProtocol = '';
-      _lastSuccessfulAutoRouteAt = null;
+      _lastSuccessfulRouteId = '';
+      _lastSuccessfulRouteProtocol = '';
+      _lastSuccessfulRouteAt = null;
       _schedulePrefsSave();
     }
     unawaited(
@@ -10472,12 +10471,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   void _recordRouteSuccess(ServerLocation server) {
     if (!kTransportPreviewFallbackEnabled || server.isAuto) return;
     _routeFailureCooldown.recordSuccess(_routeCooldownKey(server));
-    if (!kIsWeb && Platform.isWindows && selectedServer.isAuto) {
-      _lastSuccessfulAutoRouteId = greenVpnNormalizeManagedRouteId(server.id);
-      _lastSuccessfulAutoRouteProtocol = server.protocolCode
-          .trim()
-          .toLowerCase();
-      _lastSuccessfulAutoRouteAt = DateTime.now().toUtc();
+    if (!kIsWeb && Platform.isWindows) {
+      _lastSuccessfulRouteId = greenVpnNormalizeManagedRouteId(server.id);
+      _lastSuccessfulRouteProtocol = server.protocolCode.trim().toLowerCase();
+      _lastSuccessfulRouteAt = DateTime.now().toUtc();
       _schedulePrefsSave();
     }
   }
@@ -10778,25 +10775,23 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         leftWasRecentlySuccessful:
             !kIsWeb &&
             Platform.isWindows &&
-            selectedServer.isAuto &&
-            greenVpnIsFreshPreferredAutoRoute(
+            greenVpnIsFreshPreferredRoute(
               candidateId: a.id,
               candidateProtocol: a.protocolCode,
-              preferredId: _lastSuccessfulAutoRouteId,
-              preferredProtocol: _lastSuccessfulAutoRouteProtocol,
-              preferredAt: _lastSuccessfulAutoRouteAt,
+              preferredId: _lastSuccessfulRouteId,
+              preferredProtocol: _lastSuccessfulRouteProtocol,
+              preferredAt: _lastSuccessfulRouteAt,
               now: now,
             ),
         rightWasRecentlySuccessful:
             !kIsWeb &&
             Platform.isWindows &&
-            selectedServer.isAuto &&
-            greenVpnIsFreshPreferredAutoRoute(
+            greenVpnIsFreshPreferredRoute(
               candidateId: b.id,
               candidateProtocol: b.protocolCode,
-              preferredId: _lastSuccessfulAutoRouteId,
-              preferredProtocol: _lastSuccessfulAutoRouteProtocol,
-              preferredAt: _lastSuccessfulAutoRouteAt,
+              preferredId: _lastSuccessfulRouteId,
+              preferredProtocol: _lastSuccessfulRouteProtocol,
+              preferredAt: _lastSuccessfulRouteAt,
               now: now,
             ),
       );

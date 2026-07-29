@@ -4,7 +4,7 @@ param(
     [string]$ProductionVersion = '0.3.20',
     [string]$PaidBetaVersion = '0.3.20-paid-beta.1',
     [ValidateRange(0, 65535)]
-    [int]$WindowsBuildNumber = 2919,
+    [int]$WindowsBuildNumber = 2920,
     [string]$CertificateThumbprint = '',
     [string]$ExpectedPublisher = '',
     [string]$TimestampUrl = 'http://timestamp.digicert.com',
