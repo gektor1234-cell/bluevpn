@@ -158,6 +158,72 @@ void main() {
     );
   });
 
+  test(
+    'Windows WireGuard confirmation is bounded by time and adapter state',
+    () {
+      expect(
+        greenVpnShouldContinueWindowsWireGuardConfirmation(
+          elapsed: const Duration(seconds: 9),
+          consecutiveMissingInterfaceChecks:
+              greenVpnWindowsWireGuardMissingInterfaceLimit - 1,
+        ),
+        isTrue,
+      );
+      expect(
+        greenVpnShouldContinueWindowsWireGuardConfirmation(
+          elapsed: greenVpnWindowsWireGuardConfirmationBudget,
+          consecutiveMissingInterfaceChecks: 0,
+        ),
+        isFalse,
+      );
+      expect(
+        greenVpnShouldContinueWindowsWireGuardConfirmation(
+          elapsed: Duration.zero,
+          consecutiveMissingInterfaceChecks:
+              greenVpnWindowsWireGuardMissingInterfaceLimit,
+        ),
+        isFalse,
+      );
+    },
+  );
+
+  test('last successful automatic route is preferred for only 24 hours', () {
+    final now = DateTime.utc(2026, 7, 29, 20);
+    expect(
+      greenVpnIsFreshPreferredAutoRoute(
+        candidateId: 'gb1-awg2-canary',
+        candidateProtocol: 'amneziawg',
+        preferredId: 'gb1-awg2-canary',
+        preferredProtocol: 'AMNEZIAWG',
+        preferredAt: now.subtract(const Duration(hours: 23)),
+        now: now,
+      ),
+      isTrue,
+    );
+    expect(
+      greenVpnIsFreshPreferredAutoRoute(
+        candidateId: 'gb1-awg2-canary',
+        candidateProtocol: 'amneziawg',
+        preferredId: 'gb1-awg2-canary',
+        preferredProtocol: 'amneziawg',
+        preferredAt: now.subtract(const Duration(hours: 25)),
+        now: now,
+      ),
+      isFalse,
+    );
+    expect(
+      greenVpnIsFreshPreferredAutoRoute(
+        candidateId: 'another-route',
+        candidateProtocol: 'amneziawg',
+        preferredId: 'gb1-awg2-canary',
+        preferredProtocol: 'amneziawg',
+        preferredAt: now,
+        now: now,
+      ),
+      isFalse,
+    );
+  });
+
   test('cooldown demotes a failed route without changing cascade order', () {
     final now = DateTime.utc(2026, 7, 12, 12);
     final candidates =
@@ -236,5 +302,30 @@ void main() {
       'dnstt',
       'amneziawg',
     ]);
+  });
+
+  test('recently successful route leads until it fails or expires', () {
+    final candidates =
+        <({String protocol, bool preferred})>[
+          (protocol: 'wireguard_udp', preferred: false),
+          (protocol: 'amneziawg', preferred: true),
+        ]..sort(
+          (left, right) => greenVpnCompareTransportPreviewCandidates(
+            leftProtocol: left.protocol,
+            rightProtocol: right.protocol,
+            leftCooldownUntil: null,
+            rightCooldownUntil: null,
+            leftScore: 100,
+            rightScore: 100,
+            leftPingMs: 10,
+            rightPingMs: 20,
+            leftTitle: left.protocol,
+            rightTitle: right.protocol,
+            leftWasRecentlySuccessful: left.preferred,
+            rightWasRecentlySuccessful: right.preferred,
+          ),
+        );
+
+    expect(candidates.first.protocol, 'amneziawg');
   });
 }

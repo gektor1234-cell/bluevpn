@@ -20,6 +20,15 @@ const List<Duration> greenVpnStartupRouteProbeDelays = <Duration>[
   Duration(milliseconds: 1400),
 ];
 
+const Duration greenVpnWindowsWireGuardConfirmationBudget = Duration(
+  seconds: 10,
+);
+const Duration greenVpnWindowsWireGuardConfirmationPollInterval = Duration(
+  milliseconds: 500,
+);
+const int greenVpnWindowsWireGuardMissingInterfaceLimit = 4;
+const Duration greenVpnPreferredAutoRouteTtl = Duration(hours: 24);
+
 const int greenVpnRuntimeFailoverFailureThreshold = 2;
 const int greenVpnManagedRouteIdMaxLength = 160;
 
@@ -81,6 +90,14 @@ int greenVpnNextRuntimeFailoverFailureCount({
 bool greenVpnShouldTriggerRuntimeFailover(int failureCount) =>
     failureCount >= greenVpnRuntimeFailoverFailureThreshold;
 
+bool greenVpnShouldContinueWindowsWireGuardConfirmation({
+  required Duration elapsed,
+  required int consecutiveMissingInterfaceChecks,
+}) =>
+    elapsed < greenVpnWindowsWireGuardConfirmationBudget &&
+    consecutiveMissingInterfaceChecks <
+        greenVpnWindowsWireGuardMissingInterfaceLimit;
+
 String greenVpnNormalizeManagedRouteId(String value) {
   final normalized = value.trim();
   if (normalized.isEmpty ||
@@ -89,6 +106,31 @@ String greenVpnNormalizeManagedRouteId(String value) {
     return '';
   }
   return normalized;
+}
+
+bool greenVpnIsFreshPreferredAutoRoute({
+  required String candidateId,
+  required String candidateProtocol,
+  required String preferredId,
+  required String preferredProtocol,
+  required DateTime? preferredAt,
+  required DateTime now,
+}) {
+  final normalizedCandidateId = greenVpnNormalizeManagedRouteId(candidateId);
+  final normalizedPreferredId = greenVpnNormalizeManagedRouteId(preferredId);
+  final normalizedCandidateProtocol = candidateProtocol.trim().toLowerCase();
+  final normalizedPreferredProtocol = preferredProtocol.trim().toLowerCase();
+  if (normalizedCandidateId.isEmpty ||
+      normalizedPreferredId.isEmpty ||
+      normalizedCandidateId != normalizedPreferredId ||
+      normalizedCandidateProtocol.isEmpty ||
+      normalizedCandidateProtocol != normalizedPreferredProtocol ||
+      preferredAt == null) {
+    return false;
+  }
+
+  final age = now.toUtc().difference(preferredAt.toUtc());
+  return !age.isNegative && age <= greenVpnPreferredAutoRouteTtl;
 }
 
 int greenVpnCompareTransportPreviewCandidates({
@@ -102,12 +144,18 @@ int greenVpnCompareTransportPreviewCandidates({
   required int? rightPingMs,
   required String leftTitle,
   required String rightTitle,
+  bool leftWasRecentlySuccessful = false,
+  bool rightWasRecentlySuccessful = false,
 }) {
   if (leftCooldownUntil == null && rightCooldownUntil != null) return -1;
   if (leftCooldownUntil != null && rightCooldownUntil == null) return 1;
   if (leftCooldownUntil != null && rightCooldownUntil != null) {
     final byCooldown = leftCooldownUntil.compareTo(rightCooldownUntil);
     if (byCooldown != 0) return byCooldown;
+  }
+
+  if (leftWasRecentlySuccessful != rightWasRecentlySuccessful) {
+    return leftWasRecentlySuccessful ? -1 : 1;
   }
 
   final byTransport = greenVpnTransportPreviewRank(

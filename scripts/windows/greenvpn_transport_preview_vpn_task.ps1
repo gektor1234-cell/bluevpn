@@ -1418,29 +1418,40 @@ function Stop-OwnTunnel {
     Stop-VlessRealityTunnel
     Stop-NaiveHttpsTunnel
     Stop-DnsttTunnel
+    $existingServices = @{}
+    $stopRequested = $false
     foreach ($serviceName in @($WireGuardServiceName, $AmneziaWgServiceName)) {
+        $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+        if ($null -eq $service) { continue }
+        $existingServices[$serviceName] = $true
+        if ([string]$service.Status -eq 'Stopped') {
+            continue
+        }
         try {
             Invoke-External -FilePath 'sc.exe' -Arguments @('stop', $serviceName) -AllowedExitCodes @(0, 1056, 1060, 1062) | Out-Null
+            $stopRequested = $true
         } catch {
             Write-GreenLog "service stop warning: $serviceName"
         }
     }
-    Start-Sleep -Milliseconds 500
+    if ($stopRequested) {
+        Start-Sleep -Milliseconds 500
+    }
 
-    $wireGuard = Resolve-WireGuardExe
-    if ($wireGuard) {
+    if ($existingServices.ContainsKey($WireGuardServiceName)) {
+        $wireGuard = Resolve-WireGuardExe
         try { Invoke-External -FilePath $wireGuard -Arguments @('/uninstalltunnelservice', $TunnelName) -AllowedExitCodes @(0, 1) | Out-Null } catch { Write-GreenLog 'WireGuard uninstall warning' }
     }
-    $amneziaWg = Resolve-AmneziaWgExe
-    if ($amneziaWg) {
+    if ($existingServices.ContainsKey($AmneziaWgServiceName)) {
+        $amneziaWg = Resolve-AmneziaWgExe
         try { Invoke-External -FilePath $amneziaWg -Arguments @('/uninstalltunnelservice', $TunnelName) -AllowedExitCodes @(0, 1) | Out-Null } catch { Write-GreenLog 'AmneziaWG uninstall warning' }
     }
     Remove-EndpointBypassRoute
 
     for ($attempt = 0; $attempt -lt 12; $attempt++) {
         $runningServices = @(
-            Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -in @($WireGuardServiceName, $AmneziaWgServiceName) -and $_.State -ne 'Stopped' }
+            Get-Service -Name @($WireGuardServiceName, $AmneziaWgServiceName) -ErrorAction SilentlyContinue |
+                Where-Object { [string]$_.Status -ne 'Stopped' }
         )
         $runningProcesses = @(
             $managedProcesses |

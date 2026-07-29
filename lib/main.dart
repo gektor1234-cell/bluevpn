@@ -2547,6 +2547,9 @@ class Prefs {
   final bool optSmartRouting;
   final bool optDedicatedIp;
   final bool optAutoRenew;
+  final String lastSuccessfulAutoRouteId;
+  final String lastSuccessfulAutoRouteProtocol;
+  final String lastSuccessfulAutoRouteAt;
 
   const Prefs({
     required this.themeMode,
@@ -2565,6 +2568,9 @@ class Prefs {
     required this.optSmartRouting,
     required this.optDedicatedIp,
     required this.optAutoRenew,
+    required this.lastSuccessfulAutoRouteId,
+    required this.lastSuccessfulAutoRouteProtocol,
+    required this.lastSuccessfulAutoRouteAt,
   });
 
   static Prefs defaults() => const Prefs(
@@ -2584,6 +2590,9 @@ class Prefs {
     optSmartRouting: true,
     optDedicatedIp: false,
     optAutoRenew: false,
+    lastSuccessfulAutoRouteId: '',
+    lastSuccessfulAutoRouteProtocol: '',
+    lastSuccessfulAutoRouteAt: '',
   );
 
   Prefs copyWith({
@@ -2603,6 +2612,9 @@ class Prefs {
     bool? optSmartRouting,
     bool? optDedicatedIp,
     bool? optAutoRenew,
+    String? lastSuccessfulAutoRouteId,
+    String? lastSuccessfulAutoRouteProtocol,
+    String? lastSuccessfulAutoRouteAt,
   }) {
     return Prefs(
       themeMode: themeMode ?? this.themeMode,
@@ -2624,6 +2636,13 @@ class Prefs {
       optSmartRouting: optSmartRouting ?? this.optSmartRouting,
       optDedicatedIp: optDedicatedIp ?? this.optDedicatedIp,
       optAutoRenew: optAutoRenew ?? this.optAutoRenew,
+      lastSuccessfulAutoRouteId:
+          lastSuccessfulAutoRouteId ?? this.lastSuccessfulAutoRouteId,
+      lastSuccessfulAutoRouteProtocol:
+          lastSuccessfulAutoRouteProtocol ??
+          this.lastSuccessfulAutoRouteProtocol,
+      lastSuccessfulAutoRouteAt:
+          lastSuccessfulAutoRouteAt ?? this.lastSuccessfulAutoRouteAt,
     );
   }
 
@@ -2644,6 +2663,9 @@ class Prefs {
     'optSmartRouting': optSmartRouting,
     'optDedicatedIp': optDedicatedIp,
     'optAutoRenew': optAutoRenew,
+    'lastSuccessfulAutoRouteId': lastSuccessfulAutoRouteId,
+    'lastSuccessfulAutoRouteProtocol': lastSuccessfulAutoRouteProtocol,
+    'lastSuccessfulAutoRouteAt': lastSuccessfulAutoRouteAt,
   };
 
   static Prefs fromJson(Map<String, dynamic> map) {
@@ -2730,6 +2752,18 @@ class Prefs {
       optSmartRouting: b('optSmartRouting', d.optSmartRouting),
       optDedicatedIp: b('optDedicatedIp', d.optDedicatedIp),
       optAutoRenew: b('optAutoRenew', d.optAutoRenew),
+      lastSuccessfulAutoRouteId: s0(
+        'lastSuccessfulAutoRouteId',
+        d.lastSuccessfulAutoRouteId,
+      ),
+      lastSuccessfulAutoRouteProtocol: s0(
+        'lastSuccessfulAutoRouteProtocol',
+        d.lastSuccessfulAutoRouteProtocol,
+      ),
+      lastSuccessfulAutoRouteAt: s0(
+        'lastSuccessfulAutoRouteAt',
+        d.lastSuccessfulAutoRouteAt,
+      ),
     );
   }
 }
@@ -7301,6 +7335,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   String? _adaptiveRouteServerId;
   String? _adaptiveRouteProtocol;
   int? _adaptiveRouteScore;
+  String _lastSuccessfulAutoRouteId = '';
+  String _lastSuccessfulAutoRouteProtocol = '';
+  DateTime? _lastSuccessfulAutoRouteAt;
   bool _subscriptionActive = false;
   bool _subscriptionEntitlementResolved = false;
   String _subscriptionPlanCode = 'base';
@@ -7730,6 +7767,15 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       if (matchingServers.isNotEmpty) {
         selectedServer = matchingServers.first;
       }
+      _lastSuccessfulAutoRouteId = greenVpnNormalizeManagedRouteId(
+        p.lastSuccessfulAutoRouteId,
+      );
+      _lastSuccessfulAutoRouteProtocol = p.lastSuccessfulAutoRouteProtocol
+          .trim()
+          .toLowerCase();
+      _lastSuccessfulAutoRouteAt = DateTime.tryParse(
+        p.lastSuccessfulAutoRouteAt,
+      )?.toUtc();
 
       // Apply social-only
       _socialOnlyPreferenceRequested = p.socialOnlyEnabled;
@@ -7904,6 +7950,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           'optSmartRouting': true,
           'optDedicatedIp': optDedicatedIp,
           'optAutoRenew': optAutoRenew,
+          'lastSuccessfulAutoRouteId': _lastSuccessfulAutoRouteId,
+          'lastSuccessfulAutoRouteProtocol': _lastSuccessfulAutoRouteProtocol,
+          'lastSuccessfulAutoRouteAt':
+              _lastSuccessfulAutoRouteAt?.toUtc().toIso8601String() ?? '',
         }),
       );
     });
@@ -10400,9 +10450,21 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     if (!kTransportPreviewFallbackEnabled || server.isAuto) return;
     final key = _routeCooldownKey(server);
     final duration = _routeFailureCooldown.recordFailure(key);
+    final failedPreferredRoute =
+        !kIsWeb &&
+        Platform.isWindows &&
+        stage != 'config_fetch' &&
+        server.id == _lastSuccessfulAutoRouteId &&
+        server.protocolCode == _lastSuccessfulAutoRouteProtocol;
+    if (failedPreferredRoute) {
+      _lastSuccessfulAutoRouteId = '';
+      _lastSuccessfulAutoRouteProtocol = '';
+      _lastSuccessfulAutoRouteAt = null;
+      _schedulePrefsSave();
+    }
     unawaited(
       appendBlueVpnClientLog(
-        'route cooldown started server=${server.id} protocol=${server.protocolCode} stage=$stage failures=${_routeFailureCooldown.failureCount(key)} seconds=${duration.inSeconds}',
+        'route cooldown started server=${server.id} protocol=${server.protocolCode} stage=$stage failures=${_routeFailureCooldown.failureCount(key)} seconds=${duration.inSeconds} clearedPreferred=$failedPreferredRoute',
       ),
     );
   }
@@ -10410,6 +10472,14 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   void _recordRouteSuccess(ServerLocation server) {
     if (!kTransportPreviewFallbackEnabled || server.isAuto) return;
     _routeFailureCooldown.recordSuccess(_routeCooldownKey(server));
+    if (!kIsWeb && Platform.isWindows && selectedServer.isAuto) {
+      _lastSuccessfulAutoRouteId = greenVpnNormalizeManagedRouteId(server.id);
+      _lastSuccessfulAutoRouteProtocol = server.protocolCode
+          .trim()
+          .toLowerCase();
+      _lastSuccessfulAutoRouteAt = DateTime.now().toUtc();
+      _schedulePrefsSave();
+    }
   }
 
   void _disarmWindowsRuntimeFailover({required String reason}) {
@@ -10705,6 +10775,30 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         rightPingMs: b.pingMs,
         leftTitle: a.title,
         rightTitle: b.title,
+        leftWasRecentlySuccessful:
+            !kIsWeb &&
+            Platform.isWindows &&
+            selectedServer.isAuto &&
+            greenVpnIsFreshPreferredAutoRoute(
+              candidateId: a.id,
+              candidateProtocol: a.protocolCode,
+              preferredId: _lastSuccessfulAutoRouteId,
+              preferredProtocol: _lastSuccessfulAutoRouteProtocol,
+              preferredAt: _lastSuccessfulAutoRouteAt,
+              now: now,
+            ),
+        rightWasRecentlySuccessful:
+            !kIsWeb &&
+            Platform.isWindows &&
+            selectedServer.isAuto &&
+            greenVpnIsFreshPreferredAutoRoute(
+              candidateId: b.id,
+              candidateProtocol: b.protocolCode,
+              preferredId: _lastSuccessfulAutoRouteId,
+              preferredProtocol: _lastSuccessfulAutoRouteProtocol,
+              preferredAt: _lastSuccessfulAutoRouteAt,
+              now: now,
+            ),
       );
     }
     final byScore = _serverConnectScore(b).compareTo(_serverConnectScore(a));
@@ -10960,16 +11054,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       Uri.parse('https://www.youtube.com/generate_204'),
       Uri.parse('https://i.ytimg.com/generate_204'),
     ];
-    Object? lastError;
-    String lastTarget = targets.first.toString();
-    var lastLatencyMs = 0;
-    int? lastStatusCode;
-
-    for (final uri in targets) {
+    Future<PostConnectProbeResult> probeTarget(Uri uri) async {
       final watch = Stopwatch()..start();
       final client = HttpClient()
         ..connectionTimeout = const Duration(seconds: 6);
-      lastTarget = uri.toString();
       try {
         final request = await client
             .getUrl(uri)
@@ -10983,40 +11071,53 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         );
         await response.drain<void>().timeout(const Duration(seconds: 2));
         watch.stop();
-        lastLatencyMs = watch.elapsedMilliseconds;
-        lastStatusCode = response.statusCode;
+        final latencyMs = watch.elapsedMilliseconds;
         final ok = response.statusCode >= 200 && response.statusCode < 400;
         await appendBlueVpnClientLog(
-          'post connect probe server=${server.id} target=$uri status=${response.statusCode} ok=$ok ms=$lastLatencyMs',
+          'post connect probe server=${server.id} target=$uri status=${response.statusCode} ok=$ok ms=$latencyMs',
         );
-        if (ok) {
-          return PostConnectProbeResult(
-            ok: true,
-            target: uri.toString(),
-            statusCode: response.statusCode,
-            latencyMs: lastLatencyMs,
-          );
-        }
-        lastError = 'http_${response.statusCode}';
+        return PostConnectProbeResult(
+          ok: ok,
+          target: uri.toString(),
+          statusCode: response.statusCode,
+          latencyMs: latencyMs,
+          error: ok ? null : 'http_${response.statusCode}',
+        );
       } catch (e) {
         watch.stop();
-        lastLatencyMs = watch.elapsedMilliseconds;
-        lastError = e;
+        final latencyMs = watch.elapsedMilliseconds;
         await appendBlueVpnClientLog(
-          'post connect probe failed server=${server.id} target=$uri error=$e ms=$lastLatencyMs',
+          'post connect probe failed server=${server.id} target=$uri error=$e ms=$latencyMs',
+        );
+        return PostConnectProbeResult(
+          ok: false,
+          target: uri.toString(),
+          latencyMs: latencyMs,
+          error: e.toString(),
         );
       } finally {
         client.close(force: true);
       }
     }
 
-    return PostConnectProbeResult(
-      ok: false,
-      target: lastTarget,
-      statusCode: lastStatusCode,
-      latencyMs: lastLatencyMs,
-      error: lastError?.toString(),
-    );
+    final completer = Completer<PostConnectProbeResult>();
+    var remaining = targets.length;
+    PostConnectProbeResult? lastFailure;
+    for (final target in targets) {
+      probeTarget(target).then((result) {
+        if (completer.isCompleted) return;
+        if (result.ok) {
+          completer.complete(result);
+          return;
+        }
+        lastFailure = result;
+        remaining -= 1;
+        if (remaining == 0) {
+          completer.complete(lastFailure!);
+        }
+      });
+    }
+    return completer.future;
   }
 
   Future<void> _toggleVpnReal() async {
@@ -19244,6 +19345,7 @@ if ($route) { $route.InterfaceAlias }
     required String tunnelName,
     required String configPath,
     required String wireguardExePath,
+    bool includeEnvironmentDiagnostics = true,
   }) async {
     final serviceName = _serviceNameForTunnel(tunnelName);
     final serviceState = await _queryServiceState(serviceName);
@@ -19259,11 +19361,15 @@ if ($route) { $route.InterfaceAlias }
       }
     } catch (_) {}
 
-    final otherActiveWireGuardInterfaces =
-        await _queryOtherActiveWireGuardInterfaces(tunnelName);
-    final otherRunningWireGuardServices =
-        await _queryOtherRunningWireGuardServices(serviceName);
-    final primaryDefaultRouteAlias = await _queryPrimaryDefaultRouteAlias();
+    final otherActiveWireGuardInterfaces = includeEnvironmentDiagnostics
+        ? await _queryOtherActiveWireGuardInterfaces(tunnelName)
+        : const <String>[];
+    final otherRunningWireGuardServices = includeEnvironmentDiagnostics
+        ? await _queryOtherRunningWireGuardServices(serviceName)
+        : const <String>[];
+    final primaryDefaultRouteAlias = includeEnvironmentDiagnostics
+        ? await _queryPrimaryDefaultRouteAlias()
+        : null;
 
     final wgExe = _resolveWgExe(wireguardExePath);
     try {
@@ -20716,12 +20822,14 @@ if ($null -eq $svc) { exit 0 }
 
     bool isRunningText(String out) => out.contains('RUNNING');
     Future<ProcessResult> scQueryEx() => _run('sc', ['queryex', _serviceName]);
-    Future<WireGuardRuntimeStatus> runtimeStatus() =>
-        WireGuardRuntimeStatus.query(
-          tunnelName: tunnelName,
-          configPath: configPath,
-          wireguardExePath: _exe,
-        );
+    Future<WireGuardRuntimeStatus> runtimeStatus({
+      bool includeEnvironmentDiagnostics = true,
+    }) => WireGuardRuntimeStatus.query(
+      tunnelName: tunnelName,
+      configPath: configPath,
+      wireguardExePath: _exe,
+      includeEnvironmentDiagnostics: includeEnvironmentDiagnostics,
+    );
     Future<void> prepareConfigForService() async {
       try {
         final f = File(configPath);
@@ -20902,19 +21010,50 @@ if ($null -eq $svc) { exit 0 }
         );
       }
 
-      for (var i = 0; i < 35; i++) {
-        final status = await runtimeStatus();
-        await log('verify(connect)[$i] ${status.describe()}');
+      final confirmationWatch = Stopwatch()..start();
+      var verificationAttempt = 0;
+      var consecutiveMissingInterfaceChecks = 0;
+      while (greenVpnShouldContinueWindowsWireGuardConfirmation(
+        elapsed: confirmationWatch.elapsed,
+        consecutiveMissingInterfaceChecks: consecutiveMissingInterfaceChecks,
+      )) {
+        final status = await runtimeStatus(
+          includeEnvironmentDiagnostics: false,
+        );
+        if (status.serviceState == 'running' && !status.interfacePresent) {
+          consecutiveMissingInterfaceChecks += 1;
+        } else {
+          consecutiveMissingInterfaceChecks = 0;
+        }
+        await log(
+          'verify(connect)[$verificationAttempt] elapsedMs=${confirmationWatch.elapsedMilliseconds} missingInterfaceChecks=$consecutiveMissingInterfaceChecks ${status.describe()}',
+        );
         if (status.isReallyConnected && await _processRouterIsReady(log: log)) {
           await log('=== CONNECT OK ===');
           return const VpnBackendResult(ok: true);
         }
-        await Future.delayed(const Duration(seconds: 1));
+        verificationAttempt += 1;
+        if (!greenVpnShouldContinueWindowsWireGuardConfirmation(
+          elapsed: confirmationWatch.elapsed,
+          consecutiveMissingInterfaceChecks: consecutiveMissingInterfaceChecks,
+        )) {
+          break;
+        }
+        final remaining =
+            greenVpnWindowsWireGuardConfirmationBudget -
+            confirmationWatch.elapsed;
+        final delay =
+            remaining < greenVpnWindowsWireGuardConfirmationPollInterval
+            ? remaining
+            : greenVpnWindowsWireGuardConfirmationPollInterval;
+        if (delay > Duration.zero) {
+          await Future.delayed(delay);
+        }
       }
 
       final status = await runtimeStatus();
       await log(
-        '=== CONNECT FAIL: real tunnel not confirmed :: ${status.describe()}',
+        '=== CONNECT FAIL: real tunnel not confirmed checks=$verificationAttempt elapsedMs=${confirmationWatch.elapsedMilliseconds} missingInterfaceChecks=$consecutiveMissingInterfaceChecks :: ${status.describe()}',
       );
       if (_applicationRoutingRequested()) {
         const systemService = _GreenVpnSystemServiceClient();

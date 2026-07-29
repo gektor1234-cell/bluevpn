@@ -1,6 +1,6 @@
-Green VPN 0.3.19
-Android build: 2026072914
-Windows build: 2914
+Green VPN 0.3.20
+Android build: 2026072919
+Windows build: 2919
 Platforms: Android, Windows
 Source backend: 0.9.152-release-ready.1
 Status: verified source anchor; production publication requires owner approval
