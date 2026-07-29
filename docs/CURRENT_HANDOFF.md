@@ -15,7 +15,8 @@ This is the current operational entry point. Read it together with
    client profiles.
 3. Never touch Friendly Linnet `5.129.237.163` without a new explicit owner
    instruction.
-4. Android `0.3.19+2026072914` and Windows `0.3.17+2608` are public and
+4. Android `0.3.19+2026072914` and Windows `0.3.19+2914` are public and
+   optional. Windows paid-beta `0.3.19-paid-beta.1+2914` is also public and
    optional. Do not republish, force or roll them back without a verified exact
    artifact, alternate-node health and an atomic backup.
 5. Public-product uses WireGuard UDP, AmneziaWG, Hysteria2, VLESS REALITY/XHTTP
@@ -30,16 +31,17 @@ This is the current operational entry point. Read it together with
    must reject first-payment creation and must not run the renewal executor.
 8. Server maintenance is one node at a time after alternate control/data planes
    pass readiness. The owner Windows PC must not be rebooted by automation.
-9. Windows 0.3.17 is public and optional, but remains unsigned. Keep the
-   `NotSigned` status visible in operations and expect Windows
-   SmartScreen/reputation warnings until a signed successor is released.
+9. Windows 0.3.19 is public and optional, but remains unsigned by explicit
+   owner instruction with the SmartScreen risk accepted. Keep the `NotSigned`
+   status visible in operations and expect Windows SmartScreen/reputation
+   warnings until a higher signed successor is released.
 10. The admin console is a protected operator surface. Keep Nginx Basic Auth,
     `noindex`, frame denial, staff authentication, RBAC and audit enabled; never
     expose bootstrap tokens or payment/tunnel secrets in the UI or exports.
-11. Stable production publishes Android `0.3.19` and Windows `0.3.17`.
-    Clean-source Windows `0.3.19+2914` is a verified local candidate, but it is
-    not published because it remains unsigned. Do not conflate candidate proof
-    with a trusted Windows publication.
+11. Stable production publishes Android `0.3.19` and Windows `0.3.19`.
+    Clean-source Windows `0.3.19+2914` is physically verified and published,
+    but it is not a trusted/signed Windows release. Do not conflate successful
+    unsigned publication with Authenticode trust.
 
 ## Authoritative Closure, 2026-07-29
 
@@ -82,11 +84,13 @@ The complete evidence map is
   `BCA7CF6A4AB2381A6EB44836726AFC07B460B87F0789BA88DC81CF84CD37F4FB`.
   It passed an upgrade over public `0.3.15`, launch, real VPN through NL1,
   production API, YouTube and clean disconnect before publication.
-- Exact Windows candidate installer SHA-256 is
+- Exact Windows production installer SHA-256 is
   `6D5E33B0EAB146C9E2EAA78E8B5F6636B9BCBDDC11D387A07C5B71CB6E9894FB`.
   All `63/63` installed payload files match, the five alternate transports
   passed, runtime failure recovered without overlap, and the temporary network
-  failsafe was removed. The installer remains `NotSigned`.
+  failsafe was removed. Exact paid-beta installer SHA-256 is
+  `E1451CED069941A431B383E74B20B8E938CD2758C99CBD129F45A731AF1B44D1`.
+  Both installers remain `NotSigned`.
 - Android post-maintenance proof passed all `16/16` routes and strict Quick
   Tile order
   `wireguard_udp -> amneziawg -> hysteria2 -> vless_reality -> naive_https -> dnstt`.
@@ -99,15 +103,23 @@ The complete evidence map is
   `BCA7CF6A4AB2381A6EB44836726AFC07B460B87F0789BA88DC81CF84CD37F4FB`;
   paid-beta SHA-256 is
   `99EB6C2D44C955F43441039B5375CEC5AF925D19EDAFEE1D17042FAE6E2ED8A7`.
-  Eight full public download hashes and public surface `31/31` passed.
+- Windows production `0.3.19+2914` and paid-beta
+  `0.3.19-paid-beta.1+2914` are published through both control planes as
+  optional updates. The owner explicitly accepted unsigned publication and
+  SmartScreen/reputation risk. Current dynamic/static manifests pass, all
+  eight full public download hashes match, and public surface passes `31/31`.
 - Android rollback backups are
   `/root/greenvpn-apk-release-backups/20260729T094454Z-timeweb-0.3.19-2026072914`
   and
   `/root/greenvpn-apk-release-backups/20260729T094418Z-ruvds-0.3.19-2026072914`.
-- The remaining Free-release owner gate is Authenticode certificate access for
-  a signed Windows `0.3.19` successor and the short owner smoke after that
-  publication. Legal/tax/KYC decisions apply only if paid sales are enabled.
-  Google Play and rewarded ads are optional future scopes.
+- Windows rollback backups are
+  `/root/greenvpn-windows-release-backups/20260729T145410Z-timeweb-0.3.19-2914`
+  and
+  `/root/greenvpn-windows-release-backups/20260729T145347Z-ruvds-0.3.19-2914`.
+- Authenticode certificate access is now a trust/reputation improvement for a
+  higher signed Windows successor, not an unpublished-release blocker.
+  Legal/tax/KYC decisions apply only if paid sales are enabled. Google Play and
+  rewarded ads are optional future scopes.
 
 ## Historical Launch Closure, 2026-07-28 20:12 MSK
 
