@@ -246,6 +246,46 @@ void main() {
     );
   });
 
+  test('Windows can immediately reuse only the exact fresh managed route', () {
+    final now = DateTime.utc(2026, 7, 30, 10);
+    bool canUse({
+      bool isWindows = true,
+      bool socialOnlyEnabled = false,
+      bool hasManagedConfig = true,
+      String candidateId = 'nl1-fast',
+      String candidateProtocol = 'wireguard_udp',
+      String managedRouteId = 'nl1-fast',
+      String managedProtocol = 'wireguard_udp',
+      String preferredId = 'nl1-fast',
+      String preferredProtocol = 'wireguard_udp',
+      DateTime? preferredAt,
+    }) => greenVpnCanUseImmediateCachedRoute(
+      isWindows: isWindows,
+      socialOnlyEnabled: socialOnlyEnabled,
+      hasManagedConfig: hasManagedConfig,
+      candidateId: candidateId,
+      candidateProtocol: candidateProtocol,
+      managedRouteId: managedRouteId,
+      managedProtocol: managedProtocol,
+      preferredId: preferredId,
+      preferredProtocol: preferredProtocol,
+      preferredAt: preferredAt ?? now.subtract(const Duration(minutes: 5)),
+      now: now,
+    );
+
+    expect(canUse(), isTrue);
+    expect(canUse(isWindows: false), isFalse);
+    expect(canUse(socialOnlyEnabled: true), isFalse);
+    expect(canUse(hasManagedConfig: false), isFalse);
+    expect(canUse(managedRouteId: 'another-route'), isFalse);
+    expect(canUse(managedProtocol: 'amneziawg'), isFalse);
+    expect(canUse(preferredId: 'another-route'), isFalse);
+    expect(
+      canUse(preferredAt: now.subtract(const Duration(hours: 25))),
+      isFalse,
+    );
+  });
+
   test('cooldown demotes a failed route without changing cascade order', () {
     final now = DateTime.utc(2026, 7, 12, 12);
     final candidates =

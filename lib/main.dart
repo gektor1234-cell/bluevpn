@@ -10872,6 +10872,73 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         : const <ServerLocation>[];
   }
 
+  Future<ServerLocation?> _immediateCachedWindowsCandidate(
+    List<ServerLocation> candidates,
+  ) async {
+    if (kIsWeb ||
+        !Platform.isWindows ||
+        socialOnlyEnabled ||
+        _socialOnlyPreferenceRequested ||
+        candidates.isEmpty ||
+        !await _cfg.hasManagedConfig()) {
+      return null;
+    }
+    final managedMetadata = await Future.wait<String>([
+      _cfg.readManagedRouteId(),
+      _cfg.readManagedProtocol(),
+    ]);
+    final managedRouteId = managedMetadata[0];
+    final managedProtocol = managedMetadata[1];
+    final now = DateTime.now().toUtc();
+    for (final candidate in candidates) {
+      if (greenVpnCanUseImmediateCachedRoute(
+        isWindows: true,
+        socialOnlyEnabled: false,
+        hasManagedConfig: true,
+        candidateId: candidate.id,
+        candidateProtocol: candidate.protocolCode,
+        managedRouteId: managedRouteId,
+        managedProtocol: managedProtocol,
+        preferredId: _lastSuccessfulRouteId,
+        preferredProtocol: _lastSuccessfulRouteProtocol,
+        preferredAt: _lastSuccessfulRouteAt,
+        now: now,
+      )) {
+        await appendBlueVpnClientLog(
+          'immediate cached connect ready server=${candidate.id} protocol=${candidate.protocolCode}',
+        );
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  void _refreshConnectionOptionsAfterConnect(ServerLocation activeRoute) {
+    if (kIsWeb || !Platform.isWindows) return;
+    unawaited(_refreshConnectionOptionsAfterConnectAsync(activeRoute));
+  }
+
+  Future<void> _refreshConnectionOptionsAfterConnectAsync(
+    ServerLocation activeRoute,
+  ) async {
+    await Future<void>.delayed(Duration.zero);
+    if (!mounted || !vpnEnabled) return;
+    try {
+      await appendBlueVpnClientLog(
+        'background route refresh start active=${activeRoute.id}',
+      );
+      await _refreshServerCatalog(showToast: false);
+      if (!mounted || !vpnEnabled) return;
+      await appendBlueVpnClientLog(
+        'background route refresh complete active=${activeRoute.id} candidates=${_connectCandidatesForCurrentSelection().length}',
+      );
+    } catch (error) {
+      await appendBlueVpnClientLog(
+        'background route refresh failed active=${activeRoute.id} error=$error',
+      );
+    }
+  }
+
   String _serverUnsupportedReason(ServerLocation server) {
     if (server.requiresPaidSubscription && !_hasPaidSubscriptionEntitlement) {
       return 'эта локация доступна по подписке';
@@ -11116,6 +11183,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   Future<void> _toggleVpnReal() async {
+    final toggleWatch = Stopwatch()..start();
     await appendBlueVpnClientLog(
       'toggle requested vpnEnabled=$vpnEnabled busy=$vpnBusy cooldown=$_vpnTapCooldown',
     );
@@ -11170,11 +11238,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           ? 'Android может один раз показать системное окно с разрешением VPN.'
           : 'Green VPN использует права, выданные один раз при установке. Дополнительный UAC при запуске не нужен.',
     );
-    final elevated = Platform.isWindows
-        ? await isWindowsProcessElevated()
-        : false;
     await appendBlueVpnClientLog(
-      'toggle elevated=$elevated vpnEnabled=$vpnEnabled',
+      'toggle native preflight platform=${Platform.operatingSystem} vpnEnabled=$vpnEnabled',
     );
     if (!mounted) return;
 
@@ -11182,32 +11247,72 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       if (!vpnEnabled) {
         await appendBlueVpnClientLog('toggle connect branch start');
         await _prepareAndroidConnectControlPlane('toggle_connect');
-        await _refreshServerCatalog(showToast: false);
         if (!mounted) return;
-        final candidates = _connectCandidatesForCurrentSelection();
+        var candidates = _connectCandidatesForCurrentSelection();
+        if (kIsWeb || !Platform.isWindows || candidates.isEmpty) {
+          await _refreshServerCatalog(showToast: false);
+          if (!mounted) return;
+          candidates = _connectCandidatesForCurrentSelection();
+        }
         if (candidates.isEmpty) {
           final reason = _serverUnsupportedReason(selectedServer);
           _toast(context, 'Эту локацию пока нельзя подключить: $reason.');
           return;
+        }
+        final immediateCachedCandidate = await _immediateCachedWindowsCandidate(
+          candidates,
+        );
+        if (!mounted) return;
+        if (immediateCachedCandidate != null &&
+            (candidates.first.id != immediateCachedCandidate.id ||
+                candidates.first.protocolCode !=
+                    immediateCachedCandidate.protocolCode)) {
+          candidates = <ServerLocation>[
+            immediateCachedCandidate,
+            ...candidates.where(
+              (candidate) =>
+                  candidate.id != immediateCachedCandidate.id ||
+                  candidate.protocolCode !=
+                      immediateCachedCandidate.protocolCode,
+            ),
+          ];
         }
 
         String? lastError;
         for (var i = 0; i < candidates.length; i++) {
           var candidate = candidates[i];
           final canTryNext = i < candidates.length - 1;
+          final useImmediateCachedConfig =
+              i == 0 &&
+              immediateCachedCandidate != null &&
+              candidate.id == immediateCachedCandidate.id &&
+              candidate.protocolCode == immediateCachedCandidate.protocolCode;
           await appendBlueVpnClientLog(
             'toggle connect candidate ${i + 1}/${candidates.length} id=${candidate.id} protocol=${candidate.protocolCode} score=${_serverConnectScore(candidate)}',
           );
 
-          _setVpnBusyUi(
-            stage: 'Получаем конфиг...',
-            hint:
-                'Пробуем ${greenVpnPublicServerTitle(candidate)}: готовим подключение именно для этого устройства.',
-          );
           final configFetchWatch = Stopwatch()..start();
-          final provisioned = await _ensureProvisionedConfigInteractive(
-            serverOverride: candidate,
-          );
+          final ProvisionedConfigResult provisioned;
+          if (useImmediateCachedConfig) {
+            _setVpnBusyUi(
+              stage: 'Запускаем VPN...',
+              hint:
+                  'Сразу используем последний проверенный маршрут ${greenVpnPublicServerTitle(candidate)}.',
+            );
+            await appendBlueVpnClientLog(
+              'toggle connect using immediate cached config server=${candidate.id}',
+            );
+            provisioned = ProvisionedConfigResult.ok(candidate);
+          } else {
+            _setVpnBusyUi(
+              stage: 'Получаем конфиг...',
+              hint:
+                  'Пробуем ${greenVpnPublicServerTitle(candidate)}: готовим подключение именно для этого устройства.',
+            );
+            provisioned = await _ensureProvisionedConfigInteractive(
+              serverOverride: candidate,
+            );
+          }
           configFetchWatch.stop();
           final ok = provisioned.ok;
           if (ok &&
@@ -11234,6 +11339,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                 'attempt': i + 1,
                 'candidates': candidates.length,
                 'autoMode': selectedServer.isAuto,
+                'source': useImmediateCachedConfig
+                    ? 'immediate_cache'
+                    : 'provisioned',
               },
             ),
           );
@@ -11374,6 +11482,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             _toast(context, 'VPN запустился, но статус не подтвердился.');
             return;
           }
+          unawaited(
+            appendBlueVpnClientLog(
+              'toggle tunnel confirmed server=${candidate.id} clickToTunnelMs=${toggleWatch.elapsedMilliseconds}',
+            ),
+          );
 
           if (_shouldRunPostConnectProbe) {
             _setVpnBusyUi(
@@ -11440,6 +11553,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               );
               return;
             }
+            unawaited(
+              appendBlueVpnClientLog(
+                'toggle YouTube confirmed server=${candidate.id} clickToYoutubeMs=${toggleWatch.elapsedMilliseconds}',
+              ),
+            );
           }
 
           await appendBlueVpnClientLog(
@@ -11447,8 +11565,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           );
           if (!mounted) return;
           _recordRouteSuccess(candidate);
-          await _armRuntimeFailover(candidate);
-          if (!mounted) return;
+          unawaited(_armRuntimeFailover(candidate));
+          _refreshConnectionOptionsAfterConnect(candidate);
           if (kPaidBetaBuild) {
             unawaited(_recordPaidBetaEvent('vpn_connected'));
           }

@@ -142,6 +142,42 @@ bool greenVpnIsFreshPreferredRoute({
   return !age.isNegative && age <= greenVpnPreferredRouteTtl;
 }
 
+bool greenVpnCanUseImmediateCachedRoute({
+  required bool isWindows,
+  required bool socialOnlyEnabled,
+  required bool hasManagedConfig,
+  required String candidateId,
+  required String candidateProtocol,
+  required String managedRouteId,
+  required String managedProtocol,
+  required String preferredId,
+  required String preferredProtocol,
+  required DateTime? preferredAt,
+  required DateTime now,
+}) {
+  if (!isWindows || socialOnlyEnabled || !hasManagedConfig) return false;
+  final normalizedCandidateId = greenVpnNormalizeManagedRouteId(candidateId);
+  final normalizedManagedRouteId = greenVpnNormalizeManagedRouteId(
+    managedRouteId,
+  );
+  final normalizedCandidateProtocol = candidateProtocol.trim().toLowerCase();
+  final normalizedManagedProtocol = managedProtocol.trim().toLowerCase();
+  if (normalizedCandidateId.isEmpty ||
+      normalizedManagedRouteId != normalizedCandidateId ||
+      normalizedCandidateProtocol.isEmpty ||
+      normalizedManagedProtocol != normalizedCandidateProtocol) {
+    return false;
+  }
+  return greenVpnIsFreshPreferredRoute(
+    candidateId: normalizedCandidateId,
+    candidateProtocol: normalizedCandidateProtocol,
+    preferredId: preferredId,
+    preferredProtocol: preferredProtocol,
+    preferredAt: preferredAt,
+    now: now,
+  );
+}
+
 int greenVpnCompareTransportPreviewCandidates({
   required String leftProtocol,
   required String rightProtocol,
