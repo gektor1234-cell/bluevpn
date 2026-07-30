@@ -3050,6 +3050,68 @@ String normalizeProvisionedEndpoint(String rawConfig) {
   );
 }
 
+typedef GreenVpnEndpointLookup =
+    Future<List<InternetAddress>> Function(String host);
+
+Future<String> resolveWireGuardEndpointToIpv4(
+  String rawConfig, {
+  String? fallbackIpv4,
+  GreenVpnEndpointLookup? lookup,
+  Duration timeout = const Duration(seconds: 2),
+}) async {
+  final endpointMatch = RegExp(
+    r'(^\s*Endpoint\s*=\s*)([^\s:\[\]]+)(:(\d{1,5})\s*$)',
+    multiLine: true,
+    caseSensitive: false,
+  ).firstMatch(rawConfig);
+  if (endpointMatch == null) {
+    throw const FormatException(
+      'WireGuard endpoint must contain a host and port.',
+    );
+  }
+
+  final host = endpointMatch.group(2)!.trim();
+  final port = int.tryParse(endpointMatch.group(4)!);
+  if (port == null || port < 1 || port > 65535) {
+    throw const FormatException('WireGuard endpoint port is invalid.');
+  }
+
+  final literal = InternetAddress.tryParse(host);
+  if (literal != null) {
+    if (literal.type != InternetAddressType.IPv4) {
+      throw const FormatException('WireGuard endpoint must resolve to IPv4.');
+    }
+    return rawConfig;
+  }
+
+  String? resolvedIpv4;
+  final fallback = InternetAddress.tryParse((fallbackIpv4 ?? '').trim());
+  if (fallback?.type == InternetAddressType.IPv4) {
+    resolvedIpv4 = fallback!.address;
+  } else {
+    final resolver =
+        lookup ??
+        (String value) =>
+            InternetAddress.lookup(value, type: InternetAddressType.IPv4);
+    final addresses = await resolver(host).timeout(timeout);
+    for (final address in addresses) {
+      if (address.type == InternetAddressType.IPv4) {
+        resolvedIpv4 = address.address;
+        break;
+      }
+    }
+  }
+  if (resolvedIpv4 == null) {
+    throw SocketException('WireGuard endpoint has no IPv4 address: $host');
+  }
+
+  return rawConfig.replaceRange(
+    endpointMatch.start,
+    endpointMatch.end,
+    '${endpointMatch.group(1)}$resolvedIpv4${endpointMatch.group(3)}',
+  );
+}
+
 String replaceAllowedIpsInConfig(String configText, List<String> allowedIps) {
   final value = allowedIps.join(', ');
 
@@ -3151,9 +3213,13 @@ class AuthProvisioningService {
   }
 
   Future<void> _writeProvisionedConfig(String rawConfig) async {
-    await cfg.writeManagedConfig(_buildManagedConfig(rawConfig));
+    var preparedConfig = rawConfig;
+    if (!kIsWeb && Platform.isWindows) {
+      preparedConfig = await resolveWireGuardEndpointToIpv4(preparedConfig);
+    }
+    await cfg.writeManagedConfig(_buildManagedConfig(preparedConfig));
     try {
-      await cfg.writeBaseConfig(rawConfig);
+      await cfg.writeBaseConfig(preparedConfig);
     } catch (e) {
       await appendBlueVpnClientLog(
         'config write skipped path=${cfg.baseConfigPath} kind=base-auth error=$e',
@@ -8768,6 +8834,33 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     return normalizeProvisionedEndpoint(rawConfig);
   }
 
+  String? _knownIpv4EndpointForServer(ServerLocation? server) {
+    if (server == null) return null;
+    for (final host in _knownEndpointHostsForServer(server)) {
+      final address = InternetAddress.tryParse(host);
+      if (address?.type == InternetAddressType.IPv4) {
+        return address!.address;
+      }
+    }
+    return null;
+  }
+
+  Future<String> _prepareProvisionedConfigForPlatform(
+    String rawConfig, {
+    ServerLocation? server,
+  }) async {
+    final normalized = _normalizeDevEndpoint(rawConfig);
+    if (kIsWeb || !Platform.isWindows) return normalized;
+    final protocol = server?.protocolCode ?? 'wireguard_udp';
+    if (protocol != 'wireguard_udp' && protocol != 'amneziawg') {
+      return normalized;
+    }
+    return resolveWireGuardEndpointToIpv4(
+      normalized,
+      fallbackIpv4: _knownIpv4EndpointForServer(server),
+    );
+  }
+
   Set<String> _knownEndpointHostsForServer(ServerLocation server) {
     final hosts = <String>{};
 
@@ -9152,17 +9245,21 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     String rawConfig, {
     ServerLocation? server,
   }) async {
+    final preparedConfig = await _prepareProvisionedConfigForPlatform(
+      rawConfig,
+      server: server,
+    );
     await _syncWindowsRoutingPolicy();
     final protocol = server?.protocolCode ?? 'wireguard_udp';
     await _cfg.writeManagedConfig(
       greenVpnTransportRequiresFullTunnel(protocol)
-          ? rawConfig
-          : _buildManagedConfigFromBase(rawConfig),
+          ? preparedConfig
+          : _buildManagedConfigFromBase(preparedConfig),
     );
     await _cfg.writeManagedProtocol(server?.protocolCode ?? 'wireguard_udp');
     await _cfg.writeManagedRouteId(server?.id ?? '');
     try {
-      await _cfg.writeBaseConfig(rawConfig);
+      await _cfg.writeBaseConfig(preparedConfig);
     } catch (e) {
       await appendBlueVpnClientLog(
         'config write skipped path=${_cfg.baseConfigPath} kind=base-root error=$e',
@@ -9171,7 +9268,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     final effectiveServer = server;
     if (effectiveServer != null && !effectiveServer.isAuto) {
       try {
-        await _cfg.writeBaseConfigForServer(effectiveServer.id, rawConfig);
+        await _cfg.writeBaseConfigForServer(effectiveServer.id, preparedConfig);
       } catch (e) {
         await appendBlueVpnClientLog(
           'config write skipped kind=server-cache server=${effectiveServer.id} error=$e',
@@ -10363,10 +10460,19 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       res.data!.adGate,
       source: 'interactive_config',
     );
-    await _writeProvisionedConfig(
-      _normalizeDevEndpoint(res.data!.configText),
-      server: provisionedServer,
-    );
+    try {
+      await _writeProvisionedConfig(
+        res.data!.configText,
+        server: provisionedServer,
+      );
+    } catch (error) {
+      await appendBlueVpnClientLog(
+        'ensure config endpoint preparation failed server=${provisionedServer.id} error=$error',
+      );
+      return const ProvisionedConfigResult.err(
+        'Не удалось подготовить адрес VPN-сервера.',
+      );
+    }
     return ProvisionedConfigResult.ok(provisionedServer);
   }
 
@@ -10904,6 +11010,27 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         preferredAt: _lastSuccessfulRouteAt,
         now: now,
       )) {
+        try {
+          final cachedConfig = await _cfg.readManagedConfig();
+          if (cachedConfig == null || cachedConfig.trim().isEmpty) {
+            return null;
+          }
+          final preparedConfig = await _prepareProvisionedConfigForPlatform(
+            cachedConfig,
+            server: candidate,
+          );
+          if (preparedConfig != cachedConfig) {
+            await _writeProvisionedConfig(preparedConfig, server: candidate);
+            await appendBlueVpnClientLog(
+              'immediate cached connect normalized endpoint server=${candidate.id}',
+            );
+          }
+        } catch (error) {
+          await appendBlueVpnClientLog(
+            'immediate cached connect rejected server=${candidate.id} error=$error',
+          );
+          return null;
+        }
         await appendBlueVpnClientLog(
           'immediate cached connect ready server=${candidate.id} protocol=${candidate.protocolCode}',
         );

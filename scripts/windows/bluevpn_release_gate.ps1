@@ -1564,6 +1564,19 @@ else {
     Add-Error 'Windows client still blocks before the privileged competing-VPN takeover'
 }
 
+foreach ($fragment in @(
+    'Future<String> resolveWireGuardEndpointToIpv4(',
+    'immediate cached connect normalized endpoint',
+    'ensure config endpoint preparation failed'
+)) {
+    if ($main.Contains($fragment)) {
+        Add-Pass "Windows fast-connect endpoint normalization marker present: $fragment"
+    }
+    else {
+        Add-Error "Windows fast-connect endpoint normalization marker missing: $fragment"
+    }
+}
+
 
 $vpnTaskApplicationRoutingFragments = @(
     'Start-GreenProcessRouter',

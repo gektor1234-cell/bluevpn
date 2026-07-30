@@ -94,6 +94,7 @@ $DnsttStderrPath = Join-Path $ProgramDataRoot 'dnstt-client.stderr.log'
 $DnsttHevStdoutPath = Join-Path $ProgramDataRoot 'dnstt-hev.stdout.log'
 $DnsttHevStderrPath = Join-Path $ProgramDataRoot 'dnstt-hev.stderr.log'
 $LogPath = Join-Path $ProgramDataRoot 'backend.log'
+$DiagnosticLogPath = Join-Path $ProgramDataRoot 'state\transport-task.log'
 $SelectiveRoutingHelper = Join-Path $PSScriptRoot 'greenvpn_selective_routing.ps1'
 
 $ExpectedHysteriaRuntimeHashes = @{
@@ -128,9 +129,19 @@ if (-not (Test-Path -LiteralPath $SelectiveRoutingHelper -PathType Leaf)) {
 
 function Write-GreenLog {
     param([string]$Message)
+    $line = "[$((Get-Date).ToString('o'))] transport-task($Action) $Message"
     try {
         New-Item -ItemType Directory -Force -Path $ProgramDataRoot | Out-Null
-        Add-Content -LiteralPath $LogPath -Encoding UTF8 -Value "[$((Get-Date).ToString('o'))] transport-task($Action) $Message"
+        Add-Content -LiteralPath $LogPath -Encoding UTF8 -Value $line
+    } catch {
+    }
+    try {
+        New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path (Split-Path -Parent $DiagnosticLogPath) |
+            Out-Null
+        Add-Content -LiteralPath $DiagnosticLogPath -Encoding UTF8 -Value $line
     } catch {
     }
 }
@@ -1564,6 +1575,7 @@ function Start-OwnTunnel {
     Ensure-GreenProgramDataAcl
     if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "Config missing: $ConfigPath" }
     $protocol = Get-ManagedProtocol
+    Write-GreenLog "connect phase=preflight protocol=$protocol"
     $competitors = @(Stop-CompetingVpnTunnels -Reason 'connect')
     if ($competitors.Count -gt 0) {
         Write-GreenLog "connect takeover blocked by competitor count=$($competitors.Count)"
@@ -1573,6 +1585,7 @@ function Start-OwnTunnel {
 
     $engine = if ($protocol -eq 'amneziawg') { Resolve-AmneziaWgExe } else { Resolve-WireGuardExe }
     Stop-OwnTunnel
+    Write-GreenLog 'connect phase=own-tunnel-stopped'
     $routingMode = Get-GreenRoutingMode
     $routingPolicy = $null
     $applicationPaths = @()
@@ -1604,12 +1617,16 @@ function Start-OwnTunnel {
     if ($routingMode -ne 'applications') {
         Ensure-NativeFullTunnelKillSwitch
     }
+    Write-GreenLog "connect phase=route-policy-ready mode=$routingMode"
     Ensure-GreenProgramDataAcl
     Ensure-EndpointBypassRoute
+    Write-GreenLog 'connect phase=endpoint-bypass-ready'
     Invoke-External -FilePath $engine -Arguments @('/installtunnelservice', $ConfigPath) | Out-Null
+    Write-GreenLog 'connect phase=tunnel-service-installed'
     $serviceName = Get-SelectedServiceName -Protocol $protocol
     Invoke-External -FilePath 'sc.exe' -Arguments @('config', $serviceName, 'start=', 'demand') | Out-Null
     Invoke-External -FilePath 'sc.exe' -Arguments @('start', $serviceName) -AllowedExitCodes @(0, 1056) | Out-Null
+    Write-GreenLog "connect phase=tunnel-service-running service=$serviceName"
     if ($routingMode -eq 'applications' -and $applicationPaths.Count -gt 0) {
         $tunnelReady = $false
         for ($i = 0; $i -lt 40; $i++) {
