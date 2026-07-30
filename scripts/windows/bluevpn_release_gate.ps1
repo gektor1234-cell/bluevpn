@@ -1567,6 +1567,9 @@ else {
 foreach ($fragment in @(
     'Future<String> resolveWireGuardEndpointToIpv4(',
     'immediate cached connect normalized endpoint',
+    'immediate cached connect restored exact server cache',
+    'reason=route_config_mismatch',
+    'native service fast-path ping',
     'ensure config endpoint preparation failed'
 )) {
     if ($main.Contains($fragment)) {
@@ -1574,6 +1577,21 @@ foreach ($fragment in @(
     }
     else {
         Add-Error "Windows fast-connect endpoint normalization marker missing: $fragment"
+    }
+}
+
+foreach ($fragment in @(
+    'function Ensure-DiagnosticLogAccess',
+    'SetAccessRuleProtection($false, $true)',
+    'takeover service stop accepted:',
+    'Set-Service -Name $serviceName -StartupType Manual',
+    'connect phase=tunnel-service-running'
+)) {
+    if ($transportPreviewVpnTaskScript.Contains($fragment)) {
+        Add-Pass "Windows fast-takeover task marker present: $fragment"
+    }
+    else {
+        Add-Error "Windows fast-takeover task marker missing: $fragment"
     }
 }
 

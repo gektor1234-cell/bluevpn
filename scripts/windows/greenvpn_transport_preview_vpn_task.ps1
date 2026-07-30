@@ -95,6 +95,7 @@ $DnsttHevStdoutPath = Join-Path $ProgramDataRoot 'dnstt-hev.stdout.log'
 $DnsttHevStderrPath = Join-Path $ProgramDataRoot 'dnstt-hev.stderr.log'
 $LogPath = Join-Path $ProgramDataRoot 'backend.log'
 $DiagnosticLogPath = Join-Path $ProgramDataRoot 'state\transport-task.log'
+$DiagnosticLogAclReady = $false
 $SelectiveRoutingHelper = Join-Path $PSScriptRoot 'greenvpn_selective_routing.ps1'
 
 $ExpectedHysteriaRuntimeHashes = @{
@@ -127,6 +128,19 @@ if (-not (Test-Path -LiteralPath $SelectiveRoutingHelper -PathType Leaf)) {
 }
 . $SelectiveRoutingHelper
 
+function Ensure-DiagnosticLogAccess {
+    if ($script:DiagnosticLogAclReady) { return }
+    $directory = Split-Path -Parent $DiagnosticLogPath
+    New-Item -ItemType Directory -Force -Path $directory | Out-Null
+    if (-not (Test-Path -LiteralPath $DiagnosticLogPath -PathType Leaf)) {
+        New-Item -ItemType File -Force -Path $DiagnosticLogPath | Out-Null
+    }
+    $acl = Get-Acl -LiteralPath $DiagnosticLogPath
+    $acl.SetAccessRuleProtection($false, $true)
+    Set-Acl -LiteralPath $DiagnosticLogPath -AclObject $acl
+    $script:DiagnosticLogAclReady = $true
+}
+
 function Write-GreenLog {
     param([string]$Message)
     $line = "[$((Get-Date).ToString('o'))] transport-task($Action) $Message"
@@ -136,11 +150,7 @@ function Write-GreenLog {
     } catch {
     }
     try {
-        New-Item `
-            -ItemType Directory `
-            -Force `
-            -Path (Split-Path -Parent $DiagnosticLogPath) |
-            Out-Null
+        Ensure-DiagnosticLogAccess
         Add-Content -LiteralPath $DiagnosticLogPath -Encoding UTF8 -Value $line
     } catch {
     }
@@ -1483,8 +1493,8 @@ function Stop-CompetingVpnTunnels {
     foreach ($service in $services) {
         $serviceName = [string]$service.Name
         try {
-            Invoke-External -FilePath 'sc.exe' -Arguments @('stop', $serviceName) `
-                -AllowedExitCodes @(0, 1056, 1060, 1062) | Out-Null
+            Stop-Service -Name $serviceName -Force -ErrorAction Stop
+            Write-GreenLog "takeover service stop accepted: $serviceName"
         } catch {
             Write-GreenLog "takeover service stop failed: $serviceName"
         }
@@ -1624,8 +1634,18 @@ function Start-OwnTunnel {
     Invoke-External -FilePath $engine -Arguments @('/installtunnelservice', $ConfigPath) | Out-Null
     Write-GreenLog 'connect phase=tunnel-service-installed'
     $serviceName = Get-SelectedServiceName -Protocol $protocol
-    Invoke-External -FilePath 'sc.exe' -Arguments @('config', $serviceName, 'start=', 'demand') | Out-Null
-    Invoke-External -FilePath 'sc.exe' -Arguments @('start', $serviceName) -AllowedExitCodes @(0, 1056) | Out-Null
+    $service = Get-Service -Name $serviceName -ErrorAction Stop
+    if ([string]$service.StartType -ne 'Manual') {
+        Set-Service -Name $serviceName -StartupType Manual -ErrorAction Stop
+    }
+    $service.Refresh()
+    if ([string]$service.Status -ne 'Running') {
+        Start-Service -Name $serviceName -ErrorAction Stop
+        $service.WaitForStatus(
+            [System.ServiceProcess.ServiceControllerStatus]::Running,
+            [TimeSpan]::FromSeconds(10)
+        )
+    }
     Write-GreenLog "connect phase=tunnel-service-running service=$serviceName"
     if ($routingMode -eq 'applications' -and $applicationPaths.Count -gt 0) {
         $tunnelReady = $false

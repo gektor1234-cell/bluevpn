@@ -7935,11 +7935,15 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           : p.optAutoRenew;
 
       await _syncWindowsRoutingPolicy();
-      await _repairProvisionedConfigFromPreferredDevSource(showToast: false);
+      if (!kPublicProductBuild && !kPaidBetaBuild) {
+        await _repairProvisionedConfigFromPreferredDevSource(showToast: false);
+      }
       await _cfg.ensureBaseSeededFromManagedIfMissing();
-      final base = await _cfg.readBaseConfig();
-      if (base != null && base.trim().isNotEmpty) {
-        await _cfg.writeManagedConfig(_buildManagedConfigFromBase(base));
+      if (kIsWeb || !Platform.isWindows) {
+        final base = await _cfg.readBaseConfig();
+        if (base != null && base.trim().isNotEmpty) {
+          await _cfg.writeManagedConfig(_buildManagedConfigFromBase(base));
+        }
       }
 
       if (mounted) setState(() {});
@@ -10574,14 +10578,24 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     );
   }
 
-  void _recordRouteSuccess(ServerLocation server) {
+  Future<void> _recordRouteSuccess(ServerLocation server) async {
     if (!kTransportPreviewFallbackEnabled || server.isAuto) return;
     _routeFailureCooldown.recordSuccess(_routeCooldownKey(server));
     if (!kIsWeb && Platform.isWindows) {
       _lastSuccessfulRouteId = greenVpnNormalizeManagedRouteId(server.id);
       _lastSuccessfulRouteProtocol = server.protocolCode.trim().toLowerCase();
       _lastSuccessfulRouteAt = DateTime.now().toUtc();
-      _schedulePrefsSave();
+      try {
+        await _prefsStore.patch({
+          'lastSuccessfulRouteId': _lastSuccessfulRouteId,
+          'lastSuccessfulRouteProtocol': _lastSuccessfulRouteProtocol,
+          'lastSuccessfulRouteAt': _lastSuccessfulRouteAt!.toIso8601String(),
+        });
+      } catch (error) {
+        await appendBlueVpnClientLog(
+          'route success cache persistence failed server=${server.id} error=$error',
+        );
+      }
     }
   }
 
@@ -10985,8 +10999,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         !Platform.isWindows ||
         socialOnlyEnabled ||
         _socialOnlyPreferenceRequested ||
-        candidates.isEmpty ||
-        !await _cfg.hasManagedConfig()) {
+        candidates.isEmpty) {
       return null;
     }
     final managedMetadata = await Future.wait<String>([
@@ -10997,10 +11010,14 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     final managedProtocol = managedMetadata[1];
     final now = DateTime.now().toUtc();
     for (final candidate in candidates) {
+      final serverBase = await _cfg.readBaseConfigForServer(candidate.id);
+      final hasManagedConfig = await _cfg.hasManagedConfig();
+      final hasCandidateCache =
+          hasManagedConfig || (serverBase ?? '').trim().isNotEmpty;
       if (greenVpnCanUseImmediateCachedRoute(
         isWindows: true,
         socialOnlyEnabled: false,
-        hasManagedConfig: true,
+        hasManagedConfig: hasCandidateCache,
         candidateId: candidate.id,
         candidateProtocol: candidate.protocolCode,
         managedRouteId: managedRouteId,
@@ -11011,7 +11028,28 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         now: now,
       )) {
         try {
-          final cachedConfig = await _cfg.readManagedConfig();
+          var cachedConfig = hasManagedConfig
+              ? await _cfg.readManagedConfig()
+              : null;
+          final managedMatchesCandidate =
+              cachedConfig != null &&
+              cachedConfig.trim().isNotEmpty &&
+              _configMatchesServer(candidate, cachedConfig);
+          if (!managedMatchesCandidate) {
+            if (serverBase == null ||
+                serverBase.trim().isEmpty ||
+                !_configMatchesServer(candidate, serverBase)) {
+              await appendBlueVpnClientLog(
+                'immediate cached connect rejected server=${candidate.id} reason=route_config_mismatch',
+              );
+              return null;
+            }
+            await _writeProvisionedConfig(serverBase, server: candidate);
+            cachedConfig = await _cfg.readManagedConfig();
+            await appendBlueVpnClientLog(
+              'immediate cached connect restored exact server cache server=${candidate.id}',
+            );
+          }
           if (cachedConfig == null || cachedConfig.trim().isEmpty) {
             return null;
           }
@@ -11037,6 +11075,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         return candidate;
       }
     }
+    await appendBlueVpnClientLog(
+      'immediate cached connect unavailable managedRoute=$managedRouteId managedProtocol=$managedProtocol preferredRoute=$_lastSuccessfulRouteId preferredProtocol=$_lastSuccessfulRouteProtocol',
+    );
     return null;
   }
 
@@ -11563,11 +11604,18 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             return;
           }
 
-          _setVpnBusyUi(
-            stage: 'Проверяем статус...',
-            hint: 'Проверяем подключение и состояние VPN.',
-          );
-          await _syncVpnStatus();
+          if (!kIsWeb && Platform.isWindows) {
+            setState(() {
+              vpnEnabled = true;
+              _androidExternalVpnActive = false;
+            });
+          } else {
+            _setVpnBusyUi(
+              stage: 'Проверяем статус...',
+              hint: 'Проверяем подключение и состояние VPN.',
+            );
+            await _syncVpnStatus();
+          }
           await appendBlueVpnClientLog(
             'toggle connect sync done server=${candidate.id} vpnEnabled=$vpnEnabled',
           );
@@ -11691,7 +11739,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             'post connect checks accepted tunnel server=${candidate.id}',
           );
           if (!mounted) return;
-          _recordRouteSuccess(candidate);
+          await _recordRouteSuccess(candidate);
+          if (!mounted) return;
           unawaited(_armRuntimeFailover(candidate));
           _refreshConnectionOptionsAfterConnect(candidate);
           if (kPaidBetaBuild) {
@@ -11710,6 +11759,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           return;
         }
 
+        if (!mounted) return;
         _toast(
           context,
           lastError == null
@@ -12230,7 +12280,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           }
         }
 
-        _recordRouteSuccess(effectiveServer);
+        await _recordRouteSuccess(effectiveServer);
         await _armRuntimeFailover(effectiveServer);
         if (!mounted) return;
 
@@ -21131,7 +21181,6 @@ if ($null -eq $svc) { exit 0 }
       await log('service=$_serviceName');
       await log('exe=$_exe');
       await log('cfg=$configPath');
-      await prepareConfigForService();
 
       if (!File(configPath).existsSync()) {
         await log('ERROR: configPath does not exist');
@@ -21141,97 +21190,65 @@ if ($null -eq $svc) { exit 0 }
         );
       }
 
-      final preflight = await WireGuardRuntimeStatus.query(
-        tunnelName: tunnelName,
-        configPath: configPath,
-        wireguardExePath: _exe,
+      var startedBySystemService = false;
+      const systemService = _GreenVpnSystemServiceClient();
+      final servicePing = await systemService.ping();
+      await log(
+        'native service fast-path ping ok=${servicePing.ok} http=${servicePing.statusCode} msg=${servicePing.message ?? ''}',
       );
-      await log('preflight(connect) ${preflight.describe()}');
-      if (preflight.hasCompetingTunnel) {
+      if (servicePing.ok) {
+        final serviceConnect = await systemService.connect();
         await log(
-          '=== CONNECT TAKEOVER: competing VPN active :: ${preflight.competingTunnelsLabel}',
+          'native service fast-path connect ok=${serviceConnect.ok} http=${serviceConnect.statusCode} exit=${serviceConnect.exitCode} msg=${serviceConnect.message ?? ''}',
         );
+        if (serviceConnect.ok) {
+          startedBySystemService = true;
+        } else if (serviceConnect.statusCode == HttpStatus.conflict ||
+            serviceConnect.exitCode == 2) {
+          return const VpnBackendResult(
+            ok: false,
+            message:
+                'Green VPN не смог автоматически остановить другой активный VPN. Закрой его вручную и повтори подключение.',
+          );
+        } else {
+          return const VpnBackendResult(
+            ok: false,
+            message:
+                'Системный компонент Green VPN не смог запустить подключение. Переустанови последнюю версию GreenVPN_Setup.exe.',
+          );
+        }
       }
 
-      final q0 = await scQueryEx();
-      final o0 = outOf(q0);
-      await log(
-        'queryex(initial) ec=${q0.exitCode} :: ${o0.replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
-      );
-
-      final admin = await isAdmin();
-      final applicationRoutingRequested = _applicationRoutingRequested();
-      await log('isAdmin=$admin');
-      await log('applicationRoutingRequested=$applicationRoutingRequested');
-
-      if (admin &&
-          !applicationRoutingRequested &&
-          !preflight.hasCompetingTunnel) {
-        if (q0.exitCode == 0) {
-          final stop = await _run('sc', ['stop', _serviceName]);
+      if (!startedBySystemService) {
+        await prepareConfigForService();
+        final preflight = await WireGuardRuntimeStatus.query(
+          tunnelName: tunnelName,
+          configPath: configPath,
+          wireguardExePath: _exe,
+        );
+        await log('direct fallback preflight(connect) ${preflight.describe()}');
+        if (preflight.hasCompetingTunnel) {
           await log(
-            'sc stop before reinstall ec=${stop.exitCode} :: ${outOf(stop).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
-          );
-          await Future.delayed(const Duration(milliseconds: 700));
-          final un = await _run(_exe, ['/uninstalltunnelservice', tunnelName]);
-          await log(
-            'wireguard uninstall before reinstall ec=${un.exitCode} :: ${outOf(un).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
+            '=== CONNECT TAKEOVER: competing VPN active :: ${preflight.competingTunnelsLabel}',
           );
         }
 
-        final cleanup = await _cleanupLingeringAdapter(elevated: true);
+        final q0 = await scQueryEx();
+        final o0 = outOf(q0);
         await log(
-          'adapter cleanup before install ec=${cleanup.exitCode} :: ${outOf(cleanup).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
+          'direct fallback queryex(initial) ec=${q0.exitCode} :: ${o0.replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
         );
-        final cleaned = await _waitForAdapterCleanup(log: log);
-        await log('adapter cleanup before install settled=$cleaned');
-
-        final ins = await _run(_exe, ['/installtunnelservice', configPath]);
+        final admin = await isAdmin();
+        final applicationRoutingRequested = _applicationRoutingRequested();
+        await log('direct fallback isAdmin=$admin');
         await log(
-          'wireguard install ec=${ins.exitCode} :: ${outOf(ins).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
+          'direct fallback applicationRoutingRequested=$applicationRoutingRequested',
         );
-        final manualStart = await _setTunnelServiceManualStart();
-        await log(
-          'sc config demand ec=${manualStart.exitCode} :: ${outOf(manualStart).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
-        );
-        final st = await _run('sc', ['start', _serviceName]);
-        await log(
-          'sc start ec=${st.exitCode} :: ${outOf(st).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
-        );
-      } else {
-        final cleanup = await _cleanupLingeringAdapter(elevated: false);
-        await log(
-          'scheduled adapter cleanup before install ec=${cleanup.exitCode} :: ${outOf(cleanup).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
-        );
-        final cleaned = await _waitForAdapterCleanup(log: log);
-        await log('scheduled adapter cleanup before install settled=$cleaned');
-
-        var elevatedStarted = false;
-        const systemService = _GreenVpnSystemServiceClient();
-        final servicePing = await systemService.ping();
-        await log(
-          'native service ping ok=${servicePing.ok} http=${servicePing.statusCode} msg=${servicePing.message ?? ''}',
-        );
-        if (servicePing.ok) {
-          final serviceConnect = await systemService.connect();
+        if (!admin ||
+            applicationRoutingRequested ||
+            preflight.hasCompetingTunnel) {
           await log(
-            'native service connect ok=${serviceConnect.ok} http=${serviceConnect.statusCode} exit=${serviceConnect.exitCode} msg=${serviceConnect.message ?? ''}',
-          );
-          if (serviceConnect.ok) {
-            elevatedStarted = true;
-          } else if (serviceConnect.statusCode == HttpStatus.conflict ||
-              serviceConnect.exitCode == 2) {
-            return const VpnBackendResult(
-              ok: false,
-              message:
-                  'Green VPN не смог автоматически остановить другой активный VPN. Закрой его вручную и повтори подключение.',
-            );
-          }
-        }
-
-        if (!elevatedStarted) {
-          await log(
-            'native service unavailable/failed; scheduled task fallback is disabled',
+            'native service unavailable; guarded direct fallback is not eligible',
           );
           return const VpnBackendResult(
             ok: false,
@@ -21239,6 +21256,37 @@ if ($null -eq $svc) { exit 0 }
                 'Системный компонент Green VPN не отвечает. Переустанови последнюю версию GreenVPN_Setup.exe один раз с правами администратора.',
           );
         }
+
+        if (q0.exitCode == 0) {
+          final stop = await _run('sc', ['stop', _serviceName]);
+          await log(
+            'direct fallback sc stop before reinstall ec=${stop.exitCode} :: ${outOf(stop).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
+          );
+          await Future.delayed(const Duration(milliseconds: 700));
+          final un = await _run(_exe, ['/uninstalltunnelservice', tunnelName]);
+          await log(
+            'direct fallback wireguard uninstall before reinstall ec=${un.exitCode} :: ${outOf(un).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
+          );
+        }
+
+        final cleanup = await _cleanupLingeringAdapter(elevated: true);
+        await log(
+          'direct fallback adapter cleanup before install ec=${cleanup.exitCode} :: ${outOf(cleanup).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
+        );
+        final cleaned = await _waitForAdapterCleanup(log: log);
+        await log('direct fallback adapter cleanup settled=$cleaned');
+        final ins = await _run(_exe, ['/installtunnelservice', configPath]);
+        await log(
+          'direct fallback wireguard install ec=${ins.exitCode} :: ${outOf(ins).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
+        );
+        final manualStart = await _setTunnelServiceManualStart();
+        await log(
+          'direct fallback sc config demand ec=${manualStart.exitCode} :: ${outOf(manualStart).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
+        );
+        final st = await _run('sc', ['start', _serviceName]);
+        await log(
+          'direct fallback sc start ec=${st.exitCode} :: ${outOf(st).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
+        );
       }
 
       final ok = await waitRunning(loops: 60);
