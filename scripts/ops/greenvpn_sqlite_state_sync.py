@@ -86,9 +86,21 @@ CHANGE_COLUMNS = (
     "verified_at",
     "deleted_at",
 )
-PRESERVE_ID_TABLES = {
+PRESERVE_ID_TABLES: set[str] = set()
+ID_MAPPING_TABLES = (
+    "users",
     "subscriptions",
-    "billing_orders",
+    "support_reports",
+    "promo_codes",
+    "admin_staff",
+)
+ID_REFERENCE_COLUMNS = {
+    "user_id": "users",
+    "subscription_id": "subscriptions",
+    "activation_subscription_id": "subscriptions",
+    "report_id": "support_reports",
+    "promo_code_id": "promo_codes",
+    "staff_id": "admin_staff",
 }
 UNIQUE_CONFLICT_KEYS: dict[str, tuple[str, ...]] = {
     "device_transport_assignments": ("transport_key", "assigned_ip"),
@@ -235,48 +247,107 @@ def _row_latest_timestamp(row: sqlite3.Row) -> datetime | None:
     return latest
 
 
-def _build_user_id_map(
+def _remap_id_references(
+    row: Mapping[str, Any],
+    id_maps: Mapping[str, Mapping[int, int]] | None,
+) -> Mapping[str, Any]:
+    if not id_maps:
+        return row
+    remapped: dict[str, Any] | None = None
+    for column, referenced_table in ID_REFERENCE_COLUMNS.items():
+        if column not in row.keys() or row[column] is None:
+            continue
+        try:
+            source_id = int(row[column])
+        except (TypeError, ValueError):
+            continue
+        mapped_id = id_maps.get(referenced_table, {}).get(source_id)
+        if mapped_id is None or mapped_id == source_id:
+            continue
+        if remapped is None:
+            remapped = dict(row)
+        remapped[column] = mapped_id
+    return remapped or row
+
+
+def _build_entity_id_map(
     source_conn: sqlite3.Connection,
     target_conn: sqlite3.Connection,
+    table: str,
+    id_maps: Mapping[str, Mapping[int, int]],
 ) -> dict[int, int]:
-    if "users" not in _tables(source_conn) or "users" not in _tables(target_conn):
+    if table not in _tables(source_conn) or table not in _tables(target_conn):
+        return {}
+    source_columns = _columns(source_conn, table)
+    target_columns = _columns(target_conn, table)
+    keys = NATURAL_KEYS[table]
+    required_columns = ("id", *keys)
+    if any(
+        column not in source_columns or column not in target_columns
+        for column in required_columns
+    ):
         return {}
     mapping: dict[int, int] = {}
-    for source_user in source_conn.execute("SELECT id, email FROM users").fetchall():
-        target_user = target_conn.execute(
-            "SELECT id FROM users WHERE email IS ? LIMIT 1",
-            (source_user["email"],),
+    selected_columns = ", ".join(required_columns)
+    lookup_sql = f"SELECT id FROM {table} WHERE {_where_clause(keys)} LIMIT 1"
+    for raw_source_row in source_conn.execute(
+        f"SELECT {selected_columns} FROM {table}"
+    ).fetchall():
+        source_row = _remap_id_references(raw_source_row, id_maps)
+        target_row = target_conn.execute(
+            lookup_sql,
+            _row_key(source_row, keys),
         ).fetchone()
-        if target_user is not None:
-            mapping[int(source_user["id"])] = int(target_user["id"])
+        if target_row is not None:
+            mapping[int(raw_source_row["id"])] = int(target_row["id"])
     return mapping
+
+
+def _build_id_maps(
+    source_conn: sqlite3.Connection,
+    target_conn: sqlite3.Connection,
+) -> dict[str, dict[int, int]]:
+    id_maps: dict[str, dict[int, int]] = {}
+    for table in ID_MAPPING_TABLES:
+        id_maps[table] = _build_entity_id_map(
+            source_conn,
+            target_conn,
+            table,
+            id_maps,
+        )
+    return id_maps
 
 
 def _remap_replication_tombstone(
     row: Mapping[str, Any],
-    user_id_map: Mapping[int, int] | None,
+    id_maps: Mapping[str, Mapping[int, int]] | None,
 ) -> Mapping[str, Any]:
-    if not user_id_map:
+    if not id_maps:
         return row
     row_values = dict(row)
     referenced_table = str(row_values.get("table_name") or "")
     referenced_keys = NATURAL_KEYS.get(referenced_table, ())
-    if "user_id" not in referenced_keys:
-        return row
     try:
         values = json.loads(str(row_values.get("natural_key_json") or ""))
     except (TypeError, ValueError):
         return row
-    if not isinstance(values, dict) or values.get("user_id") is None:
+    if not isinstance(values, dict):
         return row
-    try:
-        source_user_id = int(values["user_id"])
-    except (TypeError, ValueError):
+    changed = False
+    for column, id_table in ID_REFERENCE_COLUMNS.items():
+        if column not in referenced_keys or values.get(column) is None:
+            continue
+        try:
+            source_id = int(values[column])
+        except (TypeError, ValueError):
+            continue
+        mapped_id = id_maps.get(id_table, {}).get(source_id)
+        if mapped_id is None or mapped_id == source_id:
+            continue
+        values[column] = mapped_id
+        changed = True
+    if not changed:
         return row
-    mapped_user_id = user_id_map.get(source_user_id)
-    if mapped_user_id is None or mapped_user_id == source_user_id:
-        return row
-    values["user_id"] = mapped_user_id
     remapped = row_values
     remapped["natural_key_json"] = json.dumps(
         values,
@@ -623,7 +694,7 @@ def _sync_table(
     target_conn: sqlite3.Connection,
     table: str,
     apply: bool,
-    user_id_map: Mapping[int, int] | None = None,
+    id_maps: Mapping[str, Mapping[int, int]] | None = None,
 ) -> TableResult:
     result = TableResult(table=table)
     source_tables = _tables(source_conn)
@@ -667,20 +738,10 @@ def _sync_table(
         if table == "replication_tombstones":
             source_row = _remap_replication_tombstone(
                 raw_source_row,
-                user_id_map,
+                id_maps,
             )
-        elif (
-            table != "users"
-            and "user_id" in columns
-            and raw_source_row["user_id"] is not None
-            and user_id_map
-        ):
-            source_user_id = int(raw_source_row["user_id"])
-            mapped_user_id = user_id_map.get(source_user_id)
-            if mapped_user_id is not None and mapped_user_id != source_user_id:
-                mutable_source_row = dict(raw_source_row)
-                mutable_source_row["user_id"] = mapped_user_id
-                source_row = mutable_source_row
+        else:
+            source_row = _remap_id_references(raw_source_row, id_maps)
         key_values = _row_key(source_row, keys)
         target_row = target_conn.execute(lookup_sql, key_values).fetchone()
         tombstone = target_tombstones.get(_natural_key_json(source_row, keys))
@@ -822,14 +883,14 @@ def main() -> int:
         for table in ordered_tables:
             if table not in NATURAL_KEYS:
                 continue
-            user_id_map = _build_user_id_map(source_conn, target_conn)
+            id_maps = _build_id_maps(source_conn, target_conn)
             results.append(
                 _sync_table(
                     source_conn,
                     target_conn,
                     table,
                     apply=args.apply,
-                    user_id_map=user_id_map,
+                    id_maps=id_maps,
                 )
             )
             if table == "replication_tombstones" and tombstones_available:

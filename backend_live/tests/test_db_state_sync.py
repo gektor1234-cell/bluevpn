@@ -1050,6 +1050,26 @@ class DbStateSyncTests(unittest.TestCase):
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY(user_id) REFERENCES users(id)
                 );
+                CREATE TABLE billing_orders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    public_id TEXT NOT NULL UNIQUE,
+                    activation_subscription_id INTEGER,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                );
+                CREATE TABLE subscription_expiry_reviews (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    subscription_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    reviewed_by TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(subscription_id) REFERENCES subscriptions(id),
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                );
             """
             for path in (source_db, target_db):
                 with sqlite3.connect(path) as conn:
@@ -1079,6 +1099,39 @@ class DbStateSyncTests(unittest.TestCase):
                         "2026-07-30T20:00:00+00:00",
                     ),
                 )
+                conn.execute(
+                    """
+                    INSERT INTO billing_orders(
+                        id, user_id, public_id, activation_subscription_id,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        1001,
+                        1,
+                        "order-source-collision",
+                        1001,
+                        "2026-07-30T19:00:00+00:00",
+                        "2026-07-30T20:00:00+00:00",
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO subscription_expiry_reviews(
+                        id, subscription_id, user_id, status, reason,
+                        reviewed_by, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        1001,
+                        1001,
+                        1,
+                        "pending",
+                        "source review",
+                        "owner",
+                        "2026-07-30T20:00:00+00:00",
+                    ),
+                )
                 conn.commit()
             with sqlite3.connect(target_db) as conn:
                 conn.execute(
@@ -1090,12 +1143,47 @@ class DbStateSyncTests(unittest.TestCase):
                         "2026-07-30T18:00:00+00:00",
                     ),
                 )
+                conn.execute(
+                    """
+                    INSERT INTO subscriptions(
+                        id, user_id, plan_code, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        1001,
+                        1,
+                        "target-local",
+                        "2026-07-30T18:00:00+00:00",
+                        "2026-07-30T18:00:00+00:00",
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO billing_orders(
+                        id, user_id, public_id, activation_subscription_id,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        1001,
+                        1,
+                        "order-target-local",
+                        1001,
+                        "2026-07-30T18:00:00+00:00",
+                        "2026-07-30T18:00:00+00:00",
+                    ),
+                )
                 conn.commit()
 
             result = self.run_sync(
                 source_db,
                 target_db,
-                tables=["users", "subscriptions"],
+                tables=[
+                    "users",
+                    "subscriptions",
+                    "billing_orders",
+                    "subscription_expiry_reviews",
+                ],
             )
 
             self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
@@ -1108,9 +1196,33 @@ class DbStateSyncTests(unittest.TestCase):
                     "SELECT user_id FROM subscriptions WHERE plan_code = ?",
                     ("green_30d",),
                 ).fetchone()[0]
+                subscription_id = conn.execute(
+                    "SELECT id FROM subscriptions WHERE plan_code = ?",
+                    ("green_30d",),
+                ).fetchone()[0]
+                billing_row = conn.execute(
+                    """
+                    SELECT id, activation_subscription_id
+                    FROM billing_orders
+                    WHERE public_id = ?
+                    """,
+                    ("order-source-collision",),
+                ).fetchone()
+                review_ids = conn.execute(
+                    """
+                    SELECT subscription_id, user_id
+                    FROM subscription_expiry_reviews
+                    WHERE reason = ?
+                    """,
+                    ("source review",),
+                ).fetchone()
                 user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
             self.assertNotEqual(source_user_id, 1)
             self.assertEqual(subscription_user_id, source_user_id)
+            self.assertNotEqual(subscription_id, 1001)
+            self.assertNotEqual(billing_row[0], 1001)
+            self.assertEqual(billing_row[1], subscription_id)
+            self.assertEqual(review_ids, (subscription_id, source_user_id))
             self.assertEqual(user_count, 2)
 
     def test_traffic_usage_converges_by_database_unique_key(self) -> None:
