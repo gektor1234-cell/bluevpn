@@ -1533,14 +1533,21 @@ $vpnPriorityTakeoverFragments = @(
     "Stop-CompetingVpnTunnels -Reason 'guard'",
     '-AllowedExitCodes @(0, 1056, 1060, 1062)',
     'takeover complete reason=$Reason',
-    'connect takeover blocked by competitor count='
+    'connect takeover blocked by competitor count=',
+    'function Get-SafePhysicalEndpointRoute',
+    'physical gateway settled after takeover'
 )
 foreach ($fragment in $vpnPriorityTakeoverFragments) {
-    if ($vpnTaskScript.Contains($fragment)) {
-        Add-Pass "Windows VPN task priority-takeover marker present: $fragment"
-    }
-    else {
-        Add-Error "Windows VPN task priority-takeover marker missing: $fragment"
+    if ($fragment -notin @(
+        'function Get-SafePhysicalEndpointRoute',
+        'physical gateway settled after takeover'
+    )) {
+        if ($vpnTaskScript.Contains($fragment)) {
+            Add-Pass "Windows VPN task priority-takeover marker present: $fragment"
+        }
+        else {
+            Add-Error "Windows VPN task priority-takeover marker missing: $fragment"
+        }
     }
     if ($transportPreviewVpnTaskScript.Contains($fragment)) {
         Add-Pass "Windows transport cascade priority-takeover marker present: $fragment"

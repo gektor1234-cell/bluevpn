@@ -247,7 +247,14 @@ try {
                     'destinationCidrs',
                     'Get-GreenDestinationCidrs',
                     'process router not required',
-                    "Selective application routing is not supported by `$protocol."
+                    "Selective application routing is not supported by `$protocol.",
+                    'function Get-CompetingVpnServices',
+                    'function Stop-CompetingVpnTunnels',
+                    "Stop-CompetingVpnTunnels -Reason 'connect'",
+                    "Stop-CompetingVpnTunnels -Reason 'guard'",
+                    'takeover complete reason=$Reason',
+                    'function Get-SafePhysicalEndpointRoute',
+                    'physical gateway settled after takeover'
                 )) {
                     if (-not $combinedTaskText.Contains($marker)) {
                         $errors.Add("Packaged Windows VPN task marker missing: $marker") | Out-Null

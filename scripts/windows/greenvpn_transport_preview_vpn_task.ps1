@@ -384,14 +384,57 @@ function Remove-EndpointBypassRoute {
     }
 }
 
+function Get-SafePhysicalEndpointRoute {
+    param(
+        [Parameter(Mandatory=$true)][string]$Endpoint,
+        [int]$MaxAttempts = 24
+    )
+
+    for ($attempt = 0; $attempt -lt $MaxAttempts; $attempt++) {
+        $selection = @()
+        try {
+            $selection = @(Find-NetRoute -RemoteIPAddress $endpoint -ErrorAction Stop)
+        } catch {
+        }
+        foreach ($candidate in @(
+            $selection |
+                Where-Object { $_.CimClass.CimClassName -eq 'MSFT_NetRoute' }
+        )) {
+            $nextHop = [string]$candidate.NextHop
+            if ([string]::IsNullOrWhiteSpace($nextHop) -or $nextHop -eq '0.0.0.0') {
+                continue
+            }
+            $adapter = Get-NetAdapter -InterfaceIndex ([int]$candidate.InterfaceIndex) `
+                -ErrorAction SilentlyContinue
+            if ($null -eq $adapter -or [string]$adapter.Status -ne 'Up') {
+                continue
+            }
+            if (
+                [string]$adapter.Name -in @(
+                    $TunnelName,
+                    $HysteriaTunnelName,
+                    $VlessTunnelName,
+                    $NaiveTunnelName,
+                    $DnsttTunnelName
+                ) -or
+                [string]$adapter.Name -match '(?i)(wireguard|wintun|amnezia|warp|cloudflare|device[0-9_]+)' -or
+                [string]$adapter.InterfaceDescription -match '(?i)(wireguard|wintun|amnezia|warp|cloudflare)'
+            ) {
+                continue
+            }
+            Write-GreenLog "physical gateway settled after takeover attempt=$attempt ifIndex=$($candidate.InterfaceIndex)"
+            return $candidate
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    return $null
+}
+
 function Ensure-EndpointBypassRoute {
     Remove-EndpointBypassRoute
     $endpoint = Get-ManagedIpv4Endpoint
-    $selection = @(Find-NetRoute -RemoteIPAddress $endpoint -ErrorAction Stop)
-    $route = $selection |
-        Where-Object { $_.CimClass.CimClassName -eq 'MSFT_NetRoute' -and $_.InterfaceAlias -ne $TunnelName } |
-        Select-Object -First 1
-    if ($null -eq $route -or [string]::IsNullOrWhiteSpace([string]$route.NextHop) -or $route.NextHop -eq '0.0.0.0') {
+    $route = Get-SafePhysicalEndpointRoute -Endpoint $endpoint
+    if ($null -eq $route) {
         throw "No physical gateway route is available for endpoint $endpoint."
     }
 

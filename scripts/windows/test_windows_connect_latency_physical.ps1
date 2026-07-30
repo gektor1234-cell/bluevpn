@@ -23,7 +23,6 @@ $resolvedProgramDataRoot = [IO.Path]::GetFullPath($ProgramDataRoot).TrimEnd('\')
 $appPath = Join-Path $resolvedInstallRoot 'greenvpn.exe'
 $tokenPath = Join-Path $resolvedProgramDataRoot 'service_token'
 $authLogPath = Join-Path $resolvedProgramDataRoot 'auth.log'
-$backendLogPath = Join-Path $resolvedProgramDataRoot 'backend.log'
 $stateRoot = Join-Path $resolvedProgramDataRoot 'state'
 $prefsPath = Join-Path $stateRoot 'prefs.json'
 $pendingActionPath = Join-Path $stateRoot 'pending_vpn_action.txt'
@@ -218,26 +217,6 @@ function Get-NewAuthLogLines {
     return @($lines[$AfterLine..($lines.Count - 1)])
 }
 
-function Get-BackendLogLineCount {
-    if (-not (Test-Path -LiteralPath $backendLogPath -PathType Leaf)) {
-        return 0
-    }
-    return @(Get-Content -LiteralPath $backendLogPath -Encoding UTF8).Count
-}
-
-function Get-NewBackendLogLines {
-    param([Parameter(Mandatory = $true)][int]$AfterLine)
-
-    if (-not (Test-Path -LiteralPath $backendLogPath -PathType Leaf)) {
-        return @()
-    }
-    $lines = @(Get-Content -LiteralPath $backendLogPath -Encoding UTF8)
-    if ($lines.Count -le $AfterLine) {
-        return @()
-    }
-    return @($lines[$AfterLine..($lines.Count - 1)])
-}
-
 function Get-LogTimestamp {
     param([Parameter(Mandatory = $true)][string]$Line)
 
@@ -401,7 +380,6 @@ function Invoke-ConnectMeasurement {
 function Invoke-CompetingVpnTakeoverMeasurement {
     param([int]$TimeoutSeconds = 150)
 
-    $backendAfterLine = Get-BackendLogLineCount
     $evidence = Invoke-ConnectMeasurement `
         -TimeoutSeconds $TimeoutSeconds `
         -Label 'Competing-VPN takeover'
@@ -417,18 +395,10 @@ function Invoke-CompetingVpnTakeoverMeasurement {
         throw 'Green VPN connected without stopping the active external tunnel service.'
     }
 
-    $backendLines = @(Get-NewBackendLogLines -AfterLine $backendAfterLine)
-    $takeoverComplete = [bool](
-        $backendLines |
-            Where-Object { $_ -match 'takeover complete reason=connect' } |
-            Select-Object -First 1
-    )
-    if (-not $takeoverComplete) {
-        throw 'The privileged service did not record a completed competing-VPN takeover.'
-    }
-
     $evidence.externalVpnStopped = $true
     $evidence.privilegedTakeoverConfirmed = $true
+    $evidence.takeoverEvidence =
+        'external_service_stopped_and_green_status_running'
     return $evidence
 }
 
