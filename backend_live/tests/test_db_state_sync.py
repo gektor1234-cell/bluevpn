@@ -1026,6 +1026,118 @@ class DbStateSyncTests(unittest.TestCase):
             self.assertEqual(users, [(1, "mapped@example.test")])
             self.assertEqual(subscription, (1, "green_30d"))
 
+    def test_traffic_usage_converges_by_database_unique_key(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="greenvpn-traffic-unique-key-",
+            ignore_cleanup_errors=True,
+        ) as root:
+            source_db = Path(root) / "source.sqlite"
+            target_db = Path(root) / "target.sqlite"
+            schema = """
+                CREATE TABLE users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT
+                );
+                CREATE TABLE device_traffic_usage (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    device_uid TEXT NOT NULL,
+                    server_id TEXT NOT NULL,
+                    period_key TEXT NOT NULL,
+                    rx_bytes INTEGER NOT NULL DEFAULT 0,
+                    tx_bytes INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(device_uid, server_id, period_key)
+                );
+            """
+            for path in (source_db, target_db):
+                with sqlite3.connect(path) as conn:
+                    conn.executescript(schema)
+                    conn.commit()
+            with sqlite3.connect(source_db) as conn:
+                conn.execute(
+                    "INSERT INTO users(id, email, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                    (
+                        1001,
+                        "source-owner@example.test",
+                        "2026-07-30T19:00:00+00:00",
+                        "2026-07-30T19:00:00+00:00",
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO device_traffic_usage(
+                        id, user_id, device_uid, server_id, period_key,
+                        rx_bytes, tx_bytes, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        1001,
+                        1001,
+                        "shared-device",
+                        "nl1",
+                        "2026-07",
+                        300,
+                        400,
+                        "2026-07-30T19:00:00+00:00",
+                        "2026-07-30T20:00:00+00:00",
+                    ),
+                )
+                conn.commit()
+            with sqlite3.connect(target_db) as conn:
+                conn.execute(
+                    "INSERT INTO users(id, email, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                    (
+                        1,
+                        "target-owner@example.test",
+                        "2026-07-30T18:00:00+00:00",
+                        "2026-07-30T18:00:00+00:00",
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO device_traffic_usage(
+                        id, user_id, device_uid, server_id, period_key,
+                        rx_bytes, tx_bytes, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        1,
+                        1,
+                        "shared-device",
+                        "nl1",
+                        "2026-07",
+                        100,
+                        200,
+                        "2026-07-30T18:00:00+00:00",
+                        "2026-07-30T19:00:00+00:00",
+                    ),
+                )
+                conn.commit()
+
+            result = self.run_sync(
+                source_db,
+                target_db,
+                tables=["users", "device_traffic_usage"],
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            with sqlite3.connect(target_db) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT user_id, device_uid, server_id, period_key,
+                           rx_bytes, tx_bytes
+                    FROM device_traffic_usage
+                    """
+                ).fetchall()
+            self.assertEqual(
+                rows,
+                [(1001, "shared-device", "nl1", "2026-07", 300, 400)],
+            )
+
     def test_tombstone_user_id_is_remapped_when_local_ids_differ(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="greenvpn-tombstone-user-id-remap-",

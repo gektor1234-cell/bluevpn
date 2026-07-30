@@ -288,6 +288,12 @@ class PaidBetaPolicyTests(unittest.TestCase):
         with self.assertRaises(main.HTTPException):
             main.normalize_update_manifest_channel("unknown")
 
+    def test_traffic_usage_replication_key_matches_database_unique_key(self) -> None:
+        self.assertEqual(
+            main.REPLICATION_DELETE_KEYS["device_traffic_usage"],
+            ("device_uid", "server_id", "period_key"),
+        )
+
     def test_paid_beta_update_channel_uses_isolated_artifact(self) -> None:
         previous = copy.deepcopy(main.PAID_BETA_UPDATE_CONFIG["android"])
         main.PAID_BETA_UPDATE_CONFIG["android"] = {

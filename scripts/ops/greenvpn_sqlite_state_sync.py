@@ -26,7 +26,7 @@ NATURAL_KEYS: dict[str, tuple[str, ...]] = {
     "subscriptions": ("user_id",),
     "billing_orders": ("public_id",),
     "client_endpoint_assignments": ("user_id", "device_uid"),
-    "device_traffic_usage": ("user_id", "device_uid", "server_id", "period_key"),
+    "device_traffic_usage": ("device_uid", "server_id", "period_key"),
     "ad_challenges": ("public_id",),
     "free_access_grants": ("public_id",),
     "email_confirmations": ("token_hash",),

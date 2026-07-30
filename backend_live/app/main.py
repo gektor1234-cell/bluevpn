@@ -300,7 +300,7 @@ REPLICATION_DELETE_KEYS: dict[str, tuple[str, ...]] = {
     "client_endpoint_assignments": ("user_id", "device_uid"),
     "ad_challenges": ("public_id",),
     "free_access_grants": ("public_id",),
-    "device_traffic_usage": ("user_id", "device_uid", "server_id", "period_key"),
+    "device_traffic_usage": ("device_uid", "server_id", "period_key"),
     "email_confirmations": ("token_hash",),
     "email_login_codes": ("email", "code_hash", "created_at"),
     "phone_confirmations": ("phone", "code_hash", "created_at"),
