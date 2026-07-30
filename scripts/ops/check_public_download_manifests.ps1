@@ -42,22 +42,22 @@ param(
     [bool]$ExpectedTestAndroidRequired = $false,
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedWindowsVersion = "0.3.20",
+    [string]$ExpectedWindowsVersion = "0.3.21",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedWindowsSha256 = "96F6AE8EBAD2F597693D824625125CC97CB39DEC3E1B7D8E352D335EF5F49D24",
+    [string]$ExpectedWindowsSha256 = "0D98EDBDBA4FFFA6B94F5C0D04CF3461C0C8E5F57AEC57FB201D678ED45A5E85",
 
     [Parameter(Mandatory = $false)]
     [bool]$ExpectedWindowsRequired = $false,
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestWindowsVersion = "0.3.20-paid-beta.1",
+    [string]$ExpectedTestWindowsVersion = "0.3.21-paid-beta.1",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestWindowsSha256 = "A9EAEDB0FBA007ADB1B28FFDD993011C04741E97EAAE859FD4A9D1F833176D18",
+    [string]$ExpectedTestWindowsSha256 = "34D838226281190EB6B867D87884B4C9AF066FD69C7D49D05D045713530338CA",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestWindowsBuildNumber = "2921",
+    [string]$ExpectedTestWindowsBuildNumber = "3001",
 
     [Parameter(Mandatory = $false)]
     [bool]$ExpectedTestWindowsRequired = $false,
@@ -328,6 +328,24 @@ $manifestChecks = @(
     Get-UpdateManifestCheck `
         -Name "windows-production-fallback-manifest" `
         -Uri "$fallbackApi/api/v1/updates/manifest?platform=windows&channel=stable&currentVersion=0.0.0&clientId=ops-check-windows-production-fallback" `
+        -ExpectedPlatform "windows" `
+        -ExpectedExtension ".exe" `
+        -ExpectedChannel "stable" `
+        -ExpectedVersion $ExpectedWindowsVersion `
+        -ExpectedSha256 $ExpectedWindowsSha256 `
+        -ExpectedRequired $ExpectedWindowsRequired
+    Get-UpdateManifestCheck `
+        -Name "windows-public-product-primary-alias-manifest" `
+        -Uri "$api/api/v1/updates/manifest?platform=windows&channel=public-product&currentVersion=0.0.0&clientId=ops-check-windows-public-product-primary" `
+        -ExpectedPlatform "windows" `
+        -ExpectedExtension ".exe" `
+        -ExpectedChannel "stable" `
+        -ExpectedVersion $ExpectedWindowsVersion `
+        -ExpectedSha256 $ExpectedWindowsSha256 `
+        -ExpectedRequired $ExpectedWindowsRequired
+    Get-UpdateManifestCheck `
+        -Name "windows-public-product-fallback-alias-manifest" `
+        -Uri "$fallbackApi/api/v1/updates/manifest?platform=windows&channel=public-product&currentVersion=0.0.0&clientId=ops-check-windows-public-product-fallback" `
         -ExpectedPlatform "windows" `
         -ExpectedExtension ".exe" `
         -ExpectedChannel "stable" `

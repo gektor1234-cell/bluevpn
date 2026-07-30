@@ -1,6 +1,6 @@
 # Green VPN Current Handoff
 
-Updated: 2026-07-29 MSK.
+Updated: 2026-07-30 MSK.
 
 This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
@@ -15,8 +15,8 @@ This is the current operational entry point. Read it together with
    client profiles.
 3. Never touch Friendly Linnet `5.129.237.163` without a new explicit owner
    instruction.
-4. Android `0.3.19+2026072914` and Windows `0.3.20+2921` are public and
-   optional. Windows paid-beta `0.3.20-paid-beta.1+2921` is also public and
+4. Android `0.3.19+2026072914` and Windows `0.3.21+3001` are public and
+   optional. Windows paid-beta `0.3.21-paid-beta.1+3001` is also public and
    optional. Do not republish, force or roll them back without a verified exact
    artifact, alternate-node health and an atomic backup.
 5. Public-product uses WireGuard UDP, AmneziaWG, Hysteria2, VLESS REALITY/XHTTP
@@ -31,19 +31,59 @@ This is the current operational entry point. Read it together with
    must reject first-payment creation and must not run the renewal executor.
 8. Server maintenance is one node at a time after alternate control/data planes
    pass readiness. The owner Windows PC must not be rebooted by automation.
-9. Windows 0.3.20 is public and optional, but remains unsigned by explicit
+9. Windows 0.3.21 is public and optional, but remains unsigned by explicit
    owner instruction with the SmartScreen risk accepted. Keep the `NotSigned`
    status visible in operations and expect Windows SmartScreen/reputation
    warnings until a higher signed successor is released.
 10. The admin console is a protected operator surface. Keep Nginx Basic Auth,
     `noindex`, frame denial, staff authentication, RBAC and audit enabled; never
     expose bootstrap tokens or payment/tunnel secrets in the UI or exports.
-11. Stable production publishes Android `0.3.19` and Windows `0.3.20`.
-    Clean-source Windows `0.3.20+2921` is published after focused physical
+11. Stable production publishes Android `0.3.19` and Windows `0.3.21`.
+    Clean-source Windows `0.3.21+3001` is published after focused physical
     latency proof, but it is not a trusted/signed Windows release. Do not
     conflate successful unsigned publication with Authenticode trust.
 
-## Windows Connection Latency Hotfix, 2026-07-29
+## Windows 0.3.21 Fast Connect And Takeover Closure, 2026-07-30
+
+This section is the current Windows/backend operational entry point. The exact
+Windows source anchor is `b6f60de44efdeaa5b89aa9097a8b87affa40e78d`.
+
+- Production installer:
+  `C:\BlueVPN_Builds\public_product_20260730_b3001_takeover_v4\GreenVPN_Setup_0.3.21.exe`,
+  `55400960` bytes, SHA-256
+  `0D98EDBDBA4FFFA6B94F5C0D04CF3461C0C8E5F57AEC57FB201D678ED45A5E85`.
+- Paid-beta installer:
+  `C:\BlueVPN_Builds\paid_beta_20260730_b3001_takeover_v4\GreenVPN_Beta_Setup_0.3.21-paid-beta.1.exe`,
+  `55383040` bytes, SHA-256
+  `34D838226281190EB6B867D87884B4C9AF066FD69C7D49D05D045713530338CA`.
+  Both updates are optional and `NotSigned`.
+- Exact production runtime/failover evidence:
+  `C:\BlueVPN_Builds\public_product_20260730_b3001_takeover_v4\windows-public-runtime-failover-physical.json`.
+- Autonomous competing-VPN summary:
+  `C:\BlueVPN_Builds\public_product_20260730_b3001_takeover_v4\windows-competing-vpn-takeover-autonomous-summary.json`.
+  All three repeats used one WireGuard candidate, confirmed the real probe and
+  privileged takeover, then restored AmneziaWG and removed the failsafe.
+  Application-log connect time was `4.092-4.131` seconds; full smoke wall time
+  was `9.355-9.617` seconds.
+- Backend `0.9.153-update-channel-alias.4` is active on both production and
+  paid-beta contours. `channel=public-product` now returns the exact `stable`
+  Windows manifest on both primary and fallback.
+- Bidirectional production/paid-beta replication passes with zero conflicts
+  and errors. Both DBs pass `PRAGMA quick_check`, both timers are active and
+  both nodes have zero failed units. The final replication fix is commit
+  `8aac1bb3095853060fc3931c3573ba2a6b2c7240`.
+- Final checks: backend `178/178`, client `72` passed / `6` skipped, release
+  gate clean, manifests/downloads `20/20`, exact public bodies `8/8` and public
+  surface `31/31`.
+- Windows rollback:
+  `/root/greenvpn-windows-release-backups/20260730T204906Z-timeweb-0.3.21-3001`
+  and
+  `/root/greenvpn-windows-release-backups/20260730T204609Z-ruvds-0.3.21-3001`.
+- Android artifacts, sales, refunds, renewal execution, Rewarded ads, forced
+  disconnect, server routes and Friendly Linnet `5.129.237.163` were not
+  changed.
+
+## Historical Windows Connection Latency Hotfix, 2026-07-29
 
 This section overrides the older Windows release values below. The clean source
 anchor is `790c4b66aa9eb1dacaecca388d4dba93185e28a9`.

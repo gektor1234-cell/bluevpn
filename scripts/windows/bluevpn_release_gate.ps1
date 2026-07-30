@@ -2581,7 +2581,8 @@ foreach ($fragment in @(
 }
 foreach ($fragment in @(
     'replication_tombstones',
-    'user_id_map',
+    '_build_id_maps',
+    'ID_REFERENCE_COLUMNS',
     '_remap_replication_tombstone',
     'not source_has_table and not target_has_table',
     'deleted'

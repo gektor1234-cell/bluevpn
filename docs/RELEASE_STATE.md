@@ -1,6 +1,78 @@
 # Green VPN Release State
 
-## Current Release Closure (2026-07-29 MSK)
+## Current Release Closure (2026-07-30 MSK)
+
+| Layer | Current state |
+|---|---|
+| Production backend | `0.9.153-update-channel-alias.4` on Timeweb and RUVDS |
+| Published Android | `0.3.19+2026072914`, signed and optional, unchanged |
+| Published Windows | `0.3.21+3001`, optional and `NotSigned` |
+| Published paid-beta Android | `0.3.19+2026072914`, optional, unchanged |
+| Published paid-beta Windows | `0.3.21-paid-beta.1+3001`, optional and `NotSigned` |
+| Product contract | permanent Free, guest-first |
+| Money gates | sales/refunds/tax confirmation/renewal charges off |
+| Advertising | Rewarded and forced disconnect off |
+| Data plane | first working Windows route wins; background refresh remains isolated |
+
+The exact Windows client source anchor is
+`b6f60de44efdeaa5b89aa9097a8b87affa40e78d`. The production installer is
+`55400960` bytes with SHA-256
+`0D98EDBDBA4FFFA6B94F5C0D04CF3461C0C8E5F57AEC57FB201D678ED45A5E85`.
+The paid-beta installer is `55383040` bytes with SHA-256
+`34D838226281190EB6B867D87884B4C9AF066FD69C7D49D05D045713530338CA`.
+Both are exact immutable v4 artifacts and remain `NotSigned`; the owner
+explicitly accepted SmartScreen/reputation risk for this publication.
+
+The exact installed production package passed complete runtime/failover smoke.
+Three additional autonomous competing-VPN takeover repeats all selected one
+WireGuard candidate, confirmed the real data-plane probe, stopped the external
+VPN with privileged evidence and restored it in `finally`. Application-log
+connect time was `4.092-4.131` seconds and complete smoke wall time was
+`9.355-9.617` seconds. Green VPN was left disconnected, the external
+AmneziaWG tunnel was restored and the temporary failsafe was removed.
+
+Backend `public-product -> stable` update-channel aliasing is active on both
+control planes. During deployment, two pre-existing bidirectional SQLite
+replication defects were reproduced and fixed: traffic usage now converges by
+its database unique key, and node-local integer IDs are remapped through
+stable entity keys before dependent rows are merged. Backend tests pass
+`178/178`; production and paid-beta sync pass in both directions with zero
+conflicts/errors, both databases pass `PRAGMA quick_check`, both sync timers
+are active and both nodes have zero failed units.
+
+Publication checks passed: release gate `0` warnings / `0` errors, Flutter
+analyze, `72` passed / `6` skipped client tests, both package audits, exact
+runtime/failover smoke, three autonomous takeover smokes, download/manifest
+checks `20/20`, exact public body hashes `8/8` and public surface `31/31`.
+The unchanged Android body hashes remain
+`BCA7CF6A4AB2381A6EB44836726AFC07B460B87F0789BA88DC81CF84CD37F4FB`
+and
+`99EB6C2D44C955F43441039B5375CEC5AF925D19EDAFEE1D17042FAE6E2ED8A7`.
+
+Atomic Windows rollback directories:
+
+- Timeweb:
+  `/root/greenvpn-windows-release-backups/20260730T204906Z-timeweb-0.3.21-3001`;
+- RUVDS:
+  `/root/greenvpn-windows-release-backups/20260730T204609Z-ruvds-0.3.21-3001`.
+
+Backend r4 rollback directories:
+
+- Timeweb production:
+  `/root/greenvpn-public-product-backups/20260730T204040Z-timeweb-0.9.153-update-channel-alias.4`;
+- Timeweb paid-beta:
+  `/root/greenvpn-paid-beta-backend-backups/20260730T204047Z-backend-update-channel-alias-20260730-r4`;
+- RUVDS production:
+  `/root/greenvpn-public-product-backups/20260730T204007Z-ruvds-0.9.153-update-channel-alias.4`;
+- RUVDS paid-beta:
+  `/root/greenvpn-paid-beta-backend-backups/20260730T204017Z-backend-update-channel-alias-20260730-r4`.
+
+Android, advertising, sales, refunds, renewal execution, VPN server routes and
+Friendly Linnet `5.129.237.163` were not changed.
+
+All sections below are historical snapshots and are not current instructions.
+
+## Historical Windows 0.3.20 Closure (2026-07-29 MSK)
 
 | Layer | Current state |
 |---|---|
