@@ -1026,6 +1026,93 @@ class DbStateSyncTests(unittest.TestCase):
             self.assertEqual(users, [(1, "mapped@example.test")])
             self.assertEqual(subscription, (1, "green_30d"))
 
+    def test_user_primary_key_collision_uses_local_id_and_remaps_dependents(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="greenvpn-user-pk-collision-",
+            ignore_cleanup_errors=True,
+        ) as root:
+            source_db = Path(root) / "source.sqlite"
+            target_db = Path(root) / "target.sqlite"
+            schema = """
+                CREATE TABLE users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT
+                );
+                CREATE TABLE subscriptions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL UNIQUE,
+                    plan_code TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                );
+            """
+            for path in (source_db, target_db):
+                with sqlite3.connect(path) as conn:
+                    conn.executescript(schema)
+                    conn.commit()
+            with sqlite3.connect(source_db) as conn:
+                conn.execute(
+                    "INSERT INTO users(id, email, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                    (
+                        1,
+                        "source-collision@example.test",
+                        "2026-07-30T19:00:00+00:00",
+                        "2026-07-30T19:00:00+00:00",
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO subscriptions(
+                        id, user_id, plan_code, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        1001,
+                        1,
+                        "green_30d",
+                        "2026-07-30T19:00:00+00:00",
+                        "2026-07-30T20:00:00+00:00",
+                    ),
+                )
+                conn.commit()
+            with sqlite3.connect(target_db) as conn:
+                conn.execute(
+                    "INSERT INTO users(id, email, created_at, updated_at) VALUES (?, ?, ?, ?)",
+                    (
+                        1,
+                        "target-collision@example.test",
+                        "2026-07-30T18:00:00+00:00",
+                        "2026-07-30T18:00:00+00:00",
+                    ),
+                )
+                conn.commit()
+
+            result = self.run_sync(
+                source_db,
+                target_db,
+                tables=["users", "subscriptions"],
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            with sqlite3.connect(target_db) as conn:
+                source_user_id = conn.execute(
+                    "SELECT id FROM users WHERE email = ?",
+                    ("source-collision@example.test",),
+                ).fetchone()[0]
+                subscription_user_id = conn.execute(
+                    "SELECT user_id FROM subscriptions WHERE plan_code = ?",
+                    ("green_30d",),
+                ).fetchone()[0]
+                user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            self.assertNotEqual(source_user_id, 1)
+            self.assertEqual(subscription_user_id, source_user_id)
+            self.assertEqual(user_count, 2)
+
     def test_traffic_usage_converges_by_database_unique_key(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="greenvpn-traffic-unique-key-",

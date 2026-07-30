@@ -87,7 +87,6 @@ CHANGE_COLUMNS = (
     "deleted_at",
 )
 PRESERVE_ID_TABLES = {
-    "users",
     "subscriptions",
     "billing_orders",
 }
