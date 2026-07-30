@@ -36,8 +36,8 @@ from pydantic import BaseModel
 
 APP_TITLE = "Green VPN Backend"
 APP_VERSION = (
-    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.152-release-ready.1").strip()
-    or "0.9.152-release-ready.1"
+    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.153-update-channel-alias.1").strip()
+    or "0.9.153-update-channel-alias.1"
 )
 DEFAULT_PUBLIC_API_BASE_URL = "https://api.greenvpn.pro"
 
@@ -17074,6 +17074,13 @@ def normalize_app_release_channel(value: Optional[str], fallback: str = "stable"
     return candidate
 
 
+def normalize_update_manifest_channel(value: Optional[str]) -> str:
+    candidate = clean_limited_text(value, 40).strip().lower() or "stable"
+    if candidate == PUBLIC_PRODUCT_RELEASE_CHANNEL or candidate == "public-product":
+        return "stable"
+    return normalize_app_release_channel(candidate)
+
+
 def normalize_app_release_status(value: Optional[str], fallback: str = "draft") -> str:
     candidate = clean_limited_text(value, 40).strip().lower() or fallback
     if candidate not in APP_RELEASE_STATUSES:
@@ -17796,7 +17803,7 @@ def build_update_manifest(
     client_id: Optional[str] = None,
 ) -> dict:
     platform = normalize_app_release_platform(platform)
-    channel = normalize_app_release_channel(channel)
+    channel = normalize_update_manifest_channel(channel)
     current = clean_limited_text(current_version, 120).strip()
     current_marker = current.lower()
     row = latest_published_app_release(platform, channel)

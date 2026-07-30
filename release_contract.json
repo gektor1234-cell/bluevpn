@@ -1,10 +1,10 @@
 {
   "schema": 1,
   "product": "Green VPN",
-  "appVersion": "0.3.20",
-  "androidBuildNumber": "2026072921",
-  "windowsBuildNumber": 2921,
-  "backendVersion": "0.9.152-release-ready.1",
+  "appVersion": "0.3.21",
+  "androidBuildNumber": "2026073001",
+  "windowsBuildNumber": 3001,
+  "backendVersion": "0.9.153-update-channel-alias.1",
   "api": {
     "primary": "https://api.greenvpn.pro",
     "fallbacks": [

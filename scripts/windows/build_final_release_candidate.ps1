@@ -1,9 +1,9 @@
 param(
-    [string]$OutDir = 'C:\BlueVPN_Builds\public_product_final_candidate_20260729_b2921',
-    [string]$AppVersion = '0.3.20',
-    [string]$AndroidBuildNumber = '2026072921',
+    [string]$OutDir = 'C:\BlueVPN_Builds\public_product_final_candidate_20260730_b3001',
+    [string]$AppVersion = '0.3.21',
+    [string]$AndroidBuildNumber = '2026073001',
     [ValidateRange(0, 65535)]
-    [int]$WindowsBuildNumber = 2921
+    [int]$WindowsBuildNumber = 3001
 )
 
 Set-StrictMode -Version Latest
