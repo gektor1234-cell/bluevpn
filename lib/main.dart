@@ -20589,7 +20589,7 @@ class SystemServiceWindowsPreviewBackend extends VpnBackend {
         ok: false,
         message:
             response.statusCode == HttpStatus.conflict || response.exitCode == 2
-            ? 'Сначала отключи другой VPN.'
+            ? 'Green VPN не смог автоматически остановить другой активный VPN. Закрой его вручную и повтори подключение.'
             : (response.message ?? 'Резервное подключение не запустилось.'),
       );
     }
@@ -20716,7 +20716,7 @@ class AmneziaWgWindowsPreviewBackend extends VpnBackend {
         ok: false,
         message:
             response.statusCode == HttpStatus.conflict || response.exitCode == 2
-            ? 'Another VPN is active. Disconnect it before starting the protected preview transport.'
+            ? 'Green VPN could not stop the active VPN automatically. Close it manually and try again.'
             : (response.message ?? 'Windows AWG2 preview connect failed.'),
       );
     }
@@ -21022,12 +21022,7 @@ if ($null -eq $svc) { exit 0 }
       await log('preflight(connect) ${preflight.describe()}');
       if (preflight.hasCompetingTunnel) {
         await log(
-          '=== CONNECT BLOCKED: competing VPN active :: ${preflight.competingTunnelsLabel}',
-        );
-        return VpnBackendResult(
-          ok: false,
-          message:
-              'Другой VPN уже активен. Green VPN не будет включаться поверх него, чтобы не сломать сеть. Отключи другой VPN и попробуй снова.',
+          '=== CONNECT TAKEOVER: competing VPN active :: ${preflight.competingTunnelsLabel}',
         );
       }
 
@@ -21042,7 +21037,9 @@ if ($null -eq $svc) { exit 0 }
       await log('isAdmin=$admin');
       await log('applicationRoutingRequested=$applicationRoutingRequested');
 
-      if (admin && !applicationRoutingRequested) {
+      if (admin &&
+          !applicationRoutingRequested &&
+          !preflight.hasCompetingTunnel) {
         if (q0.exitCode == 0) {
           final stop = await _run('sc', ['stop', _serviceName]);
           await log(
@@ -21100,7 +21097,7 @@ if ($null -eq $svc) { exit 0 }
             return const VpnBackendResult(
               ok: false,
               message:
-                  'Другой VPN уже активен. Green VPN не будет включаться поверх него, чтобы не сломать сеть. Отключи другой VPN и попробуй снова.',
+                  'Green VPN не смог автоматически остановить другой активный VPN. Закрой его вручную и повтори подключение.',
             );
           }
         }

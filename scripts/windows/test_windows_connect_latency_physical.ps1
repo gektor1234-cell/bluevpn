@@ -23,6 +23,7 @@ $resolvedProgramDataRoot = [IO.Path]::GetFullPath($ProgramDataRoot).TrimEnd('\')
 $appPath = Join-Path $resolvedInstallRoot 'greenvpn.exe'
 $tokenPath = Join-Path $resolvedProgramDataRoot 'service_token'
 $authLogPath = Join-Path $resolvedProgramDataRoot 'auth.log'
+$backendLogPath = Join-Path $resolvedProgramDataRoot 'backend.log'
 $stateRoot = Join-Path $resolvedProgramDataRoot 'state'
 $prefsPath = Join-Path $stateRoot 'prefs.json'
 $pendingActionPath = Join-Path $stateRoot 'pending_vpn_action.txt'
@@ -217,6 +218,26 @@ function Get-NewAuthLogLines {
     return @($lines[$AfterLine..($lines.Count - 1)])
 }
 
+function Get-BackendLogLineCount {
+    if (-not (Test-Path -LiteralPath $backendLogPath -PathType Leaf)) {
+        return 0
+    }
+    return @(Get-Content -LiteralPath $backendLogPath -Encoding UTF8).Count
+}
+
+function Get-NewBackendLogLines {
+    param([Parameter(Mandatory = $true)][int]$AfterLine)
+
+    if (-not (Test-Path -LiteralPath $backendLogPath -PathType Leaf)) {
+        return @()
+    }
+    $lines = @(Get-Content -LiteralPath $backendLogPath -Encoding UTF8)
+    if ($lines.Count -le $AfterLine) {
+        return @()
+    }
+    return @($lines[$AfterLine..($lines.Count - 1)])
+}
+
 function Get-LogTimestamp {
     param([Parameter(Mandatory = $true)][string]$Line)
 
@@ -298,6 +319,11 @@ function Get-ConnectEvidence {
     return [ordered]@{
         uiAccepted = [bool]$acceptedLine
         probeConfirmed = [bool]$successfulProbeLine
+        takeoverRequested = [bool](
+            $Lines |
+                Where-Object { $_ -match 'CONNECT TAKEOVER: competing VPN active' } |
+                Select-Object -First 1
+        )
         completionMarker = if ($acceptedLine) { 'ui_accepted' } else { 'network_probe' }
         wallSeconds = [Math]::Round($WallDuration.TotalSeconds, 3)
         logSeconds = $logSeconds
@@ -372,101 +398,38 @@ function Invoke-ConnectMeasurement {
     return $evidence
 }
 
-function Test-CompetingVpnFailureLine {
-    param([Parameter(Mandatory = $true)][string]$Line)
+function Invoke-CompetingVpnTakeoverMeasurement {
+    param([int]$TimeoutSeconds = 150)
 
-    return (
-        $Line -match 'UI toggle connect backend .* ok=false message=' -and
-        $Line -match '(Другой VPN|другого VPN|Another VPN is active|competing VPN)'
-    )
-}
+    $backendAfterLine = Get-BackendLogLineCount
+    $evidence = Invoke-ConnectMeasurement `
+        -TimeoutSeconds $TimeoutSeconds `
+        -Label 'Competing-VPN takeover'
 
-function Invoke-CompetingVpnMeasurement {
-    param([int]$TimeoutSeconds = 45)
+    if (
+        -not (
+            Wait-ServiceState `
+                -Name $ExternalVpnServiceName `
+                -State 'Stopped' `
+                -TimeoutSeconds 15
+        )
+    ) {
+        throw 'Green VPN connected without stopping the active external tunnel service.'
+    }
 
-    Stop-GreenApp
-    New-Item -ItemType Directory -Force -Path $stateRoot | Out-Null
-    Set-Content -LiteralPath $pendingActionPath `
-        -Encoding ASCII `
-        -NoNewline `
-        -Value 'connect'
-
-    $afterLine = Get-AuthLogLineCount
-    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
-    $process = Start-Process -FilePath $appPath `
-        -WorkingDirectory $resolvedInstallRoot `
-        -PassThru
-    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-    $lines = @()
-    $failureLine = $null
-    do {
-        Start-Sleep -Milliseconds 250
-        $lines = @(Get-NewAuthLogLines -AfterLine $afterLine)
-        $failureLine = $lines |
-            Where-Object { Test-CompetingVpnFailureLine -Line $_ } |
+    $backendLines = @(Get-NewBackendLogLines -AfterLine $backendAfterLine)
+    $takeoverComplete = [bool](
+        $backendLines |
+            Where-Object { $_ -match 'takeover complete reason=connect' } |
             Select-Object -First 1
-        if ($failureLine) {
-            break
-        }
-    } while ((Get-Date) -lt $deadline)
-
-    if (-not $failureLine) {
-        throw "The app did not report the active competing VPN within $TimeoutSeconds seconds."
+    )
+    if (-not $takeoverComplete) {
+        throw 'The privileged service did not record a completed competing-VPN takeover.'
     }
 
-    $settleDeadline = (Get-Date).AddSeconds(15)
-    do {
-        Start-Sleep -Milliseconds 250
-        $lines = @(Get-NewAuthLogLines -AfterLine $afterLine)
-        if (
-            $lines |
-                Where-Object {
-                    $_ -match 'UI fallback cleanup stage=connect_failed'
-                }
-        ) {
-            Start-Sleep -Milliseconds 750
-            $lines = @(Get-NewAuthLogLines -AfterLine $afterLine)
-            break
-        }
-    } while ((Get-Date) -lt $settleDeadline)
-    $stopwatch.Stop()
-
-    $requestedLine = $lines |
-        Where-Object { $_ -match 'UI toggle requested' } |
-        Select-Object -First 1
-    $guardSeconds = $null
-    if ($requestedLine) {
-        $requestedAt = Get-LogTimestamp -Line $requestedLine
-        $failureAt = Get-LogTimestamp -Line $failureLine
-        if ($requestedAt -and $failureAt) {
-            $guardSeconds = [Math]::Round(
-                ($failureAt - $requestedAt).TotalSeconds,
-                3
-            )
-        }
-    }
-
-    $evidence = Get-ConnectEvidence -Lines $lines -WallDuration $stopwatch.Elapsed
-    $candidates = @($evidence.candidates)
-    if ($candidates.Count -ne 1 -or [int]$candidates[0].index -ne 1) {
-        throw 'The app continued the route cascade after detecting the competing VPN.'
-    }
-    if ($evidence.uiAccepted -or $evidence.probeConfirmed) {
-        throw 'The app accepted a Green VPN tunnel while a competing VPN was active.'
-    }
-    if (-not (Wait-AllManagedComponentsStopped -TimeoutSeconds 30)) {
-        throw 'Green VPN components remained active after the competing-VPN guard.'
-    }
-
-    return [ordered]@{
-        detected = $true
-        guardSeconds = $guardSeconds
-        wallSeconds = [Math]::Round($stopwatch.Elapsed.TotalSeconds, 3)
-        candidatesAttempted = $candidates.Count
-        backendDurations = @($evidence.backendDurations)
-        greenComponentsStopped = $true
-        appProcessId = $process.Id
-    }
+    $evidence.externalVpnStopped = $true
+    $evidence.privilegedTakeoverConfirmed = $true
+    return $evidence
 }
 
 function Get-PreferenceEvidence {
@@ -532,7 +495,7 @@ if ($reportDirectory) {
 $report = [ordered]@{
     startedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
     completedAtUtc = $null
-    mode = if ($ExpectCompetingVpn) { 'competing_vpn_guard' } else { 'connect_latency' }
+    mode = if ($ExpectCompetingVpn) { 'competing_vpn_takeover' } else { 'connect_latency' }
     success = $false
     failure = $null
     baseline = [ordered]@{
@@ -546,7 +509,7 @@ $report = [ordered]@{
     firstConnect = $null
     storedPreference = $null
     secondConnect = $null
-    competingVpnGuard = $null
+    competingVpnTakeover = $null
     cleanup = [ordered]@{
         allManagedComponentsStopped = $false
         publicHealth = $false
@@ -638,7 +601,8 @@ try {
     }
 
     if ($ExpectCompetingVpn) {
-        $report.competingVpnGuard = Invoke-CompetingVpnMeasurement
+        $report.competingVpnTakeover =
+            Invoke-CompetingVpnTakeoverMeasurement -TimeoutSeconds $FirstConnectTimeoutSeconds
         $report.success = $true
     } else {
         $report.firstConnect = Invoke-ConnectMeasurement `
@@ -717,8 +681,15 @@ try {
                 $restoredEgressFingerprint -eq $baselineEgressFingerprint
         } catch {}
     } elseif ($ExpectCompetingVpn -and $externalVpnWasRunning) {
-        $report.cleanup.externalVpnRestored =
-            (Get-ServiceState -Name $ExternalVpnServiceName) -eq 'Running'
+        try {
+            Start-Service -Name $ExternalVpnServiceName -ErrorAction Stop
+            $report.cleanup.externalVpnRestored =
+                Wait-ServiceState `
+                    -Name $ExternalVpnServiceName `
+                    -State 'Running' `
+                    -TimeoutSeconds 45
+        } catch {}
+        Start-Sleep -Seconds 3
         try {
             $restoredEgressFingerprint = Get-EgressFingerprint
             $report.cleanup.originalEgressRestored =

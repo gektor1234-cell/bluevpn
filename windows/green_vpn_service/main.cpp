@@ -701,7 +701,8 @@ void HandleRequest(SOCKET client, const std::string& request) {
                TaskResultJson(true, exit_code, "connect task accepted"));
     } else if (exit_code == 2) {
       SendHttp(client, 409, "Conflict",
-               TaskResultJson(false, exit_code, "another VPN is active"));
+               TaskResultJson(false, exit_code,
+                              "competing VPN could not be stopped"));
     } else {
       SendHttp(client, 500, "Internal Server Error",
                TaskResultJson(false, exit_code, "connect task failed"));

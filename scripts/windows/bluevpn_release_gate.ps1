@@ -1526,6 +1526,37 @@ foreach ($fragment in $vpnTaskKillSwitchFragments) {
     }
 }
 
+$vpnPriorityTakeoverFragments = @(
+    'function Get-CompetingVpnServices',
+    'function Stop-CompetingVpnTunnels',
+    "Stop-CompetingVpnTunnels -Reason 'connect'",
+    "Stop-CompetingVpnTunnels -Reason 'guard'",
+    '-AllowedExitCodes @(0, 1056, 1060, 1062)',
+    'takeover complete reason=$Reason',
+    'connect takeover blocked by competitor count='
+)
+foreach ($fragment in $vpnPriorityTakeoverFragments) {
+    if ($vpnTaskScript.Contains($fragment)) {
+        Add-Pass "Windows VPN task priority-takeover marker present: $fragment"
+    }
+    else {
+        Add-Error "Windows VPN task priority-takeover marker missing: $fragment"
+    }
+    if ($transportPreviewVpnTaskScript.Contains($fragment)) {
+        Add-Pass "Windows transport cascade priority-takeover marker present: $fragment"
+    }
+    else {
+        Add-Error "Windows transport cascade priority-takeover marker missing: $fragment"
+    }
+}
+
+if ($main.Contains('=== CONNECT TAKEOVER: competing VPN active')) {
+    Add-Pass 'Windows client delegates competing-VPN takeover to the privileged service'
+}
+else {
+    Add-Error 'Windows client still blocks before the privileged competing-VPN takeover'
+}
+
 
 $vpnTaskApplicationRoutingFragments = @(
     'Start-GreenProcessRouter',

@@ -435,6 +435,26 @@ function Get-OwnService {
     }
 }
 
+function Get-CompetingVpnServices {
+    try {
+        return @(
+            Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.State -ne 'Stopped' -and
+                    $_.Name -ne $ServiceName -and
+                    (
+                        $_.Name -like 'WireGuardTunnel$*' -or
+                        $_.Name -like 'AmneziaWGTunnel$*' -or
+                        $_.Name -eq 'CloudflareWARP'
+                    )
+                }
+        )
+    } catch {
+        Write-GreenLog "service competition check warning: $($_.Exception.Message)"
+        return @()
+    }
+}
+
 function Get-CompetingVpnLabels {
     $labels = New-Object System.Collections.Generic.List[string]
 
@@ -455,24 +475,47 @@ function Get-CompetingVpnLabels {
         Write-GreenLog "adapter competition check warning: $($_.Exception.Message)"
     }
 
-    try {
-        $services = Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
-            Where-Object {
-                $_.State -eq 'Running' -and
-                (
-                    ($_.Name -like 'WireGuardTunnel$*' -and $_.Name -ne $ServiceName) -or
-                    ($_.Name -like 'AmneziaWGTunnel$*') -or
-                    ($_.Name -match '(?i)(CloudflareWARP|Cloudflare WARP)')
-                )
-            }
-        foreach ($service in $services) {
-            $labels.Add("service:$($service.Name)") | Out-Null
-        }
-    } catch {
-        Write-GreenLog "service competition check warning: $($_.Exception.Message)"
+    foreach ($service in @(Get-CompetingVpnServices)) {
+        $labels.Add("service:$($service.Name)") | Out-Null
     }
 
     return @($labels | Sort-Object -Unique)
+}
+
+function Stop-CompetingVpnTunnels {
+    param(
+        [ValidateSet('connect', 'guard')]
+        [string]$Reason
+    )
+
+    $services = @(Get-CompetingVpnServices)
+    if ($services.Count -eq 0) {
+        return @(Get-CompetingVpnLabels)
+    }
+
+    Write-GreenLog "takeover requested reason=$Reason serviceCount=$($services.Count)"
+    foreach ($service in $services) {
+        $serviceName = [string]$service.Name
+        try {
+            Invoke-External -FilePath 'sc.exe' -Arguments @('stop', $serviceName) `
+                -AllowedExitCodes @(0, 1056, 1060, 1062) | Out-Null
+        } catch {
+            Write-GreenLog "takeover service stop failed: $serviceName"
+        }
+    }
+
+    for ($attempt = 0; $attempt -lt 40; $attempt++) {
+        $remaining = @(Get-CompetingVpnLabels)
+        if ($remaining.Count -eq 0) {
+            Write-GreenLog "takeover complete reason=$Reason"
+            return @()
+        }
+        Start-Sleep -Milliseconds 250
+    }
+
+    $remaining = @(Get-CompetingVpnLabels)
+    Write-GreenLog "takeover incomplete reason=$Reason remainingCount=$($remaining.Count)"
+    return $remaining
 }
 
 function Stop-GreenTunnel {
@@ -508,9 +551,9 @@ function Start-GreenTunnel {
         exit 3
     }
 
-    $competitors = @(Get-CompetingVpnLabels)
+    $competitors = @(Stop-CompetingVpnTunnels -Reason 'connect')
     if ($competitors.Count -gt 0) {
-        Write-GreenLog "connect blocked because another VPN is active: $($competitors -join ', ')"
+        Write-GreenLog "connect takeover blocked by competitor count=$($competitors.Count)"
         Stop-GreenTunnel
         exit 2
     }
@@ -593,9 +636,9 @@ function Invoke-GreenGuard {
         return
     }
 
-    $competitors = @(Get-CompetingVpnLabels)
+    $competitors = @(Stop-CompetingVpnTunnels -Reason 'guard')
     if ($competitors.Count -gt 0) {
-        Write-GreenLog "guard disconnecting Green VPN because another VPN is active: $($competitors -join ', ')"
+        Write-GreenLog "guard disconnecting Green VPN because takeover remained incomplete count=$($competitors.Count)"
         Stop-GreenTunnel
     }
 }
