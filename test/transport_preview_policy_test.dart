@@ -111,6 +111,30 @@ void main() {
     expect(greenVpnShouldTriggerRuntimeFailover(failures), isTrue);
   });
 
+  test('Windows runtime health follows the routed data-plane probe', () {
+    expect(
+      greenVpnRuntimeRouteHealthy(
+        backendConnected: false,
+        dataPlaneProbeOk: true,
+      ),
+      isTrue,
+    );
+    expect(
+      greenVpnRuntimeRouteHealthy(
+        backendConnected: true,
+        dataPlaneProbeOk: false,
+      ),
+      isFalse,
+    );
+    expect(
+      greenVpnRuntimeRouteHealthy(
+        backendConnected: true,
+        dataPlaneProbeOk: true,
+      ),
+      isTrue,
+    );
+  });
+
   test('Windows never blocks the connect button on an Internet probe', () {
     expect(
       greenVpnShouldBlockForegroundForPostConnectProbe(
@@ -135,7 +159,14 @@ void main() {
     );
   });
 
-  test('Windows foreground connect selects one simple WireGuard route', () {
+  test('Windows foreground connect prefers an exact cached route', () {
+    expect(
+      greenVpnWindowsForegroundCandidateIndex(
+        protocols: const <String>['amneziawg', 'wireguard_udp', 'hysteria2'],
+        immediateCachedIndex: 0,
+      ),
+      0,
+    );
     expect(
       greenVpnWindowsForegroundCandidateIndex(
         protocols: const <String>['amneziawg', 'wireguard_udp', 'hysteria2'],
@@ -335,6 +366,17 @@ void main() {
     expect(canUse(managedRouteId: 'another-route'), isFalse);
     expect(canUse(managedProtocol: 'amneziawg'), isFalse);
     expect(canUse(preferredId: 'another-route'), isFalse);
+    expect(
+      canUse(
+        candidateId: 'gb1-awg2-canary',
+        candidateProtocol: 'amneziawg',
+        managedRouteId: 'gb1-awg2-canary',
+        managedProtocol: 'amneziawg',
+        preferredId: 'gb1-awg2-canary',
+        preferredProtocol: 'amneziawg',
+      ),
+      isTrue,
+    );
     expect(
       canUse(preferredAt: now.subtract(const Duration(hours: 25))),
       isFalse,

@@ -90,6 +90,15 @@ int greenVpnNextRuntimeFailoverFailureCount({
 bool greenVpnShouldTriggerRuntimeFailover(int failureCount) =>
     failureCount >= greenVpnRuntimeFailoverFailureThreshold;
 
+bool greenVpnRuntimeRouteHealthy({
+  required bool backendConnected,
+  required bool dataPlaneProbeOk,
+}) {
+  // The real routed probe is authoritative. A freshly started WireGuard
+  // service may not expose a handshake until that probe creates traffic.
+  return dataPlaneProbeOk;
+}
+
 bool greenVpnShouldBlockForegroundForPostConnectProbe({
   required bool probeRequested,
   required bool isWindows,
@@ -103,8 +112,7 @@ int greenVpnWindowsForegroundCandidateIndex({
   final cachedIndex = immediateCachedIndex;
   if (cachedIndex != null &&
       cachedIndex >= 0 &&
-      cachedIndex < protocols.length &&
-      protocols[cachedIndex].trim().toLowerCase() == 'wireguard_udp') {
+      cachedIndex < protocols.length) {
     return cachedIndex;
   }
   final wireGuardIndex = protocols.indexWhere(

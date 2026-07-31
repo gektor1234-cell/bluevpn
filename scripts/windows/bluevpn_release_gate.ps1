@@ -82,6 +82,9 @@ $transportPreviewVpnTaskPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_
 $transportSelectiveRoutingPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_selective_routing.ps1"
 $transportSelectiveRoutingTestPath = Join-Path $ProjectRoot "scripts\windows\test_windows_selective_routing_policy.ps1"
 $windowsRuntimeFailoverPhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_windows_public_runtime_failover_physical.ps1"
+$windowsConnectLatencyPhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_windows_connect_latency_physical.ps1"
+$windowsFastCacheReleaseSmokePath = Join-Path $ProjectRoot "scripts\windows\run_windows_fast_cache_release_smoke.ps1"
+$windowsSmokeNetworkRestorePath = Join-Path $ProjectRoot "scripts\windows\restore_windows_smoke_network.ps1"
 $transportCascadeStagePath = Join-Path $ProjectRoot "scripts\windows\stage_windows_transport_cascade.ps1"
 $publicInstallerAuditPath = Join-Path $ProjectRoot "scripts\windows\test_public_installer_package.ps1"
 $transportPreviewInstallPath = Join-Path $ProjectRoot "scripts\windows\install_windows_transport_preview.ps1"
@@ -215,6 +218,9 @@ $transportPreviewVpnTaskScript = Read-Text $transportPreviewVpnTaskPath
 $transportSelectiveRoutingScript = Read-Text $transportSelectiveRoutingPath
 $transportSelectiveRoutingTestScript = Read-Text $transportSelectiveRoutingTestPath
 $windowsRuntimeFailoverPhysicalTestScript = Read-Text $windowsRuntimeFailoverPhysicalTestPath
+$windowsConnectLatencyPhysicalTestScript = Read-Text $windowsConnectLatencyPhysicalTestPath
+$windowsFastCacheReleaseSmokeScript = Read-Text $windowsFastCacheReleaseSmokePath
+$windowsSmokeNetworkRestoreScript = Read-Text $windowsSmokeNetworkRestorePath
 $transportCascadeStageScript = Read-Text $transportCascadeStagePath
 $publicInstallerAuditScript = Read-Text $publicInstallerAuditPath
 $transportPreviewInstallScript = Read-Text $transportPreviewInstallPath
@@ -1575,6 +1581,9 @@ foreach ($fragment in @(
     'privileged task confirmed tunnel service running; deep verification moved to background',
     'windows foreground connect selected single primary',
     'windows background recovery retained ordered candidates=',
+    'return BlueVpnLocalPaths.userStateDir();',
+    'await WindowsLocalSecurity.preparePrivateFileForWrite(f.path);',
+    'await _recordRouteSuccess(server);',
     'greenVpnShouldBlockForegroundForPostConnectProbe',
     'initialChecksSeconds=2,5',
     'ensure config endpoint preparation failed'
@@ -1585,6 +1594,13 @@ foreach ($fragment in @(
     else {
         Add-Error "Windows fast-connect endpoint normalization marker missing: $fragment"
     }
+}
+
+if ($main.Contains("candidate.protocolCode.trim().toLowerCase() != 'wireguard_udp'")) {
+    Add-Error 'Windows immediate cache is still restricted to WireGuard instead of the exact confirmed route'
+}
+else {
+    Add-Pass 'Windows immediate cache accepts the exact confirmed route across supported protocols'
 }
 
 $nativeFastAcceptIndex = $main.IndexOf(
@@ -1657,6 +1673,30 @@ if ($startOwnTunnelStart -ge 0 -and $startOwnTunnelEnd -gt $startOwnTunnelStart)
 }
 else {
     Add-Error 'Windows native connect function could not be inspected'
+}
+
+$stopOwnTunnelStart = $transportPreviewVpnTaskScript.IndexOf('function Stop-OwnTunnel {')
+$stopOwnTunnelEnd = $transportPreviewVpnTaskScript.IndexOf(
+    'function Start-OwnTunnel {',
+    $stopOwnTunnelStart
+)
+if ($stopOwnTunnelStart -ge 0 -and $stopOwnTunnelEnd -gt $stopOwnTunnelStart) {
+    $stopOwnTunnelBody = $transportPreviewVpnTaskScript.Substring(
+        $stopOwnTunnelStart,
+        $stopOwnTunnelEnd - $stopOwnTunnelStart
+    )
+    if (
+        $stopOwnTunnelBody.Contains('$activeAdapters = @(if (') -and
+        -not $stopOwnTunnelBody.Contains('$activeAdapters = if (')
+    ) {
+        Add-Pass 'Windows transport cleanup preserves an empty adapter result as an array'
+    }
+    else {
+        Add-Error 'Windows transport cleanup must not dereference Count on a null adapter result'
+    }
+}
+else {
+    Add-Error 'Windows transport cleanup function could not be inspected'
 }
 
 foreach ($fragment in @(
@@ -1733,6 +1773,9 @@ $transportPreviewRouteFragments = @(
     'Get-ManagedIpv4Endpoint',
     'Ensure-EndpointBypassRoute',
     'Remove-EndpointBypassRoute',
+    'Save-CompetingVpnState',
+    'Restore-CompetingVpnTunnels',
+    '$CompetingVpnStatePath',
     '$endpoint/32',
     'Find-NetRoute -RemoteIPAddress $endpoint',
     "-PolicyStore ActiveStore",
@@ -1743,7 +1786,8 @@ $transportPreviewRouteFragments = @(
     "'MSFT_NetRoute'",
     'No physical gateway route is available',
     'endpoint bypass route ready',
-    'if ($Action -eq ''Connect'') { Stop-OwnTunnel }',
+    'if ($Action -eq ''Connect'') {',
+    'failed competitor restore line=',
     'Broad write ACL is forbidden for transport preview state',
     "@('S-1-1-0', 'S-1-5-11', 'S-1-5-32-545')",
     '[IO.FileAttributes]::ReparsePoint',
@@ -1929,6 +1973,8 @@ $windowsRuntimeFailoverChecks = [ordered]@{
         $transportPreviewPolicyTest,
         'runtime failover requires two consecutive unhealthy checks',
         'persisted runtime route ids are strictly normalized',
+        'Windows foreground connect prefers an exact cached route',
+        "candidateProtocol: 'amneziawg'",
         'isWindows: true'
     )
     'Windows runtime failover lifecycle' = @(
@@ -1987,6 +2033,38 @@ $windowsRuntimeFailoverChecks = [ordered]@{
         'originalEgressRestored',
         'finally'
     )
+    'Windows fast-cache latency proof uses private state and stop-before-disconnect cleanup' = @(
+        $windowsConnectLatencyPhysicalTestScript,
+        '$UserStateRoot',
+        "Join-Path `$env:APPDATA 'GreenVPN\state'",
+        'lastSuccessfulRouteProtocol',
+        'lastSuccessfulRouteAt',
+        'Stop-GreenApp',
+        'Cached connection exceeded',
+        'Second connection did not prioritize the exact last successful route'
+    )
+    'Windows autonomous fast-cache release smoke has exact artifact and recovery gates' = @(
+        $windowsFastCacheReleaseSmokeScript,
+        '$ExpectedSha256',
+        '$ExpectedSizeBytes',
+        '$ExpectedFileVersion',
+        '-UseUiAutomationAction',
+        '-ExpectCompetingVpn',
+        '-StopGreenUi',
+        '$DeadmanProcessId',
+        'deadmanStopped',
+        'installedTaskContractConfirmed',
+        'privilegedTakeoverConfirmed',
+        'exact-route timing contract'
+    )
+    'Windows emergency smoke recovery stops UI before disconnect' = @(
+        $windowsSmokeNetworkRestoreScript,
+        '[switch]$StopGreenUi',
+        'Stop-GreenVpnUi',
+        'greenUiStopped',
+        'greenComponentsStopped',
+        'externalVpnRunning'
+    )
     'Windows dnstt service status' = @(
         $serviceSource,
         'kDnsttPidPath',
@@ -2010,19 +2088,38 @@ foreach ($check in $windowsRuntimeFailoverChecks.GetEnumerator()) {
     }
 }
 
-if (Test-Path -LiteralPath $windowsRuntimeFailoverPhysicalTestPath) {
-    $tokens = $null
-    $parseErrors = $null
-    [System.Management.Automation.Language.Parser]::ParseFile(
-        $windowsRuntimeFailoverPhysicalTestPath,
-        [ref]$tokens,
-        [ref]$parseErrors
-    ) | Out-Null
-    if ($parseErrors -and $parseErrors.Count -gt 0) {
-        Add-Error "Windows runtime failover physical test has parser errors: $($parseErrors[0].ToString())"
+foreach ($parserCheck in @(
+    [pscustomobject]@{
+        Label = 'Windows runtime failover physical test'
+        Path = $windowsRuntimeFailoverPhysicalTestPath
+    },
+    [pscustomobject]@{
+        Label = 'Windows connect latency physical test'
+        Path = $windowsConnectLatencyPhysicalTestPath
+    },
+    [pscustomobject]@{
+        Label = 'Windows autonomous fast-cache release smoke'
+        Path = $windowsFastCacheReleaseSmokePath
+    },
+    [pscustomobject]@{
+        Label = 'Windows emergency smoke recovery'
+        Path = $windowsSmokeNetworkRestorePath
     }
-    else {
-        Add-Pass 'Windows runtime failover physical test PowerShell parser check passed'
+)) {
+    if (Test-Path -LiteralPath $parserCheck.Path) {
+        $tokens = $null
+        $parseErrors = $null
+        [System.Management.Automation.Language.Parser]::ParseFile(
+            $parserCheck.Path,
+            [ref]$tokens,
+            [ref]$parseErrors
+        ) | Out-Null
+        if ($parseErrors -and $parseErrors.Count -gt 0) {
+            Add-Error "$($parserCheck.Label) has parser errors: $($parseErrors[0].ToString())"
+        }
+        else {
+            Add-Pass "$($parserCheck.Label) PowerShell parser check passed"
+        }
     }
 }
 

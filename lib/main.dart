@@ -2222,6 +2222,7 @@ class PendingVpnActionStore {
     if (normalized != 'connect' && normalized != 'disconnect') return;
     try {
       final f = await _file();
+      await WindowsLocalSecurity.preparePrivateFileForWrite(f.path);
       await f.writeAsString(normalized);
       await WindowsLocalSecurity.prepareSharedStateDirectory(f.parent.path);
       await WindowsLocalSecurity.prepareSharedStateFile(f.path);
@@ -2229,6 +2230,7 @@ class PendingVpnActionStore {
     } on FileSystemException {
       await WindowsLocalSecurity.repairBlueVpnLocalAcls();
       final f = await _file();
+      await WindowsLocalSecurity.preparePrivateFileForWrite(f.path);
       await f.writeAsString(normalized);
       await WindowsLocalSecurity.prepareSharedStateDirectory(f.parent.path);
       await WindowsLocalSecurity.prepareSharedStateFile(f.path);
@@ -2769,7 +2771,7 @@ class Prefs {
 
 class PrefsStore {
   Future<String> _appDirPath() async {
-    return BlueVpnLocalPaths.sharedStateDir();
+    return BlueVpnLocalPaths.userStateDir();
   }
 
   Future<File> _file() async {
@@ -2805,9 +2807,13 @@ class PrefsStore {
   Future<void> _writeMap(Map<String, dynamic> map) async {
     if (kIsWeb) return;
     final f = await _file();
+    if (Platform.isWindows) {
+      await WindowsLocalSecurity.preparePrivateFileForWrite(f.path);
+    }
     await f.writeAsString(jsonEncode(map));
-    await WindowsLocalSecurity.prepareSharedStateDirectory(f.parent.path);
-    await WindowsLocalSecurity.prepareSharedStateFile(f.path);
+    if (Platform.isWindows) {
+      await WindowsLocalSecurity.hardenPath(f.path);
+    }
   }
 
   Future<Prefs> readPrefs() async {
@@ -10583,15 +10589,28 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     if (!kTransportPreviewFallbackEnabled || server.isAuto) return;
     _routeFailureCooldown.recordSuccess(_routeCooldownKey(server));
     if (!kIsWeb && Platform.isWindows) {
-      _lastSuccessfulRouteId = greenVpnNormalizeManagedRouteId(server.id);
-      _lastSuccessfulRouteProtocol = server.protocolCode.trim().toLowerCase();
-      _lastSuccessfulRouteAt = DateTime.now().toUtc();
+      final routeId = greenVpnNormalizeManagedRouteId(server.id);
+      final protocol = server.protocolCode.trim().toLowerCase();
+      final confirmedAt = DateTime.now().toUtc();
+      if (greenVpnIsFreshPreferredRoute(
+        candidateId: routeId,
+        candidateProtocol: protocol,
+        preferredId: _lastSuccessfulRouteId,
+        preferredProtocol: _lastSuccessfulRouteProtocol,
+        preferredAt: _lastSuccessfulRouteAt,
+        now: confirmedAt,
+      )) {
+        return;
+      }
       try {
         await _prefsStore.patch({
-          'lastSuccessfulRouteId': _lastSuccessfulRouteId,
-          'lastSuccessfulRouteProtocol': _lastSuccessfulRouteProtocol,
-          'lastSuccessfulRouteAt': _lastSuccessfulRouteAt!.toIso8601String(),
+          'lastSuccessfulRouteId': routeId,
+          'lastSuccessfulRouteProtocol': protocol,
+          'lastSuccessfulRouteAt': confirmedAt.toIso8601String(),
         });
+        _lastSuccessfulRouteId = routeId;
+        _lastSuccessfulRouteProtocol = protocol;
+        _lastSuccessfulRouteAt = confirmedAt;
       } catch (error) {
         await appendBlueVpnClientLog(
           'route success cache persistence failed server=${server.id} error=$error',
@@ -10781,9 +10800,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
     _windowsRuntimeProbeRunning = true;
     var backendConnected = false;
-    PostConnectProbeResult? probe;
+    late PostConnectProbeResult probe;
     Object? statusError;
     try {
+      final probeFuture = _probeConnectedTunnelRoute(server);
       try {
         backendConnected = await _vpnBackend.isConnected().timeout(
           const Duration(seconds: 5),
@@ -10791,9 +10811,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       } catch (error) {
         statusError = error;
       }
-      if (backendConnected) {
-        probe = await _probeConnectedTunnelRoute(server);
-      }
+      probe = await probeFuture;
     } finally {
       _windowsRuntimeProbeRunning = false;
     }
@@ -10805,13 +10823,17 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       return;
     }
 
-    final routeHealthy = backendConnected && probe?.ok == true;
+    final routeHealthy = greenVpnRuntimeRouteHealthy(
+      backendConnected: backendConnected,
+      dataPlaneProbeOk: probe.ok,
+    );
     final previousFailureCount = _windowsRuntimeFailureCount;
     _windowsRuntimeFailureCount = greenVpnNextRuntimeFailoverFailureCount(
       currentFailureCount: _windowsRuntimeFailureCount,
       routeHealthy: routeHealthy,
     );
     if (routeHealthy) {
+      await _recordRouteSuccess(server);
       if (previousFailureCount > 0) {
         await appendBlueVpnClientLog(
           'windows runtime probe recovered server=${server.id} previousFailures=$previousFailureCount',
@@ -10820,29 +10842,27 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       return;
     }
 
-    final errorCode = !backendConnected
-        ? 'runtime_backend_not_connected'
-        : (probe?.statusCode == null
-              ? 'runtime_youtube_probe_failed'
-              : 'runtime_youtube_http_${probe?.statusCode}');
+    final errorCode = probe.statusCode == null
+        ? 'runtime_youtube_probe_failed'
+        : 'runtime_youtube_http_${probe.statusCode}';
     await appendBlueVpnClientLog(
-      'windows runtime probe failed server=${server.id} protocol=${server.protocolCode} failures=$_windowsRuntimeFailureCount connected=$backendConnected status=${probe?.statusCode} statusError=${statusError ?? ""} probeError=${probe?.error ?? ""}',
+      'windows runtime probe failed server=${server.id} protocol=${server.protocolCode} failures=$_windowsRuntimeFailureCount connected=$backendConnected status=${probe.statusCode} statusError=${statusError ?? ""} probeError=${probe.error ?? ""}',
     );
     unawaited(
       _reportRouteEvent(
         server,
-        stage: 'runtime_probe',
+        stage: 'post_connect_probe',
         ok: false,
-        latencyMs: probe?.latencyMs,
+        latencyMs: probe.latencyMs,
         errorCode: errorCode,
         message: 'Активный Windows-маршрут перестал подтверждать работу.',
         details: {
           'failureCount': _windowsRuntimeFailureCount,
           'backendConnected': backendConnected,
-          'target': probe?.target,
-          'statusCode': probe?.statusCode,
+          'target': probe.target,
+          'statusCode': probe.statusCode,
           'statusError': statusError?.toString(),
-          'probeError': probe?.error,
+          'probeError': probe.error,
         },
       ),
     );
@@ -11046,9 +11066,6 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     final now = DateTime.now().toUtc();
     final hasManagedConfig = await _cfg.hasManagedConfig();
     for (final candidate in candidates) {
-      if (candidate.protocolCode.trim().toLowerCase() != 'wireguard_udp') {
-        continue;
-      }
       final serverBase = await _cfg.readBaseConfigForServer(candidate.id);
       final hasCandidateCache =
           hasManagedConfig || (serverBase ?? '').trim().isNotEmpty;
@@ -11813,7 +11830,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                 : 'post connect checks accepted tunnel server=${candidate.id}',
           );
           if (!mounted) return;
-          unawaited(_recordRouteSuccess(candidate));
+          if (kIsWeb || !Platform.isWindows) {
+            unawaited(_recordRouteSuccess(candidate));
+          }
           unawaited(_armRuntimeFailover(candidate));
           _refreshConnectionOptionsAfterConnect(candidate);
           if (kPaidBetaBuild) {
