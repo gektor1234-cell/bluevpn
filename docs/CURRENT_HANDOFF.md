@@ -15,7 +15,7 @@ This is the current operational entry point. Read it together with
    client profiles.
 3. Never touch Friendly Linnet `5.129.237.163` without a new explicit owner
    instruction.
-4. Android `0.3.19+2026072914` and Windows `0.3.22+3101` are public and
+4. Android `0.3.19+2026072914` and Windows `0.3.24+3103` are public and
    optional. Windows paid-beta `0.3.21-paid-beta.1+3001` is also public and
    optional. Do not republish, force or roll them back without a verified exact
    artifact, alternate-node health and an atomic backup.
@@ -31,50 +31,69 @@ This is the current operational entry point. Read it together with
    must reject first-payment creation and must not run the renewal executor.
 8. Server maintenance is one node at a time after alternate control/data planes
    pass readiness. The owner Windows PC must not be rebooted by automation.
-9. Windows 0.3.22 is public and optional, but remains unsigned by explicit
+9. Windows 0.3.24 is public and optional, but remains unsigned by explicit
    owner instruction with the SmartScreen risk accepted. Keep the `NotSigned`
    status visible in operations and expect Windows SmartScreen/reputation
    warnings until a higher signed successor is released.
 10. The admin console is a protected operator surface. Keep Nginx Basic Auth,
     `noindex`, frame denial, staff authentication, RBAC and audit enabled; never
     expose bootstrap tokens or payment/tunnel secrets in the UI or exports.
-11. Stable production publishes Android `0.3.19` and Windows `0.3.22`.
-    Clean-source Windows `0.3.22+3101` is published after automated validation,
-    but the owner elected to perform the post-publication physical connection
-    test. It is not a trusted/signed Windows release. Do not conflate
-    successful unsigned publication with Authenticode trust or physical smoke.
+11. Stable production publishes Android `0.3.19` and Windows `0.3.24`.
+    Windows `0.3.24+3103` passed exact-package physical takeover, cached-route
+    and recovery smoke before publication. It is not a trusted/signed Windows
+    release; do not conflate successful unsigned publication with
+    Authenticode trust.
 
-## Windows 0.3.22 Instant Foreground Connect Publication, 2026-07-31
+## Windows 0.3.24 Fast Cache And Recovery Publication, 2026-07-31
 
 This is the current Windows publication entry point. The exact client source
-anchor is `412cdd54645fcd50f5711cc6b9e14ffdff6bb242`.
+anchor is `ab0e87b4734ae159005f4ed31f6c9a57bedd5284`.
 
 - Production installer:
-  `C:\BlueVPN_Builds\public_product_20260731_b3101_commit412cdd5\GreenVPN_Setup_0.3.22.exe`,
-  `55400960` bytes, SHA-256
-  `5F2EA0EC09DE7BE7932DF22328F3B95243445B09FBF38F41DBE59D9F66DDF197`.
+  `C:\BlueVPN_Builds\public_product_20260731_b3103_fast_cache_v3\GreenVPN_Setup_0.3.24.exe`,
+  `55401472` bytes, SHA-256
+  `A6938B0EBA54BF0CC4CE029F8A3365D28DB63FA280A2E897B63FEA079F02FA38`.
   It is optional and `NotSigned`; the owner accepted the existing SmartScreen
   risk for unsigned publication.
-- A foreground Windows connect now selects one WireGuard UDP candidate. The
-  privileged task returns after the tunnel service is running; deep runtime
-  confirmation, catalog refresh and fallback preparation continue in the
-  background.
-- Validation before publication: Flutter tests `74` passed / `6` skipped,
-  Flutter analysis clean, release gate clean, Bash and PowerShell parser checks
-  clean, and the exact installer package audit passed.
-- Publication verification: dynamic/static manifests and download headers
-  passed, both public installer bodies matched the exact SHA-256 (`2/2`), and
-  the external public-surface probe passed `31/31`.
+- Foreground connect uses one candidate and accepts the real YouTube data-plane
+  probe as runtime health. Deeper catalog/fallback work remains in the
+  background, while the last confirmed route and protocol are kept in the user
+  state directory for the next connection.
+- Exact-package autonomous physical smoke passed twice with AmneziaWG already
+  active. The clean-cache run selected only `current_wg0` / `wireguard_udp`,
+  confirmed the probe and privileged takeover in `20.139` seconds wall time
+  (`14.115` seconds in the app log). The cached repeat used the same one route
+  and completed in `17.373` seconds wall time (`12.203` seconds in the app log).
+  Cleanup restored `AmneziaWGTunnel$device20_full`, stopped Green VPN, removed
+  the failsafe and preserved public health and YouTube access.
+- Validation before publication: Flutter tests `75` passed / `6` skipped,
+  Flutter analysis clean, release gate clean and the exact installer package
+  audit passed.
+- Publication verification: stable/public-product manifests on both control
+  planes return `0.3.24+3103`, optional and `fileReady=true`; all four Windows
+  production/paid-beta public bodies matched their exact SHA-256 and size; the
+  external public-surface probe passed `31/31`.
 - Atomic rollback:
-  `/root/greenvpn-windows-stable-release-backups/20260731T040115Z-timeweb-0.3.22-3101`
+  `/root/greenvpn-windows-stable-release-backups/20260731T155944Z-timeweb-0.3.24-3103`
   and
-  `/root/greenvpn-windows-stable-release-backups/20260731T040044Z-ruvds-0.3.22-3101`.
-- No post-install physical VPN connection smoke was run by Codex for this
-  artifact. The owner explicitly chose to download and test the published
-  build.
+  `/root/greenvpn-windows-stable-release-backups/20260731T160110Z-ruvds-0.3.24-3103`.
 - Paid-beta Windows remains `0.3.21-paid-beta.1+3001`. Android, advertising,
   billing, refunds, renewal execution, VPN server routes and Friendly Linnet
   `5.129.237.163` were not changed.
+
+## Historical Windows 0.3.22 Instant Foreground Connect Publication, 2026-07-31
+
+The exact client source anchor was
+`412cdd54645fcd50f5711cc6b9e14ffdff6bb242`. The production installer was
+`C:\BlueVPN_Builds\public_product_20260731_b3101_commit412cdd5\GreenVPN_Setup_0.3.22.exe`,
+`55400960` bytes, SHA-256
+`5F2EA0EC09DE7BE7932DF22328F3B95243445B09FBF38F41DBE59D9F66DDF197`.
+It was optional and `NotSigned`. Automated validation and publication checks
+passed, but Codex did not run a post-install physical connection smoke for that
+artifact. Rollback directories were
+`/root/greenvpn-windows-stable-release-backups/20260731T040115Z-timeweb-0.3.22-3101`
+and
+`/root/greenvpn-windows-stable-release-backups/20260731T040044Z-ruvds-0.3.22-3101`.
 
 ## Historical Windows 0.3.21 Fast Connect And Takeover Closure, 2026-07-30
 

@@ -3,7 +3,7 @@ Android build: 2026073101
 Windows build: 3103
 Platforms: Android, Windows
 Source backend: 0.9.153-update-channel-alias.1
-Status: Windows production 0.3.24 fast-cache cleanup candidate; paid-beta remains on 0.3.21; Android remains on 0.3.19
+Status: Windows production 0.3.24 fast-cache release published and physically verified; paid-beta remains on 0.3.21; Android remains on 0.3.19
 Production sales: disabled
 Refund execution: disabled
 Auto-renew: disabled
