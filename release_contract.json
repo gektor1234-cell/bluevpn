@@ -31,7 +31,7 @@
     "productionPublished": false,
     "androidProductionPublished": false,
     "androidPaidBetaPublished": false,
-    "windowsProductionPublished": false,
+    "windowsProductionPublished": true,
     "windowsPaidBetaPublished": false,
     "ownerApprovalRequired": true
   }

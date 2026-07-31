@@ -70,6 +70,7 @@ $paidBetaWindowsUninstallerPath = Join-Path $ProjectRoot "scripts\windows\uninst
 $signScriptPath = Join-Path $ProjectRoot "scripts\windows\sign_release_artifacts.ps1"
 $trustedWindowsFinalizerPath = Join-Path $ProjectRoot "scripts\windows\finalize_windows_trusted_release.ps1"
 $windowsPublicReleaseInstallerPath = Join-Path $ProjectRoot "scripts\server\install_windows_public_product_release.sh"
+$windowsStableReleaseInstallerPath = Join-Path $ProjectRoot "scripts\server\install_windows_stable_release.sh"
 $servicePath = Join-Path $ProjectRoot "windows\green_vpn_service\main.cpp"
 $runnerPath = Join-Path $ProjectRoot "windows\runner\flutter_window.cpp"
 $doctorPath = Join-Path $ProjectRoot "scripts\windows\doctor_bluevpn.ps1"
@@ -204,6 +205,7 @@ $paidBetaWindowsUninstaller = Read-Text $paidBetaWindowsUninstallerPath
 $signScript = Read-Text $signScriptPath
 $trustedWindowsFinalizer = Read-Text $trustedWindowsFinalizerPath
 $windowsPublicReleaseInstaller = Read-Text $windowsPublicReleaseInstallerPath
+$windowsStableReleaseInstaller = Read-Text $windowsStableReleaseInstallerPath
 $serviceSource = Read-Text $servicePath
 $doctorScript = Read-Text $doctorPath
 $networkProtectionScript = Read-Text $networkProtectionPath
@@ -3057,6 +3059,18 @@ if (Test-Path -LiteralPath $windowsPublicReleaseInstallerPath) {
     }
     else {
         Add-Error 'Windows signed publication Bash parser check failed'
+    }
+}
+
+if (Test-Path -LiteralPath $windowsStableReleaseInstallerPath) {
+    $gitBash = Join-Path $env:ProgramFiles 'Git\bin\bash.exe'
+    $bashCommand = if (Test-Path -LiteralPath $gitBash) { $gitBash } else { 'bash' }
+    & $bashCommand -n $windowsStableReleaseInstallerPath
+    if ($LASTEXITCODE -eq 0) {
+        Add-Pass 'Windows stable-only publication Bash parser check passed'
+    }
+    else {
+        Add-Error 'Windows stable-only publication Bash parser check failed'
     }
 }
 

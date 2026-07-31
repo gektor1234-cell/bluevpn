@@ -1,6 +1,6 @@
 # Green VPN Current Handoff
 
-Updated: 2026-07-30 MSK.
+Updated: 2026-07-31 MSK.
 
 This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
@@ -15,7 +15,7 @@ This is the current operational entry point. Read it together with
    client profiles.
 3. Never touch Friendly Linnet `5.129.237.163` without a new explicit owner
    instruction.
-4. Android `0.3.19+2026072914` and Windows `0.3.21+3001` are public and
+4. Android `0.3.19+2026072914` and Windows `0.3.22+3101` are public and
    optional. Windows paid-beta `0.3.21-paid-beta.1+3001` is also public and
    optional. Do not republish, force or roll them back without a verified exact
    artifact, alternate-node health and an atomic backup.
@@ -31,22 +31,55 @@ This is the current operational entry point. Read it together with
    must reject first-payment creation and must not run the renewal executor.
 8. Server maintenance is one node at a time after alternate control/data planes
    pass readiness. The owner Windows PC must not be rebooted by automation.
-9. Windows 0.3.21 is public and optional, but remains unsigned by explicit
+9. Windows 0.3.22 is public and optional, but remains unsigned by explicit
    owner instruction with the SmartScreen risk accepted. Keep the `NotSigned`
    status visible in operations and expect Windows SmartScreen/reputation
    warnings until a higher signed successor is released.
 10. The admin console is a protected operator surface. Keep Nginx Basic Auth,
     `noindex`, frame denial, staff authentication, RBAC and audit enabled; never
     expose bootstrap tokens or payment/tunnel secrets in the UI or exports.
-11. Stable production publishes Android `0.3.19` and Windows `0.3.21`.
-    Clean-source Windows `0.3.21+3001` is published after focused physical
-    latency proof, but it is not a trusted/signed Windows release. Do not
-    conflate successful unsigned publication with Authenticode trust.
+11. Stable production publishes Android `0.3.19` and Windows `0.3.22`.
+    Clean-source Windows `0.3.22+3101` is published after automated validation,
+    but the owner elected to perform the post-publication physical connection
+    test. It is not a trusted/signed Windows release. Do not conflate
+    successful unsigned publication with Authenticode trust or physical smoke.
 
-## Windows 0.3.21 Fast Connect And Takeover Closure, 2026-07-30
+## Windows 0.3.22 Instant Foreground Connect Publication, 2026-07-31
 
-This section is the current Windows/backend operational entry point. The exact
-Windows source anchor is `b6f60de44efdeaa5b89aa9097a8b87affa40e78d`.
+This is the current Windows publication entry point. The exact client source
+anchor is `412cdd54645fcd50f5711cc6b9e14ffdff6bb242`.
+
+- Production installer:
+  `C:\BlueVPN_Builds\public_product_20260731_b3101_commit412cdd5\GreenVPN_Setup_0.3.22.exe`,
+  `55400960` bytes, SHA-256
+  `5F2EA0EC09DE7BE7932DF22328F3B95243445B09FBF38F41DBE59D9F66DDF197`.
+  It is optional and `NotSigned`; the owner accepted the existing SmartScreen
+  risk for unsigned publication.
+- A foreground Windows connect now selects one WireGuard UDP candidate. The
+  privileged task returns after the tunnel service is running; deep runtime
+  confirmation, catalog refresh and fallback preparation continue in the
+  background.
+- Validation before publication: Flutter tests `74` passed / `6` skipped,
+  Flutter analysis clean, release gate clean, Bash and PowerShell parser checks
+  clean, and the exact installer package audit passed.
+- Publication verification: dynamic/static manifests and download headers
+  passed, both public installer bodies matched the exact SHA-256 (`2/2`), and
+  the external public-surface probe passed `31/31`.
+- Atomic rollback:
+  `/root/greenvpn-windows-stable-release-backups/20260731T040115Z-timeweb-0.3.22-3101`
+  and
+  `/root/greenvpn-windows-stable-release-backups/20260731T040044Z-ruvds-0.3.22-3101`.
+- No post-install physical VPN connection smoke was run by Codex for this
+  artifact. The owner explicitly chose to download and test the published
+  build.
+- Paid-beta Windows remains `0.3.21-paid-beta.1+3001`. Android, advertising,
+  billing, refunds, renewal execution, VPN server routes and Friendly Linnet
+  `5.129.237.163` were not changed.
+
+## Historical Windows 0.3.21 Fast Connect And Takeover Closure, 2026-07-30
+
+This section records the previous Windows/backend operational state. The exact
+Windows source anchor was `b6f60de44efdeaa5b89aa9097a8b87affa40e78d`.
 
 - Production installer:
   `C:\BlueVPN_Builds\public_product_20260730_b3001_takeover_v4\GreenVPN_Setup_0.3.21.exe`,

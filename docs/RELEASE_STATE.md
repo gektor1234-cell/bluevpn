@@ -1,8 +1,50 @@
 # Green VPN Release State
 
-## Current Release Closure (2026-07-30 MSK)
+## Current Release Closure (2026-07-31 MSK)
 
 | Layer | Current state |
+|---|---|
+| Production backend | `0.9.153-update-channel-alias.4` on Timeweb and RUVDS |
+| Published Android | `0.3.19+2026072914`, signed and optional, unchanged |
+| Published Windows | `0.3.22+3101`, optional and `NotSigned` |
+| Published paid-beta Android | `0.3.19+2026072914`, optional, unchanged |
+| Published paid-beta Windows | `0.3.21-paid-beta.1+3001`, optional and `NotSigned`, unchanged |
+| Product contract | permanent Free, guest-first |
+| Money gates | sales/refunds/tax confirmation/renewal charges off |
+| Advertising | Rewarded and forced disconnect off |
+| Data plane | one foreground WireGuard candidate; deep checks and fallback preparation in background |
+
+The exact Windows client source anchor is
+`412cdd54645fcd50f5711cc6b9e14ffdff6bb242`. The production installer is
+`55400960` bytes with SHA-256
+`5F2EA0EC09DE7BE7932DF22328F3B95243445B09FBF38F41DBE59D9F66DDF197`.
+It is optional and `NotSigned`; the owner accepted the existing
+SmartScreen/reputation risk.
+
+Backend `public-product -> stable` update-channel aliasing remains active on
+both control planes. The production-only publisher changed neither paid-beta
+nor Android and restarted only the production backend on each control plane.
+
+Validation passed: Flutter analyze; `74` client tests passed / `6` platform
+skips; release gate, parser checks and exact package audit passed; both stable
+and public-product manifests return `0.3.22+3101`, optional and
+`fileReady=true`; both public installer bodies match the exact SHA-256; public
+surface is `31/31`. No post-install physical connection smoke was run by Codex
+for `0.3.22`; the owner elected to perform that test after publication.
+
+Atomic Windows rollback directories:
+
+- Timeweb:
+  `/root/greenvpn-windows-stable-release-backups/20260731T040115Z-timeweb-0.3.22-3101`;
+- RUVDS:
+  `/root/greenvpn-windows-stable-release-backups/20260731T040044Z-ruvds-0.3.22-3101`.
+
+Android, paid-beta, advertising, sales, refunds, renewal execution, VPN server
+routes and Friendly Linnet `5.129.237.163` were not changed.
+
+## Historical Windows 0.3.21 Closure (2026-07-30 MSK)
+
+| Layer | Historical state |
 |---|---|
 | Production backend | `0.9.153-update-channel-alias.4` on Timeweb and RUVDS |
 | Published Android | `0.3.19+2026072914`, signed and optional, unchanged |
