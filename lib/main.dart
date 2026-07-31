@@ -18,6 +18,7 @@ import 'services/route_failure_cooldown.dart';
 import 'services/server_location_policy.dart';
 import 'services/transport_preview_policy.dart';
 import 'services/windows_selective_routing_service.dart';
+import 'services/windows_vpn_status_policy.dart';
 
 /*
   Green VPN — режим "как пользовательский продукт":
@@ -7389,12 +7390,14 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   Timer? _freeAdSessionTimer;
   Timer? _windowsRuntimeFailoverTimer;
   Timer? _windowsRouteMaintenanceTimer;
+  Timer? _windowsStatusReconciliationTimer;
   ServerLocation? _activeWindowsRuntimeRoute;
   int _windowsRuntimeFailoverEpoch = 0;
   int _windowsRuntimeFailureCount = 0;
   bool _windowsRuntimeProbeRunning = false;
   bool _windowsRuntimeRecoveryRunning = false;
   bool _windowsRuntimeRestoreRunning = false;
+  int _vpnStatusSyncEpoch = 0;
   bool _prefsLoaded = false;
   WireGuardInstallState? _wireGuardState;
   bool _wireGuardBusy = false;
@@ -7461,7 +7464,17 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       unawaited(_recordPaidBetaEvent('app_open'));
     }
 
-    _syncVpnStatus();
+    unawaited(_syncVpnStatus(source: 'startup'));
+    if (!kIsWeb && Platform.isWindows) {
+      _windowsStatusReconciliationTimer = Timer.periodic(
+        const Duration(seconds: 5),
+        (_) {
+          if (mounted && !vpnBusy && !_windowsRuntimeRecoveryRunning) {
+            unawaited(_syncVpnStatus(source: 'windows_periodic'));
+          }
+        },
+      );
+    }
     unawaited(_restoreFreeAdSessionTimer());
     _ensureProvisionedConfigSilently();
     _syncPlanSilently();
@@ -7501,8 +7514,16 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   Future<void> _handleAppResumed() async {
+    if (!kIsWeb && Platform.isWindows) {
+      await _syncVpnStatus(source: 'windows_resume');
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+      if (mounted && !vpnBusy) {
+        await _syncVpnStatus(source: 'windows_resume_retry');
+      }
+      return;
+    }
     if (kIsWeb || !Platform.isAndroid) {
-      await _syncVpnStatus();
+      await _syncVpnStatus(source: 'app_resume');
       return;
     }
     if (vpnBusy) return;
@@ -7540,13 +7561,13 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         return;
       }
 
-      await _syncVpnStatus();
+      await _syncVpnStatus(source: 'android_resume');
       await appendBlueVpnClientLog(
         'android resume sync done vpnEnabled=$vpnEnabled',
       );
     } catch (e) {
       await appendBlueVpnClientLog('android resume status sync failed=$e');
-      await _syncVpnStatus();
+      await _syncVpnStatus(source: 'android_resume_error');
     }
   }
 
@@ -9461,7 +9482,55 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _schedulePrefsSave();
   }
 
-  Future<void> _syncVpnStatus() async {
+  Future<GreenVpnWindowsManagedTunnelState>
+  _readWindowsManagedTunnelState() async {
+    const service = _GreenVpnSystemServiceClient();
+    final response = await service.status();
+    final serviceState = greenVpnClassifyWindowsManagedTunnelStatus(
+      requestOk: response.ok,
+      data: response.data,
+    );
+    if (serviceState != GreenVpnWindowsManagedTunnelState.unknown) {
+      return serviceState;
+    }
+    if (await _vpnBackend.isConnected()) {
+      return GreenVpnWindowsManagedTunnelState.connected;
+    }
+    return GreenVpnWindowsManagedTunnelState.unknown;
+  }
+
+  Future<void> _syncVpnStatus({String source = 'unspecified'}) async {
+    final syncEpoch = ++_vpnStatusSyncEpoch;
+    if (!kIsWeb && Platform.isWindows) {
+      final state = await _readWindowsManagedTunnelState();
+      if (!mounted || syncEpoch != _vpnStatusSyncEpoch) return;
+      if (state == GreenVpnWindowsManagedTunnelState.unknown) {
+        await appendBlueVpnClientLog(
+          'windows status sync source=$source result=unknown preserved=$vpnEnabled',
+        );
+        return;
+      }
+      final on = state == GreenVpnWindowsManagedTunnelState.connected;
+      final changed = vpnEnabled != on;
+      if (changed) {
+        final previous = vpnEnabled;
+        setState(() {
+          vpnEnabled = on;
+          _androidExternalVpnActive = false;
+        });
+        await appendBlueVpnClientLog(
+          'windows status sync source=$source connected=$on previous=$previous',
+        );
+      }
+      if (on) {
+        await _restoreWindowsRuntimeFailoverIfPossible(source: 'status_sync');
+      } else if (_activeWindowsRuntimeRoute != null ||
+          _windowsRuntimeFailoverTimer != null) {
+        _disarmWindowsRuntimeFailover(reason: 'status_disconnected');
+      }
+      return;
+    }
+
     final wgState = _wireGuardState;
     if (wgState != null && !wgState.installed) {
       if (mounted) {
@@ -13142,6 +13211,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _vpnTapCooldownTimer?.cancel();
     _pendingBillingPollTimer?.cancel();
     _freeAdSessionTimer?.cancel();
+    _windowsStatusReconciliationTimer?.cancel();
     _disarmWindowsRuntimeFailover(reason: 'dispose');
     super.dispose();
   }
@@ -20797,6 +20867,18 @@ class WindowsTransportPreviewBackend extends VpnBackend {
 
   @override
   Future<bool> isConnected() async {
+    const service = _GreenVpnSystemServiceClient();
+    final status = await service.status();
+    final managedState = greenVpnClassifyWindowsManagedTunnelStatus(
+      requestOk: status.ok,
+      data: status.data,
+    );
+    if (managedState == GreenVpnWindowsManagedTunnelState.connected) {
+      return true;
+    }
+    if (managedState == GreenVpnWindowsManagedTunnelState.disconnected) {
+      return false;
+    }
     if (await _dnstt.isConnected()) return true;
     if (await _naiveHttps.isConnected()) return true;
     if (await _vlessReality.isConnected()) return true;
@@ -21619,6 +21701,18 @@ if ($null -eq $svc) { exit 0 }
   @override
   Future<bool> isConnected() async {
     try {
+      const service = _GreenVpnSystemServiceClient();
+      final serviceStatus = await service.status();
+      final managedState = greenVpnClassifyWindowsManagedTunnelStatus(
+        requestOk: serviceStatus.ok,
+        data: serviceStatus.data,
+      );
+      if (managedState == GreenVpnWindowsManagedTunnelState.connected) {
+        return true;
+      }
+      if (managedState == GreenVpnWindowsManagedTunnelState.disconnected) {
+        return false;
+      }
       final status = await WireGuardRuntimeStatus.query(
         tunnelName: tunnelName,
         configPath: _lastConfigPath ?? greenVpnManagedConfigPathSync(),
