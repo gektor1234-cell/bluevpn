@@ -880,6 +880,7 @@ function Test-GreenVpnInstalledRoot {
         (Join-Path $Root 'greenvpn.exe'),
         (Join-Path $Root 'greenvpn_service.exe'),
         (Join-Path $Root 'tools\greenvpn_vpn_task.ps1'),
+        (Join-Path $Root 'tools\greenvpn_standby_probe.ps1'),
         (Join-Path $Root 'tools\process-router\ProxyBridge_CLI.exe'),
         (Join-Path $Root 'tools\process-router\ProxyBridgeCore.dll'),
         (Join-Path $Root 'tools\process-router\WinDivert.dll'),
@@ -926,13 +927,65 @@ function Move-DirectoryWithRetry {
         } catch {
             $lastError = $_
             if ($attempt -lt $Attempts) {
-                Get-Process -Name 'greenvpn' -ErrorAction SilentlyContinue |
-                    Stop-Process -Force -ErrorAction SilentlyContinue
+                Stop-GreenVpnUiGracefully -Root $Source
                 Start-Sleep -Milliseconds 300
             }
         }
     }
     throw $lastError
+}
+
+function Get-GreenVpnUiProcesses {
+    param([Parameter(Mandatory=$true)][string]$Root)
+
+    $expectedPath = [IO.Path]::GetFullPath((Join-Path $Root 'greenvpn.exe'))
+    return @(
+        Get-Process -Name 'greenvpn' -ErrorAction SilentlyContinue |
+            Where-Object {
+                try {
+                    $_.Path -and
+                        [IO.Path]::GetFullPath([string]$_.Path).Equals(
+                            $expectedPath,
+                            [StringComparison]::OrdinalIgnoreCase
+                        )
+                } catch {
+                    $false
+                }
+            }
+    )
+}
+
+function Stop-GreenVpnUiGracefully {
+    param([Parameter(Mandatory=$true)][string]$Root)
+
+    $appPath = Join-Path $Root 'greenvpn.exe'
+    $running = @(Get-GreenVpnUiProcesses -Root $Root)
+    if ($running.Count -eq 0) { return }
+
+    if (Test-Path -LiteralPath $appPath -PathType Leaf) {
+        try {
+            $shutdown = Start-Process -FilePath $appPath `
+                -ArgumentList @('--shutdown-existing', '--background') `
+                -WorkingDirectory $Root `
+                -WindowStyle Hidden `
+                -PassThru
+            $shutdown.WaitForExit(15000) | Out-Null
+        } catch {
+            Write-Step "Штатное завершение Green VPN не сработало: $($_.Exception.Message)"
+        }
+    }
+
+    $deadline = (Get-Date).AddSeconds(12)
+    do {
+        $running = @(Get-GreenVpnUiProcesses -Root $Root)
+        if ($running.Count -eq 0) { return }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+
+    Write-Step 'Green VPN не завершился штатно; применяем аварийную остановку.'
+    foreach ($process in $running) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Test-FileAclAllows {
@@ -1068,6 +1121,7 @@ try {
         (Join-Path $appSource 'greenvpn.exe'),
         (Join-Path $appSource 'greenvpn_service.exe'),
         (Join-Path $tmp 'tools\greenvpn_vpn_task.ps1'),
+        (Join-Path $tmp 'tools\greenvpn_standby_probe.ps1'),
         (Join-Path $tmp 'tools\process-router\ProxyBridge_CLI.exe'),
         (Join-Path $tmp 'tools\process-router\ProxyBridgeCore.dll'),
         (Join-Path $tmp 'tools\process-router\WinDivert.dll'),
@@ -1111,6 +1165,7 @@ try {
         (Join-Path $stagingRoot 'greenvpn.exe'),
         (Join-Path $stagingRoot 'greenvpn_service.exe'),
         (Join-Path $stagingRoot 'tools\greenvpn_vpn_task.ps1'),
+        (Join-Path $stagingRoot 'tools\greenvpn_standby_probe.ps1'),
         (Join-Path $stagingRoot 'tools\process-router\ProxyBridge_CLI.exe'),
         (Join-Path $stagingRoot 'tools\process-router\ProxyBridgeCore.dll'),
         (Join-Path $stagingRoot 'tools\process-router\WinDivert.dll'),
@@ -1132,13 +1187,13 @@ try {
     Write-Step "Останавливаем текущее подключение Green VPN..."
     Stop-BlueVpnTunnel
 
-    Write-Step "Обновляем системную службу Green VPN..."
-    Remove-GreenVpnService
-
     Write-Step "Закрываем предыдущую версию Green VPN..."
     Get-Process -Name 'bluevpn' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Get-Process -Name 'greenvpn' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Stop-GreenVpnUiGracefully -Root $installRoot
     $runtimeStopped = $true
+
+    Write-Step "Обновляем системную службу Green VPN..."
+    Remove-GreenVpnService
 
     if (Test-Path -LiteralPath $installRoot) {
         if ($existingInstallValid) {
@@ -1502,7 +1557,7 @@ exit /b %ERRORLEVEL%
     if (-not $installCompleted -and ($runtimeStopped -or $existingRootBackedUp -or $installSwapped)) {
         Write-Step "Установка не завершилась; возвращаем предыдущую версию..."
         try { Remove-GreenVpnService } catch {}
-        Get-Process -Name 'greenvpn' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Stop-GreenVpnUiGracefully -Root $installRoot
         if ($installSwapped -or $existingRootBackedUp) {
             try { Remove-CorruptInstallRoot -Root $installRoot } catch {}
         }

@@ -81,6 +81,10 @@ Copy-TransformedScript `
     -Source (Join-Path $project 'scripts\windows\greenvpn_selective_routing.ps1') `
     -Destination (Join-Path $destination 'greenvpn_selective_routing.ps1') `
     -Replacements $replacements
+Copy-TransformedScript `
+    -Source (Join-Path $project 'scripts\windows\greenvpn_standby_probe.ps1') `
+    -Destination (Join-Path $destination 'greenvpn_standby_probe.ps1') `
+    -Replacements $replacements
 foreach ($watchdog in @(
     'greenvpn_hysteria2_watchdog.ps1',
     'greenvpn_vless_reality_watchdog.ps1',

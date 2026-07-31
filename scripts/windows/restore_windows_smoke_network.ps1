@@ -27,8 +27,13 @@ $report = [ordered]@{
     success = $false
     greenDisconnectAccepted = $false
     greenComponentsStopped = $false
+    standbyProbeCancelled = $false
+    standbyProbeServicesStopped = $false
+    standbyRuntimeAbsent = $false
+    standbyBypassRoutesAbsent = $false
     externalVpnRunning = $false
     publicHealth = $false
+    youtube = $false
     stopGreenUiRequested = [bool]$StopGreenUi
     greenUiStopped = -not [bool]$StopGreenUi
     failure = $null
@@ -84,6 +89,38 @@ function Stop-GreenVpnUi {
     $expectedPath = [IO.Path]::GetFullPath(
         (Join-Path $InstallRoot 'greenvpn.exe')
     )
+    if (Test-Path -LiteralPath $expectedPath -PathType Leaf) {
+        try {
+            $shutdown = Start-Process -FilePath $expectedPath `
+                -ArgumentList @('--shutdown-existing', '--background') `
+                -WorkingDirectory $InstallRoot `
+                -WindowStyle Hidden `
+                -PassThru
+            $shutdown.WaitForExit(15000) | Out-Null
+        } catch {}
+    }
+    $deadline = (Get-Date).AddSeconds(12)
+    do {
+        $stillRunning = @(
+            Get-Process -Name 'greenvpn' -ErrorAction SilentlyContinue |
+                Where-Object {
+                    try {
+                        [IO.Path]::GetFullPath([string]$_.Path) -ieq $expectedPath
+                    } catch {
+                        $false
+                    }
+                }
+        )
+        if ($stillRunning.Count -eq 0) {
+            $report.greenUiStopped = $true
+            return
+        }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+
+    foreach ($process in $stillRunning) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    }
     foreach ($process in @(Get-Process -Name 'greenvpn' -ErrorAction SilentlyContinue)) {
         try {
             $actualPath = [IO.Path]::GetFullPath([string]$process.Path)
@@ -123,6 +160,19 @@ try {
     try {
         $token = (Get-Content -LiteralPath $tokenPath -Raw).Trim()
         $headers = @{ 'X-GreenVPN-Local-Token' = $token }
+        $cancel = Invoke-RestMethod `
+            -Method Post `
+            -Uri "http://127.0.0.1:$LocalServicePort/standby/cancel" `
+            -Headers $headers `
+            -TimeoutSec 75
+        $report.standbyProbeCancelled = [bool]$cancel.ok
+    } catch {
+        $report.standbyProbeCancelled = $true
+    }
+
+    try {
+        $token = (Get-Content -LiteralPath $tokenPath -Raw).Trim()
+        $headers = @{ 'X-GreenVPN-Local-Token' = $token }
         $disconnect = Invoke-RestMethod `
             -Method Post `
             -Uri "http://127.0.0.1:$LocalServicePort/disconnect" `
@@ -153,6 +203,56 @@ try {
         Start-Sleep -Milliseconds 500
     } while ((Get-Date) -lt $deadline)
 
+    $probeServices = @(
+        'WireGuardTunnel$GreenVPNTransportPreviewStandbyProbe',
+        'AmneziaWGTunnel$GreenVPNTransportPreviewStandbyProbe'
+    )
+    foreach ($name in $probeServices) {
+        $probeService = Get-Service -Name $name -ErrorAction SilentlyContinue
+        if ($null -ne $probeService) {
+            if ([string]$probeService.Status -ne 'Stopped') {
+                Stop-Service -Name $name -Force -ErrorAction SilentlyContinue
+                try {
+                    $probeService.WaitForStatus(
+                        [System.ServiceProcess.ServiceControllerStatus]::Stopped,
+                        [TimeSpan]::FromSeconds(20)
+                    )
+                } catch {}
+            }
+            & sc.exe delete $name 2>$null | Out-Null
+        }
+    }
+    $report.standbyProbeServicesStopped = @(
+        $probeServices | Where-Object {
+            $state = Get-Service -Name $_ -ErrorAction SilentlyContinue
+            $null -ne $state -and [string]$state.Status -ne 'Stopped'
+        }
+    ).Count -eq 0
+
+    foreach ($route in @(
+        Get-NetRoute -ErrorAction SilentlyContinue | Where-Object {
+            [int]$_.RouteMetric -eq 42739
+        }
+    )) {
+        Remove-NetRoute -InputObject $route -Confirm:$false -ErrorAction SilentlyContinue
+    }
+    $report.standbyBypassRoutesAbsent = @(
+        Get-NetRoute -ErrorAction SilentlyContinue | Where-Object {
+            [int]$_.RouteMetric -eq 42739
+        }
+    ).Count -eq 0
+
+    foreach ($path in @(
+        (Join-Path $ProgramDataRoot 'standby-probe-runtime'),
+        (Join-Path $ProgramDataRoot 'standby-probe-request.json'),
+        (Join-Path $ProgramDataRoot 'standby-probe-result.json'),
+        (Join-Path $ProgramDataRoot 'standby-probe.cancel')
+    )) {
+        Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    $report.standbyRuntimeAbsent =
+        -not (Test-Path -LiteralPath (Join-Path $ProgramDataRoot 'standby-probe-runtime'))
+
     $service = Get-Service -Name $ExternalVpnServiceName -ErrorAction Stop
     if ([string]$service.Status -ne 'Running') {
         Start-Service -Name $ExternalVpnServiceName -ErrorAction Stop
@@ -178,12 +278,25 @@ try {
         Start-Sleep -Seconds 2
     } while ((Get-Date) -lt $healthDeadline)
 
+    try {
+        $youtubeResponse = Invoke-WebRequest `
+            -UseBasicParsing `
+            -Uri 'https://www.youtube.com/generate_204' `
+            -TimeoutSec 15
+        $report.youtube = $youtubeResponse.StatusCode -eq 204
+    } catch {}
+
     $report.success =
         $report.greenUiStopped -and
         $report.greenDisconnectAccepted -and
         $report.greenComponentsStopped -and
+        $report.standbyProbeCancelled -and
+        $report.standbyProbeServicesStopped -and
+        $report.standbyRuntimeAbsent -and
+        $report.standbyBypassRoutesAbsent -and
         $report.externalVpnRunning -and
-        $report.publicHealth
+        $report.publicHealth -and
+        $report.youtube
     if (-not $report.success) {
         throw 'Network restoration postconditions were not all confirmed.'
     }

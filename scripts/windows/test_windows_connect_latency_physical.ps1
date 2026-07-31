@@ -270,16 +270,119 @@ function Wait-AllManagedComponentsStopped {
 }
 
 function Stop-GreenApp {
-    Get-Process -Name 'greenvpn' -ErrorAction SilentlyContinue |
-        Stop-Process -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $resolvedAppPath -PathType Leaf) {
+        try {
+            $shutdown = Start-Process -FilePath $resolvedAppPath `
+                -ArgumentList @('--shutdown-existing', '--background') `
+                -WorkingDirectory (Split-Path -Parent $resolvedAppPath) `
+                -WindowStyle Hidden `
+                -PassThru
+            $shutdown.WaitForExit(15000) | Out-Null
+        } catch {}
+    }
     $deadline = (Get-Date).AddSeconds(8)
     do {
-        if (-not (Get-Process -Name 'greenvpn' -ErrorAction SilentlyContinue)) {
+        $running = @(
+            Get-Process -Name 'greenvpn' -ErrorAction SilentlyContinue |
+                Where-Object {
+                    try {
+                        $_.Path -and
+                            [IO.Path]::GetFullPath([string]$_.Path).Equals(
+                                [IO.Path]::GetFullPath($resolvedAppPath),
+                                [StringComparison]::OrdinalIgnoreCase
+                            )
+                    } catch { $false }
+                }
+        )
+        if ($running.Count -eq 0) {
             return
         }
         Start-Sleep -Milliseconds 200
     } while ((Get-Date) -lt $deadline)
+    foreach ($process in $running) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Milliseconds 500
+    $remaining = @(
+        Get-Process -Name 'greenvpn' -ErrorAction SilentlyContinue |
+            Where-Object {
+                try {
+                    $_.Path -and
+                        [IO.Path]::GetFullPath([string]$_.Path).Equals(
+                            [IO.Path]::GetFullPath($resolvedAppPath),
+                            [StringComparison]::OrdinalIgnoreCase
+                        )
+                } catch { $false }
+            }
+    )
+    if ($remaining.Count -eq 0) {
+        return
+    }
     throw 'Green VPN application did not stop.'
+}
+
+function Wait-GreenConnectAcknowledgement {
+    param(
+        [Parameter(Mandatory = $true)][int]$AfterLogLine,
+        [int]$TimeoutSeconds = 6
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        Start-Sleep -Milliseconds 150
+        $lines = @(Get-NewAuthLogLines -AfterLine $AfterLogLine)
+        if (
+            $lines |
+                Where-Object { $_ -match 'UI toggle requested' } |
+                Select-Object -First 1
+        ) {
+            return $true
+        }
+    } while ((Get-Date) -lt $deadline)
+    return $false
+}
+
+function Invoke-GreenConnectAutomationElement {
+    param([Parameter(Mandatory = $true)][Diagnostics.Process]$Process)
+
+    try {
+        Add-Type -AssemblyName UIAutomationClient
+        Add-Type -AssemblyName UIAutomationTypes
+        $window = [System.Windows.Automation.AutomationElement]::FromHandle(
+            $Process.MainWindowHandle
+        )
+        if ($null -eq $window) { return $false }
+        $condition = New-Object System.Windows.Automation.PropertyCondition -ArgumentList @(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+            [System.Windows.Automation.ControlType]::Button
+        )
+        $connectNames = @(
+            [Text.Encoding]::UTF8.GetString(
+                [Convert]::FromBase64String('0J/QvtC00LrQu9GO0YfQuNGC0YwgVlBO')
+            ),
+            [Text.Encoding]::UTF8.GetString(
+                [Convert]::FromBase64String('0JLQutC70Y7Rh9C40YLRjCBWUE4=')
+            )
+        )
+        $buttons = $window.FindAll(
+            [System.Windows.Automation.TreeScope]::Descendants,
+            $condition
+        )
+        foreach ($button in $buttons) {
+            $name = [string]$button.Current.Name
+            if ($name -notin $connectNames) { continue }
+            $pattern = $null
+            if (
+                $button.TryGetCurrentPattern(
+                    [System.Windows.Automation.InvokePattern]::Pattern,
+                    [ref]$pattern
+                )
+            ) {
+                ([System.Windows.Automation.InvokePattern]$pattern).Invoke()
+                return $true
+            }
+        }
+    } catch {}
+    return $false
 }
 
 function Invoke-GreenConnectButton {
@@ -293,6 +396,7 @@ function Invoke-GreenConnectButton {
         Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 public static class GreenVpnSmokeInput {
     [StructLayout(LayoutKind.Sequential)]
@@ -325,6 +429,38 @@ public static class GreenVpnSmokeInput {
     private static extern bool SetForegroundWindow(IntPtr hWnd);
 
     [DllImport("user32.dll")]
+    private static extern bool BringWindowToTop(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr ChildWindowFromPointEx(
+        IntPtr hWnd,
+        POINT point,
+        uint flags
+    );
+
+    [DllImport("user32.dll")]
+    private static extern int MapWindowPoints(
+        IntPtr hWndFrom,
+        IntPtr hWndTo,
+        ref POINT point,
+        uint pointCount
+    );
+
+    [DllImport("user32.dll")]
+    private static extern bool PostMessage(
+        IntPtr hWnd,
+        uint message,
+        UIntPtr wParam,
+        IntPtr lParam
+    );
+
+    [DllImport("user32.dll")]
     private static extern void mouse_event(
         uint flags,
         uint dx,
@@ -333,6 +469,23 @@ public static class GreenVpnSmokeInput {
         UIntPtr extraInfo
     );
 
+    private static bool PostCoordinateClick(IntPtr hWnd, POINT clientPoint) {
+        var target = ChildWindowFromPointEx(hWnd, clientPoint, 0x0007);
+        if (target == IntPtr.Zero) {
+            target = hWnd;
+        }
+        var targetPoint = clientPoint;
+        if (target != hWnd) {
+            MapWindowPoints(hWnd, target, ref targetPoint, 1);
+        }
+        var packed = new IntPtr(
+            (targetPoint.X & 0xffff) | ((targetPoint.Y & 0xffff) << 16)
+        );
+        return PostMessage(target, 0x0200, UIntPtr.Zero, packed) &&
+            PostMessage(target, 0x0201, new UIntPtr(1), packed) &&
+            PostMessage(target, 0x0202, UIntPtr.Zero, packed);
+    }
+
     public static bool ClickConnect(IntPtr hWnd) {
         RECT rect;
         POINT original;
@@ -340,15 +493,29 @@ public static class GreenVpnSmokeInput {
             return false;
         }
 
-        var point = new POINT {
+        var clientPoint = new POINT {
             X = Math.Max(1, (rect.Right - rect.Left) / 2),
             Y = Math.Max(1, (int)Math.Round((rect.Bottom - rect.Top) * 0.255))
         };
+        var point = clientPoint;
         if (!ClientToScreen(hWnd, ref point)) {
             return false;
         }
 
-        SetForegroundWindow(hWnd);
+        ShowWindow(hWnd, 9);
+        var foregroundReady = false;
+        for (var attempt = 0; attempt < 20; attempt++) {
+            BringWindowToTop(hWnd);
+            SetForegroundWindow(hWnd);
+            if (GetForegroundWindow() == hWnd) {
+                foregroundReady = true;
+                break;
+            }
+            Thread.Sleep(100);
+        }
+        if (!foregroundReady) {
+            return PostCoordinateClick(hWnd, clientPoint);
+        }
         if (!SetCursorPos(point.X, point.Y)) {
             return false;
         }
@@ -392,29 +559,45 @@ public static class GreenVpnSmokeInput {
         throw 'Green VPN window did not become ready for the connect action.'
     }
 
+    $attempts = New-Object System.Collections.Generic.List[string]
+    if (Invoke-GreenConnectAutomationElement -Process $Process) {
+        $attempts.Add('uia_invoke')
+        if (
+            Wait-GreenConnectAcknowledgement `
+                -AfterLogLine $AfterLogLine `
+                -TimeoutSeconds 6
+        ) {
+            return 'uia_invoke'
+        }
+    } else {
+        $attempts.Add('uia_unavailable')
+    }
+
+    $Process.Refresh()
+    if ($Process.HasExited -or $Process.MainWindowHandle -eq 0) {
+        throw 'Green VPN exited before the fallback connect action.'
+    }
     $shell = New-Object -ComObject WScript.Shell
     if (-not $shell.AppActivate($Process.Id)) {
-        throw 'Green VPN window could not be activated for the connect action.'
+        throw 'Green VPN window could not be activated for the fallback connect action.'
     }
     Start-Sleep -Milliseconds 500
     if (-not [GreenVpnSmokeInput]::ClickConnect($Process.MainWindowHandle)) {
-        throw 'Green VPN connect button could not be clicked.'
+        throw 'Green VPN fallback connect button could not be clicked.'
+    }
+    $attempts.Add('coordinate_click')
+    if (
+        Wait-GreenConnectAcknowledgement `
+            -AfterLogLine $AfterLogLine `
+            -TimeoutSeconds 6
+    ) {
+        return 'coordinate_click'
     }
 
-    $clickDeadline = (Get-Date).AddSeconds(5)
-    do {
-        Start-Sleep -Milliseconds 150
-        $lines = @(Get-NewAuthLogLines -AfterLine $AfterLogLine)
-        if (
-            $lines |
-                Where-Object { $_ -match 'UI toggle requested' } |
-                Select-Object -First 1
-        ) {
-            return
-        }
-    } while ((Get-Date) -lt $clickDeadline)
-
-    throw 'Green VPN did not acknowledge the automated connect click.'
+    throw (
+        'Green VPN did not acknowledge either bounded connect action: ' +
+        ($attempts -join ',')
+    )
 }
 
 function Get-AuthLogLineCount {
@@ -557,8 +740,11 @@ function Invoke-ConnectMeasurement {
     $process = Start-Process -FilePath $resolvedAppPath `
         -WorkingDirectory (Split-Path -Parent $resolvedAppPath) `
         -PassThru
+    $uiAutomationAction = $null
     if ($UseUiAutomationAction) {
-        Invoke-GreenConnectButton -Process $process -AfterLogLine $afterLine
+        $uiAutomationAction = Invoke-GreenConnectButton `
+            -Process $process `
+            -AfterLogLine $afterLine
     }
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     $lines = @()
@@ -617,6 +803,7 @@ function Invoke-ConnectMeasurement {
     $evidence.systemTunnelConfirmed = $true
     $evidence.activeProtocol = [string]$status.protocol
     $evidence.appProcessId = $process.Id
+    $evidence['uiAutomationAction'] = $uiAutomationAction
     return $evidence
 }
 

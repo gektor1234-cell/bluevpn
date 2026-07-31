@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iterator>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <windows.h>
@@ -22,6 +23,47 @@ constexpr UINT kTrayMenuConnect = 1002;
 constexpr UINT kTrayMenuDisconnect = 1003;
 constexpr UINT kTrayMenuExit = 1004;
 constexpr UINT kTrayTaskResultMessage = WM_APP + 43;
+constexpr UINT_PTR kTrayRetryTimerId = 0x47564E49;
+constexpr UINT kTrayRetryDelayMs = 1000;
+constexpr int kTrayRetryMaxAttempts = 15;
+constexpr GUID kTrayIconGuid = {
+    0x6a820000u + GREENVPN_RUNTIME_LOCAL_SERVICE_PORT,
+    0x7d31,
+    0x4f65,
+    {0x9a, 0x6d, 0x32, 0x11, 0x8c, 0x44, 0xe2, 0x90}};
+
+UINT TaskbarCreatedMessage() {
+  static const UINT message = RegisterWindowMessageW(L"TaskbarCreated");
+  return message;
+}
+
+void WriteTrayDiagnostic(const char* event_name, bool success, int attempt) {
+  wchar_t diagnostic_path[32768] = {};
+  const DWORD path_length = GetEnvironmentVariableW(
+      L"GREENVPN_TRAY_DIAGNOSTIC_PATH", diagnostic_path,
+      static_cast<DWORD>(std::size(diagnostic_path)));
+  if (path_length == 0 || path_length >= std::size(diagnostic_path)) {
+    return;
+  }
+
+  HANDLE file = CreateFileW(
+      diagnostic_path, FILE_APPEND_DATA,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+      OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    return;
+  }
+
+  std::ostringstream line;
+  line << "{\"pid\":" << GetCurrentProcessId() << ",\"event\":\""
+       << event_name << "\",\"success\":" << (success ? "true" : "false")
+       << ",\"attempt\":" << attempt << "}\r\n";
+  const std::string payload = line.str();
+  DWORD written = 0;
+  WriteFile(file, payload.data(), static_cast<DWORD>(payload.size()), &written,
+            nullptr);
+  CloseHandle(file);
+}
 
 std::string ReadLocalServiceToken() {
   std::ifstream file(GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\service_token",
@@ -157,6 +199,19 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (message == kGreenVpnShutdownMessage) {
+    ExitApplication();
+    return 0;
+  }
+  if (message == TaskbarCreatedMessage()) {
+    WriteTrayDiagnostic("taskbar_created", true, 0);
+    tray_icon_added_ = false;
+    tray_stale_cleanup_done_ = true;
+    tray_icon_add_attempts_ = 0;
+    AddTrayIcon(hwnd);
+    return 0;
+  }
+
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =
@@ -168,6 +223,16 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   }
 
   switch (message) {
+    case WM_TIMER:
+      if (wparam == kTrayRetryTimerId) {
+        KillTimer(hwnd, kTrayRetryTimerId);
+        if (!tray_icon_added_) {
+          AddTrayIcon(hwnd);
+        }
+        return 0;
+      }
+      break;
+
     case WM_CLOSE:
       if (!exit_requested_) {
         ShowWindow(hwnd, SW_HIDE);
@@ -187,8 +252,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
           RunVpnTask(L"GreenVPNDisconnect");
           return 0;
         case kTrayMenuExit:
-          exit_requested_ = true;
-          Destroy();
+          ExitApplication();
           return 0;
       }
       break;
@@ -220,34 +284,83 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
 }
 
 void FlutterWindow::AddTrayIcon(HWND window) {
-  if (!window || tray_icon_added_) {
+  if (!window) {
     return;
   }
+  if (tray_icon_added_) {
+    KillTimer(window, kTrayRetryTimerId);
+    tray_icon_add_attempts_ = 0;
+    return;
+  }
+  if (tray_icon_add_attempts_ >= kTrayRetryMaxAttempts) {
+    WriteTrayDiagnostic("retry_exhausted", false, tray_icon_add_attempts_);
+    return;
+  }
+  ++tray_icon_add_attempts_;
 
   ZeroMemory(&tray_icon_data_, sizeof(tray_icon_data_));
   tray_icon_data_.cbSize = sizeof(tray_icon_data_);
   tray_icon_data_.hWnd = window;
   tray_icon_data_.uID = kTrayIconId;
-  tray_icon_data_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+  tray_icon_data_.guidItem = kTrayIconGuid;
+  tray_icon_data_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_GUID;
   tray_icon_data_.uCallbackMessage = kTrayCallbackMessage;
   tray_icon_data_.hIcon =
       LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_APP_ICON));
   wcscpy_s(tray_icon_data_.szTip, GREENVPN_RUNTIME_PRODUCT_NAME_W);
 
+  // A forced process termination cannot send NIM_DELETE. Clean a stale entry
+  // once per process; repeated delete/add cycles create ghost icons in the
+  // notification overflow while Explorer refreshes its cache.
+  if (!tray_stale_cleanup_done_) {
+    const bool stale_removed =
+        Shell_NotifyIconW(NIM_DELETE, &tray_icon_data_) == TRUE;
+    WriteTrayDiagnostic("delete_stale", stale_removed,
+                        tray_icon_add_attempts_);
+    tray_stale_cleanup_done_ = true;
+  }
   tray_icon_added_ = Shell_NotifyIconW(NIM_ADD, &tray_icon_data_) == TRUE;
+  WriteTrayDiagnostic("add", tray_icon_added_, tray_icon_add_attempts_);
   if (tray_icon_added_) {
     tray_icon_data_.uVersion = NOTIFYICON_VERSION_4;
-    Shell_NotifyIconW(NIM_SETVERSION, &tray_icon_data_);
+    const bool version_set =
+        Shell_NotifyIconW(NIM_SETVERSION, &tray_icon_data_) == TRUE;
+    WriteTrayDiagnostic("set_version", version_set,
+                        tray_icon_add_attempts_);
+    tray_icon_add_attempts_ = 0;
+    KillTimer(window, kTrayRetryTimerId);
+  } else {
+    ScheduleTrayIconRetry(window);
   }
 }
 
 void FlutterWindow::RemoveTrayIcon() {
-  if (!tray_icon_added_) {
+  HWND window = GetHandle();
+  if (window) {
+    KillTimer(window, kTrayRetryTimerId);
+  }
+  if (tray_icon_data_.cbSize != 0 && tray_icon_added_) {
+    const bool removed =
+        Shell_NotifyIconW(NIM_DELETE, &tray_icon_data_) == TRUE;
+    WriteTrayDiagnostic("delete_shutdown", removed, 0);
+  }
+  ZeroMemory(&tray_icon_data_, sizeof(tray_icon_data_));
+  tray_icon_added_ = false;
+  tray_stale_cleanup_done_ = false;
+  tray_icon_add_attempts_ = 0;
+}
+
+void FlutterWindow::ScheduleTrayIconRetry(HWND window) {
+  if (!window || tray_icon_add_attempts_ >= kTrayRetryMaxAttempts) {
     return;
   }
+  SetTimer(window, kTrayRetryTimerId, kTrayRetryDelayMs, nullptr);
+}
 
-  Shell_NotifyIconW(NIM_DELETE, &tray_icon_data_);
-  tray_icon_added_ = false;
+void FlutterWindow::ExitApplication() {
+  exit_requested_ = true;
+  RemoveTrayIcon();
+  Destroy();
 }
 
 void FlutterWindow::ShowTrayMenu(HWND window) {

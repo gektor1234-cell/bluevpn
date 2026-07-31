@@ -73,5 +73,11 @@ String greenVpnWindowsRoutingAppsPathSync() =>
 String greenVpnBackendLogPathSync() =>
     '${greenVpnProgramDataRootSync()}\\backend.log';
 
+String greenVpnStandbyProbeRequestPathSync() =>
+    '${greenVpnProgramDataRootSync()}\\standby-probe-request.json';
+
+String greenVpnStandbyProbeResultPathSync() =>
+    '${greenVpnProgramDataRootSync()}\\standby-probe-result.json';
+
 String greenVpnAuthLogPathSync() =>
     '${greenVpnProgramDataRootSync()}\\auth.log';

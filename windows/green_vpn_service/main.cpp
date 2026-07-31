@@ -71,6 +71,8 @@ HANDLE g_guard_thread = nullptr;
 SOCKET g_listen_socket = INVALID_SOCKET;
 std::wstring g_task_script_path;
 std::mutex g_task_action_mutex;
+constexpr const wchar_t kStandbyProbeCancelPath[] =
+    GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_W L"\\standby-probe.cancel";
 
 std::wstring Utf8ToWide(const std::string& text) {
   if (text.empty()) {
@@ -413,8 +415,16 @@ std::wstring GetPowerShellPath() {
   return L"powershell.exe";
 }
 
-int RunTaskAction(const wchar_t* action, DWORD timeout_ms) {
+int RunTaskAction(const wchar_t* action, DWORD timeout_ms,
+                  bool clear_standby_cancel = false) {
   const std::lock_guard<std::mutex> lock(g_task_action_mutex);
+  if (clear_standby_cancel &&
+      !DeleteFileW(kStandbyProbeCancelPath) &&
+      GetLastError() != ERROR_FILE_NOT_FOUND) {
+    AppendLog(L"standby probe cancellation reset failed err=" +
+              std::to_wstring(GetLastError()));
+    return 4;
+  }
   if (g_task_script_path.empty() || !FileExists(g_task_script_path)) {
     AppendLog(L"task script missing: " + g_task_script_path);
     return 3;
@@ -458,6 +468,35 @@ int RunTaskAction(const wchar_t* action, DWORD timeout_ms) {
   AppendLog(L"task action " + std::wstring(action) +
             L" exit=" + std::to_wstring(exit_code));
   return exit_code;
+}
+
+bool RequestStandbyProbeCancellation() {
+  HANDLE file = CreateFileW(kStandbyProbeCancelPath, GENERIC_WRITE,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                            nullptr, CREATE_ALWAYS,
+                            FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_TEMPORARY,
+                            nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    AppendLog(L"standby probe cancellation marker failed err=" +
+              std::to_wstring(GetLastError()));
+    return false;
+  }
+  CloseHandle(file);
+  return true;
+}
+
+bool CancelStandbyProbeAndWait() {
+  if (!RequestStandbyProbeCancellation()) {
+    return false;
+  }
+  const std::lock_guard<std::mutex> lock(g_task_action_mutex);
+  if (!DeleteFileW(kStandbyProbeCancelPath) &&
+      GetLastError() != ERROR_FILE_NOT_FOUND) {
+    AppendLog(L"standby probe cancellation cleanup failed err=" +
+              std::to_wstring(GetLastError()));
+    return false;
+  }
+  return true;
 }
 
 std::string QueryServiceState(const wchar_t* service_name) {
@@ -695,6 +734,7 @@ void HandleRequest(SOCKET client, const std::string& request) {
     if (!RequireLocalToken(client, request)) {
       return;
     }
+    CancelStandbyProbeAndWait();
     const int exit_code = RunTaskAction(L"Connect", 120000);
     if (exit_code == 0) {
       SendHttp(client, 200, "OK",
@@ -720,6 +760,7 @@ void HandleRequest(SOCKET client, const std::string& request) {
     if (!RequireLocalToken(client, request)) {
       return;
     }
+    CancelStandbyProbeAndWait();
     const int exit_code = RunTaskAction(L"Disconnect", 120000);
     if (exit_code == 0) {
       SendHttp(client, 200, "OK",
@@ -727,6 +768,45 @@ void HandleRequest(SOCKET client, const std::string& request) {
     } else {
       SendHttp(client, 500, "Internal Server Error",
                TaskResultJson(false, exit_code, "disconnect task failed"));
+    }
+    return;
+  }
+
+  if (path == "/standby/cancel" && method != "post") {
+    SendHttp(client, 405, "Method Not Allowed",
+             "{\"ok\":false,\"message\":\"standby cancel requires POST\"}");
+    return;
+  }
+
+  if (method == "post" && path == "/standby/cancel") {
+    if (!RequireLocalToken(client, request)) {
+      return;
+    }
+    const bool ok = CancelStandbyProbeAndWait();
+    SendHttp(client, ok ? 200 : 500,
+             ok ? "OK" : "Internal Server Error",
+             ok ? "{\"ok\":true,\"message\":\"standby probe cancellation requested\"}"
+                : "{\"ok\":false,\"message\":\"standby probe cancellation failed\"}");
+    return;
+  }
+
+  if (path == "/standby/probe" && method != "post") {
+    SendHttp(client, 405, "Method Not Allowed",
+             "{\"ok\":false,\"message\":\"standby probe requires POST\"}");
+    return;
+  }
+
+  if (method == "post" && path == "/standby/probe") {
+    if (!RequireLocalToken(client, request)) {
+      return;
+    }
+    const int exit_code = RunTaskAction(L"ProbeStandby", 60000, true);
+    if (exit_code == 0) {
+      SendHttp(client, 200, "OK",
+               TaskResultJson(true, exit_code, "standby probe completed"));
+    } else {
+      SendHttp(client, 409, "Conflict",
+               TaskResultJson(false, exit_code, "standby probe failed or was cancelled"));
     }
     return;
   }

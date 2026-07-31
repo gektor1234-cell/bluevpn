@@ -73,17 +73,22 @@ $windowsPublicReleaseInstallerPath = Join-Path $ProjectRoot "scripts\server\inst
 $windowsStableReleaseInstallerPath = Join-Path $ProjectRoot "scripts\server\install_windows_stable_release.sh"
 $servicePath = Join-Path $ProjectRoot "windows\green_vpn_service\main.cpp"
 $runnerPath = Join-Path $ProjectRoot "windows\runner\flutter_window.cpp"
+$runnerMainPath = Join-Path $ProjectRoot "windows\runner\main.cpp"
 $doctorPath = Join-Path $ProjectRoot "scripts\windows\doctor_bluevpn.ps1"
 $recoverPath = Join-Path $ProjectRoot "scripts\windows\bluevpn_network_recover.ps1"
 $networkProtectionPath = Join-Path $ProjectRoot "scripts\windows\check_windows_network_protection.ps1"
 $networkTransitionSmokePath = Join-Path $ProjectRoot "scripts\windows\run_paid_beta_network_transition_smoke.ps1"
 $vpnTaskPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_vpn_task.ps1"
 $transportPreviewVpnTaskPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_transport_preview_vpn_task.ps1"
+$windowsStandbyProbePath = Join-Path $ProjectRoot "scripts\windows\greenvpn_standby_probe.ps1"
+$windowsStandbyResultContractTestPath = Join-Path $ProjectRoot "scripts\windows\test_windows_standby_probe_result_contract.ps1"
 $transportSelectiveRoutingPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_selective_routing.ps1"
 $transportSelectiveRoutingTestPath = Join-Path $ProjectRoot "scripts\windows\test_windows_selective_routing_policy.ps1"
 $windowsRuntimeFailoverPhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_windows_public_runtime_failover_physical.ps1"
 $windowsConnectLatencyPhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_windows_connect_latency_physical.ps1"
 $windowsFastCacheReleaseSmokePath = Join-Path $ProjectRoot "scripts\windows\run_windows_fast_cache_release_smoke.ps1"
+$windowsStandbyTrayReleaseSmokePath = Join-Path $ProjectRoot "scripts\windows\run_windows_standby_tray_release_smoke.ps1"
+$windowsStandbyTrayReleaseLauncherPath = Join-Path $ProjectRoot "scripts\windows\launch_windows_standby_tray_release_smoke.ps1"
 $windowsSmokeNetworkRestorePath = Join-Path $ProjectRoot "scripts\windows\restore_windows_smoke_network.ps1"
 $transportCascadeStagePath = Join-Path $ProjectRoot "scripts\windows\stage_windows_transport_cascade.ps1"
 $publicInstallerAuditPath = Join-Path $ProjectRoot "scripts\windows\test_public_installer_package.ps1"
@@ -215,11 +220,14 @@ $networkProtectionScript = Read-Text $networkProtectionPath
 $networkTransitionSmokeScript = Read-Text $networkTransitionSmokePath
 $vpnTaskScript = Read-Text $vpnTaskPath
 $transportPreviewVpnTaskScript = Read-Text $transportPreviewVpnTaskPath
+$windowsStandbyProbeScript = Read-Text $windowsStandbyProbePath
 $transportSelectiveRoutingScript = Read-Text $transportSelectiveRoutingPath
 $transportSelectiveRoutingTestScript = Read-Text $transportSelectiveRoutingTestPath
 $windowsRuntimeFailoverPhysicalTestScript = Read-Text $windowsRuntimeFailoverPhysicalTestPath
 $windowsConnectLatencyPhysicalTestScript = Read-Text $windowsConnectLatencyPhysicalTestPath
 $windowsFastCacheReleaseSmokeScript = Read-Text $windowsFastCacheReleaseSmokePath
+$windowsStandbyTrayReleaseSmokeScript = Read-Text $windowsStandbyTrayReleaseSmokePath
+$windowsStandbyTrayReleaseLauncherScript = Read-Text $windowsStandbyTrayReleaseLauncherPath
 $windowsSmokeNetworkRestoreScript = Read-Text $windowsSmokeNetworkRestorePath
 $transportCascadeStageScript = Read-Text $transportCascadeStagePath
 $publicInstallerAuditScript = Read-Text $publicInstallerAuditPath
@@ -530,6 +538,7 @@ foreach ($fragment in $localServiceClientFragments) {
 }
 
 $runnerSource = Read-Text $runnerPath
+$runnerMainSource = Read-Text $runnerMainPath
 $windowsParityFragments = @(
     'greenVpnShouldOpenSavedSessionDirectly',
     'ReadLocalServiceToken',
@@ -1915,6 +1924,7 @@ $transportSelectiveRoutingChecks = [ordered]@{
     'Windows public installer audits selective helper' = @(
         $publicInstallerAuditScript,
         'tools/greenvpn_selective_routing.ps1',
+        'tools/greenvpn_standby_probe.ps1',
         'Selective application routing is not supported by `$protocol.'
     )
     'Windows selective policy test is bounded and fail-closed' = @(
@@ -1941,6 +1951,8 @@ foreach ($check in $transportSelectiveRoutingChecks.GetEnumerator()) {
 
 foreach ($scriptPath in @(
     $transportPreviewVpnTaskPath,
+    $windowsStandbyProbePath,
+    $windowsStandbyResultContractTestPath,
     $transportSelectiveRoutingPath,
     $transportSelectiveRoutingTestPath,
     $transportCascadeStagePath,
@@ -1961,25 +1973,127 @@ foreach ($scriptPath in @(
     }
 }
 
+try {
+    & $windowsStandbyResultContractTestPath -ProjectRoot $ProjectRoot | Out-Null
+    Add-Pass 'Windows standby probe writes a failure result when cleanup throws'
+}
+catch {
+    Add-Error "Windows standby result contract test failed: $($_.Exception.Message)"
+}
+
 $windowsRuntimeFailoverChecks = [ordered]@{
     'Windows runtime failover policy' = @(
         $transportPreviewPolicy,
         'greenVpnRuntimeFailoverFailureThreshold = 2',
         '(isAndroid || isWindows)',
         'greenVpnNextRuntimeFailoverFailureCount',
-        'greenVpnShouldTriggerRuntimeFailover'
+        'greenVpnShouldTriggerRuntimeFailover',
+        'greenVpnShouldRecoverUnexpectedWindowsDisconnect'
     )
     'Windows runtime failover tests' = @(
         $transportPreviewPolicyTest,
         'runtime failover requires two consecutive unhealthy checks',
+        'Windows unexpected tunnel loss stays armed for runtime recovery',
         'persisted runtime route ids are strictly normalized',
         'Windows foreground connect prefers an exact cached route',
         "candidateProtocol: 'amneziawg'",
         'isWindows: true'
     )
+    'Windows background standby policy and tests' = @(
+        ($transportPreviewPolicy + "`n" + $transportPreviewPolicyTest),
+        'greenVpnStandbyConfigTtl = Duration(hours: 6)',
+        'greenVpnStandbyProbeTtl = Duration(minutes: 10)',
+        'GreenVpnStandbyRouteProof',
+        'isFreshForPreparedConfig',
+        'fresh standby proof leads only when caller opts into recovery order',
+        'standby config refresh is bounded by a six hour TTL'
+    )
+    'Windows background standby lifecycle is post-connect only' = @(
+        $main,
+        '_runWindowsStandbyCycle',
+        'unawaited(_runWindowsStandbyCycle(server, epoch))',
+        '_windowsRuntimeRecoveryRunning &&',
+        'leftHasFreshStandbyProof:',
+        '_cancelWindowsStandbyProbe',
+        "stage: 'standby_probe'"
+    )
+    'Windows privileged standby endpoint is authenticated and cancellable' = @(
+        ($serviceSource + "`n" + $main + "`n" + $runtimeConfig),
+        'path == "/standby/probe"',
+        'path == "/standby/cancel"',
+        'RequestStandbyProbeCancellation',
+        'CancelStandbyProbeAndWait',
+        'RunTaskAction(L"ProbeStandby", 60000, true)',
+        'probeStandby()',
+        'cancelStandbyProbe()',
+        'standby-probe-request.json'
+    )
+    'Windows standby probe is route-isolated and fully reversible' = @(
+        $windowsStandbyProbeScript,
+        '$ProbeEndpointRouteMetric = 42739',
+        "-DestinationPrefix '0.0.0.0/0'",
+        'Add-ProbeEndpointBypassRoute',
+        'Remove-ProbeEndpointBypassRoutes',
+        'Remove-AllProbeEndpointBypassRoutes',
+        'Test-ProbeEndpointBypassRoutesRemoved',
+        'Test-AllProbeEndpointBypassRoutesRemoved',
+        'foreach ($route in [object[]]$bypassRoutes)',
+        'Stop-StaleProbeProcesses',
+        'Get-Service -Name ([string]$entry.service)',
+        '$p.WaitForExit(8000)',
+        '$install.WaitForExit(12000)',
+        "AllowedIPs = `$ProbeTarget/32",
+        'latest-handshakes',
+        'https://www.youtube.com/generate_204',
+        '$result.cleanupOk',
+        '$result.cleanupErrors',
+        'try { Write-ProbeResult } catch',
+        'finally'
+    )
+    'Windows standby wrapper guarantees failure accounting and cleanup' = @(
+        $transportPreviewVpnTaskScript,
+        'Remove-StandbyProbeFallbackArtifacts',
+        'Write-StandbyProbeFallbackResult',
+        "-ErrorCode 'probe_wrapper_failed'",
+        '$StandbyProbeEndpointRouteMetric = 42739',
+        'standby probe wrapper fallback cleanupOk='
+    )
+    'Windows installer packages standby probe and closes tray gracefully' = @(
+        $installer,
+        'tools\greenvpn_standby_probe.ps1',
+        'Stop-GreenVpnUiGracefully',
+        "@('--shutdown-existing', '--background')"
+    )
+    'Windows tray identity is stable and restart-safe' = @(
+        ($runnerSource + "`n" + $runnerMainSource),
+        'NIF_GUID',
+        'kTrayIconGuid',
+        'TaskbarCreated',
+        'Shell_NotifyIconW(NIM_DELETE',
+        'Shell_NotifyIconW(NIM_ADD',
+        'GREENVPN_TRAY_DIAGNOSTIC_PATH',
+        'WriteTrayDiagnostic("add"',
+        'WriteTrayDiagnostic("delete_shutdown"',
+        'tray_stale_cleanup_done_',
+        'kTrayRetryTimerId',
+        'kTrayRetryDelayMs = 1000',
+        'kTrayRetryMaxAttempts = 15',
+        'ScheduleTrayIconRetry',
+        'KillTimer',
+        'CreateMutexW(nullptr, FALSE, kSingleInstanceMutexName)',
+        'WaitForSingleObject(single_instance_mutex, 0)',
+        'WAIT_ABANDONED',
+        'owns_single_instance_mutex',
+        '--shutdown-existing',
+        'kGreenVpnShutdownMessage'
+    )
     'Windows runtime failover lifecycle' = @(
         $main,
         '_pollWindowsRuntimeFailover',
+        '_greenVpnAuthLogWriteTail',
+        'appendGreenVpnAuthLogLine',
+        "appendGreenVpnAuthLogLine('UI `$message')",
+        'reason=runtime_failover_armed',
         'windows runtime failover clean-down confirmed',
         'disconnectResult?.ok == true && !stillConnected',
         '_disarmWindowsRuntimeFailover(reason: ''user_disconnect'')',
@@ -2017,6 +2131,9 @@ $windowsRuntimeFailoverChecks = [ordered]@{
         'GreenVPNPublicRuntimeFailoverSmokeFailsafe',
         'Test-InstalledPayload',
         'UseExistingExactInstall',
+        '$expectedDisplayVersion',
+        'Installed file version mismatch:',
+        'Installed display version mismatch:',
         "tools\greenvpn_vpn_task.ps1",
         'windows runtime failover restored source=',
         'Stop-ActiveTransportEngine',
@@ -2030,6 +2147,19 @@ $windowsRuntimeFailoverChecks = [ordered]@{
         'Test-NoBroadAcl',
         'protectedProgramData',
         'overlapObserved',
+        'prevalidatedStandbyUsed',
+        'allEligibleAccounted',
+        '$standbyConfigTimestampToleranceMilliseconds = 1000',
+        'configTimestampDeltaMs',
+        '$Matches.ContainsKey(''protocol'')',
+        'failureLocation',
+        'standbyArtifactsClean',
+        'standbyCancelAccepted',
+        'function Wait-StandbyCleanupEvidence',
+        'standbyCleanupEvidence',
+        'requestRemovedByHarness',
+        "Invoke-GreenLocal -Method POST -Path '/standby/cancel'",
+        'Wait-StandbyCleanupEvidence -TimeoutSeconds 30',
         'originalEgressRestored',
         'finally'
     )
@@ -2040,6 +2170,15 @@ $windowsRuntimeFailoverChecks = [ordered]@{
         'lastSuccessfulRouteProtocol',
         'lastSuccessfulRouteAt',
         'Stop-GreenApp',
+        'UIAutomationClient',
+        'Invoke-GreenConnectAutomationElement',
+        'Wait-GreenConnectAcknowledgement',
+        'GetForegroundWindow() == hWnd',
+        'BringWindowToTop(hWnd)',
+        'ChildWindowFromPointEx',
+        'PostCoordinateClick',
+        "'uia_invoke'",
+        "'coordinate_click'",
         'Cached connection exceeded',
         'Second connection did not prioritize the exact last successful route'
     )
@@ -2057,13 +2196,47 @@ $windowsRuntimeFailoverChecks = [ordered]@{
         'privilegedTakeoverConfirmed',
         'exact-route timing contract'
     )
+    'Windows autonomous standby and tray release smoke has exact, delayed, and reversible gates' = @(
+        $windowsStandbyTrayReleaseSmokeScript,
+        '$ExpectedInstallerSha256',
+        '$ExpectedInstallerSize',
+        '$InitialDelaySeconds = 90',
+        'Assert-ReadOnlySafeBaseline',
+        'Write-RunnerLog "waiting $InitialDelaySeconds seconds before installation or network transitions"',
+        'Start-DeadmanRecovery',
+        'RequireStandbyProof',
+        'prevalidatedStandbyUsed',
+        '$trayDiagnosticsPath',
+        '$env:GREENVPN_TRAY_DIAGNOSTIC_PATH',
+        'Assert-TrayProcessLifecycle',
+        'successful NIM_ADD events; expected exactly one.',
+        'forcedPredecessorRecoveryConfirmed',
+        'standbyBypassRoutesAbsent',
+        'Invoke-FinalRecovery',
+        'deadmanStopped'
+    )
+    'Windows standby and tray launcher requests one exact elevated detached runner' = @(
+        $windowsStandbyTrayReleaseLauncherScript,
+        '$ExpectedInstallerSha256',
+        '$ExpectedInstallerSize',
+        '$ExpectedVersion',
+        '$InitialDelaySeconds = 90',
+        'windows-standby-tray-launcher-status.json',
+        "Write-LauncherStatus -Phase 'uac_requested'",
+        "-Verb RunAs",
+        "Write-LauncherStatus -Phase 'runner_started'",
+        'Exact installer SHA-256 or size mismatch.'
+    )
     'Windows emergency smoke recovery stops UI before disconnect' = @(
         $windowsSmokeNetworkRestoreScript,
         '[switch]$StopGreenUi',
         'Stop-GreenVpnUi',
         'greenUiStopped',
         'greenComponentsStopped',
-        'externalVpnRunning'
+        'standbyProbeServicesStopped',
+        'standbyBypassRoutesAbsent',
+        'externalVpnRunning',
+        'youtube'
     )
     'Windows dnstt service status' = @(
         $serviceSource,
@@ -2087,6 +2260,42 @@ foreach ($check in $windowsRuntimeFailoverChecks.GetEnumerator()) {
         Add-Error "$($check.Key) missing marker(s): $($missing -join ', ')"
     }
 }
+if ($runnerSource.Contains('Shell_NotifyIconGetRect')) {
+    Add-Error 'Windows tray lifecycle must not infer registration from icon geometry.'
+} else {
+    Add-Pass 'Windows tray lifecycle trusts NIM_ADD and does not loop on icon geometry'
+}
+if ($windowsStandbyTrayReleaseSmokeScript.Contains('Shell_NotifyIconGetRect')) {
+    Add-Error 'Windows tray smoke must use app-owned lifecycle diagnostics, not icon geometry.'
+} else {
+    Add-Pass 'Windows tray smoke uses app-owned lifecycle diagnostics'
+}
+
+$standbyInitialReadOnlyIndex = $windowsStandbyTrayReleaseSmokeScript.LastIndexOf(
+    "Assert-ReadOnlySafeBaseline -Label 'Initial read-only baseline'"
+)
+$standbyInitialDelayIndex = $windowsStandbyTrayReleaseSmokeScript.LastIndexOf(
+    'Start-Sleep -Seconds $InitialDelaySeconds'
+)
+$standbyDeadmanStartIndex = $windowsStandbyTrayReleaseSmokeScript.LastIndexOf(
+    '$deadman = Start-DeadmanRecovery'
+)
+$standbyFirstMutableBaselineIndex = $windowsStandbyTrayReleaseSmokeScript.LastIndexOf(
+    "Assert-SafeBaseline -Label 'Delayed baseline'"
+)
+if (
+    $standbyInitialReadOnlyIndex -lt 0 -or
+    $standbyInitialDelayIndex -le $standbyInitialReadOnlyIndex -or
+    $standbyDeadmanStartIndex -le $standbyInitialDelayIndex -or
+    $standbyFirstMutableBaselineIndex -le $standbyDeadmanStartIndex
+) {
+    Add-Error 'Windows standby/tray release smoke must delay before mutation and start deadman before its first mutable baseline.'
+}
+if ($windowsStandbyTrayReleaseSmokeScript -match '(?<!@)\(Get-ExactAppProcesses\)\.Count') {
+    Add-Error 'Windows standby/tray release smoke must array-wrap process enumeration before reading Count.'
+} else {
+    Add-Pass 'Windows standby/tray release smoke array-wraps process enumeration before reading Count'
+}
 
 foreach ($parserCheck in @(
     [pscustomobject]@{
@@ -2100,6 +2309,14 @@ foreach ($parserCheck in @(
     [pscustomobject]@{
         Label = 'Windows autonomous fast-cache release smoke'
         Path = $windowsFastCacheReleaseSmokePath
+    },
+    [pscustomobject]@{
+        Label = 'Windows autonomous standby and tray release smoke'
+        Path = $windowsStandbyTrayReleaseSmokePath
+    },
+    [pscustomobject]@{
+        Label = 'Windows standby and tray release launcher'
+        Path = $windowsStandbyTrayReleaseLauncherPath
     },
     [pscustomobject]@{
         Label = 'Windows emergency smoke recovery'

@@ -21,6 +21,10 @@ bool IsBackgroundLaunch(const std::wstring& raw_command_line,
          show_command == SW_HIDE;
 }
 
+bool IsShutdownRequest(const std::wstring& raw_command_line) {
+  return raw_command_line.find(L"--shutdown-existing") != std::wstring::npos;
+}
+
 BOOL CALLBACK FindExistingGreenVpnWindow(HWND window, LPARAM lparam) {
   if (!IsWindow(window)) {
     return TRUE;
@@ -61,6 +65,33 @@ void RestoreExistingGreenVpnWindow() {
   }
 }
 
+bool ShutdownExistingGreenVpnWindow() {
+  for (int attempt = 0; attempt < 40; ++attempt) {
+    HWND existing_window = FindExistingGreenVpnWindow();
+    if (existing_window) {
+      DWORD process_id = 0;
+      GetWindowThreadProcessId(existing_window, &process_id);
+      DWORD_PTR ignored = 0;
+      if (!SendMessageTimeoutW(existing_window, kGreenVpnShutdownMessage, 0, 0,
+                               SMTO_ABORTIFHUNG, 5000, &ignored)) {
+        return false;
+      }
+      if (process_id != 0) {
+        HANDLE process =
+            OpenProcess(SYNCHRONIZE, FALSE, process_id);
+        if (process) {
+          const DWORD wait_result = WaitForSingleObject(process, 10000);
+          CloseHandle(process);
+          return wait_result == WAIT_OBJECT_0;
+        }
+      }
+      return true;
+    }
+    Sleep(50);
+  }
+  return true;
+}
+
 }  // namespace
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
@@ -73,16 +104,35 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   const std::wstring raw_command_line = command_line ? command_line : L"";
   const bool start_hidden = IsBackgroundLaunch(raw_command_line, show_command);
+  const bool shutdown_requested = IsShutdownRequest(raw_command_line);
 
   HANDLE single_instance_mutex =
-      CreateMutexW(nullptr, TRUE, kSingleInstanceMutexName);
+      CreateMutexW(nullptr, FALSE, kSingleInstanceMutexName);
   if (!single_instance_mutex) {
     return EXIT_FAILURE;
   }
-  if (GetLastError() == ERROR_ALREADY_EXISTS) {
+  const DWORD mutex_wait_result =
+      WaitForSingleObject(single_instance_mutex, 0);
+  const bool owns_single_instance_mutex =
+      mutex_wait_result == WAIT_OBJECT_0 || mutex_wait_result == WAIT_ABANDONED;
+  if (mutex_wait_result == WAIT_FAILED) {
+    CloseHandle(single_instance_mutex);
+    return EXIT_FAILURE;
+  }
+  if (!owns_single_instance_mutex) {
+    if (shutdown_requested) {
+      const bool stopped = ShutdownExistingGreenVpnWindow();
+      CloseHandle(single_instance_mutex);
+      return stopped ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
     if (!start_hidden) {
       RestoreExistingGreenVpnWindow();
     }
+    CloseHandle(single_instance_mutex);
+    return EXIT_SUCCESS;
+  }
+  if (shutdown_requested) {
+    ReleaseMutex(single_instance_mutex);
     CloseHandle(single_instance_mutex);
     return EXIT_SUCCESS;
   }
@@ -97,7 +147,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   // Initialize COM, so that it is available for use in the library and/or
   // plugins.
-  ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  const HRESULT com_result =
+      ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
   flutter::DartProject project(L"data");
 
@@ -111,7 +162,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   Win32Window::Size size(980, 720);
 
   if (!window.Create(kAppWindowTitle, origin, size)) {
-
+    if (SUCCEEDED(com_result)) {
+      ::CoUninitialize();
+    }
+    ReleaseMutex(single_instance_mutex);
+    CloseHandle(single_instance_mutex);
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);
@@ -122,7 +177,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     ::DispatchMessage(&msg);
   }
 
-  ::CoUninitialize();
+  if (SUCCEEDED(com_result)) {
+    ::CoUninitialize();
+  }
   ReleaseMutex(single_instance_mutex);
   CloseHandle(single_instance_mutex);
   return EXIT_SUCCESS;

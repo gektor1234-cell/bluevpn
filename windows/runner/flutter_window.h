@@ -9,6 +9,8 @@
 
 #include "win32_window.h"
 
+constexpr UINT kGreenVpnShutdownMessage = WM_APP + 44;
+
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {
  public:
@@ -34,12 +36,16 @@ class FlutterWindow : public Win32Window {
 
   void AddTrayIcon(HWND window);
   void RemoveTrayIcon();
+  void ScheduleTrayIconRetry(HWND window);
   void ShowTrayMenu(HWND window);
   void RestoreFromTray();
   void RunVpnTask(const wchar_t* task_name);
   void ShowTrayTaskResult(bool success, bool connecting);
+  void ExitApplication();
 
   bool tray_icon_added_ = false;
+  bool tray_stale_cleanup_done_ = false;
+  int tray_icon_add_attempts_ = 0;
   bool tray_task_running_ = false;
   bool exit_requested_ = false;
   NOTIFYICONDATAW tray_icon_data_{};

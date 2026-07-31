@@ -17,6 +17,14 @@ param(
     [int]$GreenLocalPort = 48737,
     [ValidateRange(45, 300)]
     [int]$FailoverTimeoutSeconds = 150,
+    [ValidateRange(60, 1200)]
+    [int]$StandbyCycleTimeoutSeconds = 600,
+    [ValidateRange(15, 180)]
+    [int]$MaxPrevalidatedFailoverSeconds = 90,
+    [ValidateRange(5, 60)]
+    [int]$FailsafeDelayMinutes = 15,
+    [string]$UserStateRoot = '',
+    [switch]$RequireStandbyProof,
     [switch]$UseExistingExactInstall,
     [string]$ReportPath = 'C:\BlueVPN_Builds\windows_public_runtime_failover_physical.json',
     [string]$LogPath = 'C:\BlueVPN_Builds\windows_public_runtime_failover_physical.log'
@@ -26,6 +34,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $expectedInstallerHash = $ExpectedInstallerSha256.ToUpperInvariant()
+if ($ExpectedVersion -notmatch '^(\d+\.\d+\.\d+)(?:\+(\d+))?$') {
+    throw "ExpectedVersion must be x.y.z or x.y.z+build: $ExpectedVersion"
+}
+$expectedDisplayVersion = [string]$Matches[1]
 $resolvedInstaller = [IO.Path]::GetFullPath($InstallerPath)
 $resolvedInstallRoot = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
 $resolvedProgramDataRoot = [IO.Path]::GetFullPath($ProgramDataRoot).TrimEnd('\')
@@ -37,6 +49,16 @@ $pendingActionPath = Join-Path $resolvedProgramDataRoot 'state\pending_vpn_actio
 $routingModePath = Join-Path $resolvedProgramDataRoot 'routing_mode'
 $routingAppsPath = Join-Path $resolvedProgramDataRoot 'routing_apps.json'
 $authLogPath = Join-Path $resolvedProgramDataRoot 'auth.log'
+$resolvedUserStateRoot = if ([string]::IsNullOrWhiteSpace($UserStateRoot)) {
+    Join-Path $env:APPDATA 'GreenVPN\state'
+} else {
+    [IO.Path]::GetFullPath($UserStateRoot).TrimEnd('\')
+}
+$standbyProofPath = Join-Path $resolvedUserStateRoot 'standby_routes.json'
+$standbyRuntimeRoot = Join-Path $resolvedProgramDataRoot 'standby-probe-runtime'
+$standbyProbeRequestPath = Join-Path $resolvedProgramDataRoot 'standby-probe-request.json'
+$standbyProbeResultPath = Join-Path $resolvedProgramDataRoot 'standby-probe-result.json'
+$standbyCancelPath = Join-Path $resolvedProgramDataRoot 'standby-probe.cancel'
 $appPath = Join-Path $resolvedInstallRoot 'greenvpn.exe'
 $taskScriptPath = Join-Path $resolvedInstallRoot 'tools\greenvpn_vpn_task.ps1'
 $failSafeTaskName = 'GreenVPNPublicRuntimeFailoverSmokeFailsafe'
@@ -61,6 +83,7 @@ $protocolRank = @{
     naive_https = 4
     dnstt = 5
 }
+$standbyConfigTimestampToleranceMilliseconds = 1000
 
 function Write-SmokeLog {
     param([Parameter(Mandatory = $true)][string]$Message)
@@ -110,6 +133,14 @@ if (-not (Test-IsAdministrator)) {
         $GreenLocalPort,
         '-FailoverTimeoutSeconds',
         $FailoverTimeoutSeconds,
+        '-StandbyCycleTimeoutSeconds',
+        $StandbyCycleTimeoutSeconds,
+        '-MaxPrevalidatedFailoverSeconds',
+        $MaxPrevalidatedFailoverSeconds,
+        '-FailsafeDelayMinutes',
+        $FailsafeDelayMinutes,
+        '-UserStateRoot',
+        (Convert-ToQuotedArgument $resolvedUserStateRoot),
         '-ReportPath',
         (Convert-ToQuotedArgument ([IO.Path]::GetFullPath($ReportPath))),
         '-LogPath',
@@ -117,6 +148,9 @@ if (-not (Test-IsAdministrator)) {
     )
     if ($UseExistingExactInstall) {
         $arguments += '-UseExistingExactInstall'
+    }
+    if ($RequireStandbyProof) {
+        $arguments += '-RequireStandbyProof'
     }
     $process = Start-Process -FilePath 'powershell.exe' -Verb RunAs -PassThru -Wait -ArgumentList $arguments
     exit $process.ExitCode
@@ -540,18 +574,35 @@ function Get-NetworkProtectionEvidence {
 }
 
 function Stop-GreenApp {
-    foreach ($process in @(Get-Process -Name 'greenvpn' -ErrorAction SilentlyContinue)) {
+    if (Test-Path -LiteralPath $appPath -PathType Leaf) {
         try {
-            if (
-                $process.Path -and
-                [IO.Path]::GetFullPath($process.Path).Equals(
-                    $appPath,
-                    [StringComparison]::OrdinalIgnoreCase
-                )
-            ) {
-                Stop-Process -Id $process.Id -Force -ErrorAction Stop
-            }
+            $shutdown = Start-Process -FilePath $appPath `
+                -ArgumentList @('--shutdown-existing', '--background') `
+                -WorkingDirectory $resolvedInstallRoot `
+                -WindowStyle Hidden `
+                -PassThru
+            $shutdown.WaitForExit(15000) | Out-Null
         } catch {}
+    }
+    $deadline = (Get-Date).AddSeconds(12)
+    do {
+        $running = @(
+            Get-Process -Name 'greenvpn' -ErrorAction SilentlyContinue |
+                Where-Object {
+                    try {
+                        $_.Path -and
+                            [IO.Path]::GetFullPath([string]$_.Path).Equals(
+                                $appPath,
+                                [StringComparison]::OrdinalIgnoreCase
+                            )
+                    } catch { $false }
+                }
+        )
+        if ($running.Count -eq 0) { return }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+    foreach ($process in $running) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
     }
     Start-Sleep -Milliseconds 700
 }
@@ -618,6 +669,258 @@ function Wait-LogMarker {
         Start-Sleep -Milliseconds 500
     } while ((Get-Date) -lt $deadline)
     return $false
+}
+
+function Get-NewAuthLogLines {
+    param([int]$AfterLine = 0)
+
+    if (-not (Test-Path -LiteralPath $authLogPath -PathType Leaf)) {
+        return @()
+    }
+    $lines = @(Get-Content -LiteralPath $authLogPath -ErrorAction SilentlyContinue)
+    if ($lines.Count -le $AfterLine) { return @() }
+    return @($lines[$AfterLine..($lines.Count - 1)])
+}
+
+function Get-StandbyCleanupEvidence {
+    $probeServices = @(
+        'WireGuardTunnel$GreenVPNTransportPreviewStandbyProbe',
+        'AmneziaWGTunnel$GreenVPNTransportPreviewStandbyProbe'
+    )
+    $activeProbeServices = @(
+        $probeServices | Where-Object {
+            (Get-ServiceState -Name $_) -notin @('Missing', 'Stopped')
+        }
+    )
+    $bypassRoutes = @(
+        Get-NetRoute -ErrorAction SilentlyContinue | Where-Object {
+            [int]$_.RouteMetric -eq 42739
+        }
+    )
+    $listeners = @(
+        Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+            Where-Object { [int]$_.LocalPort -in @(21980, 21981, 21982, 21983) }
+    )
+    $lastResultCleanupOk = $true
+    if (Test-Path -LiteralPath $standbyProbeResultPath -PathType Leaf) {
+        try {
+            $lastResult = Get-Content -LiteralPath $standbyProbeResultPath -Raw -Encoding UTF8 |
+                ConvertFrom-Json
+            $lastResultCleanupOk = [bool]$lastResult.cleanupOk
+        } catch {
+            $lastResultCleanupOk = $false
+        }
+    }
+    return [pscustomobject]@{
+        runtimeRootAbsent = -not (Test-Path -LiteralPath $standbyRuntimeRoot)
+        activeProbeServices = @($activeProbeServices)
+        bypassRouteCount = $bypassRoutes.Count
+        probeListenerCount = $listeners.Count
+        requestAbsent = -not (Test-Path -LiteralPath $standbyProbeRequestPath)
+        cancelMarkerAbsent = -not (Test-Path -LiteralPath $standbyCancelPath)
+        lastResultCleanupOk = $lastResultCleanupOk
+        cleanupOk =
+            -not (Test-Path -LiteralPath $standbyRuntimeRoot) -and
+            $activeProbeServices.Count -eq 0 -and
+            $bypassRoutes.Count -eq 0 -and
+            $listeners.Count -eq 0 -and
+            -not (Test-Path -LiteralPath $standbyProbeRequestPath) -and
+            -not (Test-Path -LiteralPath $standbyCancelPath) -and
+            $lastResultCleanupOk
+    }
+}
+
+function Wait-StandbyCleanupEvidence {
+    param(
+        [int]$TimeoutSeconds = 30,
+        [int]$PollMilliseconds = 250
+    )
+
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    $requestRemovedByHarness = $false
+    do {
+        $evidence = Get-StandbyCleanupEvidence
+        if ([bool]$evidence.cleanupOk) {
+            $watch.Stop()
+            $evidence | Add-Member -NotePropertyName waitedMilliseconds `
+                -NotePropertyValue ([math]::Round($watch.Elapsed.TotalMilliseconds))
+            $evidence | Add-Member -NotePropertyName requestRemovedByHarness `
+                -NotePropertyValue $requestRemovedByHarness
+            return $evidence
+        }
+        $probeQuiescent =
+            [bool]$evidence.runtimeRootAbsent -and
+            @($evidence.activeProbeServices).Count -eq 0 -and
+            [int]$evidence.bypassRouteCount -eq 0 -and
+            [int]$evidence.probeListenerCount -eq 0 -and
+            [bool]$evidence.cancelMarkerAbsent
+        if ($probeQuiescent -and -not [bool]$evidence.requestAbsent) {
+            Remove-Item -LiteralPath $standbyProbeRequestPath -Force `
+                -ErrorAction SilentlyContinue
+            $requestRemovedByHarness =
+                -not (Test-Path -LiteralPath $standbyProbeRequestPath)
+        }
+        Start-Sleep -Milliseconds $PollMilliseconds
+    } while ($watch.Elapsed.TotalSeconds -lt $TimeoutSeconds)
+
+    $watch.Stop()
+    $evidence = Get-StandbyCleanupEvidence
+    $evidence | Add-Member -NotePropertyName waitedMilliseconds `
+        -NotePropertyValue ([math]::Round($watch.Elapsed.TotalMilliseconds))
+    $evidence | Add-Member -NotePropertyName requestRemovedByHarness `
+        -NotePropertyValue $requestRemovedByHarness
+    return $evidence
+}
+
+function Get-StandbyCycleEvidence {
+    param(
+        [Parameter(Mandatory = $true)][int]$AfterLine,
+        [Parameter(Mandatory = $true)][datetime]$StartedAtUtc
+    )
+
+    $lines = @(Get-NewAuthLogLines -AfterLine $AfterLine)
+    $startMatch = $null
+    $completeMatch = $null
+    foreach ($line in $lines) {
+        if ($line -match 'windows standby cycle started active=(?<active>\S+) eligible=(?<eligible>.*)$') {
+            $startMatch = $Matches.Clone()
+        }
+        if ($line -match 'windows standby cycle complete active=(?<active>\S+) checked=(?<checked>\d+) fresh=(?<fresh>\d+) candidates=(?<candidates>\d+)') {
+            $completeMatch = $Matches.Clone()
+        }
+    }
+
+    $eligible = @()
+    if ($null -ne $startMatch -and -not [string]::IsNullOrWhiteSpace([string]$startMatch.eligible)) {
+        $eligible = @(
+            ([string]$startMatch.eligible).Split(',') |
+                ForEach-Object { $_.Trim().ToLowerInvariant() } |
+                Where-Object { $_ }
+        )
+    }
+
+    $outcomes = @{}
+    foreach ($line in $lines) {
+        if ($line -match 'windows standby probe (?<status>confirmed|failed) server=(?<route>[^ ]+) protocol=(?<protocol>[^ ]+)') {
+            $key = "$($Matches.route.ToLowerInvariant())/$($Matches.protocol.ToLowerInvariant())"
+            $outcomes[$key] = [string]$Matches.status
+        } elseif ($line -match 'windows standby config (?<status>refresh failed|rejected) (?:server|requested)=(?<route>[^ /]+)(?:/(?<protocol>[^ ]+))?') {
+            $route = [string]$Matches.route
+            $protocol = if ($Matches.ContainsKey('protocol')) {
+                [string]$Matches.protocol
+            } else {
+                ''
+            }
+            $matchingEligible = @($eligible | Where-Object {
+                $_ -eq "$($route.ToLowerInvariant())/$($protocol.ToLowerInvariant())" -or
+                $_ -like "$($route.ToLowerInvariant())/*"
+            })
+            foreach ($key in $matchingEligible) {
+                $outcomes[$key] = ([string]$Matches.status).Replace(' ', '_')
+            }
+        }
+    }
+
+    $proofs = @()
+    if (Test-Path -LiteralPath $standbyProofPath -PathType Leaf) {
+        try {
+            $root = Get-Content -LiteralPath $standbyProofPath -Raw -Encoding UTF8 |
+                ConvertFrom-Json
+            if ([int]$root.schema -eq 1) {
+                foreach ($proof in @($root.proofs)) {
+                    $routeId = ([string]$proof.routeId).Trim().ToLowerInvariant()
+                    $protocol = ([string]$proof.protocol).Trim().ToLowerInvariant()
+                    $preparedAt = [datetime]::Parse([string]$proof.preparedAt).ToUniversalTime()
+                    $verifiedAt = [datetime]::Parse([string]$proof.verifiedAt).ToUniversalTime()
+                    $configPath = Join-Path (
+                        Join-Path $resolvedProgramDataRoot 'server-cache'
+                    ) "$routeId.base.conf"
+                    $configModifiedAt = $null
+                    if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+                        $configModifiedAt = (Get-Item -LiteralPath $configPath).LastWriteTimeUtc
+                    }
+                    $configTimestampDeltaMilliseconds = if ($null -ne $configModifiedAt) {
+                        [math]::Abs(
+                            ($preparedAt - $configModifiedAt).TotalMilliseconds
+                        )
+                    } else {
+                        $null
+                    }
+                    # Dart exposes Windows file timestamps at whole-second precision.
+                    $configBound =
+                        $null -ne $configTimestampDeltaMilliseconds -and
+                        $configTimestampDeltaMilliseconds -lt
+                            $standbyConfigTimestampToleranceMilliseconds
+                    $age = ((Get-Date).ToUniversalTime() - $verifiedAt).TotalSeconds
+                    $fresh =
+                        $verifiedAt -ge $StartedAtUtc.ToUniversalTime() -and
+                        $age -ge 0 -and
+                        $age -le 600 -and
+                        $configBound
+                    $proofs += [pscustomobject]@{
+                        key = "$routeId/$protocol"
+                        routeId = $routeId
+                        protocol = $protocol
+                        kind = [string]$proof.kind
+                        preparedAt = $preparedAt.ToString('o')
+                        verifiedAt = $verifiedAt.ToString('o')
+                        latencyMs = [int]$proof.latencyMs
+                        configModifiedAt = if ($null -ne $configModifiedAt) {
+                            $configModifiedAt.ToString('o')
+                        } else {
+                            $null
+                        }
+                        configTimestampDeltaMs = $configTimestampDeltaMilliseconds
+                        configTimestampToleranceMs =
+                            $standbyConfigTimestampToleranceMilliseconds
+                        configBound = $configBound
+                        fresh = $fresh
+                    }
+                }
+            }
+        } catch {}
+    }
+    $freshProofs = @($proofs | Where-Object { $_.fresh })
+    foreach ($proof in $freshProofs) {
+        $outcomes[[string]$proof.key] = 'confirmed'
+    }
+    $unaccounted = @($eligible | Where-Object { -not $outcomes.ContainsKey($_) })
+    $cleanup = Get-StandbyCleanupEvidence
+    return [pscustomobject]@{
+        cycleStarted = $null -ne $startMatch
+        cycleCompleted = $null -ne $completeMatch
+        active = if ($null -ne $completeMatch) { [string]$completeMatch.active } else { $null }
+        checked = if ($null -ne $completeMatch) { [int]$completeMatch.checked } else { 0 }
+        freshReported = if ($null -ne $completeMatch) { [int]$completeMatch.fresh } else { 0 }
+        candidateCount = if ($null -ne $completeMatch) { [int]$completeMatch.candidates } else { 0 }
+        eligibleRoutes = @($eligible)
+        outcomes = [pscustomobject]$outcomes
+        proofs = @($proofs)
+        freshProofs = @($freshProofs)
+        unaccountedRoutes = @($unaccounted)
+        allEligibleAccounted = $unaccounted.Count -eq 0
+        cleanup = $cleanup
+    }
+}
+
+function Wait-StandbyCycleEvidence {
+    param(
+        [Parameter(Mandatory = $true)][int]$AfterLine,
+        [Parameter(Mandatory = $true)][datetime]$StartedAtUtc,
+        [Parameter(Mandatory = $true)][int]$TimeoutSeconds
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        $evidence = Get-StandbyCycleEvidence `
+            -AfterLine $AfterLine `
+            -StartedAtUtc $StartedAtUtc
+        if ($evidence.cycleCompleted) { return $evidence }
+        Start-Sleep -Seconds 1
+    } while ((Get-Date) -lt $deadline)
+    return Get-StandbyCycleEvidence `
+        -AfterLine $AfterLine `
+        -StartedAtUtc $StartedAtUtc
 }
 
 function Stop-ActiveTransportEngine {
@@ -687,7 +990,9 @@ function Register-RestoreFailsafe {
         ($command -replace '"', '\"') +
         '"'
     )
-    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(12)
+    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(
+        $FailsafeDelayMinutes
+    )
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     Register-ScheduledTask -TaskName $failSafeTaskName -Action $action -Trigger $trigger `
         -Principal $principal -Force | Out-Null
@@ -745,10 +1050,19 @@ function Test-InstalledPayload {
             }
         }
 
+        $installedAppPath = Join-Path $resolvedInstallRoot 'greenvpn.exe'
+        $installedApp = Get-Item -LiteralPath $installedAppPath -ErrorAction Stop
+        if ([string]$installedApp.VersionInfo.FileVersion -ne $ExpectedVersion) {
+            throw (
+                'Installed file version mismatch: ' +
+                [string]$installedApp.VersionInfo.FileVersion
+            )
+        }
+
         $entry = Get-ItemProperty 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Green VPN' `
             -ErrorAction Stop
-        if ([string]$entry.DisplayVersion -ne $ExpectedVersion) {
-            throw "Installed version mismatch: $($entry.DisplayVersion)"
+        if ([string]$entry.DisplayVersion -ne $expectedDisplayVersion) {
+            throw "Installed display version mismatch: $($entry.DisplayVersion)"
         }
         return $stagedFiles.Count
     } finally {
@@ -769,8 +1083,10 @@ $report = [ordered]@{
     completedAt = $null
     success = $false
     failure = $null
+    failureLocation = $null
     installer = [ordered]@{
         version = $ExpectedVersion
+        displayVersion = $expectedDisplayVersion
         sha256 = $expectedInstallerHash
         signatureStatus = $null
         executedThisRun = -not [bool]$UseExistingExactInstall
@@ -786,6 +1102,19 @@ $report = [ordered]@{
         protectedProgramData = $null
     }
     firstRoute = $null
+    standby = [ordered]@{
+        required = [bool]$RequireStandbyProof
+        userStateRoot = $resolvedUserStateRoot
+        proofPath = $standbyProofPath
+        cycleStarted = $false
+        cycleCompleted = $false
+        eligibleRoutes = @()
+        outcomes = $null
+        proofs = @()
+        freshProofs = @()
+        allEligibleAccounted = $false
+        cleanup = $null
+    }
     restartRestore = [ordered]@{
         tunnelSurvivedAppExit = $false
         monitorRestored = $false
@@ -795,11 +1124,16 @@ $report = [ordered]@{
         protocol = $null
         overlapObserved = $false
         maxActiveTransportGroups = 0
+        recoverySeconds = $null
+        prevalidatedStandbyUsed = $false
     }
     recoveredRoute = $null
     probes = @()
     cleanup = [ordered]@{
         allGreenComponentsStopped = $false
+        standbyCancelAccepted = $false
+        standbyArtifactsClean = $false
+        standbyCleanupEvidence = $null
         amneziaRestored = $false
         originalEgressRestored = $false
         failsafeRemoved = $false
@@ -897,6 +1231,16 @@ try {
     }
     $report.preflight.fullTunnelMode = $true
 
+    if ($RequireStandbyProof) {
+        if ([string]::IsNullOrWhiteSpace($UserStateRoot)) {
+            throw 'Standby proof smoke requires an explicit isolated UserStateRoot.'
+        }
+        New-Item -ItemType Directory -Force -Path $resolvedUserStateRoot | Out-Null
+        if (Test-Path -LiteralPath $standbyProofPath -PathType Leaf) {
+            throw 'Standby proof smoke requires an empty isolated proof store.'
+        }
+    }
+
     if (-not (Wait-AllGreenComponentsStopped -TimeoutSeconds 5)) {
         [void](Invoke-GreenLocal -Method POST -Path '/disconnect')
     }
@@ -918,6 +1262,7 @@ try {
     New-Item -ItemType Directory -Force -Path $pendingDirectory | Out-Null
     Set-Content -LiteralPath $pendingActionPath -Encoding ASCII -NoNewline -Value 'connect'
     $initialArmLogLine = Get-AuthLogLineCount
+    $standbyCycleStartedAtUtc = (Get-Date).ToUniversalTime()
     $appProcess = Start-GreenApp
 
     $first = Wait-GreenRoute -TimeoutSeconds 150
@@ -977,6 +1322,47 @@ try {
         throw 'Initial Green VPN route failed an external probe.'
     }
 
+    $standbyEvidence = if ($RequireStandbyProof) {
+        Wait-StandbyCycleEvidence `
+            -AfterLine $initialArmLogLine `
+            -StartedAtUtc $standbyCycleStartedAtUtc `
+            -TimeoutSeconds $StandbyCycleTimeoutSeconds
+    } else {
+        Get-StandbyCycleEvidence `
+            -AfterLine $initialArmLogLine `
+            -StartedAtUtc $standbyCycleStartedAtUtc
+    }
+    $report.standby.cycleStarted = [bool]$standbyEvidence.cycleStarted
+    $report.standby.cycleCompleted = [bool]$standbyEvidence.cycleCompleted
+    $report.standby.eligibleRoutes = @($standbyEvidence.eligibleRoutes)
+    $report.standby.outcomes = $standbyEvidence.outcomes
+    $report.standby.proofs = @($standbyEvidence.proofs)
+    $report.standby.freshProofs = @($standbyEvidence.freshProofs)
+    $report.standby.allEligibleAccounted = [bool]$standbyEvidence.allEligibleAccounted
+    $report.standby.cleanup = $standbyEvidence.cleanup
+    if ($RequireStandbyProof) {
+        if (-not $standbyEvidence.cycleStarted -or -not $standbyEvidence.cycleCompleted) {
+            throw 'Background standby cycle did not complete while the active route stayed online.'
+        }
+        if (@($standbyEvidence.eligibleRoutes).Count -lt 1) {
+            throw 'Background standby cycle exposed no alternate route candidates.'
+        }
+        if (-not $standbyEvidence.allEligibleAccounted) {
+            throw "Background standby cycle left routes unaccounted: $(@($standbyEvidence.unaccountedRoutes) -join ', ')"
+        }
+        if (@($standbyEvidence.freshProofs).Count -lt 1) {
+            throw 'Background standby cycle produced no fresh config-bound standby proof.'
+        }
+        if (-not [bool]$standbyEvidence.cleanup.cleanupOk) {
+            throw 'Background standby probe did not fully clean temporary routes, services, ports, or files.'
+        }
+    }
+    $prevalidatedStandbyKeys = @(
+        $standbyEvidence.freshProofs | ForEach-Object {
+            ([string]$_.key).ToLowerInvariant()
+        }
+    )
+
     Stop-GreenApp
     $statusAfterAppExit = Get-GreenStatus
     $report.restartRestore.tunnelSurvivedAppExit =
@@ -1003,6 +1389,7 @@ try {
         throw "Unknown injected protocol: $injectedProtocol"
     }
     $failoverLogLine = Get-AuthLogLineCount
+    $failoverWatch = [Diagnostics.Stopwatch]::StartNew()
     $report.injection.kind = Stop-ActiveTransportEngine -Status $beforeInjection.status
     $report.injection.protocol = $injectedProtocol
     Write-SmokeLog "injected active transport failure protocol=$injectedProtocol"
@@ -1021,6 +1408,8 @@ try {
     }
     $recovered = Wait-GreenRoute -DifferentFromRouteId $beforeInjection.routeId `
         -TimeoutSeconds $FailoverTimeoutSeconds -OnSample $onSample
+    $failoverWatch.Stop()
+    $report.injection.recoverySeconds = [math]::Round($failoverWatch.Elapsed.TotalSeconds, 3)
     $report.injection.maxActiveTransportGroups = $script:maxActiveGroups
     $report.injection.overlapObserved = $script:overlapObserved
     if ($null -eq $recovered) {
@@ -1030,6 +1419,24 @@ try {
         throw 'More than one managed transport group was active during failover.'
     }
     $recoveredProtocol = [string]$recovered.status.protocol
+    $recoveredStandbyKey = (
+        ([string]$recovered.routeId).Trim().ToLowerInvariant() + '/' +
+        $recoveredProtocol.Trim().ToLowerInvariant()
+    )
+    $report.injection.prevalidatedStandbyUsed =
+        $recoveredStandbyKey -in $prevalidatedStandbyKeys
+    if (
+        $RequireStandbyProof -and
+        -not $report.injection.prevalidatedStandbyUsed
+    ) {
+        throw "Runtime failover selected a route without a fresh standby proof: $recoveredStandbyKey"
+    }
+    if (
+        $RequireStandbyProof -and
+        [double]$report.injection.recoverySeconds -gt $MaxPrevalidatedFailoverSeconds
+    ) {
+        throw "Prevalidated failover exceeded $MaxPrevalidatedFailoverSeconds seconds."
+    }
     if (
         -not $protocolRank.ContainsKey($recoveredProtocol) -or
         $protocolRank[$recoveredProtocol] -lt $protocolRank[$injectedProtocol]
@@ -1071,6 +1478,7 @@ try {
         routeChanged = $recovered.routeId -ne $beforeInjection.routeId
         activeTransportGroups = $recoveredGroups
         egressVerified = $recoveredEgressVerified
+        prevalidatedStandby = [bool]$report.injection.prevalidatedStandbyUsed
         networkProtection = $recoveredNetworkProtection
     }
     $report.probes = @(
@@ -1085,11 +1493,26 @@ try {
     $report.success = $true
     Write-SmokeLog 'runtime failover smoke passed before cleanup'
 } catch {
-    $report.failure = $_.Exception.Message
-    Write-SmokeLog "smoke failed type=$($_.Exception.GetType().Name)"
+    $caught = $_
+    $invocation = $caught.InvocationInfo
+    $report.failure = $caught.Exception.Message
+    $report.failureLocation = [ordered]@{
+        script = $(if ($null -ne $invocation) { [string]$invocation.ScriptName } else { '' })
+        line = $(if ($null -ne $invocation) { [int]$invocation.ScriptLineNumber } else { 0 })
+        command = $(if ($null -ne $invocation) { [string]$invocation.MyCommand.Name } else { '' })
+    }
+    Write-SmokeLog (
+        "smoke failed type=$($caught.Exception.GetType().Name) " +
+        "line=$($report.failureLocation.line) command=$($report.failureLocation.command)"
+    )
 } finally {
     Stop-GreenApp
     Remove-Item -LiteralPath $pendingActionPath -Force -ErrorAction SilentlyContinue
+
+    try {
+        $standbyCancel = Invoke-GreenLocal -Method POST -Path '/standby/cancel'
+        $report.cleanup.standbyCancelAccepted = [bool]$standbyCancel.ok
+    } catch {}
 
     try {
         if ((Get-ServiceState -Name $GreenServiceName) -eq 'Running') {
@@ -1107,6 +1530,12 @@ try {
     try {
         $report.cleanup.allGreenComponentsStopped =
             Wait-AllGreenComponentsStopped -TimeoutSeconds 45
+    } catch {}
+    try {
+        $standbyCleanupEvidence = Wait-StandbyCleanupEvidence -TimeoutSeconds 30
+        $report.cleanup.standbyCleanupEvidence = $standbyCleanupEvidence
+        $report.cleanup.standbyArtifactsClean =
+            [bool]$standbyCleanupEvidence.cleanupOk
     } catch {}
 
     if ($amneziaWasRunning) {
@@ -1136,6 +1565,7 @@ try {
 
     if (
         -not $report.cleanup.allGreenComponentsStopped -or
+        -not $report.cleanup.standbyArtifactsClean -or
         -not $report.cleanup.amneziaRestored -or
         -not $report.cleanup.originalEgressRestored -or
         ($failSafeRegistered -and -not $report.cleanup.failsafeRemoved)

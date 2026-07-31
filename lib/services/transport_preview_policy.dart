@@ -28,6 +28,9 @@ const Duration greenVpnWindowsWireGuardConfirmationPollInterval = Duration(
 );
 const int greenVpnWindowsWireGuardMissingInterfaceLimit = 4;
 const Duration greenVpnPreferredRouteTtl = Duration(hours: 24);
+const Duration greenVpnStandbyConfigTtl = Duration(hours: 6);
+const Duration greenVpnStandbyProbeTtl = Duration(minutes: 10);
+const Duration greenVpnStandbyFailureRetryDelay = Duration(minutes: 3);
 
 const int greenVpnRuntimeFailoverFailureThreshold = 2;
 const int greenVpnManagedRouteIdMaxLength = 160;
@@ -89,6 +92,19 @@ int greenVpnNextRuntimeFailoverFailureCount({
 
 bool greenVpnShouldTriggerRuntimeFailover(int failureCount) =>
     failureCount >= greenVpnRuntimeFailoverFailureThreshold;
+
+bool greenVpnShouldRecoverUnexpectedWindowsDisconnect({
+  required bool reportedConnected,
+  required bool vpnEnabled,
+  required bool monitorArmed,
+  required bool recoveryRunning,
+  required bool vpnBusy,
+}) =>
+    !reportedConnected &&
+    vpnEnabled &&
+    monitorArmed &&
+    !recoveryRunning &&
+    !vpnBusy;
 
 bool greenVpnRuntimeRouteHealthy({
   required bool backendConnected,
@@ -222,6 +238,8 @@ int greenVpnCompareTransportPreviewCandidates({
   required String rightTitle,
   bool leftWasRecentlySuccessful = false,
   bool rightWasRecentlySuccessful = false,
+  bool leftHasFreshStandbyProof = false,
+  bool rightHasFreshStandbyProof = false,
 }) {
   if (leftCooldownUntil == null && rightCooldownUntil != null) return -1;
   if (leftCooldownUntil != null && rightCooldownUntil == null) return 1;
@@ -232,6 +250,10 @@ int greenVpnCompareTransportPreviewCandidates({
 
   if (leftWasRecentlySuccessful != rightWasRecentlySuccessful) {
     return leftWasRecentlySuccessful ? -1 : 1;
+  }
+
+  if (leftHasFreshStandbyProof != rightHasFreshStandbyProof) {
+    return leftHasFreshStandbyProof ? -1 : 1;
   }
 
   final byTransport = greenVpnTransportPreviewRank(
@@ -245,4 +267,115 @@ int greenVpnCompareTransportPreviewCandidates({
   final byPing = (leftPingMs ?? 999999).compareTo(rightPingMs ?? 999999);
   if (byPing != 0) return byPing;
   return leftTitle.compareTo(rightTitle);
+}
+
+enum GreenVpnStandbyProofKind { nativeHandshake, proxyYoutube }
+
+class GreenVpnStandbyRouteProof {
+  const GreenVpnStandbyRouteProof({
+    required this.routeId,
+    required this.protocol,
+    required this.kind,
+    required this.preparedAt,
+    required this.verifiedAt,
+    required this.latencyMs,
+  });
+
+  final String routeId;
+  final String protocol;
+  final GreenVpnStandbyProofKind kind;
+  final DateTime preparedAt;
+  final DateTime verifiedAt;
+  final int latencyMs;
+
+  String get key => greenVpnStandbyRouteKey(routeId, protocol);
+
+  bool isFresh(DateTime now) {
+    final age = now.toUtc().difference(verifiedAt.toUtc());
+    return !age.isNegative && age <= greenVpnStandbyProbeTtl;
+  }
+
+  bool isFreshForPreparedConfig(DateTime now, DateTime? configModifiedAt) {
+    if (configModifiedAt == null || !isFresh(now)) return false;
+    return preparedAt.toUtc().millisecondsSinceEpoch ==
+        configModifiedAt.toUtc().millisecondsSinceEpoch;
+  }
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'routeId': routeId,
+    'protocol': protocol,
+    'kind': kind.name,
+    'preparedAt': preparedAt.toUtc().toIso8601String(),
+    'verifiedAt': verifiedAt.toUtc().toIso8601String(),
+    'latencyMs': latencyMs,
+  };
+
+  static GreenVpnStandbyRouteProof? fromJson(Map<String, dynamic> json) {
+    final routeId = greenVpnNormalizeManagedRouteId(
+      (json['routeId'] ?? '').toString(),
+    );
+    final protocol = (json['protocol'] ?? '').toString().trim().toLowerCase();
+    final preparedAt = DateTime.tryParse((json['preparedAt'] ?? '').toString());
+    final verifiedAt = DateTime.tryParse((json['verifiedAt'] ?? '').toString());
+    final latencyMs = switch (json['latencyMs']) {
+      int value => value,
+      num value => value.round(),
+      final value => int.tryParse(value?.toString() ?? ''),
+    };
+    final kindName = (json['kind'] ?? '').toString();
+    GreenVpnStandbyProofKind? kind;
+    for (final candidate in GreenVpnStandbyProofKind.values) {
+      if (candidate.name == kindName) {
+        kind = candidate;
+        break;
+      }
+    }
+    if (routeId.isEmpty ||
+        !greenVpnTransportPreviewCascade.contains(protocol) ||
+        preparedAt == null ||
+        verifiedAt == null ||
+        latencyMs == null ||
+        latencyMs < 0 ||
+        kind == null) {
+      return null;
+    }
+    return GreenVpnStandbyRouteProof(
+      routeId: routeId,
+      protocol: protocol,
+      kind: kind,
+      preparedAt: preparedAt.toUtc(),
+      verifiedAt: verifiedAt.toUtc(),
+      latencyMs: latencyMs,
+    );
+  }
+}
+
+String greenVpnStandbyRouteKey(String routeId, String protocol) {
+  final normalizedId = greenVpnNormalizeManagedRouteId(routeId);
+  final normalizedProtocol = protocol.trim().toLowerCase();
+  if (normalizedId.isEmpty ||
+      !greenVpnTransportPreviewCascade.contains(normalizedProtocol)) {
+    return '';
+  }
+  return '$normalizedId|$normalizedProtocol';
+}
+
+bool greenVpnHasFreshStandbyProof({
+  required Map<String, GreenVpnStandbyRouteProof> proofs,
+  required String routeId,
+  required String protocol,
+  required DateTime now,
+}) {
+  final key = greenVpnStandbyRouteKey(routeId, protocol);
+  if (key.isEmpty) return false;
+  return proofs[key]?.isFresh(now) ?? false;
+}
+
+bool greenVpnShouldRefreshStandbyConfig({
+  required DateTime? cachedAt,
+  required DateTime now,
+}) {
+  if (cachedAt == null) return true;
+  final age = now.toUtc().difference(cachedAt.toUtc());
+  return age.isNegative || age > greenVpnStandbyConfigTtl;
 }

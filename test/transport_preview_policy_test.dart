@@ -111,6 +111,49 @@ void main() {
     expect(greenVpnShouldTriggerRuntimeFailover(failures), isTrue);
   });
 
+  test('Windows unexpected tunnel loss stays armed for runtime recovery', () {
+    expect(
+      greenVpnShouldRecoverUnexpectedWindowsDisconnect(
+        reportedConnected: false,
+        vpnEnabled: true,
+        monitorArmed: true,
+        recoveryRunning: false,
+        vpnBusy: false,
+      ),
+      isTrue,
+    );
+    expect(
+      greenVpnShouldRecoverUnexpectedWindowsDisconnect(
+        reportedConnected: false,
+        vpnEnabled: true,
+        monitorArmed: false,
+        recoveryRunning: false,
+        vpnBusy: false,
+      ),
+      isFalse,
+    );
+    expect(
+      greenVpnShouldRecoverUnexpectedWindowsDisconnect(
+        reportedConnected: false,
+        vpnEnabled: true,
+        monitorArmed: true,
+        recoveryRunning: false,
+        vpnBusy: true,
+      ),
+      isFalse,
+    );
+    expect(
+      greenVpnShouldRecoverUnexpectedWindowsDisconnect(
+        reportedConnected: true,
+        vpnEnabled: true,
+        monitorArmed: true,
+        recoveryRunning: false,
+        vpnBusy: false,
+      ),
+      isFalse,
+    );
+  });
+
   test('Windows runtime health follows the routed data-plane probe', () {
     expect(
       greenVpnRuntimeRouteHealthy(
@@ -486,5 +529,85 @@ void main() {
         );
 
     expect(candidates.first.protocol, 'amneziawg');
+  });
+
+  test(
+    'fresh standby proof leads only when caller opts into recovery order',
+    () {
+      int compare(String left, String right, {required bool useProof}) =>
+          greenVpnCompareTransportPreviewCandidates(
+            leftProtocol: left,
+            rightProtocol: right,
+            leftCooldownUntil: null,
+            rightCooldownUntil: null,
+            leftScore: 100,
+            rightScore: 100,
+            leftPingMs: 10,
+            rightPingMs: 20,
+            leftTitle: left,
+            rightTitle: right,
+            leftHasFreshStandbyProof: false,
+            rightHasFreshStandbyProof: useProof,
+          );
+
+      expect(
+        compare('wireguard_udp', 'hysteria2', useProof: false),
+        lessThan(0),
+      );
+      expect(
+        compare('wireguard_udp', 'hysteria2', useProof: true),
+        greaterThan(0),
+      );
+    },
+  );
+
+  test('standby proof JSON is strict and expires after ten minutes', () {
+    final now = DateTime.utc(2026, 7, 31, 12);
+    final proof = GreenVpnStandbyRouteProof(
+      routeId: 'nl2-hysteria',
+      protocol: 'hysteria2',
+      kind: GreenVpnStandbyProofKind.proxyYoutube,
+      preparedAt: now.subtract(const Duration(minutes: 2)),
+      verifiedAt: now.subtract(const Duration(minutes: 9)),
+      latencyMs: 321,
+    );
+    final restored = GreenVpnStandbyRouteProof.fromJson(proof.toJson());
+    expect(restored, isNotNull);
+    expect(restored!.key, 'nl2-hysteria|hysteria2');
+    expect(restored.isFresh(now), isTrue);
+    expect(restored.isFreshForPreparedConfig(now, proof.preparedAt), isTrue);
+    expect(
+      restored.isFreshForPreparedConfig(
+        now,
+        proof.preparedAt.add(const Duration(milliseconds: 1)),
+      ),
+      isFalse,
+    );
+    expect(restored.isFresh(now.add(const Duration(minutes: 2))), isFalse);
+    expect(
+      GreenVpnStandbyRouteProof.fromJson(<String, dynamic>{
+        ...proof.toJson(),
+        'routeId': '../unsafe',
+      }),
+      isNull,
+    );
+  });
+
+  test('standby config refresh is bounded by a six hour TTL', () {
+    final now = DateTime.utc(2026, 7, 31, 12);
+    expect(
+      greenVpnShouldRefreshStandbyConfig(
+        cachedAt: now.subtract(const Duration(hours: 5)),
+        now: now,
+      ),
+      isFalse,
+    );
+    expect(
+      greenVpnShouldRefreshStandbyConfig(
+        cachedAt: now.subtract(const Duration(hours: 7)),
+        now: now,
+      ),
+      isTrue,
+    );
   });
 }

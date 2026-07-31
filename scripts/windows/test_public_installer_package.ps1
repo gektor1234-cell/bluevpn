@@ -193,6 +193,7 @@ try {
                 'app/greenvpn.exe',
                 'app/greenvpn_service.exe',
                 'tools/greenvpn_vpn_task.ps1',
+                'tools/greenvpn_standby_probe.ps1',
                 'tools/greenvpn_selective_routing.ps1'
             ) + $processRouterPayload
         }
@@ -201,6 +202,7 @@ try {
                 'app/greenvpn_beta.exe',
                 'app/greenvpn_beta_service.exe',
                 'tools/greenvpn_vpn_task.ps1',
+                'tools/greenvpn_standby_probe.ps1',
                 'tools/greenvpn_selective_routing.ps1',
                 'tools/uninstall_greenvpn_beta.ps1'
             ) + $processRouterPayload
@@ -240,7 +242,20 @@ try {
                         $selectiveReader.Dispose()
                     }
                 }
-                $combinedTaskText = $vpnTaskText + "`n" + $selectiveText
+                $standbyEntry = $zip.Entries | Where-Object {
+                    $_.FullName.Replace('\', '/').ToLowerInvariant() -eq 'tools/greenvpn_standby_probe.ps1'
+                } | Select-Object -First 1
+                $standbyText = ''
+                if ($null -ne $standbyEntry) {
+                    $standbyReader = [IO.StreamReader]::new($standbyEntry.Open())
+                    try {
+                        $standbyText = $standbyReader.ReadToEnd()
+                    }
+                    finally {
+                        $standbyReader.Dispose()
+                    }
+                }
+                $combinedTaskText = $vpnTaskText + "`n" + $selectiveText + "`n" + $standbyText
                 foreach ($marker in @(
                     'greenvpn_selective_routing.ps1',
                     'Get-GreenRoutingPolicy',
@@ -254,7 +269,11 @@ try {
                     "Stop-CompetingVpnTunnels -Reason 'guard'",
                     'takeover complete reason=$Reason',
                     'function Get-SafePhysicalEndpointRoute',
-                    'physical gateway settled after takeover'
+                    'physical gateway settled after takeover',
+                    "'ProbeStandby'",
+                    'Add-ProbeEndpointBypassRoute',
+                    'Remove-ProbeEndpointBypassRoutes',
+                    'https://www.youtube.com/generate_204'
                 )) {
                     if (-not $combinedTaskText.Contains($marker)) {
                         $errors.Add("Packaged Windows VPN task marker missing: $marker") | Out-Null

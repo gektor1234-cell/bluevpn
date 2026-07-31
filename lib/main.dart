@@ -2253,14 +2253,24 @@ class PendingVpnActionStore {
   }
 }
 
-Future<void> appendBlueVpnClientLog(String message) async {
-  if (kIsWeb || !Platform.isWindows) return;
-  try {
-    final f = File(greenVpnAuthLogPathSync());
-    final ts = DateTime.now().toIso8601String();
-    await f.writeAsString('[$ts] UI $message\n', mode: FileMode.append);
-  } catch (_) {}
+Future<void> _greenVpnAuthLogWriteTail = Future<void>.value();
+
+Future<void> appendGreenVpnAuthLogLine(String message) {
+  if (kIsWeb || !Platform.isWindows) return Future<void>.value();
+  final timestamp = DateTime.now().toIso8601String();
+  final line = '[$timestamp] $message\n';
+  final write = _greenVpnAuthLogWriteTail.then((_) async {
+    try {
+      final file = File(greenVpnAuthLogPathSync());
+      await file.writeAsString(line, mode: FileMode.append);
+    } catch (_) {}
+  });
+  _greenVpnAuthLogWriteTail = write;
+  return write;
 }
+
+Future<void> appendBlueVpnClientLog(String message) =>
+    appendGreenVpnAuthLogLine('UI $message');
 
 Future<bool> isWindowsProcessElevated() async {
   if (kIsWeb || !Platform.isWindows) return false;
@@ -2829,6 +2839,64 @@ class PrefsStore {
       m[e.key] = e.value;
     }
     await _writeMap(m);
+  }
+}
+
+class WindowsStandbyProofStore {
+  Future<File> _file() async {
+    final dir = await BlueVpnLocalPaths.userStateDir();
+    return File('$dir${Platform.pathSeparator}standby_routes.json');
+  }
+
+  Future<Map<String, GreenVpnStandbyRouteProof>> read() async {
+    if (kIsWeb || !Platform.isWindows) {
+      return <String, GreenVpnStandbyRouteProof>{};
+    }
+    try {
+      final file = await _file();
+      if (!file.existsSync()) return <String, GreenVpnStandbyRouteProof>{};
+      final decoded = jsonDecode(await file.readAsString());
+      if (decoded is! Map || decoded['schema'] != 1) {
+        return <String, GreenVpnStandbyRouteProof>{};
+      }
+      final rawProofs = decoded['proofs'];
+      if (rawProofs is! List) return <String, GreenVpnStandbyRouteProof>{};
+      final proofs = <String, GreenVpnStandbyRouteProof>{};
+      for (final raw in rawProofs.take(64)) {
+        if (raw is! Map) continue;
+        final proof = GreenVpnStandbyRouteProof.fromJson(
+          Map<String, dynamic>.from(raw),
+        );
+        if (proof != null && proof.key.isNotEmpty) {
+          proofs[proof.key] = proof;
+        }
+      }
+      return proofs;
+    } catch (_) {
+      return <String, GreenVpnStandbyRouteProof>{};
+    }
+  }
+
+  Future<void> write(Map<String, GreenVpnStandbyRouteProof> proofs) async {
+    if (kIsWeb || !Platform.isWindows) return;
+    final file = await _file();
+    final temp = File('${file.path}.tmp');
+    final ordered = proofs.values.toList()
+      ..sort((left, right) => right.verifiedAt.compareTo(left.verifiedAt));
+    await WindowsLocalSecurity.preparePrivateFileForWrite(temp.path);
+    await temp.writeAsString(
+      jsonEncode(<String, dynamic>{
+        'schema': 1,
+        'proofs': ordered.take(64).map((proof) => proof.toJson()).toList(),
+      }),
+      flush: true,
+    );
+    if (file.existsSync()) {
+      await WindowsLocalSecurity.preparePrivateFileForWrite(file.path);
+      await file.delete();
+    }
+    await temp.rename(file.path);
+    await WindowsLocalSecurity.hardenPath(file.path);
   }
 }
 
@@ -3843,19 +3911,7 @@ while True:
     throw lastError ?? Exception('Unknown HTTP retry failure');
   }
 
-  File? _authLogFile() {
-    if (kIsWeb || !Platform.isWindows) return null;
-    return File(greenVpnAuthLogPathSync());
-  }
-
-  Future<void> _authLog(String s) async {
-    try {
-      final f = _authLogFile();
-      if (f == null) return;
-      final ts = DateTime.now().toIso8601String();
-      await f.writeAsString('[$ts] $s\n', mode: FileMode.append);
-    } catch (_) {}
-  }
+  Future<void> _authLog(String s) => appendGreenVpnAuthLogLine(s);
 
   Future<String> _tcpPreflight(String path) async {
     final urls = _orderedApiBaseUrlsForRetry();
@@ -5679,6 +5735,36 @@ class ConfigStore {
     });
   }
 
+  Future<DateTime?> baseConfigModifiedAtForServer(String serverId) async {
+    final key = _safeServerCacheKey(serverId);
+    if (kIsWeb || !Platform.isWindows || key == 'auto') return null;
+    return _runConfigIo(() async {
+      final path = serverBaseConfigPath(key);
+      if (path.isEmpty) return null;
+      final file = File(path);
+      if (!file.existsSync()) return null;
+      try {
+        return (await file.stat()).modified.toUtc();
+      } catch (_) {
+        return null;
+      }
+    });
+  }
+
+  DateTime? baseConfigModifiedAtForServerSync(String serverId) {
+    final key = _safeServerCacheKey(serverId);
+    if (kIsWeb || !Platform.isWindows || key == 'auto') return null;
+    final path = serverBaseConfigPath(key);
+    if (path.isEmpty) return null;
+    final file = File(path);
+    if (!file.existsSync()) return null;
+    try {
+      return file.statSync().modified.toUtc();
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> ensureBaseSeededFromManagedIfMissing() async {
     await _runConfigIo(() async {
       if (kIsWeb) return;
@@ -7146,6 +7232,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   final _cfg = ConfigStore();
   final _pendingBillingOrderStore = PendingBillingOrderStore();
   final RouteFailureCooldown _routeFailureCooldown = RouteFailureCooldown();
+  final WindowsStandbyProofStore _windowsStandbyProofStore =
+      WindowsStandbyProofStore();
 
   // device identifier (for server-side provisioning) — hidden from user
   final DeviceIdStore _deviceStore = DeviceIdStore();
@@ -7397,6 +7485,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   bool _windowsRuntimeProbeRunning = false;
   bool _windowsRuntimeRecoveryRunning = false;
   bool _windowsRuntimeRestoreRunning = false;
+  bool _windowsStandbyCycleRunning = false;
+  bool _windowsStandbyProofsLoaded = false;
+  final Map<String, GreenVpnStandbyRouteProof> _windowsStandbyProofs =
+      <String, GreenVpnStandbyRouteProof>{};
+  final Map<String, DateTime> _windowsStandbyRetryAfter = <String, DateTime>{};
   int _vpnStatusSyncEpoch = 0;
   bool _prefsLoaded = false;
   WireGuardInstallState? _wireGuardState;
@@ -7466,6 +7559,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
     unawaited(_syncVpnStatus(source: 'startup'));
     if (!kIsWeb && Platform.isWindows) {
+      unawaited(_loadWindowsStandbyProofs());
       _windowsStatusReconciliationTimer = Timer.periodic(
         const Duration(seconds: 5),
         (_) {
@@ -9511,6 +9605,29 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         return;
       }
       final on = state == GreenVpnWindowsManagedTunnelState.connected;
+      final activeRuntimeRoute = _activeWindowsRuntimeRoute;
+      final recoverUnexpectedDisconnect =
+          greenVpnShouldRecoverUnexpectedWindowsDisconnect(
+            reportedConnected: on,
+            vpnEnabled: vpnEnabled,
+            monitorArmed:
+                activeRuntimeRoute != null &&
+                _windowsRuntimeFailoverTimer != null,
+            recoveryRunning: _windowsRuntimeRecoveryRunning,
+            vpnBusy: vpnBusy,
+          );
+      if (recoverUnexpectedDisconnect && activeRuntimeRoute != null) {
+        await appendBlueVpnClientLog(
+          'windows status sync source=$source connected=false preserved=true reason=runtime_failover_armed',
+        );
+        unawaited(
+          _pollWindowsRuntimeFailover(
+            activeRuntimeRoute,
+            _windowsRuntimeFailoverEpoch,
+          ),
+        );
+        return;
+      }
       final changed = vpnEnabled != on;
       if (changed) {
         final previous = vpnEnabled;
@@ -10688,6 +10805,409 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _loadWindowsStandbyProofs() async {
+    if (kIsWeb || !Platform.isWindows || _windowsStandbyProofsLoaded) return;
+    final now = DateTime.now().toUtc();
+    final loaded = await _windowsStandbyProofStore.read();
+    loaded.removeWhere((_, proof) {
+      final age = now.difference(proof.verifiedAt.toUtc());
+      return age.isNegative || age > const Duration(hours: 24);
+    });
+    _windowsStandbyProofs
+      ..clear()
+      ..addAll(loaded);
+    _windowsStandbyProofsLoaded = true;
+    await appendBlueVpnClientLog(
+      'windows standby proofs loaded count=${loaded.length}',
+    );
+  }
+
+  bool _hasFreshWindowsStandbyProof(
+    ServerLocation candidate, {
+    required DateTime now,
+  }) {
+    final key = greenVpnStandbyRouteKey(candidate.id, candidate.protocolCode);
+    if (key.isEmpty) return false;
+    final proof = _windowsStandbyProofs[key];
+    return proof?.isFreshForPreparedConfig(
+          now,
+          _cfg.baseConfigModifiedAtForServerSync(candidate.id),
+        ) ??
+        false;
+  }
+
+  String _newWindowsStandbyRequestId() {
+    final random = Random.secure();
+    return List<String>.generate(
+      16,
+      (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+      growable: false,
+    ).join();
+  }
+
+  bool _standbyConfigMatchesCandidate(
+    ServerLocation candidate,
+    String rawConfig,
+  ) {
+    final protocol = candidate.protocolCode.trim().toLowerCase();
+    if (protocol == 'wireguard_udp' || protocol == 'amneziawg') {
+      return _configMatchesServer(candidate, rawConfig);
+    }
+    final expectedHosts = _knownEndpointHostsForServer(candidate)
+      ..add((candidate.endpointHost ?? '').trim().toLowerCase());
+    expectedHosts.removeWhere((value) => value.isEmpty);
+    try {
+      String endpoint = '';
+      if (protocol == 'hysteria2') {
+        endpoint =
+            RegExp(
+              r'^\s*server\s*:\s*([^\s:]+):\d+\s*$',
+              multiLine: true,
+              caseSensitive: false,
+            ).firstMatch(rawConfig)?.group(1)?.trim().toLowerCase() ??
+            '';
+      } else if (protocol == 'vless_reality') {
+        final root = jsonDecode(rawConfig) as Map;
+        endpoint = root['outbounds'][0]['settings']['vnext'][0]['address']
+            .toString()
+            .trim()
+            .toLowerCase();
+      } else if (protocol == 'naive_https') {
+        final root = jsonDecode(rawConfig) as Map;
+        endpoint = (root['endpointIp'] ?? '').toString().trim().toLowerCase();
+        if (endpoint.isEmpty) {
+          endpoint =
+              Uri.tryParse(
+                (root['proxy'] ?? '').toString(),
+              )?.host.toLowerCase() ??
+              '';
+        }
+      } else if (protocol == 'dnstt') {
+        final root = jsonDecode(rawConfig) as Map;
+        endpoint = (root['expectedEgress'] ?? '')
+            .toString()
+            .trim()
+            .toLowerCase();
+      }
+      return endpoint.isNotEmpty && expectedHosts.contains(endpoint);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<DateTime?> _prepareWindowsStandbyConfig(
+    ServerLocation candidate,
+  ) async {
+    var cached = await _cfg.readBaseConfigForServer(candidate.id);
+    var cachedAt = await _cfg.baseConfigModifiedAtForServer(candidate.id);
+    var cachedValid =
+        (cached ?? '').trim().isNotEmpty &&
+        _standbyConfigMatchesCandidate(candidate, cached!);
+    final now = DateTime.now().toUtc();
+    if (cachedValid &&
+        !greenVpnShouldRefreshStandbyConfig(cachedAt: cachedAt, now: now)) {
+      return cachedAt;
+    }
+
+    if (widget.session.accessToken != 'dev-token') {
+      final deviceId = await _ensureDeviceId();
+      if (deviceId != null && deviceId.isNotEmpty) {
+        final response = await _fetchWireGuardConfigWithRecovery(
+          deviceId,
+          candidate,
+          source: 'windows_standby_prefetch',
+        );
+        if (response.ok &&
+            response.data != null &&
+            response.data!.configText.trim().isNotEmpty) {
+          final actualId = response.data!.serverId.trim();
+          final actualProtocol = response.data!.protocol.trim().toLowerCase();
+          if (actualId == candidate.id &&
+              (actualProtocol.isEmpty ||
+                  actualProtocol == candidate.protocolCode.toLowerCase())) {
+            final prepared = await _prepareProvisionedConfigForPlatform(
+              response.data!.configText,
+              server: candidate,
+            );
+            if (_standbyConfigMatchesCandidate(candidate, prepared)) {
+              await _cfg.writeBaseConfigForServer(candidate.id, prepared);
+              cached = prepared;
+              cachedAt = await _cfg.baseConfigModifiedAtForServer(candidate.id);
+              cachedValid = true;
+              await appendBlueVpnClientLog(
+                'windows standby config cached server=${candidate.id} protocol=${candidate.protocolCode}',
+              );
+            } else {
+              await appendBlueVpnClientLog(
+                'windows standby config rejected server=${candidate.id} reason=endpoint_mismatch',
+              );
+            }
+          } else {
+            await appendBlueVpnClientLog(
+              'windows standby config rejected requested=${candidate.id}/${candidate.protocolCode} actual=$actualId/$actualProtocol',
+            );
+          }
+        } else {
+          await appendBlueVpnClientLog(
+            'windows standby config refresh failed server=${candidate.id} message=${response.message ?? ""} cachedFallback=$cachedValid',
+          );
+        }
+      }
+    }
+    return cachedValid ? cachedAt : null;
+  }
+
+  Future<bool> _probeWindowsStandbyRoute(
+    ServerLocation candidate, {
+    required DateTime preparedAt,
+    required int epoch,
+  }) async {
+    final requestId = _newWindowsStandbyRequestId();
+    final requestFile = File(greenVpnStandbyProbeRequestPathSync());
+    final resultFile = File(greenVpnStandbyProbeResultPathSync());
+    try {
+      if (resultFile.existsSync()) {
+        await WindowsLocalSecurity.preparePrivateFileForWrite(resultFile.path);
+        await resultFile.delete();
+      }
+      await requestFile.writeAsString(
+        jsonEncode(<String, dynamic>{
+          'schema': 1,
+          'requestId': requestId,
+          'routeId': candidate.id,
+          'protocol': candidate.protocolCode.trim().toLowerCase(),
+        }),
+        flush: true,
+      );
+      await WindowsLocalSecurity.prepareSharedConfigFile(requestFile.path);
+      const service = _GreenVpnSystemServiceClient();
+      final response = await service.probeStandby();
+      if (!mounted ||
+          epoch != _windowsRuntimeFailoverEpoch ||
+          !vpnEnabled ||
+          _windowsRuntimeRecoveryRunning) {
+        return false;
+      }
+      if (!resultFile.existsSync()) {
+        await appendBlueVpnClientLog(
+          'windows standby probe missing result server=${candidate.id} http=${response.statusCode}',
+        );
+        return false;
+      }
+      final decoded = jsonDecode(await resultFile.readAsString());
+      if (decoded is! Map) return false;
+      final result = Map<String, dynamic>.from(decoded);
+      final resultRequestId = (result['requestId'] ?? '').toString();
+      final resultRouteId = (result['routeId'] ?? '').toString();
+      final resultProtocol = (result['protocol'] ?? '')
+          .toString()
+          .trim()
+          .toLowerCase();
+      if (resultRequestId != requestId ||
+          resultRouteId != candidate.id ||
+          resultProtocol != candidate.protocolCode.trim().toLowerCase()) {
+        await appendBlueVpnClientLog(
+          'windows standby probe rejected server=${candidate.id} reason=result_identity_mismatch',
+        );
+        return false;
+      }
+      final cancelled = result['cancelled'] == true;
+      final success =
+          response.ok &&
+          result['success'] == true &&
+          result['cleanupOk'] == true;
+      if (!success) {
+        if (!cancelled) {
+          _windowsStandbyRetryAfter[greenVpnStandbyRouteKey(
+            candidate.id,
+            candidate.protocolCode,
+          )] = DateTime.now().toUtc().add(
+            greenVpnStandbyFailureRetryDelay,
+          );
+        }
+        await appendBlueVpnClientLog(
+          'windows standby probe failed server=${candidate.id} protocol=${candidate.protocolCode} cancelled=$cancelled code=${result['errorCode'] ?? "unknown"}',
+        );
+        return false;
+      }
+      final kindName = (result['proofKind'] ?? '').toString();
+      GreenVpnStandbyProofKind? kind;
+      for (final value in GreenVpnStandbyProofKind.values) {
+        if (value.name == kindName) {
+          kind = value;
+          break;
+        }
+      }
+      final verifiedAt = DateTime.tryParse(
+        (result['verifiedAt'] ?? '').toString(),
+      );
+      final latencyMs = switch (result['latencyMs']) {
+        int value => value,
+        num value => value.round(),
+        final value => int.tryParse(value?.toString() ?? ''),
+      };
+      if (kind == null ||
+          verifiedAt == null ||
+          latencyMs == null ||
+          latencyMs < 0) {
+        return false;
+      }
+      final proof = GreenVpnStandbyRouteProof(
+        routeId: candidate.id,
+        protocol: candidate.protocolCode.trim().toLowerCase(),
+        kind: kind,
+        preparedAt: preparedAt.toUtc(),
+        verifiedAt: verifiedAt.toUtc(),
+        latencyMs: latencyMs,
+      );
+      _windowsStandbyProofs[proof.key] = proof;
+      _windowsStandbyRetryAfter.remove(proof.key);
+      await _windowsStandbyProofStore.write(_windowsStandbyProofs);
+      await appendBlueVpnClientLog(
+        'windows standby probe confirmed server=${candidate.id} protocol=${candidate.protocolCode} proof=${kind.name} ms=$latencyMs youtube=${result['youtubeStatus'] ?? 0}',
+      );
+      unawaited(
+        _reportRouteEvent(
+          candidate,
+          stage: 'standby_probe',
+          ok: true,
+          latencyMs: latencyMs,
+          details: <String, dynamic>{
+            'proof': kind.name,
+            'youtubeStatus': result['youtubeStatus'],
+            'cleanupOk': true,
+          },
+        ),
+      );
+      return true;
+    } catch (error) {
+      await appendBlueVpnClientLog(
+        'windows standby probe exception server=${candidate.id} error=$error',
+      );
+      return false;
+    } finally {
+      try {
+        if (requestFile.existsSync()) {
+          await WindowsLocalSecurity.preparePrivateFileForWrite(
+            requestFile.path,
+          );
+          await requestFile.delete();
+        }
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _runWindowsStandbyCycle(
+    ServerLocation activeRoute,
+    int epoch,
+  ) async {
+    if (kIsWeb ||
+        !Platform.isWindows ||
+        !mounted ||
+        !vpnEnabled ||
+        vpnBusy ||
+        _windowsRuntimeRecoveryRunning ||
+        _windowsStandbyCycleRunning ||
+        epoch != _windowsRuntimeFailoverEpoch ||
+        socialOnlyEnabled ||
+        _socialOnlyPreferenceRequested) {
+      return;
+    }
+    final now = DateTime.now().toUtc();
+    if (!greenVpnIsFreshPreferredRoute(
+      candidateId: activeRoute.id,
+      candidateProtocol: activeRoute.protocolCode,
+      preferredId: _lastSuccessfulRouteId,
+      preferredProtocol: _lastSuccessfulRouteProtocol,
+      preferredAt: _lastSuccessfulRouteAt,
+      now: now,
+    )) {
+      return;
+    }
+    _windowsStandbyCycleRunning = true;
+    try {
+      await _loadWindowsStandbyProofs();
+      final activeKey = _routeCooldownKey(activeRoute);
+      final candidates = _connectCandidatesForCurrentSelection();
+      final seen = <String>{};
+      final eligible = candidates
+          .where((candidate) => _routeCooldownKey(candidate) != activeKey)
+          .map(
+            (candidate) =>
+                '${greenVpnNormalizeManagedRouteId(candidate.id)}/${candidate.protocolCode.trim().toLowerCase()}',
+          )
+          .toSet()
+          .toList(growable: false);
+      await appendBlueVpnClientLog(
+        'windows standby cycle started active=${activeRoute.id}/${activeRoute.protocolCode} eligible=${eligible.join(",")}',
+      );
+      var checked = 0;
+      for (final candidate in candidates) {
+        final key = greenVpnStandbyRouteKey(
+          candidate.id,
+          candidate.protocolCode,
+        );
+        if (key.isEmpty || key == activeKey || !seen.add(key)) continue;
+        if (!mounted ||
+            !vpnEnabled ||
+            vpnBusy ||
+            _windowsRuntimeRecoveryRunning ||
+            epoch != _windowsRuntimeFailoverEpoch) {
+          return;
+        }
+        if (_hasFreshWindowsStandbyProof(
+          candidate,
+          now: DateTime.now().toUtc(),
+        )) {
+          continue;
+        }
+        final retryAfter = _windowsStandbyRetryAfter[key];
+        if (retryAfter != null && retryAfter.isAfter(DateTime.now().toUtc())) {
+          continue;
+        }
+        final preparedAt = await _prepareWindowsStandbyConfig(candidate);
+        if (preparedAt == null) {
+          _windowsStandbyRetryAfter[key] = DateTime.now().toUtc().add(
+            greenVpnStandbyFailureRetryDelay,
+          );
+          continue;
+        }
+        await _probeWindowsStandbyRoute(
+          candidate,
+          preparedAt: preparedAt,
+          epoch: epoch,
+        );
+        checked += 1;
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
+      if (mounted && epoch == _windowsRuntimeFailoverEpoch) {
+        final completedAt = DateTime.now().toUtc();
+        final freshCount = candidates
+            .where(
+              (candidate) =>
+                  _hasFreshWindowsStandbyProof(candidate, now: completedAt),
+            )
+            .length;
+        await appendBlueVpnClientLog(
+          'windows standby cycle complete active=${activeRoute.id} checked=$checked fresh=$freshCount candidates=${candidates.length}',
+        );
+      }
+    } finally {
+      _windowsStandbyCycleRunning = false;
+    }
+  }
+
+  void _cancelWindowsStandbyProbe({required String reason}) {
+    if (kIsWeb || !Platform.isWindows) return;
+    unawaited(() async {
+      const service = _GreenVpnSystemServiceClient();
+      final response = await service.cancelStandbyProbe();
+      await appendBlueVpnClientLog(
+        'windows standby cancel reason=$reason ok=${response.ok}',
+      );
+    }());
+  }
+
   void _disarmWindowsRuntimeFailover({required String reason}) {
     final hadMonitor =
         _windowsRuntimeFailoverTimer != null ||
@@ -10699,6 +11219,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _activeWindowsRuntimeRoute = null;
     _windowsRuntimeFailureCount = 0;
     _windowsRuntimeFailoverEpoch += 1;
+    _cancelWindowsStandbyProbe(reason: reason);
     if (hadMonitor) {
       unawaited(
         appendBlueVpnClientLog(
@@ -10903,6 +11424,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     );
     if (routeHealthy) {
       await _recordRouteSuccess(server);
+      unawaited(_runWindowsStandbyCycle(server, epoch));
       if (previousFailureCount > 0) {
         await appendBlueVpnClientLog(
           'windows runtime probe recovered server=${server.id} previousFailures=$previousFailureCount',
@@ -11038,6 +11560,16 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               preferredAt: _lastSuccessfulRouteAt,
               now: now,
             ),
+        leftHasFreshStandbyProof:
+            !kIsWeb &&
+            Platform.isWindows &&
+            _windowsRuntimeRecoveryRunning &&
+            _hasFreshWindowsStandbyProof(a, now: now),
+        rightHasFreshStandbyProof:
+            !kIsWeb &&
+            Platform.isWindows &&
+            _windowsRuntimeRecoveryRunning &&
+            _hasFreshWindowsStandbyProof(b, now: now),
       );
     }
     final byScore = _serverConnectScore(b).compareTo(_serverConnectScore(a));
@@ -11221,6 +11753,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       );
       await _refreshServerCatalog(showToast: false);
       if (!mounted || !vpnEnabled) return;
+      unawaited(
+        _runWindowsStandbyCycle(activeRoute, _windowsRuntimeFailoverEpoch),
+      );
       await appendBlueVpnClientLog(
         'background route refresh complete active=${activeRoute.id} candidates=${_connectCandidatesForCurrentSelection().length}',
       );
@@ -20645,6 +21180,20 @@ class _GreenVpnSystemServiceClient {
     responseTimeout: const Duration(seconds: 3),
   );
 
+  Future<_GreenVpnSystemServiceResponse> probeStandby() => _request(
+    'POST',
+    '/standby/probe',
+    connectTimeout: const Duration(seconds: 2),
+    responseTimeout: const Duration(seconds: 65),
+  );
+
+  Future<_GreenVpnSystemServiceResponse> cancelStandbyProbe() => _request(
+    'POST',
+    '/standby/cancel',
+    connectTimeout: const Duration(seconds: 2),
+    responseTimeout: const Duration(seconds: 5),
+  );
+
   Future<_GreenVpnSystemServiceResponse> _request(
     String method,
     String path, {
@@ -20722,7 +21271,11 @@ class _GreenVpnSystemServiceClient {
 
   static bool _requiresLocalToken(String path) {
     final lower = path.toLowerCase();
-    return lower == '/connect' || lower == '/disconnect' || lower == '/status';
+    return lower == '/connect' ||
+        lower == '/disconnect' ||
+        lower == '/status' ||
+        lower == '/standby/probe' ||
+        lower == '/standby/cancel';
   }
 
   static Future<String?> _readLocalToken() async {

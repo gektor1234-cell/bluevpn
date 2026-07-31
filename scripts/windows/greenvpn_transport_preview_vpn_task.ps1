@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Connect', 'Disconnect', 'Guard')]
+    [ValidateSet('Connect', 'Disconnect', 'Guard', 'ProbeStandby')]
     [string]$Action = 'Guard'
 )
 
@@ -77,6 +77,13 @@ $DnsttRouteMetric = 42735
 $DnsttSocksPort = 1983
 $DnsttZone = 't.greenvpn.pro'
 $DnsttExpectedEgress = '5.129.216.42'
+$StandbyProbeScript = Join-Path $PSScriptRoot 'greenvpn_standby_probe.ps1'
+$StandbyProbeWireGuardServiceName = 'WireGuardTunnel$GreenVPNTransportPreviewStandbyProbe'
+$StandbyProbeAmneziaServiceName = 'AmneziaWGTunnel$GreenVPNTransportPreviewStandbyProbe'
+$StandbyProbeRequestPath = Join-Path $ProgramDataRoot 'standby-probe-request.json'
+$StandbyProbeResultPath = Join-Path $ProgramDataRoot 'standby-probe-result.json'
+$StandbyProbeRuntimeRoot = Join-Path $ProgramDataRoot 'standby-probe-runtime'
+$StandbyProbeEndpointRouteMetric = 42739
 $DnsttToolRoot = Join-Path $PSScriptRoot 'dnstt'
 $DnsttExe = Join-Path $DnsttToolRoot 'dnstt-client-windows-amd64.exe'
 $DnsttHevExe = Join-Path $DnsttToolRoot 'hev-socks5-tunnel.exe'
@@ -134,16 +141,12 @@ function Ensure-DiagnosticLogAccess {
     if ($script:DiagnosticLogAclReady) { return }
     $directory = Split-Path -Parent $DiagnosticLogPath
     New-Item -ItemType Directory -Force -Path $directory | Out-Null
-    $created = $false
     if (-not (Test-Path -LiteralPath $DiagnosticLogPath -PathType Leaf)) {
         New-Item -ItemType File -Force -Path $DiagnosticLogPath | Out-Null
-        $created = $true
     }
-    if ($created) {
-        $acl = Get-Acl -LiteralPath $DiagnosticLogPath
-        $acl.SetAccessRuleProtection($false, $true)
-        Set-Acl -LiteralPath $DiagnosticLogPath -AclObject $acl
-    }
+    $acl = Get-Acl -LiteralPath $DiagnosticLogPath
+    $acl.SetAccessRuleProtection($false, $true)
+    Set-Acl -LiteralPath $DiagnosticLogPath -AclObject $acl
     $script:DiagnosticLogAclReady = $true
 }
 
@@ -1458,7 +1461,12 @@ function Get-CompetingVpnServices {
             ) -ErrorAction SilentlyContinue |
                 Where-Object {
                     [string]$_.Status -ne 'Stopped' -and
-                    $_.Name -notin @($WireGuardServiceName, $AmneziaWgServiceName) -and
+                    $_.Name -notin @(
+                        $WireGuardServiceName,
+                        $AmneziaWgServiceName,
+                        $StandbyProbeWireGuardServiceName,
+                        $StandbyProbeAmneziaServiceName
+                    ) -and
                     (
                         $_.Name -like 'WireGuardTunnel$*' -or
                         $_.Name -like 'AmneziaWGTunnel$*' -or
@@ -1478,6 +1486,8 @@ function Test-AllowedCompetingVpnServiceName {
     return (
         $Name -ne $WireGuardServiceName -and
         $Name -ne $AmneziaWgServiceName -and
+        $Name -ne $StandbyProbeWireGuardServiceName -and
+        $Name -ne $StandbyProbeAmneziaServiceName -and
         (
             $Name -like 'WireGuardTunnel$*' -or
             $Name -like 'AmneziaWGTunnel$*' -or
@@ -1850,6 +1860,109 @@ function Invoke-GreenGuard {
     }
 }
 
+function Remove-StandbyProbeFallbackArtifacts {
+    $runtimeNeedle = [IO.Path]::GetFullPath($StandbyProbeRuntimeRoot)
+    $allowedProcessNames = @(
+        'hysteria-windows-amd64.exe',
+        'xray.exe',
+        'naive.exe',
+        'dnstt-client-windows-amd64.exe'
+    )
+    foreach ($process in @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                [string]$_.Name -in $allowedProcessNames -and
+                -not [string]::IsNullOrWhiteSpace([string]$_.CommandLine) -and
+                ([string]$_.CommandLine).IndexOf(
+                    $runtimeNeedle,
+                    [StringComparison]::OrdinalIgnoreCase
+                ) -ge 0
+            }
+    )) {
+        try { Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction Stop } catch {}
+    }
+    foreach ($serviceName in @(
+        $StandbyProbeWireGuardServiceName,
+        $StandbyProbeAmneziaServiceName
+    )) {
+        try { Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue } catch {}
+        try { & sc.exe delete $serviceName 2>$null | Out-Null } catch {}
+    }
+    try {
+        Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object {
+                [int]$_.RouteMetric -eq $StandbyProbeEndpointRouteMetric
+            } |
+            Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+    } catch {}
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            Remove-Item -LiteralPath $StandbyProbeRuntimeRoot -Recurse -Force `
+                -ErrorAction SilentlyContinue
+        } catch {}
+        if (-not (Test-Path -LiteralPath $StandbyProbeRuntimeRoot)) { break }
+        Start-Sleep -Milliseconds 250
+    }
+    $servicesGone = @(Get-Service -Name @(
+        $StandbyProbeWireGuardServiceName,
+        $StandbyProbeAmneziaServiceName
+    ) -ErrorAction SilentlyContinue).Count -eq 0
+    $routesGone = @(
+        Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object {
+                [int]$_.RouteMetric -eq $StandbyProbeEndpointRouteMetric
+            }
+    ).Count -eq 0
+    return $servicesGone -and $routesGone -and
+        -not (Test-Path -LiteralPath $StandbyProbeRuntimeRoot)
+}
+
+function Write-StandbyProbeFallbackResult {
+    param(
+        [Parameter(Mandatory=$true)][string]$ErrorCode,
+        [Parameter(Mandatory=$true)][bool]$CleanupOk
+    )
+    $requestId = ''
+    $routeId = ''
+    $protocol = ''
+    try {
+        $request = Get-Content -LiteralPath $StandbyProbeRequestPath -Raw |
+            ConvertFrom-Json
+        $requestId = [string]$request.requestId
+        $routeId = [string]$request.routeId
+        $protocol = [string]$request.protocol
+    } catch {}
+    $payload = [ordered]@{
+        schema = 1
+        requestId = $requestId
+        routeId = $routeId
+        protocol = $protocol
+        success = $false
+        proofKind = ''
+        latencyMs = 0
+        youtubeStatus = 0
+        egress = ''
+        verifiedAt = (Get-Date).ToUniversalTime().ToString('o')
+        cleanupOk = $CleanupOk
+        cancelled = $false
+        errorCode = $ErrorCode
+        cleanupErrors = if ($CleanupOk) { @() } else { @('wrapper_cleanup') }
+    }
+    $json = ($payload | ConvertTo-Json -Depth 6) + [Environment]::NewLine
+    $temp = $StandbyProbeResultPath + '.tmp'
+    try {
+        Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+        [IO.File]::WriteAllText($temp, $json, [Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $temp -Destination $StandbyProbeResultPath -Force
+    } catch {
+        [IO.File]::WriteAllText(
+            $StandbyProbeResultPath,
+            $json,
+            [Text.UTF8Encoding]::new($false)
+        )
+    }
+}
+
 try {
     Write-GreenLog 'started'
     switch ($Action) {
@@ -1860,6 +1973,27 @@ try {
             Restore-CompetingVpnTunnels
         }
         'Guard' { Invoke-GreenGuard }
+        'ProbeStandby' {
+            if (-not (Test-Path -LiteralPath $StandbyProbeScript -PathType Leaf)) {
+                throw 'Standby probe script is missing.'
+            }
+            $probeFailure = $null
+            try { & $StandbyProbeScript } catch { $probeFailure = $_ }
+            if ($null -ne $probeFailure -or
+                -not (Test-Path -LiteralPath $StandbyProbeResultPath -PathType Leaf)) {
+                $fallbackCleanupOk = Remove-StandbyProbeFallbackArtifacts
+                if (-not (Test-Path -LiteralPath $StandbyProbeResultPath -PathType Leaf)) {
+                    Write-StandbyProbeFallbackResult `
+                        -ErrorCode 'probe_wrapper_failed' `
+                        -CleanupOk $fallbackCleanupOk
+                }
+                Write-GreenLog "standby probe wrapper fallback cleanupOk=$fallbackCleanupOk"
+                if ($null -eq $probeFailure) {
+                    throw 'Standby probe completed without a result.'
+                }
+                throw $probeFailure
+            }
+        }
     }
     Write-GreenLog 'finished'
     exit 0

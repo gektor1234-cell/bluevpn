@@ -84,6 +84,7 @@ if (-not (Test-Path -LiteralPath $windowsArtifact -PathType Leaf)) {
 }
 $requiredWindowsPayloads = @(
     'app\tools\greenvpn_transport_preview_vpn_task.ps1',
+    'app\tools\greenvpn_standby_probe.ps1',
     'app\tools\greenvpn_selective_routing.ps1',
     'app\tools\process-router\ProxyBridge_CLI.exe',
     'app\tools\process-router\ProxyBridgeCore.dll',
