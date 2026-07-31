@@ -28,7 +28,7 @@ $errors = New-Object System.Collections.Generic.List[string]
 
 try {
     New-Item -ItemType Directory -Force -Path $root | Out-Null
-    $process = Start-Process -FilePath $resolvedInstaller -ArgumentList @('/Q', "/T:$root", '/C') -PassThru
+    $process = Start-Process -FilePath $resolvedInstaller -ArgumentList @('/Q', "/T:$root", '/C') -WindowStyle Hidden -PassThru
     if (-not $process.WaitForExit(30000)) {
         Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
         throw 'IExpress extraction did not finish within 30 seconds.'

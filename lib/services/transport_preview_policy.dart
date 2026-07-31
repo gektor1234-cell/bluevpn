@@ -90,6 +90,29 @@ int greenVpnNextRuntimeFailoverFailureCount({
 bool greenVpnShouldTriggerRuntimeFailover(int failureCount) =>
     failureCount >= greenVpnRuntimeFailoverFailureThreshold;
 
+bool greenVpnShouldBlockForegroundForPostConnectProbe({
+  required bool probeRequested,
+  required bool isWindows,
+}) => probeRequested && !isWindows;
+
+int greenVpnWindowsForegroundCandidateIndex({
+  required List<String> protocols,
+  int? immediateCachedIndex,
+}) {
+  if (protocols.isEmpty) return -1;
+  final cachedIndex = immediateCachedIndex;
+  if (cachedIndex != null &&
+      cachedIndex >= 0 &&
+      cachedIndex < protocols.length &&
+      protocols[cachedIndex].trim().toLowerCase() == 'wireguard_udp') {
+    return cachedIndex;
+  }
+  final wireGuardIndex = protocols.indexWhere(
+    (protocol) => protocol.trim().toLowerCase() == 'wireguard_udp',
+  );
+  return wireGuardIndex >= 0 ? wireGuardIndex : 0;
+}
+
 bool greenVpnIsCompetingVpnFailureMessage(String? message) {
   final normalized = (message ?? '').trim().toLowerCase();
   if (normalized.isEmpty) return false;

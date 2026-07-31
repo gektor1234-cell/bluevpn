@@ -7382,6 +7382,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   Timer? _pendingBillingPollTimer;
   Timer? _freeAdSessionTimer;
   Timer? _windowsRuntimeFailoverTimer;
+  Timer? _windowsRouteMaintenanceTimer;
   ServerLocation? _activeWindowsRuntimeRoute;
   int _windowsRuntimeFailoverEpoch = 0;
   int _windowsRuntimeFailureCount = 0;
@@ -10605,6 +10606,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         _activeWindowsRuntimeRoute != null;
     _windowsRuntimeFailoverTimer?.cancel();
     _windowsRuntimeFailoverTimer = null;
+    _windowsRouteMaintenanceTimer?.cancel();
+    _windowsRouteMaintenanceTimer = null;
     _activeWindowsRuntimeRoute = null;
     _windowsRuntimeFailureCount = 0;
     _windowsRuntimeFailoverEpoch += 1;
@@ -10661,9 +10664,41 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       const Duration(seconds: 15),
       (_) => unawaited(_pollWindowsRuntimeFailover(server, epoch)),
     );
+    _windowsRouteMaintenanceTimer = Timer.periodic(const Duration(minutes: 1), (
+      _,
+    ) {
+      if (mounted &&
+          vpnEnabled &&
+          !vpnBusy &&
+          !_serverCatalogBusy &&
+          epoch == _windowsRuntimeFailoverEpoch) {
+        _refreshConnectionOptionsAfterConnect(server);
+      }
+    });
+    unawaited(_runInitialWindowsRuntimeChecks(server, epoch));
     await appendBlueVpnClientLog(
-      'windows runtime failover armed server=${server.id} protocol=${server.protocolCode} intervalSeconds=15 threshold=$greenVpnRuntimeFailoverFailureThreshold',
+      'windows runtime failover armed server=${server.id} protocol=${server.protocolCode} intervalSeconds=15 initialChecksSeconds=2,5 catalogRefreshSeconds=60 threshold=$greenVpnRuntimeFailoverFailureThreshold',
     );
+  }
+
+  Future<void> _runInitialWindowsRuntimeChecks(
+    ServerLocation server,
+    int epoch,
+  ) async {
+    for (final delay in const <Duration>[
+      Duration(seconds: 2),
+      Duration(seconds: 3),
+    ]) {
+      await Future<void>.delayed(delay);
+      if (!mounted ||
+          !vpnEnabled ||
+          vpnBusy ||
+          epoch != _windowsRuntimeFailoverEpoch ||
+          _windowsRuntimeRecoveryRunning) {
+        return;
+      }
+      await _pollWindowsRuntimeFailover(server, epoch);
+    }
   }
 
   Future<void> _restoreWindowsRuntimeFailoverIfPossible({
@@ -11009,9 +11044,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     final managedRouteId = managedMetadata[0];
     final managedProtocol = managedMetadata[1];
     final now = DateTime.now().toUtc();
+    final hasManagedConfig = await _cfg.hasManagedConfig();
     for (final candidate in candidates) {
+      if (candidate.protocolCode.trim().toLowerCase() != 'wireguard_udp') {
+        continue;
+      }
       final serverBase = await _cfg.readBaseConfigForServer(candidate.id);
-      final hasManagedConfig = await _cfg.hasManagedConfig();
       final hasCandidateCache =
           hasManagedConfig || (serverBase ?? '').trim().isNotEmpty;
       if (greenVpnCanUseImmediateCachedRoute(
@@ -11431,7 +11469,38 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           candidates,
         );
         if (!mounted) return;
-        if (immediateCachedCandidate != null &&
+        if (!kIsWeb && Platform.isWindows) {
+          if (!_windowsRuntimeRecoveryRunning) {
+            final immediateCachedIndex = immediateCachedCandidate == null
+                ? null
+                : candidates.indexWhere(
+                    (candidate) =>
+                        candidate.id == immediateCachedCandidate.id &&
+                        candidate.protocolCode ==
+                            immediateCachedCandidate.protocolCode,
+                  );
+            final primaryIndex = greenVpnWindowsForegroundCandidateIndex(
+              protocols: candidates
+                  .map((candidate) => candidate.protocolCode)
+                  .toList(growable: false),
+              immediateCachedIndex:
+                  immediateCachedIndex != null && immediateCachedIndex >= 0
+                  ? immediateCachedIndex
+                  : null,
+            );
+            if (primaryIndex >= 0) {
+              final primary = candidates[primaryIndex];
+              candidates = <ServerLocation>[primary];
+              await appendBlueVpnClientLog(
+                'windows foreground connect selected single primary server=${primary.id} protocol=${primary.protocolCode} cached=${immediateCachedCandidate != null && primary.id == immediateCachedCandidate.id && primary.protocolCode == immediateCachedCandidate.protocolCode}',
+              );
+            }
+          } else {
+            await appendBlueVpnClientLog(
+              'windows background recovery retained ordered candidates=${candidates.length}',
+            );
+          }
+        } else if (immediateCachedCandidate != null &&
             (candidates.first.id != immediateCachedCandidate.id ||
                 candidates.first.protocolCode !=
                     immediateCachedCandidate.protocolCode)) {
@@ -11663,7 +11732,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             ),
           );
 
-          if (_shouldRunPostConnectProbe) {
+          if (greenVpnShouldBlockForegroundForPostConnectProbe(
+            probeRequested: _shouldRunPostConnectProbe,
+            isWindows: !kIsWeb && Platform.isWindows,
+          )) {
             _setVpnBusyUi(
               stage: 'Проверяем YouTube...',
               hint: 'VPN включён. Проверяем, что YouTube открывается.',
@@ -11736,11 +11808,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           }
 
           await appendBlueVpnClientLog(
-            'post connect checks accepted tunnel server=${candidate.id}',
+            !kIsWeb && Platform.isWindows
+                ? 'foreground connect accepted system-service tunnel server=${candidate.id}; Internet checks continue in background'
+                : 'post connect checks accepted tunnel server=${candidate.id}',
           );
           if (!mounted) return;
-          await _recordRouteSuccess(candidate);
-          if (!mounted) return;
+          unawaited(_recordRouteSuccess(candidate));
           unawaited(_armRuntimeFailover(candidate));
           _refreshConnectionOptionsAfterConnect(candidate);
           if (kPaidBetaBuild) {
@@ -21287,6 +21360,13 @@ if ($null -eq $svc) { exit 0 }
         await log(
           'direct fallback sc start ec=${st.exitCode} :: ${outOf(st).replaceAll('\r', ' ').replaceAll('\n', ' | ')}',
         );
+      }
+
+      if (startedBySystemService) {
+        await log(
+          '=== CONNECT OK: privileged task confirmed tunnel service running; deep verification moved to background ===',
+        );
+        return const VpnBackendResult(ok: true);
       }
 
       final ok = await waitRunning(loops: 60);

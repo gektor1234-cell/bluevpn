@@ -111,6 +111,61 @@ void main() {
     expect(greenVpnShouldTriggerRuntimeFailover(failures), isTrue);
   });
 
+  test('Windows never blocks the connect button on an Internet probe', () {
+    expect(
+      greenVpnShouldBlockForegroundForPostConnectProbe(
+        probeRequested: true,
+        isWindows: true,
+      ),
+      isFalse,
+    );
+    expect(
+      greenVpnShouldBlockForegroundForPostConnectProbe(
+        probeRequested: true,
+        isWindows: false,
+      ),
+      isTrue,
+    );
+    expect(
+      greenVpnShouldBlockForegroundForPostConnectProbe(
+        probeRequested: false,
+        isWindows: false,
+      ),
+      isFalse,
+    );
+  });
+
+  test('Windows foreground connect selects one simple WireGuard route', () {
+    expect(
+      greenVpnWindowsForegroundCandidateIndex(
+        protocols: const <String>['amneziawg', 'wireguard_udp', 'hysteria2'],
+      ),
+      1,
+    );
+    expect(
+      greenVpnWindowsForegroundCandidateIndex(
+        protocols: const <String>[
+          'wireguard_udp',
+          'wireguard_udp',
+          'amneziawg',
+        ],
+        immediateCachedIndex: 1,
+      ),
+      1,
+    );
+    expect(
+      greenVpnWindowsForegroundCandidateIndex(
+        protocols: const <String>['amneziawg', 'hysteria2'],
+        immediateCachedIndex: 0,
+      ),
+      0,
+    );
+    expect(
+      greenVpnWindowsForegroundCandidateIndex(protocols: const <String>[]),
+      -1,
+    );
+  });
+
   test('persisted runtime route ids are strictly normalized', () {
     expect(
       greenVpnNormalizeManagedRouteId('  nl2-amneziawg.public:1  '),

@@ -96,6 +96,7 @@ $DnsttHevStderrPath = Join-Path $ProgramDataRoot 'dnstt-hev.stderr.log'
 $LogPath = Join-Path $ProgramDataRoot 'backend.log'
 $DiagnosticLogPath = Join-Path $ProgramDataRoot 'state\transport-task.log'
 $DiagnosticLogAclReady = $false
+$CompetingVpnTakeoverOccurred = $false
 $SelectiveRoutingHelper = Join-Path $PSScriptRoot 'greenvpn_selective_routing.ps1'
 
 $ExpectedHysteriaRuntimeHashes = @{
@@ -132,12 +133,16 @@ function Ensure-DiagnosticLogAccess {
     if ($script:DiagnosticLogAclReady) { return }
     $directory = Split-Path -Parent $DiagnosticLogPath
     New-Item -ItemType Directory -Force -Path $directory | Out-Null
+    $created = $false
     if (-not (Test-Path -LiteralPath $DiagnosticLogPath -PathType Leaf)) {
         New-Item -ItemType File -Force -Path $DiagnosticLogPath | Out-Null
+        $created = $true
     }
-    $acl = Get-Acl -LiteralPath $DiagnosticLogPath
-    $acl.SetAccessRuleProtection($false, $true)
-    Set-Acl -LiteralPath $DiagnosticLogPath -AclObject $acl
+    if ($created) {
+        $acl = Get-Acl -LiteralPath $DiagnosticLogPath
+        $acl.SetAccessRuleProtection($false, $true)
+        Set-Acl -LiteralPath $DiagnosticLogPath -AclObject $acl
+    }
     $script:DiagnosticLogAclReady = $true
 }
 
@@ -1445,9 +1450,13 @@ function Start-DnsttTunnel {
 function Get-CompetingVpnServices {
     try {
         return @(
-            Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
+            Get-Service -Name @(
+                'WireGuardTunnel$*',
+                'AmneziaWGTunnel$*',
+                'CloudflareWARP'
+            ) -ErrorAction SilentlyContinue |
                 Where-Object {
-                    $_.State -ne 'Stopped' -and
+                    [string]$_.Status -ne 'Stopped' -and
                     $_.Name -notin @($WireGuardServiceName, $AmneziaWgServiceName) -and
                     (
                         $_.Name -like 'WireGuardTunnel$*' -or
@@ -1489,6 +1498,7 @@ function Stop-CompetingVpnTunnels {
         return @(Get-CompetingVpnLabels)
     }
 
+    $script:CompetingVpnTakeoverOccurred = $true
     Write-GreenLog "takeover requested reason=$Reason serviceCount=$($services.Count)"
     foreach ($service in $services) {
         $serviceName = [string]$service.Name
@@ -1500,36 +1510,82 @@ function Stop-CompetingVpnTunnels {
         }
     }
 
-    for ($attempt = 0; $attempt -lt 40; $attempt++) {
+    for ($attempt = 0; $attempt -lt 30; $attempt++) {
+        if (@(Get-CompetingVpnServices).Count -eq 0) { break }
+        Start-Sleep -Milliseconds 100
+    }
+
+    $remainingServices = @(Get-CompetingVpnServices)
+    if ($remainingServices.Count -gt 0) {
+        $remaining = @($remainingServices | ForEach-Object { "service:$($_.Name)" })
+        Write-GreenLog "takeover incomplete reason=$Reason remainingCount=$($remaining.Count)"
+        return $remaining
+    }
+
+    $remaining = @()
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
         $remaining = @(Get-CompetingVpnLabels)
         if ($remaining.Count -eq 0) {
             Write-GreenLog "takeover complete reason=$Reason"
             return @()
         }
-        Start-Sleep -Milliseconds 250
+        Start-Sleep -Milliseconds 100
     }
 
-    $remaining = @(Get-CompetingVpnLabels)
     Write-GreenLog "takeover incomplete reason=$Reason remainingCount=$($remaining.Count)"
     return $remaining
 }
 
+function Test-AdvancedTransportStatePresent {
+    foreach ($path in @(
+        $ProcessRouterActivePath,
+        $ProcessRouterPidPath,
+        $HysteriaPidPath,
+        $HevPidPath,
+        $HysteriaWatchdogPidPath,
+        $HysteriaRouteStatePath,
+        $XrayPidPath,
+        $VlessHevPidPath,
+        $VlessWatchdogPidPath,
+        $VlessRouteStatePath,
+        $NaivePidPath,
+        $NaiveHevPidPath,
+        $NaiveWatchdogPidPath,
+        $NaiveRouteStatePath,
+        $DnsttPidPath,
+        $DnsttHevPidPath,
+        $DnsttWatchdogPidPath,
+        $DnsttRouteStatePath
+    )) {
+        if (Test-Path -LiteralPath $path -PathType Leaf) { return $true }
+    }
+    return $false
+}
+
 function Stop-OwnTunnel {
-    Stop-GreenProcessRouter
-    $managedProcesses = @(
-        [pscustomobject]@{ pid = Read-ManagedPid -Path $HysteriaPidPath; path = $HysteriaExe },
-        [pscustomobject]@{ pid = Read-ManagedPid -Path $HevPidPath; path = $HevExe },
-        [pscustomobject]@{ pid = Read-ManagedPid -Path $XrayPidPath; path = $XrayExe },
-        [pscustomobject]@{ pid = Read-ManagedPid -Path $VlessHevPidPath; path = $VlessHevExe },
-        [pscustomobject]@{ pid = Read-ManagedPid -Path $NaivePidPath; path = $NaiveExe },
-        [pscustomobject]@{ pid = Read-ManagedPid -Path $NaiveHevPidPath; path = $NaiveHevExe },
-        [pscustomobject]@{ pid = Read-ManagedPid -Path $DnsttPidPath; path = $DnsttExe },
-        [pscustomobject]@{ pid = Read-ManagedPid -Path $DnsttHevPidPath; path = $DnsttHevExe }
-    )
-    Stop-Hysteria2Tunnel
-    Stop-VlessRealityTunnel
-    Stop-NaiveHttpsTunnel
-    Stop-DnsttTunnel
+    param([switch]$FastNativeSwitch)
+
+    $advancedStatePresent = Test-AdvancedTransportStatePresent
+    $managedProcesses = @()
+    if (-not $FastNativeSwitch -or $advancedStatePresent) {
+        Stop-GreenProcessRouter
+        $managedProcesses = @(
+            [pscustomobject]@{ pid = Read-ManagedPid -Path $HysteriaPidPath; path = $HysteriaExe },
+            [pscustomobject]@{ pid = Read-ManagedPid -Path $HevPidPath; path = $HevExe },
+            [pscustomobject]@{ pid = Read-ManagedPid -Path $XrayPidPath; path = $XrayExe },
+            [pscustomobject]@{ pid = Read-ManagedPid -Path $VlessHevPidPath; path = $VlessHevExe },
+            [pscustomobject]@{ pid = Read-ManagedPid -Path $NaivePidPath; path = $NaiveExe },
+            [pscustomobject]@{ pid = Read-ManagedPid -Path $NaiveHevPidPath; path = $NaiveHevExe },
+            [pscustomobject]@{ pid = Read-ManagedPid -Path $DnsttPidPath; path = $DnsttExe },
+            [pscustomobject]@{ pid = Read-ManagedPid -Path $DnsttHevPidPath; path = $DnsttHevExe }
+        )
+        Stop-Hysteria2Tunnel
+        Stop-VlessRealityTunnel
+        Stop-NaiveHttpsTunnel
+        Stop-DnsttTunnel
+    } else {
+        Write-GreenLog 'fast native switch skipped inactive advanced transport cleanup'
+    }
     $existingServices = @{}
     $stopRequested = $false
     foreach ($serviceName in @($WireGuardServiceName, $AmneziaWgServiceName)) {
@@ -1569,10 +1625,14 @@ function Stop-OwnTunnel {
             $managedProcesses |
                 Where-Object { Test-ExactProcess -ProcessId ([int]$_.pid) -ExpectedPath ([string]$_.path) }
         )
-        $activeAdapters = @(
-            Get-NetAdapter -Name @($HysteriaTunnelName, $VlessTunnelName, $NaiveTunnelName, $DnsttTunnelName) -ErrorAction SilentlyContinue |
-                Where-Object { $_.Status -eq 'Up' }
-        )
+        $activeAdapters = if (-not $FastNativeSwitch -or $advancedStatePresent) {
+            @(
+                Get-NetAdapter -Name @($HysteriaTunnelName, $VlessTunnelName, $NaiveTunnelName, $DnsttTunnelName) -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Status -eq 'Up' }
+            )
+        } else {
+            @()
+        }
         if ($runningServices.Count -eq 0 -and $runningProcesses.Count -eq 0 -and $activeAdapters.Count -eq 0) {
             return
         }
@@ -1582,7 +1642,6 @@ function Stop-OwnTunnel {
 }
 
 function Start-OwnTunnel {
-    Ensure-GreenProgramDataAcl
     if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "Config missing: $ConfigPath" }
     $protocol = Get-ManagedProtocol
     Write-GreenLog "connect phase=preflight protocol=$protocol"
@@ -1594,7 +1653,8 @@ function Start-OwnTunnel {
     }
 
     $engine = if ($protocol -eq 'amneziawg') { Resolve-AmneziaWgExe } else { Resolve-WireGuardExe }
-    Stop-OwnTunnel
+    $nativeProtocol = $protocol -in @('wireguard_udp', 'amneziawg')
+    Stop-OwnTunnel -FastNativeSwitch:$nativeProtocol
     Write-GreenLog 'connect phase=own-tunnel-stopped'
     $routingMode = Get-GreenRoutingMode
     $routingPolicy = $null
@@ -1608,18 +1668,22 @@ function Start-OwnTunnel {
         Ensure-GreenApplicationTunnelRoutes -Policy $routingPolicy
     }
     if ($protocol -eq 'hysteria2') {
+        Ensure-GreenProgramDataAcl
         Start-Hysteria2Tunnel
         return
     }
     if ($protocol -eq 'vless_reality') {
+        Ensure-GreenProgramDataAcl
         Start-VlessRealityTunnel
         return
     }
     if ($protocol -eq 'naive_https') {
+        Ensure-GreenProgramDataAcl
         Start-NaiveHttpsTunnel
         return
     }
     if ($protocol -eq 'dnstt') {
+        Ensure-GreenProgramDataAcl
         Start-DnsttTunnel
         return
     }
@@ -1628,10 +1692,19 @@ function Start-OwnTunnel {
         Ensure-NativeFullTunnelKillSwitch
     }
     Write-GreenLog "connect phase=route-policy-ready mode=$routingMode"
-    Ensure-GreenProgramDataAcl
-    Ensure-EndpointBypassRoute
-    Write-GreenLog 'connect phase=endpoint-bypass-ready'
-    Invoke-External -FilePath $engine -Arguments @('/installtunnelservice', $ConfigPath) | Out-Null
+    if ($script:CompetingVpnTakeoverOccurred) {
+        Ensure-EndpointBypassRoute
+        Write-GreenLog 'connect phase=endpoint-bypass-ready'
+    } else {
+        Write-GreenLog 'connect phase=endpoint-bypass-skipped reason=no-competing-vpn'
+    }
+    try {
+        Invoke-External -FilePath $engine -Arguments @('/installtunnelservice', $ConfigPath) | Out-Null
+    } catch {
+        Write-GreenLog 'native tunnel install failed; validating protected state before one retry'
+        Ensure-GreenProgramDataAcl
+        Invoke-External -FilePath $engine -Arguments @('/installtunnelservice', $ConfigPath) | Out-Null
+    }
     Write-GreenLog 'connect phase=tunnel-service-installed'
     $serviceName = Get-SelectedServiceName -Protocol $protocol
     $service = Get-Service -Name $serviceName -ErrorAction Stop

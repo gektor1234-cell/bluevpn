@@ -1570,6 +1570,11 @@ foreach ($fragment in @(
     'immediate cached connect restored exact server cache',
     'reason=route_config_mismatch',
     'native service fast-path ping',
+    'privileged task confirmed tunnel service running; deep verification moved to background',
+    'windows foreground connect selected single primary',
+    'windows background recovery retained ordered candidates=',
+    'greenVpnShouldBlockForegroundForPostConnectProbe',
+    'initialChecksSeconds=2,5',
     'ensure config endpoint preparation failed'
 )) {
     if ($main.Contains($fragment)) {
@@ -1580,10 +1585,86 @@ foreach ($fragment in @(
     }
 }
 
+$nativeFastAcceptIndex = $main.IndexOf(
+    '=== CONNECT OK: privileged task confirmed tunnel service running; deep verification moved to background ==='
+)
+$nativeDeepVerificationIndex = $main.IndexOf('final ok = await waitRunning(loops: 60);')
+if (
+    $nativeFastAcceptIndex -ge 0 -and
+    $nativeDeepVerificationIndex -ge 0 -and
+    $nativeFastAcceptIndex -lt $nativeDeepVerificationIndex
+) {
+    Add-Pass 'Windows native service returns before deep tunnel verification'
+}
+else {
+    Add-Error 'Windows native service fast return must remain before deep tunnel verification'
+}
+
+$competingServicesStart = $transportPreviewVpnTaskScript.IndexOf('function Get-CompetingVpnServices {')
+$competingServicesEnd = $transportPreviewVpnTaskScript.IndexOf(
+    'function Get-CompetingVpnLabels {',
+    $competingServicesStart
+)
+if ($competingServicesStart -ge 0 -and $competingServicesEnd -gt $competingServicesStart) {
+    $competingServicesBody = $transportPreviewVpnTaskScript.Substring(
+        $competingServicesStart,
+        $competingServicesEnd - $competingServicesStart
+    )
+    if (
+        $competingServicesBody.Contains('Get-Service -Name @(') -and
+        -not $competingServicesBody.Contains('Get-CimInstance Win32_Service')
+    ) {
+        Add-Pass 'Windows takeover uses targeted service lookup instead of a full CIM scan'
+    }
+    else {
+        Add-Error 'Windows takeover must keep targeted service lookup on the connect hot path'
+    }
+}
+else {
+    Add-Error 'Windows takeover service lookup function could not be inspected'
+}
+
+$startOwnTunnelStart = $transportPreviewVpnTaskScript.IndexOf('function Start-OwnTunnel {')
+$startOwnTunnelEnd = $transportPreviewVpnTaskScript.IndexOf(
+    'function Invoke-GreenGuard {',
+    $startOwnTunnelStart
+)
+if ($startOwnTunnelStart -ge 0 -and $startOwnTunnelEnd -gt $startOwnTunnelStart) {
+    $startOwnTunnelBody = $transportPreviewVpnTaskScript.Substring(
+        $startOwnTunnelStart,
+        $startOwnTunnelEnd - $startOwnTunnelStart
+    )
+    if ($startOwnTunnelBody -notmatch 'function Start-OwnTunnel \{\s*Ensure-GreenProgramDataAcl') {
+        Add-Pass 'Windows native connect does not perform an unconditional ACL scan at startup'
+    }
+    else {
+        Add-Error 'Windows native connect must not perform an unconditional ACL scan at startup'
+    }
+    foreach ($fragment in @(
+        'Stop-OwnTunnel -FastNativeSwitch:$nativeProtocol',
+        'if ($script:CompetingVpnTakeoverOccurred)',
+        'native tunnel install failed; validating protected state before one retry'
+    )) {
+        if ($startOwnTunnelBody.Contains($fragment)) {
+            Add-Pass "Windows native connect hot-path contract present: $fragment"
+        }
+        else {
+            Add-Error "Windows native connect hot-path contract missing: $fragment"
+        }
+    }
+}
+else {
+    Add-Error 'Windows native connect function could not be inspected'
+}
+
 foreach ($fragment in @(
     'function Ensure-DiagnosticLogAccess',
+    'function Test-AdvancedTransportStatePresent',
     'SetAccessRuleProtection($false, $true)',
     'takeover service stop accepted:',
+    'fast native switch skipped inactive advanced transport cleanup',
+    'connect phase=endpoint-bypass-skipped reason=no-competing-vpn',
+    'native tunnel install failed; validating protected state before one retry',
     'Set-Service -Name $serviceName -StartupType Manual',
     'connect phase=tunnel-service-running'
 )) {
