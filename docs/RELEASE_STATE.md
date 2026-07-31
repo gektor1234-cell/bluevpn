@@ -1,23 +1,23 @@
 # Green VPN Release State
 
-## Current Release Closure (2026-07-31 MSK)
+## Current Release Closure (2026-08-01 MSK)
 
 | Layer | Current state |
 |---|---|
 | Production backend | `0.9.153-update-channel-alias.4` on Timeweb and RUVDS |
 | Published Android | `0.3.19+2026072914`, signed and optional, unchanged |
-| Published Windows | `0.3.25+3104`, optional and `NotSigned` |
+| Published Windows | `0.3.26+3105`, optional and `NotSigned` |
 | Published paid-beta Android | `0.3.19+2026072914`, optional, unchanged |
 | Published paid-beta Windows | `0.3.21-paid-beta.1+3001`, optional and `NotSigned`, unchanged |
 | Product contract | permanent Free, guest-first |
 | Money gates | sales/refunds/tax confirmation/renewal charges off |
 | Advertising | Rewarded and forced disconnect off |
-| Data plane | one foreground candidate; real data-plane probe, cached route and background fallback preparation |
+| Data plane | one foreground candidate; config-bound standby validation and prevalidated failover in the background |
 
 The exact Windows client source anchor is
-`cad2bbbca1e27899c6730b59c412a94a977efb13`. The production installer is
-`55404544` bytes with SHA-256
-`D93BE65841C2625D3B728EB409C762357A8DD6CAA744F1E032769BCBB21BE1FB`.
+`e6fd54054972811299abf708ccd46857a1c8b6c4`. The production installer is
+`55441408` bytes with SHA-256
+`1E5505E73B735A00E1C7C44BD1919F96F98EA8DC5F03497205EA39E89AAE00F6`.
 It is optional and `NotSigned`; the owner accepted the existing
 SmartScreen/reputation risk.
 
@@ -25,36 +25,52 @@ Backend `public-product -> stable` update-channel aliasing remains active on
 both control planes. The production-only publisher changed neither paid-beta
 nor Android and restarted only the production backend on each control plane.
 
-The defect was a false negative in the non-elevated UI: after resume, its direct
-`wg.exe` query failed even though the privileged service and managed tunnel were
-still running. Windows now uses the authenticated local service as the primary
-status source, treats incomplete reads as `unknown`, retries on resume and
-reconciles every five seconds without reconnecting the tunnel.
+Foreground connection still uses one cached or highest-priority candidate and
+does not wait for the guarded cascade. After a confirmed connection, Windows
+prepares and validates remaining routes in the background. Proofs expire after
+ten minutes and are bound to the exact cached config. Runtime recovery prefers a
+fresh proof, never overlaps transport groups and preserves the connected UI
+state while failover is armed. The tray now has a stable GUID, one process and a
+graceful stale-icon lifecycle.
 
-Validation passed: Flutter analyze; `80` client tests passed / `6` platform
-skips; exact package audit passed. The exact final installer payload was launched
-over the already-running `BlueVPNDev1` tunnel and showed `Включено` plus
-`Отключить VPN` both before and after a real minimize/restore cycle. API health
-remained `200` and YouTube `generate_204` remained `204`. Both stable and
-public-product manifests return `0.3.25+3104`, optional and `fileReady=true`;
-four Windows production/paid-beta public bodies match their exact hashes and
-sizes; public surface is `31/31`.
+Validation passed: Flutter analyze, `19/19` focused policy tests, release gate
+with `0` warnings / `0` errors and exact package audit with `66` payload entries.
+The installed exact artifact completed foreground takeover with one candidate
+in `23.019` seconds, then accounted for all `15` eligible standby routes. An
+injected WireGuard failure moved to a config-bound prevalidated AmneziaWG route
+in `28.319` seconds with no transport overlap. Five tray cycles each accepted
+eight duplicate launches while retaining one process and one successful icon
+lifecycle. Final cleanup restored Amnezia, API `200` and YouTube `204`.
+Both stable and public-product manifests return `0.3.26+3105`, optional and
+`fileReady=true`; four Windows production/paid-beta public bodies match their
+exact hashes and sizes; public surface is `31/31`.
 
 Atomic Windows rollback directories:
 
 - Timeweb:
-  `/root/greenvpn-windows-stable-release-backups/20260731T171003Z-timeweb-0.3.25-3104`;
+  `/root/greenvpn-windows-stable-release-backups/20260731T234229Z-timeweb-0.3.26-3105`;
 - RUVDS:
-  `/root/greenvpn-windows-stable-release-backups/20260731T171359Z-ruvds-0.3.25-3104`.
+  `/root/greenvpn-windows-stable-release-backups/20260731T234011Z-ruvds-0.3.26-3105`.
 
-The first Timeweb apply detected an indentation defect in an embedded Python
-block and rolled the alias, environment, database and backend back to `0.3.24`
-before retry. The release script was corrected and all five Python heredocs were
-compiled before the successful apply. Failed-attempt backup:
-`/root/greenvpn-windows-stable-release-backups/20260731T170812Z-timeweb-0.3.25-3104`.
+The first RUVDS apply was interrupted by the local SSH wrapper after a normal
+transient restart message. The remote transaction restored `0.3.25`, backend
+health and the previous public hash before a clean retry. Failed-attempt backup:
+`/root/greenvpn-windows-stable-release-backups/20260731T233921Z-ruvds-0.3.26-3105`.
 
 Android, paid-beta, advertising, sales, refunds, renewal execution, VPN server
 routes and Friendly Linnet `5.129.237.163` were not changed.
+
+## Historical Windows 0.3.25 Closure (2026-07-31 MSK)
+
+Windows `0.3.25+3104` was published as an optional unsigned release from source
+anchor `cad2bbbca1e27899c6730b59c412a94a977efb13`. Its installer was `55404544`
+bytes with SHA-256
+`D93BE65841C2625D3B728EB409C762357A8DD6CAA744F1E032769BCBB21BE1FB`.
+It corrected UI status reconciliation after minimize/restore and passed an
+exact-payload physical status smoke. Its successful rollback directories were
+`/root/greenvpn-windows-stable-release-backups/20260731T171003Z-timeweb-0.3.25-3104`
+and
+`/root/greenvpn-windows-stable-release-backups/20260731T171359Z-ruvds-0.3.25-3104`.
 
 ## Historical Windows 0.3.24 Closure (2026-07-31 MSK)
 

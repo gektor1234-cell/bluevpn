@@ -1,6 +1,6 @@
 # Green VPN Current Handoff
 
-Updated: 2026-07-31 MSK.
+Updated: 2026-08-01 MSK.
 
 This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
@@ -15,7 +15,7 @@ This is the current operational entry point. Read it together with
    client profiles.
 3. Never touch Friendly Linnet `5.129.237.163` without a new explicit owner
    instruction.
-4. Android `0.3.19+2026072914` and Windows `0.3.25+3104` are public and
+4. Android `0.3.19+2026072914` and Windows `0.3.26+3105` are public and
    optional. Windows paid-beta `0.3.21-paid-beta.1+3001` is also public and
    optional. Do not republish, force or roll them back without a verified exact
    artifact, alternate-node health and an atomic backup.
@@ -31,23 +31,59 @@ This is the current operational entry point. Read it together with
    must reject first-payment creation and must not run the renewal executor.
 8. Server maintenance is one node at a time after alternate control/data planes
    pass readiness. The owner Windows PC must not be rebooted by automation.
-9. Windows 0.3.25 is public and optional, but remains unsigned by explicit
+9. Windows 0.3.26 is public and optional, but remains unsigned by explicit
    owner instruction with the SmartScreen risk accepted. Keep the `NotSigned`
    status visible in operations and expect Windows SmartScreen/reputation
    warnings until a higher signed successor is released.
 10. The admin console is a protected operator surface. Keep Nginx Basic Auth,
     `noindex`, frame denial, staff authentication, RBAC and audit enabled; never
     expose bootstrap tokens or payment/tunnel secrets in the UI or exports.
-11. Stable production publishes Android `0.3.19` and Windows `0.3.25`.
-    Windows `0.3.25+3104` passed exact-package audit and an exact-payload
-    minimize/restore status smoke over an already-running managed tunnel. It is
-    not a trusted/signed Windows release; do not conflate successful unsigned
-    publication with Authenticode trust.
+11. Stable production publishes Android `0.3.19` and Windows `0.3.26`.
+    Windows `0.3.26+3105` passed exact-package foreground, standby, failover,
+    takeover, tray and final-recovery smoke. It is not a trusted/signed Windows
+    release; do not conflate successful unsigned publication with
+    Authenticode trust.
 
-## Windows 0.3.25 Status Reconciliation Publication, 2026-07-31
+## Windows 0.3.26 Standby And Tray Publication, 2026-08-01
 
 This is the current Windows publication entry point. The exact client source
-anchor is `cad2bbbca1e27899c6730b59c412a94a977efb13`.
+anchor is `e6fd54054972811299abf708ccd46857a1c8b6c4`.
+
+- Production installer:
+  `C:\BlueVPN_Builds\public_product_20260801_b3105_standby_tray_candidate_v13_clean_e6fd540\GreenVPN_Setup_0.3.26.exe`,
+  `55441408` bytes, SHA-256
+  `1E5505E73B735A00E1C7C44BD1919F96F98EA8DC5F03497205EA39E89AAE00F6`.
+  It is optional and `NotSigned`; the accepted SmartScreen risk remains.
+- Foreground connect uses one candidate and does not wait for the full route
+  cascade. Remaining routes are prepared and validated after connection, with
+  ten-minute config-bound proofs used only for runtime recovery.
+- Exact installed smoke completed foreground takeover in `23.019` seconds,
+  accounted for all `15` standby routes and recovered an injected WireGuard
+  failure through a prevalidated AmneziaWG route in `28.319` seconds without
+  transport overlap. Evidence:
+  `C:\BlueVPN_Builds\public_product_20260801_b3105_standby_tray_physical_v17_clean_e6fd540\windows-standby-tray-autonomous-summary.json`.
+- Five tray lifecycle cycles retained one process and one icon despite eight
+  duplicate launches per cycle. The connected UI state survived transient
+  status loss while runtime failover remained armed.
+- Validation: Flutter analyze clean, `19/19` focused policy tests, release gate
+  `0` warnings / `0` errors, package audit `66` entries, manifest checks green,
+  exact Windows public bodies `4/4` and public surface `31/31`.
+- Stable and public-product on both control planes return `0.3.26+3105`,
+  optional and `fileReady=true`. Rollback directories:
+  `/root/greenvpn-windows-stable-release-backups/20260731T234229Z-timeweb-0.3.26-3105`
+  and
+  `/root/greenvpn-windows-stable-release-backups/20260731T234011Z-ruvds-0.3.26-3105`.
+- A first RUVDS attempt was interrupted by the local SSH wrapper during a
+  normal backend restart; the atomic transaction restored `0.3.25` before the
+  successful retry. Failed-attempt backup:
+  `/root/greenvpn-windows-stable-release-backups/20260731T233921Z-ruvds-0.3.26-3105`.
+- Android, paid-beta, advertising, billing, refunds, renewal execution, VPN
+  server routes and Friendly Linnet `5.129.237.163` were not changed.
+
+## Historical Windows 0.3.25 Status Reconciliation Publication, 2026-07-31
+
+This records the previous Windows publication. Its exact client source anchor
+is `cad2bbbca1e27899c6730b59c412a94a977efb13`.
 
 - Production installer:
   `C:\BlueVPN_Builds\public_product_20260731_b3104_status_reconcile_final\GreenVPN_Setup_0.3.25.exe`,
