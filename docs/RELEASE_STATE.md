@@ -6,7 +6,7 @@
 |---|---|
 | Production backend | `0.9.153-update-channel-alias.4` on Timeweb and RUVDS |
 | Published Android | `0.3.19+2026072914`, signed and optional, unchanged |
-| Published Windows | `0.3.24+3103`, optional and `NotSigned` |
+| Published Windows | `0.3.25+3104`, optional and `NotSigned` |
 | Published paid-beta Android | `0.3.19+2026072914`, optional, unchanged |
 | Published paid-beta Windows | `0.3.21-paid-beta.1+3001`, optional and `NotSigned`, unchanged |
 | Product contract | permanent Free, guest-first |
@@ -15,9 +15,9 @@
 | Data plane | one foreground candidate; real data-plane probe, cached route and background fallback preparation |
 
 The exact Windows client source anchor is
-`ab0e87b4734ae159005f4ed31f6c9a57bedd5284`. The production installer is
-`55401472` bytes with SHA-256
-`A6938B0EBA54BF0CC4CE029F8A3365D28DB63FA280A2E897B63FEA079F02FA38`.
+`cad2bbbca1e27899c6730b59c412a94a977efb13`. The production installer is
+`55404544` bytes with SHA-256
+`D93BE65841C2625D3B728EB409C762357A8DD6CAA744F1E032769BCBB21BE1FB`.
 It is optional and `NotSigned`; the owner accepted the existing
 SmartScreen/reputation risk.
 
@@ -25,25 +25,48 @@ Backend `public-product -> stable` update-channel aliasing remains active on
 both control planes. The production-only publisher changed neither paid-beta
 nor Android and restarted only the production backend on each control plane.
 
-Validation passed: Flutter analyze; `75` client tests passed / `6` platform
-skips; release gate and exact package audit passed. Exact-package autonomous
-physical takeover passed twice with one `current_wg0` / `wireguard_udp`
-candidate, real probe and privileged takeover. Clean-cache wall/log time was
-`20.139` / `14.115` seconds; cached wall/log time was `17.373` / `12.203`
-seconds. Final cleanup stopped Green VPN, restored AmneziaWG and removed the
-failsafe. Both stable and public-product manifests return `0.3.24+3103`,
-optional and `fileReady=true`; four Windows production/paid-beta public bodies
-match their exact hashes and sizes; public surface is `31/31`.
+The defect was a false negative in the non-elevated UI: after resume, its direct
+`wg.exe` query failed even though the privileged service and managed tunnel were
+still running. Windows now uses the authenticated local service as the primary
+status source, treats incomplete reads as `unknown`, retries on resume and
+reconciles every five seconds without reconnecting the tunnel.
+
+Validation passed: Flutter analyze; `80` client tests passed / `6` platform
+skips; exact package audit passed. The exact final installer payload was launched
+over the already-running `BlueVPNDev1` tunnel and showed `Включено` plus
+`Отключить VPN` both before and after a real minimize/restore cycle. API health
+remained `200` and YouTube `generate_204` remained `204`. Both stable and
+public-product manifests return `0.3.25+3104`, optional and `fileReady=true`;
+four Windows production/paid-beta public bodies match their exact hashes and
+sizes; public surface is `31/31`.
 
 Atomic Windows rollback directories:
 
 - Timeweb:
-  `/root/greenvpn-windows-stable-release-backups/20260731T155944Z-timeweb-0.3.24-3103`;
+  `/root/greenvpn-windows-stable-release-backups/20260731T171003Z-timeweb-0.3.25-3104`;
 - RUVDS:
-  `/root/greenvpn-windows-stable-release-backups/20260731T160110Z-ruvds-0.3.24-3103`.
+  `/root/greenvpn-windows-stable-release-backups/20260731T171359Z-ruvds-0.3.25-3104`.
+
+The first Timeweb apply detected an indentation defect in an embedded Python
+block and rolled the alias, environment, database and backend back to `0.3.24`
+before retry. The release script was corrected and all five Python heredocs were
+compiled before the successful apply. Failed-attempt backup:
+`/root/greenvpn-windows-stable-release-backups/20260731T170812Z-timeweb-0.3.25-3104`.
 
 Android, paid-beta, advertising, sales, refunds, renewal execution, VPN server
 routes and Friendly Linnet `5.129.237.163` were not changed.
+
+## Historical Windows 0.3.24 Closure (2026-07-31 MSK)
+
+Windows `0.3.24+3103` was published as an optional unsigned release from source
+anchor `ab0e87b4734ae159005f4ed31f6c9a57bedd5284`. Its installer was `55401472`
+bytes with SHA-256
+`A6938B0EBA54BF0CC4CE029F8A3365D28DB63FA280A2E897B63FEA079F02FA38`.
+Exact-package autonomous takeover and cached-route smokes passed before that
+publication. Its rollback directories were
+`/root/greenvpn-windows-stable-release-backups/20260731T155944Z-timeweb-0.3.24-3103`
+and
+`/root/greenvpn-windows-stable-release-backups/20260731T160110Z-ruvds-0.3.24-3103`.
 
 ## Historical Windows 0.3.22 Closure (2026-07-31 MSK)
 

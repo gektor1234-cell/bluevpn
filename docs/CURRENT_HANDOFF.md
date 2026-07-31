@@ -15,7 +15,7 @@ This is the current operational entry point. Read it together with
    client profiles.
 3. Never touch Friendly Linnet `5.129.237.163` without a new explicit owner
    instruction.
-4. Android `0.3.19+2026072914` and Windows `0.3.24+3103` are public and
+4. Android `0.3.19+2026072914` and Windows `0.3.25+3104` are public and
    optional. Windows paid-beta `0.3.21-paid-beta.1+3001` is also public and
    optional. Do not republish, force or roll them back without a verified exact
    artifact, alternate-node health and an atomic backup.
@@ -31,23 +31,68 @@ This is the current operational entry point. Read it together with
    must reject first-payment creation and must not run the renewal executor.
 8. Server maintenance is one node at a time after alternate control/data planes
    pass readiness. The owner Windows PC must not be rebooted by automation.
-9. Windows 0.3.24 is public and optional, but remains unsigned by explicit
+9. Windows 0.3.25 is public and optional, but remains unsigned by explicit
    owner instruction with the SmartScreen risk accepted. Keep the `NotSigned`
    status visible in operations and expect Windows SmartScreen/reputation
    warnings until a higher signed successor is released.
 10. The admin console is a protected operator surface. Keep Nginx Basic Auth,
     `noindex`, frame denial, staff authentication, RBAC and audit enabled; never
     expose bootstrap tokens or payment/tunnel secrets in the UI or exports.
-11. Stable production publishes Android `0.3.19` and Windows `0.3.24`.
-    Windows `0.3.24+3103` passed exact-package physical takeover, cached-route
-    and recovery smoke before publication. It is not a trusted/signed Windows
-    release; do not conflate successful unsigned publication with
-    Authenticode trust.
+11. Stable production publishes Android `0.3.19` and Windows `0.3.25`.
+    Windows `0.3.25+3104` passed exact-package audit and an exact-payload
+    minimize/restore status smoke over an already-running managed tunnel. It is
+    not a trusted/signed Windows release; do not conflate successful unsigned
+    publication with Authenticode trust.
 
-## Windows 0.3.24 Fast Cache And Recovery Publication, 2026-07-31
+## Windows 0.3.25 Status Reconciliation Publication, 2026-07-31
 
 This is the current Windows publication entry point. The exact client source
-anchor is `ab0e87b4734ae159005f4ed31f6c9a57bedd5284`.
+anchor is `cad2bbbca1e27899c6730b59c412a94a977efb13`.
+
+- Production installer:
+  `C:\BlueVPN_Builds\public_product_20260731_b3104_status_reconcile_final\GreenVPN_Setup_0.3.25.exe`,
+  `55404544` bytes, SHA-256
+  `D93BE65841C2625D3B728EB409C762357A8DD6CAA744F1E032769BCBB21BE1FB`.
+  It is optional and `NotSigned`; the existing owner acceptance of the
+  SmartScreen/reputation risk remains in effect.
+- Root cause: the ordinary non-elevated UI could not query `wg.exe`, interpreted
+  that diagnostic failure as a real disconnect after resume and disarmed the
+  runtime monitor even though the privileged service and `BlueVPNDev1` tunnel
+  remained active.
+- Resolution: Windows status now comes first from the authenticated privileged
+  local service. A transient or incomplete snapshot is `unknown` and preserves
+  the last known UI state; resume performs an immediate read plus retry, and a
+  five-second reconciliation loop repairs later drift without reconnecting the
+  tunnel.
+- Physical defect smoke used the exact runtime extracted from the final
+  installer while `WireGuardTunnel$BlueVPNDev1` remained running. Before and
+  after a real minimize/restore cycle the accessibility tree showed `Включено`
+  and `Отключить VPN`; API health was `200` and YouTube `generate_204` was `204`.
+  Evidence:
+  `C:\BlueVPN_Builds\public_product_20260731_b3104_status_reconcile_final\windows-ui-status-reconciliation-smoke.json`.
+- Validation: Flutter analysis clean; client tests `80` passed / `6` skipped;
+  exact installer package audit passed with `65` payload entries; all stable,
+  public-product and unchanged paid-beta manifests passed; four complete
+  Windows public bodies matched `4/4`; public surface passed `31/31`.
+- Publication is active on both production control planes. Stable and
+  public-product manifests return `0.3.25+3104`, optional and `fileReady=true`.
+  Atomic rollback directories are
+  `/root/greenvpn-windows-stable-release-backups/20260731T171003Z-timeweb-0.3.25-3104`
+  and
+  `/root/greenvpn-windows-stable-release-backups/20260731T171359Z-ruvds-0.3.25-3104`.
+- The first Timeweb apply attempt exposed a Python-heredoc indentation defect in
+  the release script. Its transaction restored `0.3.24`, the old public body
+  hash and backend health before the script was corrected, all five embedded
+  Python blocks were compiled, and the successful apply was retried. The failed
+  attempt backup is
+  `/root/greenvpn-windows-stable-release-backups/20260731T170812Z-timeweb-0.3.25-3104`.
+- Android, paid-beta, advertising, billing, refunds, renewal execution, VPN
+  server routes and Friendly Linnet `5.129.237.163` were not changed.
+
+## Historical Windows 0.3.24 Fast Cache And Recovery Publication, 2026-07-31
+
+This records the previous Windows publication. Its exact client source anchor
+is `ab0e87b4734ae159005f4ed31f6c9a57bedd5284`.
 
 - Production installer:
   `C:\BlueVPN_Builds\public_product_20260731_b3103_fast_cache_v3\GreenVPN_Setup_0.3.24.exe`,
