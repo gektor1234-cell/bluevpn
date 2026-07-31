@@ -42,10 +42,10 @@ param(
     [bool]$ExpectedTestAndroidRequired = $false,
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedWindowsVersion = "0.3.25",
+    [string]$ExpectedWindowsVersion = "0.3.26",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedWindowsSha256 = "D93BE65841C2625D3B728EB409C762357A8DD6CAA744F1E032769BCBB21BE1FB",
+    [string]$ExpectedWindowsSha256 = "1E5505E73B735A00E1C7C44BD1919F96F98EA8DC5F03497205EA39E89AAE00F6",
 
     [Parameter(Mandatory = $false)]
     [bool]$ExpectedWindowsRequired = $false,

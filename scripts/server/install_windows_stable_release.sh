@@ -208,8 +208,8 @@ updates = {
     "GREENVPN_UPDATE_REQUIRED": required,
     "GREENVPN_UPDATE_RELEASED_AT": released_at,
     "GREENVPN_UPDATE_CHANGELOG": (
-        f"Green VPN {version}: исправлено отображение статуса VPN "
-        "после сворачивания и повторного открытия окна."
+        f"Green VPN {version}: быстрый запуск, фоновые резервные маршруты "
+        "и исправленная иконка в системном трее."
     ),
     "GREENVPN_PUBLIC_WINDOWS_DOWNLOAD_URL": download_url,
     "GREENVPN_WINDOWS_CODE_SIGNING_PROVIDER": "",
@@ -259,9 +259,9 @@ installer = pathlib.Path(installer_raw)
 required = 1 if required_raw == "1" else 0
 changelog = json.dumps(
     [
-        "Исправлено отображение статуса VPN после сворачивания и повторного открытия окна.",
-        "Рабочее подключение автоматически восстанавливается в интерфейсе.",
-        "Кратковременная ошибка проверки больше не сбрасывает статус соединения.",
+        "Быстрое подключение использует один основной маршрут без ожидания полного каскада.",
+        "Резервные маршруты проверяются в фоне и используются для быстрого восстановления.",
+        "Исправлены синхронизация статуса и дублирование значка в системном трее.",
     ],
     ensure_ascii=False,
 )
