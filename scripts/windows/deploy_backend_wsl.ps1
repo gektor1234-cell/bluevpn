@@ -1,10 +1,18 @@
 param(
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\.." )).Path,
-    [string]$ServerHost = "37.220.85.211"
+    [string]$ServerHost = ""
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+$allowedControlPlaneHosts = @('72.56.32.197', '176.113.81.35')
+if ([string]::IsNullOrWhiteSpace($ServerHost)) {
+    throw "-ServerHost is required. Use an explicit current control plane: $($allowedControlPlaneHosts -join ', ')."
+}
+if ($ServerHost -notin $allowedControlPlaneHosts) {
+    throw "Refusing legacy backend deploy to non-control-plane host: $ServerHost"
+}
 
 if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
     throw "wsl.exe not found. Deploy backend from WSL or install WSL."

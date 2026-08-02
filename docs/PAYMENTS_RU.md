@@ -50,7 +50,7 @@ YOOKASSA_WEBHOOK_URL=https://api.greenvpn.pro/api/v1/billing/yookassa/webhook
 Secrets вводить только через:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\bluevpn\scripts\windows\configure_backend_env_wsl.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\bluevpn\scripts\windows\configure_backend_env_wsl.ps1 -ServerHost 72.56.32.197
 ```
 
 Если `YOOKASSA_SHOP_ID` или `YOOKASSA_SECRET_KEY` не заданы, Green VPN автоматически остаётся в ручном MVP-режиме: заказ создаётся, но `paymentUrl` пустой, а тариф активируется кнопкой `Оплата получена` в админке.

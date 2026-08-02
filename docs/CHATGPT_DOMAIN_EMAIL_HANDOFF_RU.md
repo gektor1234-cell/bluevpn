@@ -258,7 +258,7 @@ GREENVPN_SMTP_PASSWORD=<пароль приложения>
 Когда пароль будет готов, вернуться в Codex и запустить уже подготовленный безопасный скрипт:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\bluevpn\scripts\windows\configure_backend_env_wsl.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\bluevpn\scripts\windows\configure_backend_env_wsl.ps1 -ServerHost 72.56.32.197
 ```
 
 Скрипт спросит пароль интерактивно и положит его только на сервер в `/etc/bluevpn/backend.env`, без записи секрета в git.

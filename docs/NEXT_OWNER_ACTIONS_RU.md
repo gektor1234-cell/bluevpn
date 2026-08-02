@@ -1,6 +1,6 @@
 # Green VPN Next Owner Actions
 
-Последнее обновление: 2026-07-29 МСК
+Последнее обновление: 2026-08-02 МСК
 
 Этот файл фиксирует только действия, которые после полной автономной проверки
 действительно остались за владельцем. Старые setup-подробности ниже сохранены
@@ -8,26 +8,29 @@
 
 ## Что действительно осталось владельцу
 
-Для бесплатного direct-download релиза:
+Для текущего бесплатного direct-download релиза обязательных действий владельца
+не осталось. Android `0.3.19+2026072914` и Windows `0.3.26+3105` уже
+опубликованы как optional на обоих control plane. Windows остаётся честно
+`NotSigned`; риск SmartScreen был принят владельцем.
+
+Только для будущего массового доверенного Windows-релиза:
 
 1. **Windows trust:** оформить Authenticode Code Signing/Trusted Signing с
    доступным закрытым ключом. Это не лицензия Windows 10/11. Сертификат должен
-   поддерживать Code Signing EKU и работать с `signtool.exe`.
-2. **Production go/no-go:** отдельно разрешить публикацию точного `0.3.19`
-   после подписи Windows и выполнить короткий финальный пользовательский smoke.
-   До этой команды public Android `0.3.15` и Windows `0.3.17` остаются без
-   изменений.
+   поддерживать Code Signing EKU и работать с `signtool.exe`. После этого Codex
+   самостоятельно подпишет, соберёт, физически проверит и опубликует
+   higher-version successor после отдельного production go/no-go.
 
 Только если будут включаться платные продажи:
 
-3. **Legal/tax/KYC:** подтвердить юридический/налоговый статус, допустимый
+2. **Legal/tax/KYC:** подтвердить юридический/налоговый статус, допустимый
    способ формирования чека, правила возврата и требуемые договоры/KYC.
-4. **Money movement:** отдельно разрешить реальный refund или auto-renew smoke,
+3. **Money movement:** отдельно разрешить реальный refund или auto-renew smoke,
    если эти функции действительно будут включаться. Сейчас sales, refunds,
    tax confirmation и renewal charges безопасно выключены.
 
-После пунктов 1-2 инженерная цепочка подписи, canary, атомарной публикации на
-оба control plane, exact-download проверки и rollback уже подготовлена.
+Инженерная цепочка подписи, canary, атомарной публикации на оба control plane,
+exact-download проверки и rollback уже подготовлена.
 
 Telegram-бот, автопродление, промо, бесплатная квота и rewarded-реклама являются
 необязательными будущими бизнес-решениями, а не блокерами релиза. SMTP alerts
@@ -36,8 +39,8 @@ Telegram-бот, автопродление, промо, бесплатная к
 
 Не требуют повторения до изменения соответствующего кода: прежний реальный
 платёж, email-код, восстановление аккаунта, Android/Windows tunnel smoke, SMTP,
-YooKassa, DNS/HTTPS, внешний мониторинг, публикация Android `0.3.15` и проверка
-обоих зеркал.
+YooKassa, DNS/HTTPS, внешний мониторинг, публикация Android `0.3.19`, Windows
+`0.3.26` и проверка обоих зеркал.
 
 ## Главное правило
 
@@ -49,8 +52,13 @@ YooKassa, DNS/HTTPS, внешний мониторинг, публикация A
 - Рабочий скрипт подключения:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\bluevpn\scripts\windows\configure_backend_env_wsl.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\bluevpn\scripts\windows\configure_backend_env_wsl.ps1 -ServerHost 72.56.32.197
 ```
+
+Mutating env helper больше не выбирает сервер по умолчанию. Для Timeweb нужно
+явно добавить `-ServerHost 72.56.32.197`, для RUVDS —
+`-ServerHost 176.113.81.35`; изменения выполняются по одному control plane с
+проверкой второго и rollback.
 - В admin/support app раздел `Готовность` теперь показывает safe setup bundle: что дать владельцу, какой env-скрипт запускать, какие DNS-записи ожидать и какими endpoint/checker-командами всё проверить.
 - Owner launch packet можно получить отдельно:
 
@@ -108,10 +116,13 @@ Windows. Повторный OTP или платёж для очередного 
 
 ## 4. YooKassa production
 
-Статус 2026-07-27: **ручная production-оплата готова**. Кабинет активен,
-production key установлен только в root-owned env обоих control plane,
-provider API, webhook, реальный платёж, чек и активация проверены. Повторный
-платёж для smoke не нужен.
+Статус 2026-08-02: **provider-интеграция и прежний реальный payment smoke
+подтверждены, но продажи не разрешены**. Кабинет активен, production key
+установлен только в root-owned env обоих control plane, provider API, webhook,
+реальный платёж, чек и активация проверены. Текущий
+`productionPaymentReady=false` является ожидаемым policy state: sales,
+tax-confirmation, refund execution и renewal charges выключены. Повторный
+платёж до решения владельца о коммерческом запуске не нужен.
 
 Webhook в кабинете проверен 2026-07-11:
 
@@ -135,13 +146,18 @@ https://api.greenvpn.pro/payment/return
 - YooKassa env записан только на серверы, backend перезапущен;
 - provider API и реальный order/payment/activation прошли;
 - Timeweb остаётся единственным billing writer, оплаченный результат синхронизирован на RUVDS;
-- `/api/v1/admin/billing/readiness` готов к текущему ручному платёжному сценарию;
-- `/api/v1/admin/billing/renewals/readiness` green для dry-run, но реальное
-  автоматическое списание намеренно выключено до отдельного решения владельца;
+- `/api/v1/admin/billing/readiness` отвечает и подтверждает установленного
+  provider, но остаётся `productionReady=false`, пока денежные gates выключены;
+- `/api/v1/admin/billing/payment-smoke/readiness` подтверждает
+  `smokeCompleted=true`, один успешный provider-backed кандидат и отсутствие
+  synthetic activation;
+- `/api/v1/admin/billing/renewals/readiness` остаётся readiness-only:
+  `paymentSmokeReady=false`, реальное автоматическое списание выключено до
+  отдельного решения владельца и нового разрешённого smoke;
 - новые клиенты и backend используют auto-renew только как явный opt-in;
   существующая оплаченная подписка не изменялась;
-- `BLUEVPN_ENFORCE_SUBSCRIPTION_ACCESS` остаётся выключенным: три ближайших
-  истечения являются гостевыми Trial без email, expired-active строк нет;
+- `BLUEVPN_ENFORCE_SUBSCRIPTION_ACCESS` остаётся выключенным; бесплатный
+  permanent-Free доступ не зависит от истечения подписки;
 - возврат и отмена реального платежа остаются owner/payment-provider gate:
   автоматизация не должна инициировать движение денег.
 
@@ -190,13 +206,12 @@ Telegram-доставка alert остаётся отдельным необяз
 
 Статус: **готово**.
 
-Android `0.3.14` имеет точные primary/fallback bytes и серверные rollback
-каталоги. Для Windows `0.3.13` предыдущий рабочий installer `0.3.12`,
-SHA-256
-`79F5E201F8F798906C9A7FF5F837B9C5AD08B4890DEB3DF0B7F3F2E3C4EC0FE7`,
-опубликован как rollback на обоих зеркалах. Protected readiness на обоих
-control plane: `productionReady=true`, `rollbackReady=true`, blockers/warnings
-пусты.
+Android `0.3.19+2026072914` и Windows `0.3.26+3105` имеют точные
+primary/fallback bytes и серверные rollback-каталоги. Текущий Windows SHA-256:
+`1E5505E73B735A00E1C7C44BD1919F96F98EA8DC5F03497205EA39E89AAE00F6`.
+Stable и `public-product` manifest на обоих control plane возвращают
+`fileReady=true`; текущая публичная проверка манифестов и загрузок проходит
+`20/20`, public surface — `31/31`.
 
 При следующей финальной сборке значения обновляются аналогично:
 
@@ -217,7 +232,8 @@ GREENVPN_ROLLBACK_SHA256: <64 hex>
 
 ## 8. Code signing certificate
 
-Статус: **текущий критический блокер массового Windows-релиза**.
+Статус: **внешний блокер только доверенного массового Windows-релиза**.
+Текущий бесплатный direct-download релиз уже опубликован и этим не блокируется.
 
 Нужно будет:
 
@@ -260,9 +276,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\blue
 
 Отсутствие внешнего сервиса не должно тормозить код:
 
-- SMTP/email-code и YooKassa уже production-ready;
+- SMTP/email-code production-ready; YooKassa provider настроен и проверен,
+  однако денежные gates и продажи выключены;
 - phone/SMS flow удалён из продуктового контракта;
 - если нет Telegram token, alerts остаются manual MVP;
-- без Windows signing и rollback массовый Windows launch остаётся закрыт;
+- rollback готов; без Windows signing холодная массовая дистрибуция остаётся
+  осознанным SmartScreen/reputation риском;
 - реклама, автосписания, промо и hard expiry включаются только отдельным
   решением владельца после соответствующего smoke.

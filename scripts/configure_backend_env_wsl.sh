@@ -1,7 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVER_HOST="${1:-37.220.85.211}"
+SERVER_HOST="${1:-}"
+if [[ -z "${SERVER_HOST}" ]]; then
+  echo "Usage: $0 <control-plane-host>" >&2
+  exit 2
+fi
+case "${SERVER_HOST}" in
+  72.56.32.197|176.113.81.35) ;;
+  *)
+    echo "Refusing to configure backend env on non-control-plane host: ${SERVER_HOST}" >&2
+    exit 2
+    ;;
+esac
 REMOTE="root@${SERVER_HOST}"
 APP_SERVICE="bluevpn-backend"
 ENV_DIR="/etc/bluevpn"

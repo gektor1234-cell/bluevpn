@@ -1,6 +1,6 @@
 # Green VPN External Services Checklist
 
-Последнее обновление: 2026-07-27
+Последнее обновление: 2026-08-02
 
 Этот файл нужен, чтобы внешние сервисы подключались одним коротким циклом: ты оформляешь сервис, берёшь нужные значения, передаёшь их Codex, а backend/UI уже готовы их принять. Секреты, пароли, API-ключи и токены в этот файл не писать.
 
@@ -10,13 +10,17 @@
   Moscow `72.56.32.197` с RUVDS Moscow `176.113.81.35` как fallback.
   Упоминания ниже о production backend на `37.220.85.211` являются
   исторической setup-справкой: сейчас это NL1 VPN-узел.
-- DNS/HTTPS, Yandex 360 SMTP/email code, YooKassa manual payment flow,
-  guest-first auth и внешний monitoring production-ready.
+- DNS/HTTPS, Yandex 360 SMTP/email code, guest-first auth и внешний monitoring
+  production-ready. YooKassa provider integration и прежний реальный payment
+  smoke подтверждены, но коммерческий `productionPaymentReady` намеренно false,
+  пока sales/tax/refund/renewal gates выключены.
 - Телефон/SMS исключён из продуктового контракта.
-- Android `0.3.14` опубликован и проверен на обоих зеркалах.
-- Реально не закрыты только Telegram alert credentials и Windows code
-  signing. Публичный rollback Windows `0.3.12` уже настроен и readiness green.
-  Rewarded provider также не выбран, поэтому реклама выключена.
+- Android `0.3.19+2026072914` и Windows `0.3.26+3105` опубликованы и
+  проверены на обоих зеркалах. Windows остаётся `NotSigned` с принятым риском
+  SmartScreen; текущий direct-download релиз этим не блокируется.
+- Необязательными внешними действиями остаются Telegram alert credentials,
+  Windows code signing и публикация в Google Play/RuStore. Rewarded provider
+  не выбран, поэтому реклама выключена по решению владельца.
 - Автосписания, hard expiry, промо и реклама не включаются этой памяткой:
   каждое действие требует отдельного решения владельца.
 
@@ -28,12 +32,13 @@
 - Для безопасной загрузки секретов на сервер используй:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\bluevpn\scripts\windows\configure_backend_env_wsl.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\bluevpn\scripts\windows\configure_backend_env_wsl.ps1 -ServerHost 72.56.32.197
 ```
 
-Скрипт допустимо использовать только после проверки его текущих target-hosts:
-production control plane сейчас не `37.220.85.211`. Изменения применяются по
-одному control plane с проверкой fallback и rollback.
+Скрипт намеренно не имеет server default. Нужно явно указать текущий target:
+`-ServerHost 72.56.32.197` для Timeweb либо
+`-ServerHost 176.113.81.35` для RUVDS. Изменения применяются по одному control
+plane с проверкой fallback и rollback. VPN-узлы helper отклоняет.
 
 ## Уже Куплено / Настроено
 
@@ -344,13 +349,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\blue
 Текущее ожидаемое состояние:
 
 - `DNS A api.greenvpn.pro` должен быть green.
-- `API/VPN endpoint split` сейчас ожидаемо red, пока `api.greenvpn.pro` и VPN endpoint используют один IP `37.220.85.211`.
+- `API/VPN endpoint split` должен быть green: API/site control plane и NL1 VPN
+  endpoint используют разные IP.
 - `DNS MX greenvpn.pro` должен быть green.
 - `DNS SPF` должен быть green.
 - `DNS DKIM` должен быть green после propagation.
 - `DNS DMARC` должен быть green: `_dmarc` запись уже добавлена.
-- `Server self-check API HTTPS` должен быть green, если nginx/certbot/backend на сервере живы.
-- Локальная проверка `https://api.greenvpn.pro` может быть red при включённом full-tunnel VPN из-за общей IP-точки API и VPN endpoint. Если server-side check green, это не backend outage, но перед публичным запуском IP нужно разделить.
+- `Server self-check API HTTPS` и `Server admin self-check` должны быть green:
+  SSH-проверка по умолчанию выполняется с Timeweb control plane, а не с NL1.
+- Локальная проверка `https://api.greenvpn.pro` должна быть green и при
+  включённом VPN. Ошибку локального ingress нужно диагностировать отдельно от
+  server-side backend health.
 
 ## 8. Что Передавать Codex Потом
 
@@ -363,12 +372,8 @@ SMTP mailbox: no-reply@greenvpn.pro
 SMTP app password: <секрет>
 ```
 
-Минимальный набор для SMS:
-
-```text
-SMS.ru api_id: <секрет>
-Sender name: <если согласован, иначе пусто>
-```
+Телефон/SMS исключён из продуктового контракта. SMS provider, sender и API key
+не оформлять и не передавать.
 
 Минимальный набор для YooKassa:
 
@@ -448,13 +453,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\blue
 
 ## 10. Не Блокирует Разработку
 
-Если каких-то внешних значений пока нет:
+Текущее состояние внешних сервисов:
 
-- Email остаётся в `not_configured/manual_mvp` режиме.
-- SMS остаётся в `manual_mvp` режиме.
-- YooKassa остаётся в manual MVP billing mode.
-- Telegram alerts остаются в manual MVP mode.
-- Monitoring probe можно не ставить, пока нет отдельного VPS.
+- SMTP/email-code production-ready. YooKassa provider настроен и прежний
+  реальный smoke подтверждён, но продажи выключены; секреты повторно не
+  передавать.
+- Телефон/SMS не является fallback и не входит в продукт.
+- Telegram alerts остаются необязательным manual MVP без bot credentials.
+- Внешний monitoring уже имеет два probe-agent; новый VPS не требуется.
+- Rewarded, paid sales, refund execution, automatic renewal charges и hard
+  expiry остаются выключенными до отдельных owner-gate и smoke.
 - Текущий Windows update/rollback опубликован и readiness green. Для каждого
   следующего full/required rollout backend/admin по-прежнему блокирует
   публикацию без нового пригодного rollback.

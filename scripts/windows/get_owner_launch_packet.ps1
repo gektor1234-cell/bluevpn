@@ -1,5 +1,6 @@
 param(
-  [string]$ServerHost = "37.220.85.211",
+  [Alias("ServerHost")]
+  [string]$ControlPlaneHost = "72.56.32.197",
   [string]$ApiBase = "https://api.greenvpn.pro",
   [string]$AdminTokenFile = "",
   [switch]$Json
@@ -132,7 +133,7 @@ function Write-OwnerPacketSummary {
 }
 
 if ([string]::IsNullOrWhiteSpace($AdminTokenFile)) {
-  $packet = Invoke-OwnerPacketWithServerToken -HostName $ServerHost -Base $ApiBase
+  $packet = Invoke-OwnerPacketWithServerToken -HostName $ControlPlaneHost -Base $ApiBase
 } else {
   $packet = Invoke-OwnerPacketWithLocalToken -Base $ApiBase -TokenFile $AdminTokenFile
 }

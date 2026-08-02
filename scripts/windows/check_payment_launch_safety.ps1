@@ -1,5 +1,6 @@
 param(
-  [string]$ServerHost = "37.220.85.211",
+  [Alias("ServerHost")]
+  [string]$ControlPlaneHost = "72.56.32.197",
   [string]$ApiBase = "https://api.greenvpn.pro",
   [string]$AdminTokenFile = "",
   [switch]$Json
@@ -198,7 +199,7 @@ function Write-PaymentSafetySummary {
 }
 
 if ([string]::IsNullOrWhiteSpace($AdminTokenFile)) {
-  $payload = Invoke-PaymentSafetyWithServerToken -HostName $ServerHost -Base $ApiBase
+  $payload = Invoke-PaymentSafetyWithServerToken -HostName $ControlPlaneHost -Base $ApiBase
 } else {
   $payload = Invoke-PaymentSafetyWithLocalToken -Base $ApiBase -TokenFile $AdminTokenFile
 }

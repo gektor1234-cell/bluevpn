@@ -196,6 +196,15 @@ $paidBetaBackendBundlePath = Join-Path $ProjectRoot "scripts\windows\prepare_pai
 $paidBetaBackendInstallerPath = Join-Path $ProjectRoot "scripts\server\install_paid_beta_backend_release.sh"
 $releaseRollbackInstallerPath = Join-Path $ProjectRoot "scripts\server\configure_public_release_rollback.sh"
 $adminStaticInstallerPath = Join-Path $ProjectRoot "scripts\server\install_admin_app_release.sh"
+$externalReadinessPath = Join-Path $ProjectRoot "scripts\windows\check_external_services_readiness.ps1"
+$paymentLaunchSafetyPath = Join-Path $ProjectRoot "scripts\windows\check_payment_launch_safety.ps1"
+$monitoringProbePlanPath = Join-Path $ProjectRoot "scripts\windows\get_monitoring_probe_plan.ps1"
+$ownerLaunchPacketPath = Join-Path $ProjectRoot "scripts\windows\get_owner_launch_packet.ps1"
+$configureBackendEnvWindowsPath = Join-Path $ProjectRoot "scripts\windows\configure_backend_env_wsl.ps1"
+$deployBackendWindowsPath = Join-Path $ProjectRoot "scripts\windows\deploy_backend_wsl.ps1"
+$configureBackendEnvShellPath = Join-Path $ProjectRoot "scripts\configure_backend_env_wsl.sh"
+$deployBackendShellPath = Join-Path $ProjectRoot "scripts\deploy_backend_wsl.sh"
+$androidLegacyE2ePath = Join-Path $ProjectRoot "scripts\windows\run_android_vpn_e2e.ps1"
 
 $main = Read-Text $mainPath
 $releaseContractText = Read-Text $releaseContractPath
@@ -335,6 +344,15 @@ $paidBetaBackendBundleScript = Read-Text $paidBetaBackendBundlePath
 $paidBetaBackendInstallerScript = Read-Text $paidBetaBackendInstallerPath
 $releaseRollbackInstallerScript = Read-Text $releaseRollbackInstallerPath
 $adminStaticInstallerScript = Read-Text $adminStaticInstallerPath
+$externalReadinessScript = Read-Text $externalReadinessPath
+$paymentLaunchSafetyScript = Read-Text $paymentLaunchSafetyPath
+$monitoringProbePlanScript = Read-Text $monitoringProbePlanPath
+$ownerLaunchPacketScript = Read-Text $ownerLaunchPacketPath
+$configureBackendEnvWindowsScript = Read-Text $configureBackendEnvWindowsPath
+$deployBackendWindowsScript = Read-Text $deployBackendWindowsPath
+$configureBackendEnvShellScript = Read-Text $configureBackendEnvShellPath
+$deployBackendShellScript = Read-Text $deployBackendShellPath
+$androidLegacyE2eScript = Read-Text $androidLegacyE2ePath
 
 Write-Section "RELEASE IDENTITY AND REPRODUCIBILITY CHECKS"
 $releaseContract = $null
@@ -2906,6 +2924,91 @@ foreach ($scriptPath in @($androidDnsttPreparePath, $androidDnsttPhysicalTestPat
 }
 
 Write-Section "RELEASE INTEGRITY CHECKS"
+
+$readOnlyControlPlaneHelpers = [ordered]@{
+    'External readiness' = $externalReadinessScript
+    'Payment launch safety' = $paymentLaunchSafetyScript
+    'Monitoring probe plan' = $monitoringProbePlanScript
+    'Owner launch packet' = $ownerLaunchPacketScript
+}
+foreach ($helper in $readOnlyControlPlaneHelpers.GetEnumerator()) {
+    if ($helper.Value.Contains('ControlPlaneHost = "72.56.32.197"') -and
+        -not $helper.Value.Contains('ServerHost = "37.220.85.211"')) {
+        Add-Pass "$($helper.Key) defaults to the primary control plane"
+    }
+    else {
+        Add-Error "$($helper.Key) has a stale or missing control-plane default"
+    }
+}
+if ($externalReadinessScript.Contains('VpnEndpointHost = "37.220.85.211"') -and
+    $externalReadinessScript.Contains('root@$ControlPlaneHost') -and
+    -not $externalReadinessScript.Contains('root@$ServerHost')) {
+    Add-Pass 'External readiness separates the control plane from the NL1 VPN endpoint'
+}
+else {
+    Add-Error 'External readiness conflates the control plane with the VPN endpoint'
+}
+
+$mutatingPowerShellHelpers = [ordered]@{
+    'Backend env Windows wrapper' = $configureBackendEnvWindowsScript
+    'Legacy backend deploy Windows wrapper' = $deployBackendWindowsScript
+}
+foreach ($helper in $mutatingPowerShellHelpers.GetEnumerator()) {
+    if ($helper.Value.Contains('ServerHost = ""') -and
+        $helper.Value.Contains('72.56.32.197') -and
+        $helper.Value.Contains('176.113.81.35') -and
+        $helper.Value.Contains('non-control-plane host')) {
+        Add-Pass "$($helper.Key) requires an explicit allowlisted control plane"
+    }
+    else {
+        Add-Error "$($helper.Key) can select an unsafe implicit server target"
+    }
+}
+
+$mutatingShellHelpers = [ordered]@{
+    'Backend env shell helper' = $configureBackendEnvShellScript
+    'Legacy backend deploy shell helper' = $deployBackendShellScript
+}
+foreach ($helper in $mutatingShellHelpers.GetEnumerator()) {
+    if ($helper.Value.Contains('SERVER_HOST="${1:-}"') -and
+        $helper.Value.Contains('72.56.32.197|176.113.81.35') -and
+        $helper.Value.Contains('non-control-plane host')) {
+        Add-Pass "$($helper.Key) requires an explicit allowlisted control plane"
+    }
+    else {
+        Add-Error "$($helper.Key) can select an unsafe implicit server target"
+    }
+}
+
+if ($androidLegacyE2eScript.Contains('[switch]$EnableServerCleanup') -and
+    $androidLegacyE2eScript.Contains('-not $EnableServerCleanup') -and
+    $androidLegacyE2eScript.Contains('ControlPlaneHost = ""') -and
+    -not $androidLegacyE2eScript.Contains('ServerHost = "37.220.85.211"')) {
+    Add-Pass 'Legacy Android server cleanup is explicit and fail-closed'
+}
+else {
+    Add-Error 'Legacy Android server cleanup can target a server implicitly'
+}
+
+if ($backend.Contains('configure_backend_env_wsl.ps1 -ServerHost 72.56.32.197') -and
+    $backend.Contains('"serverHost": "72.56.32.197"') -and
+    $backend.Contains('"controlPlaneHost": "72.56.32.197"') -and
+    $backend.Contains('"fallbackControlPlaneHost": "176.113.81.35"') -and
+    $backend.Contains('"vpnEndpointHost": "37.220.85.211"')) {
+    Add-Pass 'Owner setup bundle separates explicit control-plane and VPN endpoint roles'
+}
+else {
+    Add-Error 'Owner setup bundle contains a stale or ambiguous server target'
+}
+if ($monitoringProbePlanScript.Contains('No additional monitoring host is required') -and
+    $monitoringProbePlanScript.Contains('Provision or repair a separate monitoring VPS') -and
+    $backend.Contains('monitoring readiness') -and
+    $backend.Contains('missing coverage')) {
+    Add-Pass 'Monitoring owner guidance follows current readiness instead of requiring a redundant VPS'
+}
+else {
+    Add-Error 'Monitoring owner guidance still requires a redundant probe host unconditionally'
+}
 
 $androidReleaseSigningFragments = @(
     'releaseTaskRequested',

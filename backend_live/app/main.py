@@ -19567,7 +19567,8 @@ def build_api_vpn_split_migration_plan(
             "owner": "ops",
             "status": "pending" if needs_split else "done",
             "details": (
-                "Через configure_backend_env_wsl.ps1 закрепить публичные URL и endpoint: "
+                "Через configure_backend_env_wsl.ps1 -ServerHost 72.56.32.197 "
+                "закрепить публичные URL и endpoint: "
                 "GREENVPN_PUBLIC_API_BASE_URL, GREENVPN_PUBLIC_BASE_URL, "
                 "GREENVPN_EMAIL_PUBLIC_BASE_URL, GREENVPN_API_BASE_URLS, BLUEVPN_ENDPOINT_HOST."
             ),
@@ -21534,7 +21535,8 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
             "actor": "owner_or_ops",
             "status": "done" if payment.get("productionReady") else "blocked",
             "details": (
-                r"Run scripts\windows\configure_backend_env_wsl.ps1 and enter "
+                r"Run scripts\windows\configure_backend_env_wsl.ps1 "
+                r"-ServerHost 72.56.32.197 and enter "
                 "YOOKASSA_SHOP_ID plus YOOKASSA_SECRET_KEY only in the terminal."
             ),
             "secret": True,
@@ -25830,10 +25832,12 @@ def build_owner_launch_packet() -> dict:
 def external_owner_setup_bundle() -> dict:
     return {
         "applyScript": r"C:\Users\gekto\projects\bluevpn\scripts\windows\configure_backend_env_wsl.ps1",
-        "applyCommand": r"powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\bluevpn\scripts\windows\configure_backend_env_wsl.ps1",
+        "applyCommand": r"powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\bluevpn\scripts\windows\configure_backend_env_wsl.ps1 -ServerHost 72.56.32.197",
         "readinessCommand": r"powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\bluevpn\scripts\windows\check_external_services_readiness.ps1 -ServerAdminSelfCheck",
         "serverOnlyEnvFile": "/etc/bluevpn/backend.env",
-        "serverHost": "37.220.85.211",
+        "serverHost": "72.56.32.197",
+        "controlPlaneHost": "72.56.32.197",
+        "fallbackControlPlaneHost": "176.113.81.35",
         "apiBase": "https://api.greenvpn.pro",
         "vpnEndpointHost": "37.220.85.211",
         "secretPolicy": "Секреты вводятся только в server-only env или кабинеты провайдеров; не вставлять их в repo, docs, заметки владельца, audit-тексты или чат.",
@@ -25969,7 +25973,7 @@ def external_action_specs() -> list[dict]:
                 {"name": "DMARC TXT", "secret": False, "example": "v=DMARC1; p=none; rua=mailto:postmaster@greenvpn.pro; adkim=s; aspf=s"},
             ],
             "applySteps": [
-                "Запустить configure_backend_env_wsl.ps1 и ответить на вопросы по SMTP Яндекс 360.",
+                "Запустить configure_backend_env_wsl.ps1 -ServerHost 72.56.32.197 и ответить на вопросы по SMTP Яндекс 360.",
                 "Добавить или проверить MX/SPF/DKIM/DMARC записи в DNS-панели.",
             ],
             "verifySteps": [
@@ -25992,7 +25996,7 @@ def external_action_specs() -> list[dict]:
                 {"name": "Return URL после оплаты", "envKey": "YOOKASSA_RETURN_URL", "secret": False, "example": "https://api.greenvpn.pro/payment/return"},
             ],
             "applySteps": [
-                "Запустить configure_backend_env_wsl.ps1 и ответить на вопросы по ЮKassa.",
+                "Запустить configure_backend_env_wsl.ps1 -ServerHost 72.56.32.197 и ответить на вопросы по ЮKassa.",
                 "В кабинете ЮKassa включить webhook-события payment.succeeded и payment.canceled.",
             ],
             "verifySteps": [
@@ -26108,7 +26112,7 @@ def external_action_specs() -> list[dict]:
         {
             "code": "monitoring",
             "title": "Внешние проверки мониторинга",
-            "ownerAction": "Поставить controlled probe-agent на отдельный VPS и выдать ему admin token через /etc/greenvpn-monitoring/admin_token.",
+            "ownerAction": "Поддерживать текущие controlled probe-agent; добавлять или чинить отдельный VPS только если monitoring readiness показывает missing coverage.",
             "envKeys": ["GREENVPN_SERVICE_CHECK_TIMEOUT"],
             "ownerInputs": [
                 {"name": "Host/IP VPS для мониторинга", "secret": False},
@@ -26117,7 +26121,7 @@ def external_action_specs() -> list[dict]:
                 {"name": "Регион внешней проверки", "secret": False, "example": "eu"},
             ],
             "applySteps": [
-                "Установить scripts/monitoring/service_probe.py на отдельный VPS через install_probe_systemd.sh.",
+                "При missing coverage установить scripts/monitoring/service_probe.py на отдельный VPS через install_probe_systemd.sh.",
                 "Хранить admin token только на probe-сервере в /etc/greenvpn-monitoring/admin_token с mode 600.",
             ],
             "verifySteps": [

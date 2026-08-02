@@ -1,5 +1,6 @@
 param(
-  [string]$ServerHost = "37.220.85.211",
+  [Alias("ServerHost")]
+  [string]$ControlPlaneHost = "72.56.32.197",
   [string]$ApiBase = "https://api.greenvpn.pro",
   [string]$AdminTokenFile = "",
   [switch]$Json
@@ -62,10 +63,6 @@ function Invoke-MonitoringPlanWithServerToken {
     [string]$Base
   )
 
-  if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
-    throw "wsl.exe not found. Provide -AdminTokenFile to fetch from local Windows instead."
-  }
-
   $baseJson = Convert-ToJsonLiteral $Base
   $remoteScript = @"
 import json
@@ -73,7 +70,11 @@ import urllib.request
 from pathlib import Path
 
 base = $baseJson.rstrip("/")
-token_path = Path("/opt/bluevpn/backend/data/admin_token.txt")
+token_path = Path(
+    "/opt/bluevpn-paid-beta/data/admin_token.txt"
+    if "/paid-beta-api" in base
+    else "/opt/bluevpn/backend/data/admin_token.txt"
+)
 token = token_path.read_text(encoding="utf-8").strip()
 paths = [
     "/api/v1/admin/monitoring/readiness",
@@ -89,7 +90,19 @@ for path in paths:
         responses[path] = json.loads(response.read().decode("utf-8"))
 print(json.dumps(responses, ensure_ascii=False))
 "@
-  $raw = $remoteScript | wsl ssh "root@$HostName" python3 -
+  if (Get-Command ssh.exe -ErrorAction SilentlyContinue) {
+    $raw = $remoteScript | & ssh.exe -o BatchMode=yes -o ConnectTimeout=10 "root@$HostName" python3 -
+    if ($LASTEXITCODE -ne 0) {
+      throw "Windows OpenSSH monitoring plan request failed."
+    }
+  } elseif (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
+    $raw = $remoteScript | & wsl.exe ssh -o BatchMode=yes -o ConnectTimeout=10 "root@$HostName" python3 -
+    if ($LASTEXITCODE -ne 0) {
+      throw "WSL SSH monitoring plan request failed."
+    }
+  } else {
+    throw "No SSH client found. Provide -AdminTokenFile to fetch from local Windows instead."
+  }
   if ([string]::IsNullOrWhiteSpace($raw)) {
     throw "Monitoring probe plan request returned empty response."
   }
@@ -111,6 +124,10 @@ function Convert-MonitoringPlanPayload {
   $operatorInstallCommand = [string]($operatorPlan.systemdInstallCommand)
   $runOnceCommands = @($operatorPlan.runOnceCommands | ForEach-Object { $_.command })
   $commandText = (@($installCommand, $operatorInstallCommand) + $runOnceCommands) -join "`n"
+  $safeToProceed = (
+    [bool]$readiness.productionReady -and
+    [bool]$externalProbe.productionReady
+  )
 
   $payload = [ordered]@{
     ok = $true
@@ -140,10 +157,7 @@ function Convert-MonitoringPlanPayload {
     runOnceCommands = $runOnceCommands
     installCommand = $(if ($operatorInstallCommand) { $operatorInstallCommand } else { $installCommand })
     verifySteps = @($installBundle.verifySteps)
-    safeToProceed = (
-      [bool]$readiness.productionReady -and
-      [bool]$externalProbe.productionReady
-    )
+    safeToProceed = $safeToProceed
     summary = [ordered]@{
       monitoring = $readiness.summary.message
       serverHealth = $externalProbe.summary.message
@@ -152,7 +166,11 @@ function Convert-MonitoringPlanPayload {
     policy = [ordered]@{
       noSecretValues = $true
       tokenInput = "Admin token must be entered only on the probe host through stdin or a local token file."
-      ownerAction = "Provision a separate monitoring VPS/probe host before public launch."
+      ownerAction = $(if ($safeToProceed) {
+        "No additional monitoring host is required while current probe coverage remains green."
+      } else {
+        "Provision or repair a separate monitoring VPS/probe host until required coverage is green."
+      })
     }
   }
 
@@ -186,7 +204,7 @@ function Write-MonitoringPlanSummary {
 }
 
 if ([string]::IsNullOrWhiteSpace($AdminTokenFile)) {
-  $payload = Invoke-MonitoringPlanWithServerToken -HostName $ServerHost -Base $ApiBase
+  $payload = Invoke-MonitoringPlanWithServerToken -HostName $ControlPlaneHost -Base $ApiBase
 } else {
   $payload = Invoke-MonitoringPlanWithLocalToken -Base $ApiBase -TokenFile $AdminTokenFile
 }

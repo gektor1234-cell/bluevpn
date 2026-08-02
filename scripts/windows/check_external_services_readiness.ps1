@@ -2,8 +2,9 @@ param(
   [string]$Domain = "greenvpn.pro",
   [string]$ApiBase = "https://api.greenvpn.pro",
   [string]$FallbackApiBase = "",
-  [string]$ServerHost = "37.220.85.211",
-  [string]$VpnEndpointHost = "",
+  [Alias("ServerHost")]
+  [string]$ControlPlaneHost = "72.56.32.197",
+  [string]$VpnEndpointHost = "37.220.85.211",
   [string]$ServerSelfCheckApiBase = "https://api.greenvpn.pro",
   [string]$AdminToken = "",
   [string]$AdminTokenFile = "",
@@ -14,10 +15,6 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-
-if ([string]::IsNullOrWhiteSpace($VpnEndpointHost)) {
-  $VpnEndpointHost = $ServerHost
-}
 
 function New-Result {
   param(
@@ -214,9 +211,9 @@ function Add-ServerSelfCheck {
   $url = "$($ServerSelfCheckApiBase.TrimEnd('/'))/healthz"
   try {
     if ($windowsSsh) {
-      $output = & ssh.exe -T -o BatchMode=yes -o ConnectTimeout=12 "root@$ServerHost" "curl -fsS --max-time 15 '$url'" 2>&1
+      $output = & ssh.exe -T -o BatchMode=yes -o ConnectTimeout=12 "root@$ControlPlaneHost" "curl -fsS --max-time 15 '$url'" 2>&1
     } else {
-      $output = & wsl.exe ssh -T -o BatchMode=yes -o ConnectTimeout=12 "root@$ServerHost" "curl -fsS --max-time 15 '$url'" 2>&1
+      $output = & wsl.exe ssh -T -o BatchMode=yes -o ConnectTimeout=12 "root@$ControlPlaneHost" "curl -fsS --max-time 15 '$url'" 2>&1
     }
     $exitCode = $LASTEXITCODE
     $text = ($output | Out-String).Trim()
@@ -925,9 +922,9 @@ print(json.dumps(summary, ensure_ascii=False))
 
   try {
     if ($windowsSsh) {
-      $output = $pythonSource | & ssh.exe -T -o BatchMode=yes -o ConnectTimeout=12 "root@$ServerHost" "python3 -" 2>&1
+      $output = $pythonSource | & ssh.exe -T -o BatchMode=yes -o ConnectTimeout=12 "root@$ControlPlaneHost" "python3 -" 2>&1
     } else {
-      $output = $pythonSource | & wsl.exe ssh -T -o BatchMode=yes -o ConnectTimeout=12 "root@$ServerHost" "python3 -" 2>&1
+      $output = $pythonSource | & wsl.exe ssh -T -o BatchMode=yes -o ConnectTimeout=12 "root@$ControlPlaneHost" "python3 -" 2>&1
     }
     $exitCode = $LASTEXITCODE
     $text = ($output | Out-String).Trim()

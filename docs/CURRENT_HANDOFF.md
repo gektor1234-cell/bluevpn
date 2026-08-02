@@ -1,6 +1,6 @@
 # Green VPN Current Handoff
 
-Updated: 2026-08-01 MSK.
+Updated: 2026-08-02 MSK.
 
 This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
@@ -43,6 +43,29 @@ This is the current operational entry point. Read it together with
     takeover, tray and final-recovery smoke. It is not a trusted/signed Windows
     release; do not conflate successful unsigned publication with
     Authenticode trust.
+
+## Post-Release Control-Plane Helper Safety, 2026-08-02
+
+- No client artifact, production backend/site runtime, database, payment flag,
+  advertising flag or VPN route was deployed or changed. Backend source-only
+  owner guidance was corrected and remains undeployed until a separate
+  production go/no-go.
+- Read-only owner/billing/monitoring helpers now use Timeweb
+  `72.56.32.197` as the default control plane. External readiness keeps NL1
+  `37.220.85.211` as a separate VPN endpoint and accepts legacy
+  `-ServerHost` only as an alias for `-ControlPlaneHost`.
+- Mutating legacy env/deploy wrappers no longer have an implicit server target;
+  they require an explicit allowlisted Timeweb/RUVDS host. Legacy Android E2E
+  server cleanup is disabled unless `-EnableServerCleanup` is supplied with an
+  explicit control plane.
+- Live read-only validation passed: external readiness `11 green / 0 yellow /
+  0 red`, monitoring `2` agents covering `6` required targets, Flutter `89`
+  tests with `6` intentional skips, backend `178/178`, and release gate
+  `0 warnings / 0 errors`.
+- The protected commercial launch packet still reports `payments` and
+  `windows_trust` as owner-blocked. This is expected while paid sales and
+  trusted Windows distribution remain disabled; it does not invalidate the
+  already published permanent-Free direct-download release.
 
 ## Windows 0.3.26 Standby And Tray Publication, 2026-08-01
 

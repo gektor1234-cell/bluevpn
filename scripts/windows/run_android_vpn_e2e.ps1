@@ -1,11 +1,13 @@
 param(
     [string]$PackageName = "pro.greenvpn.app",
     [string]$ApkPath = "build\app\outputs\flutter-apk\app-release.apk",
-    [string]$ServerHost = "37.220.85.211",
+    [Alias("ServerHost")]
+    [string]$ControlPlaneHost = "",
     [string]$SmokeEmailPrefix = "android-smoke",
     [string]$SmokeEmailDomain = "example.invalid",
     [string]$SmokePassword = "Smoke123456a",
     [switch]$InstallApk,
+    [switch]$EnableServerCleanup,
     [switch]$SkipServerCleanup
 )
 
@@ -193,7 +195,14 @@ function New-TextFromCodepoints {
 
 function Remove-AndroidSmokeUsers {
     param([string]$HostName)
-    if ($SkipServerCleanup) { return }
+    if ($SkipServerCleanup -or -not $EnableServerCleanup) { return }
+    $allowedControlPlaneHosts = @('72.56.32.197', '176.113.81.35')
+    if ([string]::IsNullOrWhiteSpace($HostName)) {
+        throw "-ControlPlaneHost is required when -EnableServerCleanup is used."
+    }
+    if ($HostName -notin $allowedControlPlaneHosts) {
+        throw "Refusing Android smoke cleanup on non-control-plane host: $HostName"
+    }
     if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
         Write-Warning "wsl.exe not found; server cleanup skipped."
         return
@@ -280,7 +289,7 @@ $labelConnectVpn = New-TextFromCodepoints @(0x041F, 0x043E, 0x0434, 0x043A, 0x04
 $labelDisconnectVpn = New-TextFromCodepoints @(0x041E, 0x0442, 0x043A, 0x043B, 0x044E, 0x0447, 0x0438, 0x0442, 0x044C, 0x0020, 0x0056, 0x0050, 0x004E)
 
 try {
-    Remove-AndroidSmokeUsers -HostName $ServerHost
+    Remove-AndroidSmokeUsers -HostName $ControlPlaneHost
     Invoke-Adb -s $serial shell pm clear $PackageName | Out-Null
     Invoke-Adb -s $serial shell am force-stop "com.google.android.apps.messaging" | Out-Null
     Invoke-Adb -s $serial shell am start -n "$PackageName/.MainActivity" | Out-Null
@@ -357,5 +366,5 @@ try {
         screenshot = $connectedScreenshot
     }
 } finally {
-    Remove-AndroidSmokeUsers -HostName $ServerHost
+    Remove-AndroidSmokeUsers -HostName $ControlPlaneHost
 }

@@ -1,5 +1,22 @@
 # Green VPN Release State
 
+## Post-Release Repository Safety Closure (2026-08-02 MSK)
+
+No production runtime was changed. Stale helper defaults that still treated
+NL1 `37.220.85.211` as a backend control plane were removed. Read-only
+readiness/owner/billing/monitoring helpers now default to Timeweb
+`72.56.32.197`; mutating legacy env/deploy helpers require an explicit
+allowlisted Timeweb/RUVDS target, and legacy Android server cleanup requires a
+separate opt-in. A regression test and release-gate contracts enforce these
+boundaries.
+
+Validation passed: external readiness `11/11` green, monitoring `2/2` agents
+covering `6/6` required targets, Flutter analyze, `89` Flutter tests with `6`
+intentional skips, backend `178/178`, PowerShell/Bash syntax and release gate
+with `0` warnings / `0` errors. Protected commercial readiness remains
+owner-blocked on `payments` and `windows_trust` by policy; the current Free
+direct-download release is unchanged.
+
 ## Current Release Closure (2026-08-01 MSK)
 
 | Layer | Current state |

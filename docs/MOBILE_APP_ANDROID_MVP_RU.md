@@ -40,7 +40,7 @@ Android-версия Green VPN подготовлена как MVP в исход
 - `app-release.apk` подписан локальным Green VPN upload key, а не debug-ключом Gradle. Keystore и `android\key.properties` лежат локально, игнорируются git и не содержатся в repo/docs/chat. Для Google Play всё равно нужно решение владельца по публикации и хранению upload key.
 - Локально создан Android Emulator AVD `GreenVPN_API36` на Android 36 Google APIs x86_64; WHPX acceleration проверен как usable.
 - Добавлен повторяемый smoke script `scripts\windows\run_android_emulator_smoke.ps1`. Он запускает/использует AVD, ставит APK, открывает Green VPN, проверяет фокус окна, UI dump, screenshot и отсутствие fatal crash в logcat.
-- Добавлен повторяемый E2E script `scripts\windows\run_android_vpn_e2e.ps1`. Он ставит APK, при смене подписи безопасно переустанавливает package, создаёт временного smoke-пользователя, получает backend config, поднимает Android VPN, проверяет `tun0`, отключает VPN и удаляет smoke-пользователя с backend.
+- Добавлен повторяемый E2E script `scripts\windows\run_android_vpn_e2e.ps1`. Он ставит APK, при смене подписи безопасно переустанавливает package, создаёт временного smoke-пользователя, получает backend config, поднимает Android VPN и проверяет `tun0`. Удаление smoke-пользователя с backend выполняется только с явными `-EnableServerCleanup -ControlPlaneHost <host>`.
 - Эмуляторный smoke пройден: `pro.greenvpn.app` установлен, `MainActivity` открыта, экран входа показывает `Green VPN`, `Телефон`, `Email-код`, `Пароль`; сеть эмулятора достучалась до `api.greenvpn.pro`.
 - Эмуляторный smoke 2026-05-15 на опубликованном APK `0.2.3/20260515` также пройден.
 - Полный Android E2E на эмуляторе пройден на release APK: регистрация тестового аккаунта, выдача WireGuard config, системное VPN-разрешение Android, `VPN CONNECTED` через `tun0`, отключение, отсутствие fatal crash в logcat, cleanup тестового пользователя. После теста `android-smoke-%@example.invalid` в live DB = `0`, VPN на эмуляторе выключен.
@@ -79,10 +79,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows\run_android_
 Это smoke первого запуска. Полный end-to-end VPN-тест на эмуляторе теперь запускается отдельной командой:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows\run_android_vpn_e2e.ps1 -InstallApk
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows\run_android_vpn_e2e.ps1 -InstallApk -EnableServerCleanup -ControlPlaneHost 72.56.32.197
 ```
 
-Этот E2E создаёт только временного smoke-пользователя `android-smoke-*` и в конце удаляет его. На физическом Android-устройстве всё ещё нужен отдельный ручной тест владельца.
+Этот E2E создаёт только временного smoke-пользователя `android-smoke-*`. Server cleanup выполняется только при одновременной передаче `-EnableServerCleanup` и явного allowlisted `-ControlPlaneHost`; без этих флагов backend не изменяется. На физическом Android-устройстве всё ещё нужен отдельный ручной тест владельца.
 
 Ручные команды, если скрипт не нужен:
 
@@ -107,7 +107,7 @@ flutter build apk --release --no-pub
 apksigner verify --verbose build\app\outputs\flutter-apk\app-debug.apk
 apksigner verify --verbose build\app\outputs\flutter-apk\app-release.apk
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows\run_android_emulator_smoke.ps1 -ApkPath build\app\outputs\flutter-apk\app-release.apk
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows\run_android_vpn_e2e.ps1 -InstallApk
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\windows\run_android_vpn_e2e.ps1 -InstallApk -EnableServerCleanup -ControlPlaneHost 72.56.32.197
 ```
 
 Обычный `flutter analyze` в проекте по-прежнему показывает старые info-level legacy замечания, но без warning/error.
