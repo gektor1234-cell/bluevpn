@@ -46,6 +46,9 @@ This is the current operational entry point. Read it together with
 
 ## Post-Release Control-Plane Helper Safety, 2026-08-02
 
+- Owner decision recorded on 2026-08-02: `v1` is closed as a permanent-Free
+  direct-download VPN. Advertising, paid sales and store distribution belong
+  to later stages and require new explicit owner decisions.
 - No client artifact, production backend/site runtime, database, payment flag,
   advertising flag or VPN route was deployed or changed. Backend source-only
   owner guidance was corrected and remains undeployed until a separate

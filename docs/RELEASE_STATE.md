@@ -2,6 +2,10 @@
 
 ## Post-Release Repository Safety Closure (2026-08-02 MSK)
 
+The owner confirmed on 2026-08-02 that `v1` is the permanent-Free
+direct-download product. Paid sales, advertising and store distribution are
+separate future stages and remain fail-closed.
+
 No production runtime was changed. Stale helper defaults that still treated
 NL1 `37.220.85.211` as a backend control plane were removed. Read-only
 readiness/owner/billing/monitoring helpers now default to Timeweb
