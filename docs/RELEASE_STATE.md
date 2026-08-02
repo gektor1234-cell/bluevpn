@@ -6,6 +6,13 @@ The owner confirmed on 2026-08-02 that `v1` is the permanent-Free
 direct-download product. Paid sales, advertising and store distribution are
 separate future stages and remain fail-closed.
 
+Windows Authenticode was separately reviewed on 2026-08-02 and deferred. No
+verified publicly trusted issuance route is currently available under the
+owner's present legal status. The published installer therefore remains
+explicitly `NotSigned`; this is a known trust/reputation limitation rather than
+an untracked release task. Provider eligibility must be rechecked after an
+IP/legal-entity registration or when Microsoft Store distribution is selected.
+
 No production runtime was changed. Stale helper defaults that still treated
 NL1 `37.220.85.211` as a backend control plane were removed. Read-only
 readiness/owner/billing/monitoring helpers now default to Timeweb

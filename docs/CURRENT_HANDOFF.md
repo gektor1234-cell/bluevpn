@@ -34,7 +34,11 @@ This is the current operational entry point. Read it together with
 9. Windows 0.3.26 is public and optional, but remains unsigned by explicit
    owner instruction with the SmartScreen risk accepted. Keep the `NotSigned`
    status visible in operations and expect Windows SmartScreen/reputation
-   warnings until a higher signed successor is released.
+   warnings until a higher signed successor is released. On 2026-08-02 the
+   signing gate was explicitly deferred because no verified publicly trusted
+   issuance route is available under the owner's current legal status. Recheck
+   provider eligibility after an IP/legal-entity registration or when choosing
+   Microsoft Store; do not store owner tax identifiers in the repository.
 10. The admin console is a protected operator surface. Keep Nginx Basic Auth,
     `noindex`, frame denial, staff authentication, RBAC and audit enabled; never
     expose bootstrap tokens or payment/tunnel secrets in the UI or exports.
