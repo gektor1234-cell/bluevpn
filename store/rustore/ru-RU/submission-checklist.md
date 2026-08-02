@@ -31,5 +31,6 @@
 - [x] Upload the exact APK to the existing RuStore draft.
 - [x] Review every rendered field and permission declaration in the console.
 - [x] Save the version as a draft with manual publication after moderation.
-- [ ] Confirm any new agreement and the final «Отправить на модерацию» action
-  only at action time.
+- [x] Submit version `0.3.20 (2026080301)` for moderation on 2026-08-03.
+- [ ] Review the moderation result and make a separate legal/product decision
+  before any manual publication in RuStore.
