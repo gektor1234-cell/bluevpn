@@ -28,7 +28,8 @@
 
 ## Final external gate
 
-- [ ] Upload the exact APK to the existing RuStore draft.
-- [ ] Review every rendered field and permission declaration in the console.
+- [x] Upload the exact APK to the existing RuStore draft.
+- [x] Review every rendered field and permission declaration in the console.
+- [x] Save the version as a draft with manual publication after moderation.
 - [ ] Confirm any new agreement and the final «Отправить на модерацию» action
   only at action time.
