@@ -66,6 +66,9 @@ val greenVpnApiFallbackBaseUrls = environmentValue(
 )
 val greenVpnReleaseChannel = environmentValue("GREENVPN_ANDROID_RELEASE_CHANNEL", "stable")
 val greenVpnClientMarker = environmentValue("GREENVPN_ANDROID_CLIENT_MARKER", "")
+val greenVpnStoreDistribution =
+    environmentValue("GREENVPN_ANDROID_STORE_DISTRIBUTION", "false").lowercase() in
+        setOf("1", "true", "yes", "on")
 val greenVpnAwg2PreviewEnabled =
     environmentValue("GREENVPN_ANDROID_AWG2_PREVIEW_ENABLED", "false").lowercase() in
         setOf("1", "true", "yes", "on")
@@ -180,6 +183,18 @@ android {
             if (hasReleaseKeystore) {
                 signingConfig = signingConfigs.getByName("release")
             }
+        }
+    }
+
+    sourceSets {
+        getByName("release") {
+            manifest.srcFile(
+                if (greenVpnStoreDistribution) {
+                    "src/store/AndroidManifest.xml"
+                } else {
+                    "src/direct/AndroidManifest.xml"
+                },
+            )
         }
     }
 }

@@ -10,7 +10,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:yandex_mobileads/mobile_ads.dart';
 
 import 'runtime_config.dart';
 import 'services/product_display_policy.dart';
@@ -49,6 +48,11 @@ const bool kPublicProductBuild = bool.fromEnvironment(
   'GREENVPN_PUBLIC_PRODUCT_BUILD',
   defaultValue: false,
 );
+const bool kStoreDistributionBuild = bool.fromEnvironment(
+  'GREENVPN_STORE_DISTRIBUTION_BUILD',
+  defaultValue: false,
+);
+const bool kSelfUpdateEnabled = !kStoreDistributionBuild;
 const bool kPaidBetaCustomerUi = kPaidBetaBuild && !kPublicProductBuild;
 const String kPaidBetaClientMarker = String.fromEnvironment(
   'GREENVPN_PAID_BETA_CLIENT_MARKER',
@@ -98,7 +102,12 @@ const bool kTransportPreviewFallbackEnabled =
     kVlessRealityPreviewEnabled ||
     kNaiveHttpsPreviewEnabled ||
     kDnsttPreviewEnabled;
-const bool kAdsDisabledBuild = kTrialOnlyNoAdsBuild || kPaidBetaBuild;
+const bool kRewardedAdsRuntimeAvailable = false;
+const bool kAdsDisabledBuild =
+    kTrialOnlyNoAdsBuild ||
+    kPaidBetaBuild ||
+    kStoreDistributionBuild ||
+    !kRewardedAdsRuntimeAvailable;
 const bool kYandexRewardedAdsEnabled = bool.fromEnvironment(
   'GREENVPN_YANDEX_REWARDED_ADS_ENABLED',
   defaultValue: false,
@@ -359,6 +368,7 @@ String greenVpnAdChallengeTokenFromRewardUrl(String rewardUrl) {
 }
 
 String greenVpnAndroidYandexRewardedAdUnitId(Map<String, dynamic> bootMap) {
+  if (!kRewardedAdsRuntimeAvailable) return '';
   if (kAdsDisabledBuild) return '';
   if (kIsWeb || !Platform.isAndroid || !kYandexRewardedAdsEnabled) return '';
   if (kYandexRewardedAdsUseDemo) return kYandexRewardedDemoAdUnitId;
@@ -401,65 +411,8 @@ class GreenVpnYandexRewardedAds {
     required Future<void> Function(String message) log,
     Future<void> Function()? onRewarded,
   }) async {
-    final unit = adUnitId.trim();
-    if (kAdsDisabledBuild || unit.isEmpty) {
-      await log('rewarded ads are disabled for this build');
-      return false;
-    }
-    if (kIsWeb || !Platform.isAndroid) {
-      await log('rewarded ads are available only on Android');
-      return false;
-    }
-
-    RewardedAd? ad;
-    try {
-      YandexAds.initialize();
-      final loader = RewardedAdLoader();
-      await log('loading Yandex rewarded ad');
-      ad = await loader.loadAd(adRequest: AdRequest(adUnitId: unit));
-      ad.setAdEventListener(
-        eventListener: RewardedAdEventListener(
-          onAdShown: () {
-            unawaited(log('Yandex rewarded ad shown'));
-          },
-          onAdFailedToShow: (error) {
-            unawaited(log('Yandex rewarded ad failed to show: $error'));
-          },
-          onAdClicked: () {
-            unawaited(log('Yandex rewarded ad clicked'));
-          },
-          onAdDismissed: () {
-            unawaited(log('Yandex rewarded ad dismissed'));
-          },
-          onAdImpression: (impressionData) {
-            unawaited(log('Yandex rewarded ad impression'));
-          },
-          onRewarded: (reward) {
-            unawaited(log('Yandex rewarded ad reward earned'));
-            final callback = onRewarded;
-            if (callback != null) {
-              unawaited(callback());
-            }
-          },
-        ),
-      );
-      await ad.show();
-      final reward = await ad.waitForDismiss();
-      if (reward == null) {
-        await log('Yandex rewarded ad closed without reward');
-        return false;
-      }
-      await log('Yandex rewarded ad completed');
-      return true;
-    } on AdRequestError catch (error) {
-      await log('Yandex rewarded ad failed to load: $error');
-      return false;
-    } catch (error) {
-      await log('Yandex rewarded ad error: $error');
-      return false;
-    } finally {
-      ad?.destroy();
-    }
+    await log('rewarded ads are not included in this release');
+    return false;
   }
 }
 
@@ -13793,6 +13746,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   Future<void> _checkRequiredUpdateSilently() async {
+    if (!kSelfUpdateEnabled) return;
     if (_updateCheckBusy || _forcedUpdateRouteOpen) return;
     if (kIsWeb) return;
 
@@ -14287,7 +14241,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.star_rounded),
-            label: kTrialOnlyNoAdsBuild ? 'Trial' : 'Тариф',
+            label: kStoreDistributionBuild
+                ? 'Доступ'
+                : kTrialOnlyNoAdsBuild
+                ? 'Trial'
+                : 'Тариф',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.settings_rounded),
@@ -14511,14 +14469,16 @@ class VpnPage extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'Тариф',
+                    Text(
+                      kStoreDistributionBuild ? 'Доступ' : 'Тариф',
                       style: TextStyle(fontWeight: FontWeight.w900),
                     ),
                     const SizedBox(height: 2),
                     Text(
                       freeUsageSummary ??
-                          'Текущий: $displayedPlanName • открыть тариф',
+                          (kStoreDistributionBuild
+                              ? 'Бесплатный VPN без регистрации'
+                              : 'Текущий: $displayedPlanName • открыть тариф'),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontSize: 12),
@@ -14538,7 +14498,7 @@ class VpnPage extends StatelessWidget {
             ],
           ),
         ),
-        if (isGuest && onRestoreAccess != null) ...[
+        if (!kStoreDistributionBuild && isGuest && onRestoreAccess != null) ...[
           const SizedBox(height: 8),
           OutlinedButton(
             key: const Key('restore_access_home'),
@@ -14716,7 +14676,9 @@ class VpnPage extends StatelessWidget {
                   ),
                   label: Text(
                     !socialOnlyAllowed
-                        ? 'Доступно по подписке'
+                        ? (kStoreDistributionBuild
+                              ? 'Недоступно в бесплатной версии'
+                              : 'Доступно по подписке')
                         : usesApplications
                         ? (usesWindowsApplications
                               ? 'Выбрать сервисы, программы и сайты'
@@ -14739,6 +14701,7 @@ class VpnPage extends StatelessWidget {
                   enabled: socialOnlyEnabled,
                   usesApplications: usesApplications,
                   usesMixedSelection: usesWindowsApplications,
+                  permanentFreeBuild: kStoreDistributionBuild,
                 ),
                 style: TextStyle(
                   color: mutedColor,
@@ -16357,6 +16320,65 @@ class TariffPage extends StatelessWidget {
     final textColor = theme.colorScheme.onSurface;
     final mutedColor = textColor.withValues(alpha: isDark ? 0.72 : 0.62);
 
+    if (kStoreDistributionBuild) {
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          const _PageTitle(
+            title: 'Бесплатный доступ',
+            subtitle: 'Green VPN работает без оплаты и рекламы',
+            icon: Icons.verified_user_rounded,
+          ),
+          const SizedBox(height: 12),
+          _Card(
+            tint: isDark ? kBrandDarkSurface : kBrandPrimarySoft,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Включено в приложение',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 12),
+                const Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _IncludedBadge(
+                      icon: Icons.vpn_key_rounded,
+                      text: 'VPN-доступ',
+                    ),
+                    _IncludedBadge(
+                      icon: Icons.person_off_rounded,
+                      text: 'Без регистрации',
+                    ),
+                    _IncludedBadge(
+                      icon: Icons.block_rounded,
+                      text: 'Без рекламы',
+                    ),
+                    _IncludedBadge(
+                      icon: Icons.system_update_rounded,
+                      text: 'Обновления через магазин',
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  'Подключение доступно сразу после установки. Лимиты и доступные локации управляются сервисом Green VPN.',
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 110),
+        ],
+      );
+    }
+
     if (kPublicProductBuild ||
         greenVpnCatalogHasFixedBillingPlans(tariffCatalog)) {
       return _buildFixedPublicProduct(context);
@@ -17203,7 +17225,8 @@ class SettingsPage extends StatelessWidget {
                         title: Text('Бесплатный профиль'),
                         subtitle: Text('Без регистрации'),
                       ),
-                      if (onRestoreAccess != null) ...[
+                      if (!kStoreDistributionBuild &&
+                          onRestoreAccess != null) ...[
                         const Divider(height: 18),
                         KeyedSubtree(
                           key: const Key('restore_access_settings'),
@@ -17242,13 +17265,15 @@ class SettingsPage extends StatelessWidget {
               children: [
                 const _SectionTitle('О приложении'),
                 const SizedBox(height: 8),
-                _SettingsActionRow(
-                  title: 'Обновления',
-                  subtitle: 'Проверить свежую версию Green VPN',
-                  icon: Icons.system_update_alt_rounded,
-                  onTap: onOpenUpdates,
-                ),
-                const Divider(height: 18),
+                if (kSelfUpdateEnabled) ...[
+                  _SettingsActionRow(
+                    title: 'Обновления',
+                    subtitle: 'Проверить свежую версию Green VPN',
+                    icon: Icons.system_update_alt_rounded,
+                    onTap: onOpenUpdates,
+                  ),
+                  const Divider(height: 18),
+                ],
                 _SettingsActionRow(
                   title: 'Поддержка',
                   subtitle: 'Отправить диагностический отчёт в поддержку',

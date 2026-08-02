@@ -1,0 +1,40 @@
+{
+  "package": "pro.greenvpn.app",
+  "versionName": "0.3.20",
+  "versionCode": 2026080301,
+  "minSdk": 26,
+  "targetSdk": 36,
+  "channel": "store",
+  "apk": {
+    "file": "GreenVPN_Android_0.3.20_2026080301.apk",
+    "size": 56085141,
+    "sha256": "4692981095D97A1AC6C8AA53E33E127FC4AE8930E5BA7B5EEBEC0B15FD7D5891"
+  },
+  "aab": {
+    "file": "GreenVPN_Android_0.3.20_2026080301.aab",
+    "size": 73367760,
+    "sha256": "83587CE976C3A5E3FF458EE440BB83F9EA9CEFCD7C424209BDC346E202815D89"
+  },
+  "signerSha256": "1EA2C985890E9010AA3B76AEE676624EC45398FD86A5E40DD95C76CDFC6A0FBC",
+  "physicalSmoke": {
+    "device": "Samsung SM-A530F",
+    "android": 9,
+    "connectElapsedMs": 15394,
+    "egressVerified": true,
+    "apiStatus": 200,
+    "youtubeStatus": 204,
+    "backgroundYoutubeStatus": 204,
+    "backgroundStatePreserved": true,
+    "resumeStateReconciled": true,
+    "finalVpnDisconnected": true,
+    "crashBufferClean": true
+  },
+  "storeRestrictions": {
+    "advertising": false,
+    "payments": false,
+    "accountRequired": false,
+    "selfUpdater": false,
+    "requestInstallPackages": false,
+    "advertisingId": false
+  }
+}

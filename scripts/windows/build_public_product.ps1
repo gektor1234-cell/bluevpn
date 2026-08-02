@@ -17,6 +17,8 @@ param(
     [string]$WindowsCodeSigningTimestampUrl = 'http://timestamp.digicert.com',
     [switch]$RequireWindowsCodeSigning,
     [switch]$EnableAndroidRewardedAds,
+    [switch]$AndroidStoreDistribution,
+    [switch]$BuildAndroidAppBundle,
     [switch]$SkipChecks
 )
 
@@ -34,6 +36,12 @@ if ($AndroidApplicationId -ne "pro.greenvpn.app") {
 }
 if ($AndroidAppLabel -ne "Green VPN") {
     throw "Public product Android build must keep the production label."
+}
+if ($AndroidStoreDistribution -and $EnableAndroidRewardedAds) {
+    throw "Android store distribution builds must not include rewarded ads."
+}
+if ($BuildAndroidAppBundle -and $Mode -notin @("android", "both")) {
+    throw "BuildAndroidAppBundle requires an Android build mode."
 }
 if (-not (Get-Command flutter -ErrorAction SilentlyContinue)) {
     throw "flutter was not found in PATH."
@@ -60,6 +68,17 @@ if ($Mode -in @("android", "both")) {
     if (-not (Test-Path -LiteralPath $androidSdk)) { throw "Android SDK not found: $androidSdk" }
     if (-not (Test-Path -LiteralPath $jdkDir)) { throw "Android JDK not found: $jdkDir" }
 
+    $androidReleaseChannel = if ($AndroidStoreDistribution) { "store" } else { "public-product" }
+    $androidClientMarker = if ($AndroidStoreDistribution) {
+        "green-vpn-store-v1"
+    } else {
+        "green-vpn-public-product-v1"
+    }
+    $storeDistributionValue = $AndroidStoreDistribution.ToString().ToLowerInvariant()
+    $trialOnlyNoAdsValue = $AndroidStoreDistribution.ToString().ToLowerInvariant()
+    $rewardedAdsValue = $EnableAndroidRewardedAds.ToString().ToLowerInvariant()
+    $transportCascadeValue = $EnableTransportCascade.ToString().ToLowerInvariant()
+
     $oldEnvironment = @{}
     $buildEnvironment = [ordered]@{
         ANDROID_HOME = $androidSdk
@@ -69,13 +88,14 @@ if ($Mode -in @("android", "both")) {
         GREENVPN_ANDROID_APP_LABEL = $AndroidAppLabel
         GREENVPN_ANDROID_API_BASE_URL = $ApiBaseUrl
         GREENVPN_ANDROID_API_FALLBACK_BASE_URLS = $ApiFallbackBaseUrls
-        GREENVPN_ANDROID_RELEASE_CHANNEL = "public-product"
-        GREENVPN_ANDROID_CLIENT_MARKER = "green-vpn-public-product-v1"
-        GREENVPN_ANDROID_AWG2_PREVIEW_ENABLED = $EnableTransportCascade.ToString().ToLowerInvariant()
-        GREENVPN_ANDROID_HYSTERIA2_PREVIEW_ENABLED = $EnableTransportCascade.ToString().ToLowerInvariant()
-        GREENVPN_ANDROID_VLESS_REALITY_PREVIEW_ENABLED = $EnableTransportCascade.ToString().ToLowerInvariant()
-        GREENVPN_ANDROID_NAIVE_HTTPS_PREVIEW_ENABLED = $EnableTransportCascade.ToString().ToLowerInvariant()
-        GREENVPN_ANDROID_DNSTT_PREVIEW_ENABLED = $EnableTransportCascade.ToString().ToLowerInvariant()
+        GREENVPN_ANDROID_RELEASE_CHANNEL = $androidReleaseChannel
+        GREENVPN_ANDROID_CLIENT_MARKER = $androidClientMarker
+        GREENVPN_ANDROID_STORE_DISTRIBUTION = $storeDistributionValue
+        GREENVPN_ANDROID_AWG2_PREVIEW_ENABLED = $transportCascadeValue
+        GREENVPN_ANDROID_HYSTERIA2_PREVIEW_ENABLED = $transportCascadeValue
+        GREENVPN_ANDROID_VLESS_REALITY_PREVIEW_ENABLED = $transportCascadeValue
+        GREENVPN_ANDROID_NAIVE_HTTPS_PREVIEW_ENABLED = $transportCascadeValue
+        GREENVPN_ANDROID_DNSTT_PREVIEW_ENABLED = $transportCascadeValue
         GREENVPN_APP_VERSION = $AppVersion
     }
     $oldPath = $env:Path
@@ -117,24 +137,38 @@ if ($Mode -in @("android", "both")) {
             }
         }
 
-        flutter build apk --release --no-pub `
-            --target-platform android-arm64,android-x64 `
-            --build-name $AppVersion `
-            --build-number $AndroidBuildNumber `
-            --dart-define="GREENVPN_APP_VERSION=$AppVersion" `
-            --dart-define="GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=false" `
-            --dart-define="GREENVPN_PAID_BETA_BUILD=false" `
-            --dart-define="GREENVPN_PUBLIC_PRODUCT_BUILD=true" `
-            --dart-define="GREENVPN_PUBLIC_PRODUCT_CLIENT_MARKER=green-vpn-public-product-v1" `
-            --dart-define="GREENVPN_YANDEX_REWARDED_ADS_ENABLED=$($EnableAndroidRewardedAds.ToString().ToLowerInvariant())" `
-            --dart-define="GREENVPN_AWG2_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" `
-            --dart-define="GREENVPN_HYSTERIA2_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" `
-            --dart-define="GREENVPN_VLESS_REALITY_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" `
-            --dart-define="GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" `
-            --dart-define="GREENVPN_DNSTT_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" `
-            --dart-define="BLUEVPN_API_BASE_URL=$ApiBaseUrl" `
-            --dart-define="BLUEVPN_API_BASE_URLS=$ApiFallbackBaseUrls" | Out-Host
+        $flutterAndroidArgs = @(
+            '--release'
+            '--no-pub'
+            '--target-platform'
+            'android-arm64,android-x64'
+            '--build-name'
+            $AppVersion
+            '--build-number'
+            $AndroidBuildNumber
+            "--dart-define=GREENVPN_APP_VERSION=$AppVersion"
+            "--dart-define=GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=$trialOnlyNoAdsValue"
+            '--dart-define=GREENVPN_PAID_BETA_BUILD=false'
+            '--dart-define=GREENVPN_PUBLIC_PRODUCT_BUILD=true'
+            "--dart-define=GREENVPN_STORE_DISTRIBUTION_BUILD=$storeDistributionValue"
+            "--dart-define=GREENVPN_PUBLIC_PRODUCT_CLIENT_MARKER=$androidClientMarker"
+            "--dart-define=GREENVPN_YANDEX_REWARDED_ADS_ENABLED=$rewardedAdsValue"
+            "--dart-define=GREENVPN_AWG2_PREVIEW_ENABLED=$transportCascadeValue"
+            "--dart-define=GREENVPN_HYSTERIA2_PREVIEW_ENABLED=$transportCascadeValue"
+            "--dart-define=GREENVPN_VLESS_REALITY_PREVIEW_ENABLED=$transportCascadeValue"
+            "--dart-define=GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED=$transportCascadeValue"
+            "--dart-define=GREENVPN_DNSTT_PREVIEW_ENABLED=$transportCascadeValue"
+            "--dart-define=BLUEVPN_API_BASE_URL=$ApiBaseUrl"
+            "--dart-define=BLUEVPN_API_BASE_URLS=$ApiFallbackBaseUrls"
+        )
+
+        flutter build apk @flutterAndroidArgs | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "Android public product build failed" }
+
+        if ($BuildAndroidAppBundle) {
+            flutter build appbundle @flutterAndroidArgs | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw "Android public product app bundle build failed" }
+        }
     }
     finally {
         $env:Path = $oldPath
@@ -151,6 +185,12 @@ if ($Mode -in @("android", "both")) {
     $sourceApk = (Resolve-Path "build\app\outputs\flutter-apk\app-release.apk").Path
     $androidPath = Join-Path $OutDir "GreenVPN_Android_${safeVersion}_${AndroidBuildNumber}.apk"
     Copy-Item -LiteralPath $sourceApk -Destination $androidPath -Force
+    $androidBundlePath = $null
+    if ($BuildAndroidAppBundle) {
+        $sourceBundle = (Resolve-Path "build\app\outputs\bundle\release\app-release.aab").Path
+        $androidBundlePath = Join-Path $OutDir "GreenVPN_Android_${safeVersion}_${AndroidBuildNumber}.aab"
+        Copy-Item -LiteralPath $sourceBundle -Destination $androidBundlePath -Force
+    }
 
     $apksigner = Get-ChildItem -LiteralPath (Join-Path $androidSdk "build-tools") `
         -Filter "apksigner.bat" -Recurse | Sort-Object FullName -Descending | Select-Object -First 1
@@ -177,6 +217,19 @@ if ($Mode -in @("android", "both")) {
     if ($badging -notmatch "application-label:'$([regex]::Escape($AndroidAppLabel))'") {
         throw "Android app label mismatch."
     }
+    if ($AndroidStoreDistribution) {
+        $permissions = (& $aapt.FullName dump permissions $androidPath) -join "`n"
+        if ($permissions -match 'android\.permission\.REQUEST_INSTALL_PACKAGES') {
+            throw "Android store APK must not request REQUEST_INSTALL_PACKAGES."
+        }
+        if ($permissions -match 'com\.google\.android\.gms\.permission\.AD_ID') {
+            throw "Android store APK must not request AD_ID."
+        }
+        $manifestTree = (& $aapt.FullName dump xmltree $androidPath AndroidManifest.xml) -join "`n"
+        if ($manifestTree -match '(?i)yandex|appmetrica|mobileads') {
+            throw "Android store APK still contains an advertising SDK manifest component."
+        }
+    }
     if ($EnableTransportCascade) {
         & (Join-Path $PSScriptRoot "verify_android_hysteria2_preview_apk.ps1") `
             -ApkPath $androidPath `
@@ -197,10 +250,41 @@ if ($Mode -in @("android", "both")) {
     $item = Get-Item -LiteralPath $androidPath
     $artifacts.Add([pscustomobject]@{
         platform = "android"; version = $AppVersion; buildNumber = $AndroidBuildNumber
+        artifactType = "apk"; storeDistribution = [bool]$AndroidStoreDistribution
         applicationId = $AndroidApplicationId; path = $item.FullName
         sizeBytes = $item.Length; sha256 = (Get-FileHash $item.FullName -Algorithm SHA256).Hash
         signed = $true
     })
+
+    if ($BuildAndroidAppBundle) {
+        $jarsigner = Join-Path $jdkDir 'bin\jarsigner.exe'
+        $keytool = Join-Path $jdkDir 'bin\keytool.exe'
+        foreach ($tool in @($jarsigner, $keytool)) {
+            if (-not (Test-Path -LiteralPath $tool -PathType Leaf)) {
+                throw "Android app bundle verification tool not found: $tool"
+            }
+        }
+        & $jarsigner -verify $androidBundlePath | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "Android app bundle signature verification failed" }
+        $bundleCertificate = (& $keytool -printcert -jarfile $androidBundlePath) -join "`n"
+        if ($LASTEXITCODE -ne 0) { throw "Unable to inspect Android app bundle signer" }
+        $bundleShaLine = $bundleCertificate |
+            Select-String -Pattern 'SHA256:\s*([0-9A-Fa-f:]{95})' |
+            Select-Object -First 1
+        if (-not $bundleShaLine) { throw "Android app bundle signer fingerprint was not reported" }
+        $bundleSigner = ($bundleShaLine.Matches[0].Groups[1].Value -replace ':', '').ToLowerInvariant()
+        if ($bundleSigner -ne $expectedSigner) { throw "Unexpected Android app bundle release signer" }
+
+        $bundleItem = Get-Item -LiteralPath $androidBundlePath
+        $artifacts.Add([pscustomobject]@{
+            platform = "android"; version = $AppVersion; buildNumber = $AndroidBuildNumber
+            artifactType = "aab"; storeDistribution = [bool]$AndroidStoreDistribution
+            applicationId = $AndroidApplicationId; path = $bundleItem.FullName
+            sizeBytes = $bundleItem.Length
+            sha256 = (Get-FileHash $bundleItem.FullName -Algorithm SHA256).Hash
+            signed = $true
+        })
+    }
 }
 
 if ($Mode -in @("windows", "both")) {
@@ -235,22 +319,28 @@ if ($Mode -in @("windows", "both")) {
 }
 
 $effectiveTransportCascade = $EnableTransportCascade
+$manifestChannel = if ($AndroidStoreDistribution) { "store" } else { "stable" }
+[object[]]$releasePlans = @()
+if (-not $AndroidStoreDistribution) {
+    $releasePlans = @(
+        [pscustomobject]@{ code = 'green_30d'; periodDays = 30; priceRub = 249 }
+        [pscustomobject]@{ code = 'green_90d'; periodDays = 90; priceRub = 649 }
+        [pscustomobject]@{ code = 'green_180d'; periodDays = 180; priceRub = 1099 }
+    )
+}
 $manifest = [ordered]@{
-    channel = "stable"
+    channel = $manifestChannel
     publicProduct = $true
     productionPublished = $false
     appVersion = $AppVersion
     windowsAppVersion = $WindowsAppVersion
     freeAccessPolicy = "server-configured"
     trialDays = $null
-    plans = [object[]]@(
-        [pscustomobject]@{ code = 'green_30d'; periodDays = 30; priceRub = 249 }
-        [pscustomobject]@{ code = 'green_90d'; periodDays = 90; priceRub = 649 }
-        [pscustomobject]@{ code = 'green_180d'; periodDays = 180; priceRub = 1099 }
-    )
+    plans = $releasePlans
     autoRenew = $false
     autoRenewRequiresExplicitConsent = $true
     adsEnabled = [bool]$EnableAndroidRewardedAds
+    androidStoreDistribution = [bool]$AndroidStoreDistribution
     transportCascade = $effectiveTransportCascade
     generatedAt = (Get-Date).ToUniversalTime().ToString("o")
     artifacts = [object[]]$artifacts

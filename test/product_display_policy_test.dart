@@ -98,31 +98,30 @@ void main() {
 
   test('server selection never silently enables auto-renew', () {
     expect(
-      greenVpnSelectionAutoRenewEnabled(
-        const {'policyMode': 'public_product'},
-        paidBetaBuild: false,
-      ),
+      greenVpnSelectionAutoRenewEnabled(const {
+        'policyMode': 'public_product',
+      }, paidBetaBuild: false),
       isFalse,
     );
     expect(
-      greenVpnSelectionAutoRenewEnabled(
-        const {'policyMode': 'legacy', 'autoRenew': false},
-        paidBetaBuild: false,
-      ),
+      greenVpnSelectionAutoRenewEnabled(const {
+        'policyMode': 'legacy',
+        'autoRenew': false,
+      }, paidBetaBuild: false),
       isFalse,
     );
     expect(
-      greenVpnSelectionAutoRenewEnabled(
-        const {'policyMode': 'public_product', 'autoRenew': true},
-        paidBetaBuild: false,
-      ),
+      greenVpnSelectionAutoRenewEnabled(const {
+        'policyMode': 'public_product',
+        'autoRenew': true,
+      }, paidBetaBuild: false),
       isTrue,
     );
     expect(
-      greenVpnSelectionAutoRenewEnabled(
-        const {'policyMode': 'public_product', 'autoRenew': true},
-        paidBetaBuild: true,
-      ),
+      greenVpnSelectionAutoRenewEnabled(const {
+        'policyMode': 'public_product',
+        'autoRenew': true,
+      }, paidBetaBuild: true),
       isFalse,
     );
   });
@@ -216,6 +215,14 @@ void main() {
     expect(
       greenVpnSocialOnlyStatusText(allowed: false, enabled: false),
       contains('по подписке'),
+    );
+    expect(
+      greenVpnSocialOnlyStatusText(
+        allowed: false,
+        enabled: false,
+        permanentFreeBuild: true,
+      ),
+      isNot(contains('подписк')),
     );
     expect(
       greenVpnSocialOnlyStatusText(

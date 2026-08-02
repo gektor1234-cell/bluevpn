@@ -304,8 +304,12 @@ String greenVpnSocialOnlyStatusText({
   required bool enabled,
   bool usesApplications = true,
   bool usesMixedSelection = false,
+  bool permanentFreeBuild = false,
 }) {
   if (!allowed) {
+    if (permanentFreeBuild) {
+      return 'Функция пока недоступна. Бесплатный режим работает с обычным подключением.';
+    }
     return 'Доступно по подписке. Бесплатный режим работает с обычным подключением.';
   }
   if (enabled) {
