@@ -14,6 +14,7 @@ param(
     [string]$ClientMarker = "green-vpn-paid-beta-v1",
     [string]$OutDir = "C:\BlueVPN_Builds\paid_beta_20260801_b3105",
     [bool]$EnableTransportCascade = $true,
+    [bool]$EnableFusionUi = $true,
     [string]$WindowsCodeSigningCertificateThumbprint = $env:GREENVPN_WINDOWS_CODE_SIGNING_CERT_THUMBPRINT,
     [string]$WindowsCodeSigningPublisher = $env:GREENVPN_WINDOWS_CODE_SIGNING_PUBLISHER,
     [string]$WindowsCodeSigningTimestampUrl = 'http://timestamp.digicert.com',
@@ -81,6 +82,12 @@ if (-not $SkipChecks) {
     if ($LASTEXITCODE -ne 0) { throw "flutter analyze failed" }
     flutter test --no-pub | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "flutter test failed" }
+    if ($EnableFusionUi) {
+        flutter test --no-pub `
+            --dart-define="GREENVPN_FUSION_UI_ENABLED=true" `
+            "test\fusion_ui_test.dart" | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "Fusion UI test failed" }
+    }
 }
 
 $artifacts = New-Object System.Collections.Generic.List[object]
@@ -165,6 +172,7 @@ if ($Mode -in @("android", "both")) {
             --dart-define="GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=false" `
             --dart-define="GREENVPN_PAID_BETA_BUILD=$(((-not $PublicProductCandidate)).ToString().ToLowerInvariant())" `
             --dart-define="GREENVPN_PUBLIC_PRODUCT_BUILD=$($PublicProductCandidate.ToString().ToLowerInvariant())" `
+            --dart-define="GREENVPN_FUSION_UI_ENABLED=$($EnableFusionUi.ToString().ToLowerInvariant())" `
             --dart-define="GREENVPN_UPDATE_CHANNEL=paid-beta" `
             --dart-define="GREENVPN_PUBLIC_PRODUCT_CLIENT_MARKER=green-vpn-public-product-v1" `
             --dart-define="GREENVPN_PAID_BETA_CLIENT_MARKER=green-vpn-paid-beta-v1" `
@@ -280,6 +288,7 @@ if ($Mode -in @("windows", "both")) {
         -TrialOnlyNoAdsBuild $false `
         -PaidBetaBuild (-not $PublicProductCandidate) `
         -PublicProductBuild ([bool]$PublicProductCandidate) `
+        -EnableFusionUi $EnableFusionUi `
         -EnableTransportCascade $EnableTransportCascade `
         -WindowsRuntimeScope $(if ($PublicProductCandidate) { 'stable' } else { 'paid-beta' }) `
         -UpdateChannelOverride 'paid-beta' `
@@ -321,6 +330,7 @@ $manifest = [pscustomobject]@{
     trialOnlyNoAdsBuild = $false
     paidBetaBuild = -not $PublicProductCandidate
     publicProductBuild = [bool]$PublicProductCandidate
+    fusionUiEnabled = [bool]$EnableFusionUi
     rewardedAdsEnabled = [bool]$EnableAndroidRewardedAds
     transportCascade = $EnableTransportCascade
     generatedAt = (Get-Date).ToUniversalTime().ToString("o")

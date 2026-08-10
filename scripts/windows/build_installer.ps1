@@ -12,6 +12,7 @@
     [bool]$TrialOnlyNoAdsBuild = $true,
     [bool]$PaidBetaBuild = $false,
     [bool]$PublicProductBuild = $false,
+    [bool]$EnableFusionUi = $false,
     [bool]$EnableTransportCascade = $false,
     [ValidateSet('stable', 'paid-beta')]
     [string]$WindowsRuntimeScope = 'stable',
@@ -374,6 +375,7 @@ if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
         $trialOnlyDefine = $TrialOnlyNoAdsBuild.ToString().ToLowerInvariant()
         $paidBetaDefine = $PaidBetaBuild.ToString().ToLowerInvariant()
         $publicProductDefine = $PublicProductBuild.ToString().ToLowerInvariant()
+        $fusionUiDefine = $EnableFusionUi.ToString().ToLowerInvariant()
         $transportCascadeDefine = $EnableTransportCascade.ToString().ToLowerInvariant()
         $previousRuntimeEnvironment = @{}
         foreach ($name in $runtime.Keys) {
@@ -398,6 +400,7 @@ if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
                 --dart-define="GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=$trialOnlyDefine" `
                 --dart-define="GREENVPN_PAID_BETA_BUILD=$paidBetaDefine" `
                 --dart-define="GREENVPN_PUBLIC_PRODUCT_BUILD=$publicProductDefine" `
+                --dart-define="GREENVPN_FUSION_UI_ENABLED=$fusionUiDefine" `
                 --dart-define="GREENVPN_AWG2_PREVIEW_ENABLED=$transportCascadeDefine" `
                 --dart-define="GREENVPN_HYSTERIA2_PREVIEW_ENABLED=$transportCascadeDefine" `
                 --dart-define="GREENVPN_VLESS_REALITY_PREVIEW_ENABLED=$transportCascadeDefine" `

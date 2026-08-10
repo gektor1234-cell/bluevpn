@@ -52,6 +52,10 @@ const bool kStoreDistributionBuild = bool.fromEnvironment(
   'GREENVPN_STORE_DISTRIBUTION_BUILD',
   defaultValue: false,
 );
+const bool kFusionUiEnabled = bool.fromEnvironment(
+  'GREENVPN_FUSION_UI_ENABLED',
+  defaultValue: false,
+);
 const bool kSelfUpdateEnabled = !kStoreDistributionBuild;
 const bool kPaidBetaCustomerUi = kPaidBetaBuild && !kPublicProductBuild;
 const String kPaidBetaClientMarker = String.fromEnvironment(
@@ -7159,6 +7163,24 @@ class _AndroidLaunchableApp {
   }
 }
 
+class _FusionTrafficChoice {
+  final String id;
+  final String title;
+  final String? subtitle;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onToggle;
+
+  const _FusionTrafficChoice({
+    required this.id,
+    required this.title,
+    this.subtitle,
+    required this.icon,
+    required this.selected,
+    required this.onToggle,
+  });
+}
+
 class RootShell extends StatefulWidget {
   final ThemeMode themeMode;
   final void Function(ThemeMode mode) onThemeModeChanged;
@@ -10514,7 +10536,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         _ => 'Beta-доступ сейчас недоступен.',
       };
       if (mounted) {
-        setState(() => _index = 1);
+        _openTariff();
         _toast(context, message);
       }
       return ProvisionedConfigResult.err(
@@ -10571,7 +10593,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       }
       if (greenVpnIsFreeQuotaExhaustedMessage(res.message)) {
         if (mounted) {
-          setState(() => _index = 1);
+          _openTariff();
           _toast(
             context,
             'Бесплатный лимит исчерпан. Открой тариф или дождись нового месяца.',
@@ -12672,7 +12694,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                     onTap: () {
                       if (locked) {
                         Navigator.of(ctx).pop();
-                        goToTab(1);
+                        _openTariff();
                         _toast(context, 'Эта локация доступна по подписке.');
                         return;
                       }
@@ -12700,7 +12722,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
   Future<void> _selectServerAndReconnectIfNeeded(ServerLocation picked) async {
     if (picked.requiresPaidSubscription && !_hasPaidSubscriptionEntitlement) {
-      goToTab(1);
+      _openTariff();
       _toast(context, 'Эта локация доступна по подписке.');
       return;
     }
@@ -13298,7 +13320,345 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _commitSocialOnlySelection({
+    required BuildContext context,
+    required Set<SocialApp> presets,
+    required Set<String> androidPackages,
+    required Set<String> windowsApplications,
+    required Set<String> windowsSites,
+  }) async {
+    setState(() {
+      socialOnlyApps
+        ..clear()
+        ..addAll(presets);
+      socialOnlyCustomPackages
+        ..clear()
+        ..addAll(androidPackages);
+      socialOnlyWindowsApplications
+        ..clear()
+        ..addAll(windowsApplications);
+      socialOnlyWindowsSites
+        ..clear()
+        ..addAll(windowsSites);
+    });
+    _schedulePrefsSave();
+
+    if (!socialOnlyEnabled) return;
+    if (mounted) {
+      setState(() {
+        vpnBusy = vpnEnabled;
+        _vpnBusyStage = vpnEnabled ? 'Применяем выбранный список...' : null;
+        _vpnBusyHint = vpnEnabled
+            ? 'Переподключаем VPN с новым набором сервисов и программ.'
+            : null;
+      });
+    }
+    try {
+      await _applyCurrentConfigMode(
+        reconnectIfNeeded: true,
+        showToastOnSuccess: true,
+      );
+    } catch (e) {
+      if (context.mounted) {
+        _toast(context, e.toString().replaceFirst('Bad state: ', ''));
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          vpnBusy = false;
+          _vpnBusyStage = null;
+          if (!_vpnTapCooldown) _vpnBusyHint = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _openFusionSocialAppsPicker(BuildContext context) async {
+    final tempPresets = Set<SocialApp>.from(socialOnlyApps);
+    final usesAndroidApplications = !kIsWeb && Platform.isAndroid;
+    final usesWindowsApplications = !kIsWeb && Platform.isWindows;
+    final tempCustomPackages = usesAndroidApplications
+        ? Set<String>.from(socialOnlyCustomPackages)
+        : <String>{};
+    final tempWindowsApplications = usesWindowsApplications
+        ? Set<String>.from(socialOnlyWindowsApplications)
+        : <String>{};
+    final tempWindowsSites = usesWindowsApplications
+        ? Set<String>.from(socialOnlyWindowsSites)
+        : <String>{};
+
+    final picked = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) {
+          final choices =
+              <_FusionTrafficChoice>[
+                for (final app in SocialApp.values)
+                  _FusionTrafficChoice(
+                    id: 'preset_${app.name}',
+                    title: app.title,
+                    icon: app.icon,
+                    selected: tempPresets.contains(app),
+                    onToggle: () => setLocal(() {
+                      if (!tempPresets.add(app)) tempPresets.remove(app);
+                    }),
+                  ),
+                for (final packageName in tempCustomPackages)
+                  _FusionTrafficChoice(
+                    id: 'android_$packageName',
+                    title:
+                        _androidInstalledAppLabels[packageName] ?? packageName,
+                    subtitle: packageName,
+                    icon: Icons.apps_rounded,
+                    selected: true,
+                    onToggle: () =>
+                        setLocal(() => tempCustomPackages.remove(packageName)),
+                  ),
+                for (final path in tempWindowsApplications)
+                  _FusionTrafficChoice(
+                    id: 'windows_$path',
+                    title:
+                        _windowsInstalledAppLabels[path] ??
+                        windowsApplicationLabel(path),
+                    subtitle: path,
+                    icon: Icons.apps_rounded,
+                    selected: true,
+                    onToggle: () =>
+                        setLocal(() => tempWindowsApplications.remove(path)),
+                  ),
+                for (final site in tempWindowsSites)
+                  _FusionTrafficChoice(
+                    id: 'site_$site',
+                    title: site,
+                    icon: Icons.language_rounded,
+                    selected: true,
+                    onToggle: () =>
+                        setLocal(() => tempWindowsSites.remove(site)),
+                  ),
+              ]..sort(
+                (a, b) =>
+                    a.title.toLowerCase().compareTo(b.title.toLowerCase()),
+              );
+          final selectedCount =
+              tempPresets.length +
+              tempCustomPackages.length +
+              tempWindowsApplications.length +
+              tempWindowsSites.length;
+
+          Future<void> addAndroidApplications() async {
+            try {
+              final selected = await _openInstalledAppsPicker(
+                ctx,
+                tempCustomPackages,
+              );
+              if (selected == null || !ctx.mounted) return;
+              setLocal(() {
+                tempCustomPackages
+                  ..clear()
+                  ..addAll(selected);
+              });
+            } catch (e) {
+              if (ctx.mounted) {
+                _toast(ctx, 'Не удалось открыть список приложений: $e');
+              }
+            }
+          }
+
+          Future<void> addWindowsApplications() async {
+            try {
+              final selected = await _openWindowsInstalledAppsPicker(
+                ctx,
+                tempWindowsApplications,
+              );
+              if (selected == null || !ctx.mounted) return;
+              setLocal(() {
+                tempWindowsApplications
+                  ..clear()
+                  ..addAll(selected);
+              });
+            } catch (e) {
+              if (ctx.mounted) {
+                _toast(ctx, 'Не удалось открыть список программ: $e');
+              }
+            }
+          }
+
+          Future<void> addWindowsSite() async {
+            try {
+              final site = await _openWindowsSitePicker(ctx);
+              if (site == null || !ctx.mounted) return;
+              setLocal(() => tempWindowsSites.add(site));
+            } catch (e) {
+              if (ctx.mounted) _toast(ctx, 'Не удалось добавить сайт: $e');
+            }
+          }
+
+          Future<void> addWindowsExecutablesManually() async {
+            try {
+              final result = await FilePicker.platform.pickFiles(
+                dialogTitle: 'Выбери файл программы',
+                type: FileType.custom,
+                allowedExtensions: const ['exe'],
+                allowMultiple: true,
+              );
+              if (result == null || !ctx.mounted) return;
+              final paths = result.paths
+                  .whereType<String>()
+                  .map((value) => value.trim())
+                  .where(isValidWindowsApplicationPath)
+                  .where((value) => File(value).existsSync())
+                  .toSet();
+              if (paths.isEmpty) {
+                _toast(ctx, 'Не удалось определить выбранную программу.');
+                return;
+              }
+              if (tempWindowsApplications.length + paths.length >
+                  maxWindowsVpnApplications) {
+                _toast(
+                  ctx,
+                  'Можно выбрать не более $maxWindowsVpnApplications приложений.',
+                );
+                return;
+              }
+              setLocal(() => tempWindowsApplications.addAll(paths));
+            } catch (e) {
+              if (ctx.mounted) _toast(ctx, 'Не удалось выбрать программу: $e');
+            }
+          }
+
+          return AlertDialog(
+            key: const Key('fusion_selected_traffic_dialog'),
+            title: const Text('Только выбранное'),
+            content: SizedBox(
+              width: usesWindowsApplications ? 590 : 470,
+              height: min(MediaQuery.of(ctx).size.height * 0.68, 610.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    'Выберите всё, что должно работать через VPN. Остальной интернет останется без VPN.',
+                  ),
+                  const SizedBox(height: 12),
+                  if (usesAndroidApplications)
+                    OutlinedButton.icon(
+                      key: const Key('fusion_add_android_app'),
+                      onPressed: addAndroidApplications,
+                      icon: const Icon(Icons.add_rounded),
+                      label: const Text('Добавить приложение'),
+                    ),
+                  if (usesWindowsApplications)
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          key: const Key('fusion_add_windows_program'),
+                          onPressed:
+                              tempWindowsApplications.length >=
+                                  maxWindowsVpnApplications
+                              ? null
+                              : addWindowsApplications,
+                          icon: const Icon(Icons.search_rounded),
+                          label: const Text('Добавить программу'),
+                        ),
+                        OutlinedButton.icon(
+                          key: const Key('fusion_add_windows_site'),
+                          onPressed:
+                              tempWindowsSites.length >= maxWindowsVpnSites
+                              ? null
+                              : addWindowsSite,
+                          icon: const Icon(Icons.add_link_rounded),
+                          label: const Text('Добавить сайт'),
+                        ),
+                        TextButton.icon(
+                          key: const Key('fusion_manual_windows_exe'),
+                          onPressed:
+                              tempWindowsApplications.length >=
+                                  maxWindowsVpnApplications
+                              ? null
+                              : addWindowsExecutablesManually,
+                          icon: const Icon(Icons.folder_open_rounded),
+                          label: const Text('Выбрать EXE'),
+                        ),
+                      ],
+                    ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Выбрано: $selectedCount',
+                    style: const TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                  const SizedBox(height: 6),
+                  const Divider(height: 1),
+                  const SizedBox(height: 4),
+                  Expanded(
+                    child: ListView.separated(
+                      itemCount: choices.length,
+                      separatorBuilder: (_, _) => const Divider(height: 1),
+                      itemBuilder: (_, index) {
+                        final choice = choices[index];
+                        return CheckboxListTile(
+                          key: Key('fusion_traffic_choice_${choice.id}'),
+                          value: choice.selected,
+                          onChanged: (_) => choice.onToggle(),
+                          secondary: Icon(choice.icon, color: kBrandPrimary),
+                          title: Text(
+                            choice.title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: choice.subtitle == null
+                              ? null
+                              : Text(
+                                  choice.subtitle!,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                          controlAffinity: ListTileControlAffinity.trailing,
+                          contentPadding: EdgeInsets.zero,
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Отмена'),
+              ),
+              ElevatedButton(
+                key: const Key('fusion_selected_traffic_done'),
+                onPressed: () {
+                  if (selectedCount == 0) {
+                    _toast(ctx, 'Выберите хотя бы один пункт.');
+                    return;
+                  }
+                  Navigator.of(ctx).pop(true);
+                },
+                child: const Text('Готово'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    if (picked != true || !context.mounted) return;
+    await _commitSocialOnlySelection(
+      context: context,
+      presets: tempPresets,
+      androidPackages: tempCustomPackages,
+      windowsApplications: tempWindowsApplications,
+      windowsSites: tempWindowsSites,
+    );
+  }
+
   Future<void> _openSocialAppsPicker(BuildContext context) async {
+    if (kFusionUiEnabled) {
+      await _openFusionSocialAppsPicker(context);
+      return;
+    }
     final tempPresets = Set<SocialApp>.from(socialOnlyApps);
     final usesAndroidApplications = !kIsWeb && Platform.isAndroid;
     final usesWindowsApplications = !kIsWeb && Platform.isWindows;
@@ -13642,53 +14002,14 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       },
     );
 
-    if (picked != true) return;
-
-    setState(() {
-      socialOnlyApps
-        ..clear()
-        ..addAll(tempPresets);
-      socialOnlyCustomPackages
-        ..clear()
-        ..addAll(tempCustomPackages);
-      socialOnlyWindowsApplications
-        ..clear()
-        ..addAll(tempWindowsApplications);
-      socialOnlyWindowsSites
-        ..clear()
-        ..addAll(tempWindowsSites);
-    });
-    _schedulePrefsSave();
-
-    if (socialOnlyEnabled) {
-      if (mounted) {
-        setState(() {
-          vpnBusy = vpnEnabled;
-          _vpnBusyStage = vpnEnabled ? 'Применяем выбранный список...' : null;
-          _vpnBusyHint = vpnEnabled
-              ? 'Переподключаем VPN с новым набором сервисов и программ.'
-              : null;
-        });
-      }
-      try {
-        await _applyCurrentConfigMode(
-          reconnectIfNeeded: true,
-          showToastOnSuccess: true,
-        );
-      } catch (e) {
-        if (context.mounted) {
-          _toast(context, e.toString().replaceFirst('Bad state: ', ''));
-        }
-      } finally {
-        if (mounted) {
-          setState(() {
-            vpnBusy = false;
-            _vpnBusyStage = null;
-            if (!_vpnTapCooldown) _vpnBusyHint = null;
-          });
-        }
-      }
-    }
+    if (picked != true || !context.mounted) return;
+    await _commitSocialOnlySelection(
+      context: context,
+      presets: tempPresets,
+      androidPackages: tempCustomPackages,
+      windowsApplications: tempWindowsApplications,
+      windowsSites: tempWindowsSites,
+    );
   }
 
   @override
@@ -13981,6 +14302,222 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
   }
 
+  void _openDiagnosticsPage() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => DiagnosticsPage(
+          accessToken: widget.session.accessToken,
+          email: widget.session.email,
+        ),
+      ),
+    );
+  }
+
+  List<String> _selectedTrafficTitles() {
+    final titles = <String>[
+      ...socialOnlyApps.map((app) => app.title),
+      if (!kIsWeb && Platform.isAndroid)
+        ...socialOnlyCustomPackages.map(
+          (packageName) =>
+              _androidInstalledAppLabels[packageName] ?? packageName,
+        ),
+      if (!kIsWeb && Platform.isWindows)
+        ...socialOnlyWindowsApplications.map(
+          (path) =>
+              _windowsInstalledAppLabels[path] ?? windowsApplicationLabel(path),
+        ),
+      if (!kIsWeb && Platform.isWindows) ...socialOnlyWindowsSites,
+    ];
+    titles.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return titles;
+  }
+
+  Future<void> _toggleSocialOnlyMode(bool enabled) async {
+    if (_vpnInteractionLocked) return;
+    if (!_hasPaidSubscriptionEntitlement) {
+      _openTariff();
+      _toast(context, 'Режим «Только выбранное» доступен по подписке.');
+      return;
+    }
+
+    final noSelection =
+        socialOnlyApps.isEmpty &&
+        socialOnlyCustomPackages.isEmpty &&
+        socialOnlyWindowsApplications.isEmpty &&
+        socialOnlyWindowsSites.isEmpty;
+    final shouldOpenPicker =
+        enabled &&
+        noSelection &&
+        !kIsWeb &&
+        (Platform.isWindows || (kFusionUiEnabled && Platform.isAndroid));
+    if (shouldOpenPicker) {
+      await _openSocialAppsPicker(context);
+      if (!mounted || _selectedTrafficTitles().isEmpty) return;
+    }
+
+    setState(() {
+      vpnBusy = true;
+      _vpnBusyStage = 'Обновляем режим...';
+      _vpnBusyHint =
+          'Пересобираем конфиг и аккуратно применяем новый режим трафика.';
+      socialOnlyEnabled = enabled;
+      _socialOnlyPreferenceRequested = enabled;
+    });
+    _schedulePrefsSave();
+
+    try {
+      await _applyCurrentConfigMode(
+        reconnectIfNeeded: true,
+        showToastOnSuccess: true,
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          socialOnlyEnabled = !enabled;
+          _socialOnlyPreferenceRequested = !enabled;
+        });
+        _schedulePrefsSave();
+        _toast(context, e.toString().replaceFirst('Bad state: ', ''));
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          vpnBusy = false;
+          _vpnBusyStage = null;
+          if (!_vpnTapCooldown) _vpnBusyHint = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _configureSocialOnlyTraffic() async {
+    if (_vpnInteractionLocked) return;
+    if (!_hasPaidSubscriptionEntitlement) {
+      _openTariff();
+      _toast(context, 'Выбор приложений и сайтов доступен по подписке.');
+      return;
+    }
+    await _openSocialAppsPicker(context);
+  }
+
+  Widget _buildTariffPage({VoidCallback? refresh}) {
+    void changed(VoidCallback callback) {
+      callback();
+      refresh?.call();
+    }
+
+    Future<void> changedAsync(Future<void> Function() callback) async {
+      await callback();
+      refresh?.call();
+    }
+
+    return TariffPage(
+      planName: planName,
+      freeTierActive: _freeTierActive,
+      trafficUsage: _trafficUsage,
+      isGuest: widget.session.isGuest,
+      onRestoreAccess: () => unawaited(changedAsync(_openRestoreAccess)),
+      selectedApps: selectedApps,
+      trafficPack: trafficPack,
+      trafficGb: trafficGb,
+      devices: devices,
+      optNoAds: optNoAds,
+      optSmartRouting: optSmartRouting,
+      optDedicatedIp: optDedicatedIp,
+      optAutoRenew: optAutoRenew,
+      tariffCatalog: _tariffCatalog,
+      tariffQuote: _tariffQuote,
+      tariffStatus: _tariffStatus,
+      pendingBillingOrder: _pendingBillingOrder,
+      subscriptionActive: _subscriptionActive,
+      subscriptionMaxDevices: _subscriptionMaxDevices,
+      subscriptionExpiresAt: _subscriptionExpiresAt,
+      subscriptionMonthlyPriceRub: _subscriptionMonthlyPriceRub,
+      publicBillingPlanCode: _publicBillingPlanCode,
+      tariffBusy: _tariffBusy,
+      onClaimPaidBetaInvite: () => changedAsync(_claimPaidBetaInvite),
+      onApplyTariff: () => changedAsync(_createTariffOrderOnServer),
+      onCheckPendingBillingOrder: () =>
+          changedAsync(() => _checkPendingBillingOrder(showToast: true)),
+      onOpenPaymentUrl: _openPaymentUrl,
+      onPublicBillingPlanChanged: (code) => changed(() {
+        setState(() => _publicBillingPlanCode = code);
+        _scheduleTariffRefresh();
+      }),
+      onToggleApp: (app) => changed(() {
+        setState(() {
+          if (selectedApps.contains(app)) {
+            selectedApps.remove(app);
+          } else {
+            selectedApps.add(app);
+          }
+        });
+        _schedulePrefsSave();
+        _scheduleTariffRefresh();
+      }),
+      onTrafficChanged: (pack) => changed(() {
+        setState(() => trafficPack = pack);
+        _schedulePrefsSave();
+        _scheduleTariffRefresh();
+      }),
+      onTrafficGbChanged: (gb) => changed(() {
+        setState(() => trafficGb = gb);
+        _schedulePrefsSave();
+        _scheduleTariffRefresh();
+      }),
+      onDevicesChanged: (value) => changed(() {
+        setState(() => devices = value.clamp(1, 5));
+        _schedulePrefsSave();
+        _scheduleTariffRefresh();
+      }),
+      onOptNoAds: (_) => changed(() {
+        setState(() => optNoAds = true);
+        _schedulePrefsSave();
+      }),
+      onOptSmartRouting: (_) => changed(() {
+        setState(() => optSmartRouting = true);
+        _schedulePrefsSave();
+      }),
+      onOptDedicatedIp: (value) => changed(() {
+        setState(() => optDedicatedIp = value);
+        _schedulePrefsSave();
+        _scheduleTariffRefresh();
+      }),
+      onOptAutoRenew: (value) => changed(() {
+        setState(() => optAutoRenew = value);
+        _schedulePrefsSave();
+        _scheduleTariffRefresh();
+      }),
+    );
+  }
+
+  void _openTariff() {
+    if (!kFusionUiEnabled) {
+      goToTab(1);
+      return;
+    }
+    unawaited(
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (routeContext) => Scaffold(
+            appBar: AppBar(title: const Text('Тариф')),
+            body: StatefulBuilder(
+              builder: (routeContext, setRouteState) {
+                return _DesktopShellBody(
+                  child: _buildTariffPage(
+                    refresh: () {
+                      if (routeContext.mounted) setRouteState(() {});
+                    },
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final wireGuardState = _wireGuardState;
@@ -14026,160 +14563,22 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         socialOnlyWindowsSites: socialOnlyWindowsSites,
         socialOnlyCustomLabels: _androidInstalledAppLabels,
         socialOnlyWindowsApplicationLabels: _windowsInstalledAppLabels,
-        onToggleSocialOnly: (v) async {
-          if (_vpnInteractionLocked) return;
-          if (!_hasPaidSubscriptionEntitlement) {
-            goToTab(1);
-            _toast(
-              context,
-              'Режим «Только для соцсетей» доступен по подписке.',
-            );
-            return;
-          }
-          if (v &&
-              !kIsWeb &&
-              Platform.isWindows &&
-              socialOnlyApps.isEmpty &&
-              socialOnlyWindowsApplications.isEmpty &&
-              socialOnlyWindowsSites.isEmpty) {
-            await _openSocialAppsPicker(context);
-            if (!mounted ||
-                (socialOnlyApps.isEmpty &&
-                    socialOnlyWindowsApplications.isEmpty &&
-                    socialOnlyWindowsSites.isEmpty)) {
-              return;
-            }
-          }
-
-          setState(() {
-            vpnBusy = true;
-            _vpnBusyStage = 'Обновляем режим...';
-            _vpnBusyHint =
-                'Пересобираем конфиг и аккуратно применяем новый режим трафика.';
-            socialOnlyEnabled = v;
-            _socialOnlyPreferenceRequested = v;
-          });
-          _schedulePrefsSave();
-
-          try {
-            await _applyCurrentConfigMode(
-              reconnectIfNeeded: true,
-              showToastOnSuccess: true,
-            );
-          } catch (e) {
-            if (context.mounted) {
-              setState(() {
-                socialOnlyEnabled = !v;
-                _socialOnlyPreferenceRequested = !v;
-              });
-              _schedulePrefsSave();
-              _toast(context, e.toString().replaceFirst('Bad state: ', ''));
-            }
-          } finally {
-            if (mounted) {
-              setState(() {
-                vpnBusy = false;
-                _vpnBusyStage = null;
-                if (!_vpnTapCooldown) {
-                  _vpnBusyHint = null;
-                }
-              });
-            }
-          }
-        },
-        onConfigureSocialApps: () async {
-          if (_vpnInteractionLocked) return;
-          if (!_hasPaidSubscriptionEntitlement) {
-            goToTab(1);
-            _toast(context, 'Выбор приложений и сайтов доступен по подписке.');
-            return;
-          }
-          await _openSocialAppsPicker(context);
-        },
-
-        onOpenTariff: () => goToTab(1),
+        onToggleSocialOnly: _toggleSocialOnlyMode,
+        onConfigureSocialApps: _configureSocialOnlyTraffic,
+        onOpenDiagnostics: _openDiagnosticsPage,
+        onOpenTariff: _openTariff,
       ),
 
-      TariffPage(
-        planName: planName,
-        freeTierActive: _freeTierActive,
-        trafficUsage: _trafficUsage,
-        isGuest: widget.session.isGuest,
-        onRestoreAccess: () => unawaited(_openRestoreAccess()),
-        selectedApps: selectedApps,
-        trafficPack: trafficPack,
-        trafficGb: trafficGb,
-        devices: devices,
-        optNoAds: optNoAds,
-        optSmartRouting: optSmartRouting,
-        optDedicatedIp: optDedicatedIp,
-        optAutoRenew: optAutoRenew,
-        tariffCatalog: _tariffCatalog,
-        tariffQuote: _tariffQuote,
-        tariffStatus: _tariffStatus,
-        pendingBillingOrder: _pendingBillingOrder,
-        subscriptionActive: _subscriptionActive,
-        subscriptionMaxDevices: _subscriptionMaxDevices,
-        subscriptionExpiresAt: _subscriptionExpiresAt,
-        subscriptionMonthlyPriceRub: _subscriptionMonthlyPriceRub,
-        publicBillingPlanCode: _publicBillingPlanCode,
-        tariffBusy: _tariffBusy,
-        onClaimPaidBetaInvite: _claimPaidBetaInvite,
-        onApplyTariff: _createTariffOrderOnServer,
-        onCheckPendingBillingOrder: () =>
-            _checkPendingBillingOrder(showToast: true),
-        onOpenPaymentUrl: _openPaymentUrl,
-        onPublicBillingPlanChanged: (code) {
-          setState(() => _publicBillingPlanCode = code);
-          _scheduleTariffRefresh();
-        },
-        onToggleApp: (app) {
-          setState(() {
-            if (selectedApps.contains(app)) {
-              selectedApps.remove(app);
-            } else {
-              selectedApps.add(app);
-            }
-          });
-          _schedulePrefsSave();
-          _scheduleTariffRefresh();
-        },
-        onTrafficChanged: (p) {
-          setState(() => trafficPack = p);
-          _schedulePrefsSave();
-          _scheduleTariffRefresh();
-        },
-        onTrafficGbChanged: (gb) {
-          setState(() => trafficGb = gb);
-          _schedulePrefsSave();
-          _scheduleTariffRefresh();
-        },
-        onDevicesChanged: (v) {
-          setState(() => devices = v.clamp(1, 5));
-          _schedulePrefsSave();
-          _scheduleTariffRefresh();
-        },
-        onOptNoAds: (v) {
-          setState(() => optNoAds = true);
-          _schedulePrefsSave();
-        },
-        onOptSmartRouting: (v) {
-          setState(() {
-            optSmartRouting = true;
-          });
-          _schedulePrefsSave();
-        },
-        onOptDedicatedIp: (v) {
-          setState(() => optDedicatedIp = v);
-          _schedulePrefsSave();
-          _scheduleTariffRefresh();
-        },
-        onOptAutoRenew: (v) {
-          setState(() => optAutoRenew = v);
-          _schedulePrefsSave();
-          _scheduleTariffRefresh();
-        },
-      ),
+      kFusionUiEnabled
+          ? FusionModePage(
+              enabled: socialOnlyEnabled,
+              allowed: _hasPaidSubscriptionEntitlement,
+              selectedTitles: _selectedTrafficTitles(),
+              onToggle: _toggleSocialOnlyMode,
+              onConfigure: _configureSocialOnlyTraffic,
+              onOpenTariff: _openTariff,
+            )
+          : _buildTariffPage(),
 
       SettingsPage(
         themeMode: widget.themeMode,
@@ -14203,7 +14602,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         subscriptionActive: _subscriptionActive,
         subscriptionAutoRenew: _subscriptionAutoRenew,
         paymentMethodSaved: _paymentMethodSaved,
-        onOpenTariff: () => setState(() => _index = 1),
+        onOpenTariff: _openTariff,
         onRestoreAccess: () => unawaited(_openRestoreAccess()),
         onCancelAutoRenew: _cancelAutoRenew,
         onLogout: widget.onLogout,
@@ -14212,16 +14611,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             context,
           ).push(MaterialPageRoute(builder: (_) => const UpdatesPage()));
         },
-        onOpenDiagnostics: () {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => DiagnosticsPage(
-                accessToken: widget.session.accessToken,
-                email: widget.session.email,
-              ),
-            ),
-          );
-        },
+        onOpenDiagnostics: _openDiagnosticsPage,
       ),
     ];
     final currentIndex = _index.clamp(0, pages.length - 1).toInt();
@@ -14240,8 +14630,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             label: 'VPN',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.star_rounded),
-            label: kStoreDistributionBuild
+            icon: Icon(
+              kFusionUiEnabled ? Icons.route_rounded : Icons.star_rounded,
+            ),
+            label: kFusionUiEnabled
+                ? 'Режим'
+                : kStoreDistributionBuild
                 ? 'Доступ'
                 : kTrialOnlyNoAdsBuild
                 ? 'Trial'
@@ -14331,6 +14725,200 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 }
 
+class FusionModePage extends StatelessWidget {
+  final bool enabled;
+  final bool allowed;
+  final List<String> selectedTitles;
+  final ValueChanged<bool> onToggle;
+  final VoidCallback onConfigure;
+  final VoidCallback onOpenTariff;
+
+  const FusionModePage({
+    super.key,
+    required this.enabled,
+    required this.allowed,
+    required this.selectedTitles,
+    required this.onToggle,
+    required this.onConfigure,
+    required this.onOpenTariff,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final muted = theme.colorScheme.onSurface.withValues(alpha: 0.62);
+
+    Widget modeChoice({
+      required Key key,
+      required bool selected,
+      required IconData icon,
+      required String title,
+      required String subtitle,
+      required VoidCallback onTap,
+    }) {
+      return InkWell(
+        key: key,
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          constraints: const BoxConstraints(minHeight: 92),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: selected
+                ? (isDark ? const Color(0xFF123126) : const Color(0xFFEAF7F0))
+                : theme.colorScheme.surface,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: selected ? kBrandPrimary : const Color(0xFFD7E3DC),
+              width: selected ? 2 : 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: selected
+                      ? kBrandPrimarySoft
+                      : theme.colorScheme.onSurface.withValues(alpha: 0.06),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(icon, color: kBrandPrimaryDeep),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: muted,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                selected
+                    ? Icons.check_circle_rounded
+                    : Icons.radio_button_unchecked_rounded,
+                color: selected ? kBrandPrimary : muted,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return ListView(
+      key: const Key('fusion_mode_page'),
+      padding: const EdgeInsets.all(16),
+      children: [
+        const Text(
+          'Режим защиты',
+          style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900),
+        ),
+        const SizedBox(height: 5),
+        Text(
+          'Выберите, какой трафик направлять через Green VPN.',
+          style: TextStyle(color: muted, fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 16),
+        modeChoice(
+          key: const Key('fusion_mode_page_full'),
+          selected: !enabled,
+          icon: Icons.public_rounded,
+          title: 'Весь интернет',
+          subtitle: 'VPN защищает весь трафик устройства.',
+          onTap: () => onToggle(false),
+        ),
+        const SizedBox(height: 10),
+        modeChoice(
+          key: const Key('fusion_mode_page_selected'),
+          selected: enabled,
+          icon: allowed
+              ? Icons.auto_awesome_rounded
+              : Icons.lock_outline_rounded,
+          title: 'Только выбранное',
+          subtitle: allowed
+              ? 'Через VPN работают только выбранные пункты.'
+              : 'Доступно по подписке.',
+          onTap: () => onToggle(true),
+        ),
+        const SizedBox(height: 16),
+        Container(
+          padding: const EdgeInsets.all(15),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surface,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFD7E3DC)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Выбранные приложения и сайты',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                  Text(
+                    '${selectedTitles.length}',
+                    style: const TextStyle(
+                      color: kBrandPrimaryDeep,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              if (selectedTitles.isEmpty)
+                Text(
+                  'Список пока пуст.',
+                  style: TextStyle(color: muted, fontWeight: FontWeight.w700),
+                )
+              else
+                Wrap(
+                  spacing: 7,
+                  runSpacing: 7,
+                  children: [
+                    for (final title in selectedTitles.take(12))
+                      Chip(label: Text(title)),
+                    if (selectedTitles.length > 12)
+                      Chip(label: Text('+${selectedTitles.length - 12}')),
+                  ],
+                ),
+              const SizedBox(height: 12),
+              ElevatedButton.icon(
+                key: const Key('fusion_mode_configure_button'),
+                onPressed: allowed ? onConfigure : onOpenTariff,
+                icon: Icon(
+                  allowed ? Icons.add_rounded : Icons.lock_outline_rounded,
+                ),
+                label: Text(allowed ? 'Настроить список' : 'Открыть тарифы'),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 /* =========================
    VPN PAGE
    ========================= */
@@ -14354,6 +14942,7 @@ class VpnPage extends StatelessWidget {
   final Future<void> Function() onRefreshWireGuard;
   final VoidCallback onToggleVpn;
   final VoidCallback onOpenTariff;
+  final VoidCallback? onOpenDiagnostics;
   final ServerLocation selectedServer;
   final VoidCallback onOpenServerPicker;
   final bool socialOnlyEnabled;
@@ -14387,6 +14976,7 @@ class VpnPage extends StatelessWidget {
     required this.onRefreshWireGuard,
     required this.onToggleVpn,
     required this.onOpenTariff,
+    this.onOpenDiagnostics,
     required this.selectedServer,
     required this.onOpenServerPicker,
     required this.socialOnlyEnabled,
@@ -14403,6 +14993,663 @@ class VpnPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (kFusionUiEnabled) return _buildFusion(context);
+    return _buildLegacy(context);
+  }
+
+  Widget _buildFusion(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final textColor = theme.colorScheme.onSurface;
+    final mutedColor = textColor.withValues(alpha: isDark ? 0.72 : 0.62);
+    final usesAndroidApplications = !kIsWeb && Platform.isAndroid;
+    final usesWindowsApplications = !kIsWeb && Platform.isWindows;
+    final selectedTitles = <String>[
+      ...socialOnlyApps.map((app) => app.title),
+      if (usesAndroidApplications)
+        ...socialOnlyCustomPackages.map(
+          (packageName) => socialOnlyCustomLabels[packageName] ?? packageName,
+        ),
+      if (usesWindowsApplications)
+        ...socialOnlyWindowsApplications.map(
+          (path) =>
+              socialOnlyWindowsApplicationLabels[path] ??
+              windowsApplicationLabel(path),
+        ),
+      if (usesWindowsApplications) ...socialOnlyWindowsSites,
+    ]..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    final statusText = vpnBusy
+        ? (vpnBusyStage ?? (vpnEnabled ? 'Отключаем...' : 'Подключаем...'))
+        : (vpnEnabled
+              ? 'Защита активна'
+              : (androidExternalVpnActive
+                    ? 'Активен другой VPN'
+                    : 'Готов к защите'));
+    final statusDetail = vpnBusy
+        ? (vpnBusyHint ?? 'Подождите, Green VPN завершает операцию.')
+        : (vpnEnabled
+              ? 'Интернет проходит через Green VPN.'
+              : (androidExternalVpnActive
+                    ? 'Нажмите кнопку, чтобы переключиться на Green VPN.'
+                    : 'Подключим первый доступный маршрут.'));
+    final serverTitle = selectedServer.isAuto
+        ? 'Самая быстрая локация'
+        : greenVpnPublicServerTitle(selectedServer);
+    final serverSubtitle = greenVpnPublicServerSubtitle(selectedServer);
+    final displayedPlanName = isGuest
+        ? 'Бесплатный'
+        : kPublicProductBuild
+        ? greenVpnPublicPlanTitle(planName)
+        : planName;
+    final freeUsageSummary = freeTierActive
+        ? greenVpnTrafficUsageSummary(trafficUsage)
+        : null;
+
+    Widget surface({required Widget child, EdgeInsetsGeometry? padding}) {
+      return Container(
+        padding: padding ?? const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF10271F) : const Color(0xFFF9FCFA),
+          border: Border.all(
+            color: isDark
+                ? Colors.white.withValues(alpha: 0.10)
+                : const Color(0xFFD7E3DC),
+          ),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: child,
+      );
+    }
+
+    Widget connectionPanel() {
+      final powerColor = vpnEnabled ? kBrandPrimaryDeep : kBrandPrimary;
+      return surface(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 9,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: vpnEnabled
+                              ? kBrandPrimarySoft
+                              : (isDark
+                                    ? Colors.white.withValues(alpha: 0.08)
+                                    : const Color(0xFFEEF3F0)),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          vpnEnabled ? 'ЗАЩИЩЕНО' : 'НЕ ЗАЩИЩЕНО',
+                          style: TextStyle(
+                            color: vpnEnabled ? kBrandPrimaryDeep : mutedColor,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        statusText,
+                        key: const Key('fusion_connection_status'),
+                        style: TextStyle(
+                          color: textColor,
+                          fontSize: 28,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        statusDetail,
+                        style: TextStyle(
+                          color: mutedColor,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Semantics(
+                  button: true,
+                  label: vpnEnabled ? 'Отключить VPN' : 'Подключить VPN',
+                  child: InkWell(
+                    key: const Key('fusion_connect_button'),
+                    onTap: wireGuardInstalled && !vpnInteractionLocked
+                        ? onToggleVpn
+                        : null,
+                    borderRadius: BorderRadius.circular(56),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      width: 94,
+                      height: 94,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: powerColor.withValues(alpha: 0.12),
+                        border: Border.all(
+                          color: powerColor.withValues(alpha: 0.42),
+                          width: 2,
+                        ),
+                      ),
+                      child: Center(
+                        child: Container(
+                          width: 66,
+                          height: 66,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: powerColor,
+                          ),
+                          child: vpnBusy
+                              ? const Padding(
+                                  padding: EdgeInsets.all(21),
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.4,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : Icon(
+                                  vpnEnabled
+                                      ? Icons.stop_rounded
+                                      : Icons.power_settings_new_rounded,
+                                  color: Colors.white,
+                                  size: 31,
+                                ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            InkWell(
+              key: const Key('fusion_location_button'),
+              onTap: onOpenServerPicker,
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                padding: const EdgeInsets.all(13),
+                decoration: BoxDecoration(
+                  color: isDark
+                      ? Colors.white.withValues(alpha: 0.05)
+                      : const Color(0xFFF1F6F3),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: isDark
+                        ? Colors.white.withValues(alpha: 0.08)
+                        : const Color(0xFFD7E3DC),
+                  ),
+                ),
+                child: LayoutBuilder(
+                  builder: (context, constraints) => Row(
+                    children: [
+                      Container(
+                        width: 42,
+                        height: 42,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFDDF1F4),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          selectedServer.isAuto
+                              ? 'A'
+                              : serverTitle.characters.first,
+                          style: const TextStyle(
+                            color: Color(0xFF087A8C),
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              serverTitle,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: textColor,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            if (serverSubtitle.isNotEmpty) ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                serverSubtitle,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: mutedColor,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      if (selectedServer.isAuto &&
+                          constraints.maxWidth >= 360) ...[
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: kBrandPrimarySoft,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: const Text(
+                            'АВТО',
+                            style: TextStyle(
+                              color: kBrandPrimaryDeep,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(width: 6),
+                      Icon(Icons.chevron_right_rounded, color: mutedColor),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    key: const Key('fusion_diagnostics_button'),
+                    onPressed: onOpenDiagnostics,
+                    icon: const Icon(Icons.health_and_safety_outlined),
+                    label: const Text('Диагностика'),
+                  ),
+                ),
+                if (vpnEnabled) ...[
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      key: const Key('fusion_details_button'),
+                      onPressed: () => _showFusionConnectionDetails(
+                        context,
+                        serverTitle: serverTitle,
+                        modeTitle: socialOnlyEnabled
+                            ? 'Только выбранное'
+                            : 'Весь интернет',
+                      ),
+                      icon: const Icon(Icons.info_outline_rounded),
+                      label: const Text('Детали'),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
+    Widget modePanel() {
+      final selectedCount = selectedTitles.length;
+      return surface(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'РЕЖИМ ЗАЩИТЫ',
+                        style: TextStyle(
+                          color: kBrandMuted,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        'Что направить через VPN',
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.tune_rounded, color: kBrandPrimary),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: isDark
+                    ? Colors.white.withValues(alpha: 0.05)
+                    : const Color(0xFFEEF3F0),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: _FusionModeChoice(
+                      key: const Key('fusion_mode_full'),
+                      selected: !socialOnlyEnabled,
+                      icon: Icons.public_rounded,
+                      label: 'Весь интернет',
+                      onTap: () => onToggleSocialOnly(false),
+                    ),
+                  ),
+                  Expanded(
+                    child: _FusionModeChoice(
+                      key: const Key('fusion_mode_selected'),
+                      selected: socialOnlyEnabled,
+                      icon: socialOnlyAllowed
+                          ? Icons.auto_awesome_rounded
+                          : Icons.lock_outline_rounded,
+                      label: 'Только выбранное',
+                      onTap: () => onToggleSocialOnly(true),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(13),
+              decoration: BoxDecoration(
+                color: isDark
+                    ? Colors.white.withValues(alpha: 0.04)
+                    : const Color(0xFFF4F8F5),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: isDark
+                      ? Colors.white.withValues(alpha: 0.08)
+                      : const Color(0xFFD7E3DC),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        socialOnlyEnabled
+                            ? Icons.auto_awesome_rounded
+                            : Icons.public_rounded,
+                        color: kBrandPrimary,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              socialOnlyEnabled
+                                  ? 'Только выбранное'
+                                  : 'Весь интернет защищён',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              socialOnlyEnabled
+                                  ? 'Через VPN направляется: $selectedCount.'
+                                  : 'Трафик всего устройства проходит через VPN.',
+                              style: TextStyle(
+                                color: mutedColor,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (socialOnlyEnabled) ...[
+                    const SizedBox(height: 10),
+                    OutlinedButton.icon(
+                      key: const Key('fusion_configure_selected_button'),
+                      onPressed: onConfigureSocialApps,
+                      icon: const Icon(Icons.add_rounded),
+                      label: Text(
+                        usesWindowsApplications
+                            ? 'Выбрать программы и сайты'
+                            : 'Выбрать приложения',
+                      ),
+                    ),
+                    if (selectedTitles.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: selectedTitles.take(5).map((title) {
+                          return Chip(
+                            visualDensity: VisualDensity.compact,
+                            label: Text(title, overflow: TextOverflow.ellipsis),
+                          );
+                        }).toList(),
+                      ),
+                    ],
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: isDark
+                    ? const Color(0xFF123126)
+                    : const Color(0xFFEAF7F0),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    vpnEnabled ? Icons.shield_rounded : Icons.radar_rounded,
+                    color: kBrandPrimary,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          vpnEnabled
+                              ? 'Маршрут контролируется'
+                              : 'Автовыбор готов к запуску',
+                          style: const TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          vpnEnabled
+                              ? 'При сбое Green VPN выполнит безопасное переключение.'
+                              : 'Подключится первый доступный маршрут.',
+                          style: TextStyle(
+                            color: mutedColor,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            InkWell(
+              key: const Key('fusion_tariff_button'),
+              onTap: onOpenTariff,
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                padding: const EdgeInsets.all(13),
+                decoration: BoxDecoration(
+                  color: isDark
+                      ? const Color(0xFF2D291D)
+                      : const Color(0xFFFFF8E9),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: isDark
+                        ? const Color(0xFF655A39)
+                        : const Color(0xFFE8D3A5),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.star_rounded, color: Color(0xFFB7791F)),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            displayedPlanName,
+                            style: const TextStyle(fontWeight: FontWeight.w900),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            freeUsageSummary ?? 'Открыть управление тарифом',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: mutedColor,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Icon(Icons.chevron_right_rounded, color: mutedColor),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 760;
+        return ListView(
+          key: const Key('fusion_vpn_page'),
+          padding: const EdgeInsets.all(16),
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: kBrandPrimaryDeep,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(Icons.shield_outlined, color: Colors.white),
+                ),
+                const SizedBox(width: 11),
+                Expanded(
+                  child: Text(
+                    'Green VPN',
+                    style: TextStyle(
+                      color: textColor,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: onOpenTariff,
+                  icon: const Icon(Icons.star_outline_rounded, size: 18),
+                  label: Text(displayedPlanName),
+                ),
+              ],
+            ),
+            if (!wireGuardInstalled) ...[
+              const SizedBox(height: 12),
+              _WireGuardSetupCard(
+                title: 'Установите системный компонент перед подключением',
+                subtitle:
+                    wireGuardStatusText ??
+                    'Green VPN установит компонент, необходимый для подключения.',
+                busy: wireGuardBusy,
+                onInstall: onInstallWireGuard,
+                onRefresh: onRefreshWireGuard,
+              ),
+            ],
+            const SizedBox(height: 14),
+            if (wide)
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(flex: 6, child: connectionPanel()),
+                  const SizedBox(width: 12),
+                  Expanded(flex: 4, child: modePanel()),
+                ],
+              )
+            else ...[
+              connectionPanel(),
+              const SizedBox(height: 12),
+              modePanel(),
+            ],
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _showFusionConnectionDetails(
+    BuildContext context, {
+    required String serverTitle,
+    required String modeTitle,
+  }) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Детали соединения',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 16),
+              _FusionDetailRow(label: 'Состояние', value: 'Защита активна'),
+              _FusionDetailRow(label: 'Локация', value: serverTitle),
+              _FusionDetailRow(label: 'Режим', value: modeTitle),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLegacy(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final textColor = theme.colorScheme.onSurface;
@@ -14755,6 +16002,113 @@ class VpnPage extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _FusionModeChoice extends StatelessWidget {
+  final bool selected;
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _FusionModeChoice({
+    super.key,
+    required this.selected,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        constraints: const BoxConstraints(minHeight: 48),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected ? theme.colorScheme.surface : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+          boxShadow: selected
+              ? [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.06),
+                    blurRadius: 7,
+                    offset: const Offset(0, 2),
+                  ),
+                ]
+              : null,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 17,
+              color: selected
+                  ? kBrandPrimaryDeep
+                  : theme.colorScheme.onSurface.withValues(alpha: 0.55),
+            ),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                label,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: selected
+                      ? theme.colorScheme.onSurface
+                      : theme.colorScheme.onSurface.withValues(alpha: 0.62),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FusionDetailRow extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const _FusionDetailRow({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 9),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                color: Theme.of(
+                  context,
+                ).colorScheme.onSurface.withValues(alpha: 0.62),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Flexible(
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              style: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -20802,7 +22156,7 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Поддержка'),
+        title: Text(kFusionUiEnabled ? 'Диагностика' : 'Поддержка'),
         actions: [
           IconButton(
             tooltip: 'Обновить',
@@ -20816,11 +22170,15 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                const _PageTitle(
-                  title: 'Помощь и отчёт',
+                _PageTitle(
+                  title: kFusionUiEnabled
+                      ? 'Диагностика и отчёт'
+                      : 'Помощь и отчёт',
                   subtitle:
                       'Если VPN не подключается или работает странно, отправь отчёт в поддержку одной кнопкой.',
-                  icon: Icons.support_agent_rounded,
+                  icon: kFusionUiEnabled
+                      ? Icons.health_and_safety_outlined
+                      : Icons.support_agent_rounded,
                 ),
                 const SizedBox(height: 12),
                 _Card(
