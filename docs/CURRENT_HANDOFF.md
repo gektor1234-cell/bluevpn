@@ -1,10 +1,34 @@
 # Green VPN Current Handoff
 
-Updated: 2026-08-02 MSK.
+Updated: 2026-08-11 MSK.
 
 This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
 `PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md`. Dated reports are evidence only.
+
+## Fusion Paid-Beta Closure, 2026-08-11
+
+- Paid-beta backend `0.9.154-fusion-actions.1`, Android
+  `0.4.6-paid-beta.1+2026081106` and Windows
+  `0.4.6-paid-beta.1+4601` are deployed on both control planes.
+- Stable production remains backend `0.9.153-update-channel-alias.4`, Android
+  `0.3.19+2026072914` and Windows `0.3.26+3105`; exact public verification
+  confirmed that production did not change.
+- Exact paid-beta Android SHA-256 is
+  `F2FF98B569C574910CEB4ED7BA18EBC33FD54013A1DD15DE808DEC69986F883D`;
+  exact Windows SHA-256 is
+  `1D752ADFFFB33D60B2693E6AE888EA62AA82EFA1EF0A7462513C35CF2FBCCC89`.
+- Android physical smoke passed connection, Netherlands-to-London route
+  change, Activity recreation with London state preservation, pause/resume,
+  real YouTube playback, corrected one-line diagnostics action and final
+  cleanup. The phone was left without an active VPN.
+- Strict public release verification is `12/12` (`8` artifacts and `4`
+  backends); public surface is `31/31`; remote fail-closed audit is green.
+- Windows paid-beta remains `NotSigned` and did not receive a physical tunnel
+  smoke in this Fusion task. Production promotion still requires a separate
+  owner acceptance and explicit permission.
+- Full evidence and rollback paths:
+  `docs/FUSION_PAID_BETA_2026_08_11_RU.md`.
 
 ## Hard rules
 
@@ -15,8 +39,9 @@ This is the current operational entry point. Read it together with
    client profiles.
 3. Never touch Friendly Linnet `5.129.237.163` without a new explicit owner
    instruction.
-4. Android `0.3.19+2026072914` and Windows `0.3.26+3105` are public and
-   optional. Windows paid-beta `0.3.21-paid-beta.1+3001` is also public and
+4. Android `0.3.19+2026072914` and Windows `0.3.26+3105` are stable production
+   and optional. Paid-beta Android `0.4.6-paid-beta.1+2026081106` and Windows
+   `0.4.6-paid-beta.1+4601` are isolated, public in the paid-beta contour and
    optional. Do not republish, force or roll them back without a verified exact
    artifact, alternate-node health and an atomic backup.
 5. Public-product uses WireGuard UDP, AmneziaWG, Hysteria2, VLESS REALITY/XHTTP

@@ -1,5 +1,34 @@
 # Green VPN Release State
 
+## Fusion Paid-Beta Closure (2026-08-11 MSK)
+
+| Layer | Current state |
+|---|---|
+| Production backend | `0.9.153-update-channel-alias.4`, unchanged |
+| Paid-beta backend | `0.9.154-fusion-actions.1` on Timeweb and RUVDS |
+| Production Android | `0.3.19+2026072914`, unchanged |
+| Production Windows | `0.3.26+3105`, unchanged and `NotSigned` |
+| Paid-beta Android | `0.4.6-paid-beta.1+2026081106` |
+| Paid-beta Windows | `0.4.6-paid-beta.1+4601`, `NotSigned` |
+| Money and advertising | disabled, unchanged |
+
+Both paid-beta control planes expose exact Android and Windows artifacts;
+strict release verification passed `12/12` (`8` artifact and `4` backend
+checks), while the complete public-surface probe passed `31/31`. The remote
+fail-closed audit is green without secret values. Atomic backend and client
+rollback copies are recorded in `FUSION_PAID_BETA_2026_08_11_RU.md`.
+
+The exact public Android APK passed a physical smoke on the shared phone. It
+connected through Netherlands in `5.951` seconds, changed to London in no more
+than `8.090` seconds, retained London after Activity recreation, completed
+pause/manual-resume, advanced real YouTube playback from `10` to `52` seconds
+and disconnected cleanly. The corrected diagnostics action stayed on one line.
+The installed `base.apk` matched the public candidate byte-for-byte. Windows
+was built, package-audited and published, but its exact Fusion installer did
+not receive a physical Windows tunnel smoke in this task. Fusion therefore
+remains paid-beta and requires separate owner acceptance before any stable
+production promotion.
+
 ## Post-Release Repository Safety Closure (2026-08-02 MSK)
 
 The owner confirmed on 2026-08-02 that `v1` is the permanent-Free
@@ -28,7 +57,7 @@ with `0` warnings / `0` errors. Protected commercial readiness remains
 owner-blocked on `payments` and `windows_trust` by policy; the current Free
 direct-download release is unchanged.
 
-## Current Release Closure (2026-08-01 MSK)
+## Historical Production Release Closure (2026-08-01 MSK)
 
 | Layer | Current state |
 |---|---|
