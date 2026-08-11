@@ -12,6 +12,7 @@
 #include <winhttp.h>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "flutter/standard_method_codec.h"
 #include "resource.h"
 
 namespace {
@@ -168,6 +169,49 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  window_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(),
+          "green_vpn/windows_window",
+          &flutter::StandardMethodCodec::GetInstance());
+  window_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<
+                 flutter::MethodResult<flutter::EncodableValue>> result) {
+        if (call.method_name() != "setCloseBehavior") {
+          result->NotImplemented();
+          return;
+        }
+        const auto* arguments = std::get_if<flutter::EncodableMap>(
+            call.arguments());
+        if (!arguments) {
+          result->Error("invalid_arguments", "Expected an argument map.");
+          return;
+        }
+        const auto behavior_it =
+            arguments->find(flutter::EncodableValue("behavior"));
+        if (behavior_it == arguments->end()) {
+          result->Error("invalid_behavior", "Close behavior is required.");
+          return;
+        }
+        const auto* behavior =
+            std::get_if<std::string>(&behavior_it->second);
+        if (!behavior) {
+          result->Error("invalid_behavior", "Close behavior must be text.");
+          return;
+        }
+        if (*behavior == "minimize_to_tray") {
+          close_behavior_ = CloseBehavior::kMinimizeToTray;
+        } else if (*behavior == "ask") {
+          close_behavior_ = CloseBehavior::kAsk;
+        } else if (*behavior == "disconnect_and_exit") {
+          close_behavior_ = CloseBehavior::kDisconnectAndExit;
+        } else {
+          result->Error("invalid_behavior", "Unknown close behavior.");
+          return;
+        }
+        result->Success(flutter::EncodableValue(true));
+      });
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
   AddTrayIcon(GetHandle());
 
@@ -187,6 +231,7 @@ bool FlutterWindow::OnCreate() {
 
 void FlutterWindow::OnDestroy() {
   RemoveTrayIcon();
+  window_channel_.reset();
 
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
@@ -235,7 +280,26 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
 
     case WM_CLOSE:
       if (!exit_requested_) {
-        ShowWindow(hwnd, SW_HIDE);
+        if (close_behavior_ == CloseBehavior::kMinimizeToTray) {
+          ShowWindow(hwnd, SW_HIDE);
+          return 0;
+        }
+        if (close_behavior_ == CloseBehavior::kDisconnectAndExit) {
+          RequestDisconnectAndExit();
+          return 0;
+        }
+        const int choice = MessageBoxW(
+            hwnd,
+            L"\u0414\u0430: \u0441\u0432\u0435\u0440\u043d\u0443\u0442\u044c Green VPN \u0432 \u0442\u0440\u0435\u0439.\n"
+            L"\u041d\u0435\u0442: \u043e\u0442\u043a\u043b\u044e\u0447\u0438\u0442\u044c VPN \u0438 \u0432\u044b\u0439\u0442\u0438.\n"
+            L"\u041e\u0442\u043c\u0435\u043d\u0430: \u043e\u0441\u0442\u0430\u0442\u044c\u0441\u044f \u0432 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0438.",
+            GREENVPN_RUNTIME_PRODUCT_NAME_W,
+            MB_YESNOCANCEL | MB_ICONQUESTION | MB_DEFBUTTON1);
+        if (choice == IDYES) {
+          ShowWindow(hwnd, SW_HIDE);
+        } else if (choice == IDNO) {
+          RequestDisconnectAndExit();
+        }
         return 0;
       }
       break;
@@ -252,7 +316,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
           RunVpnTask(L"GreenVPNDisconnect");
           return 0;
         case kTrayMenuExit:
-          ExitApplication();
+          RequestDisconnectAndExit();
           return 0;
       }
       break;
@@ -272,7 +336,19 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
 
     case kTrayTaskResultMessage:
       tray_task_running_ = false;
-      ShowTrayTaskResult(wparam == TRUE, lparam == TRUE);
+      {
+        const bool success = wparam == TRUE;
+        const bool connecting = lparam == TRUE;
+        ShowTrayTaskResult(success, connecting);
+        if (exit_after_tray_task_) {
+          exit_after_tray_task_ = false;
+          if (success && !connecting) {
+            ExitApplication();
+          } else {
+            RestoreFromTray();
+          }
+        }
+      }
       return 0;
 
     case WM_FONTCHANGE:
@@ -405,6 +481,24 @@ void FlutterWindow::RestoreFromTray() {
   ShowWindow(window, SW_SHOW);
   ShowWindow(window, SW_RESTORE);
   SetForegroundWindow(window);
+}
+
+void FlutterWindow::RequestDisconnectAndExit() {
+  if (tray_task_running_) {
+    RestoreFromTray();
+    MessageBoxW(
+        GetHandle(),
+        L"\u0414\u043e\u0436\u0434\u0438\u0442\u0435\u0441\u044c \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0438\u044f \u0442\u0435\u043a\u0443\u0449\u0435\u0439 VPN-\u043e\u043f\u0435\u0440\u0430\u0446\u0438\u0438.",
+        GREENVPN_RUNTIME_PRODUCT_NAME_W,
+        MB_OK | MB_ICONINFORMATION);
+    return;
+  }
+  exit_after_tray_task_ = true;
+  RunVpnTask(L"GreenVPNDisconnect");
+  if (!tray_task_running_) {
+    exit_after_tray_task_ = false;
+    RestoreFromTray();
+  }
 }
 
 void FlutterWindow::RunVpnTask(const wchar_t* task_name) {

@@ -70,6 +70,8 @@ class MainActivity : FlutterActivity() {
                 "disconnect" -> handleDisconnect(result)
                 "probeConnectedRoute" -> handleProbeConnectedRoute(call, result)
                 "armRuntimeFailover" -> handleArmRuntimeFailover(call, result)
+                "scheduleRuntimeResume" -> handleScheduleRuntimeResume(call, result)
+                "cancelRuntimeResume" -> handleCancelRuntimeResume(result)
                 "runtimeFailoverStatus" -> result.success(
                     GreenVpnRuntimeFailoverService.snapshot(applicationContext)
                 )
@@ -285,6 +287,45 @@ class MainActivity : FlutterActivity() {
                 GreenVpnRuntimeFailoverService.snapshot(applicationContext)
             ).apply { put("ok", armed) }
         )
+    }
+
+    private fun handleScheduleRuntimeResume(call: MethodCall, result: MethodChannel.Result) {
+        val resumeAtMs = call.argument<Number>("resumeAtMs")?.toLong() ?: 0L
+        val serverId = call.argument<String>("serverId").orEmpty()
+        val protocol = call.argument<String>("protocol").orEmpty()
+        val scheduled = GreenVpnRuntimeFailoverService.scheduleResume(
+            applicationContext,
+            resumeAtMs,
+            serverId,
+            protocol,
+        )
+        result.success(
+            LinkedHashMap<String, Any>(
+                GreenVpnRuntimeFailoverService.snapshot(applicationContext)
+            ).apply { put("ok", scheduled) }
+        )
+    }
+
+    private fun handleCancelRuntimeResume(result: MethodChannel.Result) {
+        GreenVpnRuntimeFailoverService.cancelScheduledResume(applicationContext)
+        executor.execute {
+            try {
+                GreenVpnConnectionOperationGate.awaitIdle()
+                val response = LinkedHashMap<String, Any>(
+                    GreenVpnRuntimeFailoverService.snapshot(applicationContext)
+                ).apply { put("ok", true) }
+                runOnUiThread { result.success(response) }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    result.success(
+                        mapOf(
+                            "ok" to false,
+                            "message" to "Не удалось отменить автозапуск VPN: ${safeError(e)}",
+                        )
+                    )
+                }
+            }
+        }
     }
 
     private fun connectWithConfig(protocol: String, config: Any, result: MethodChannel.Result) {

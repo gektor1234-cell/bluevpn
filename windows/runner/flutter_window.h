@@ -3,6 +3,7 @@
 
 #include <flutter/dart_project.h>
 #include <flutter/flutter_view_controller.h>
+#include <flutter/method_channel.h>
 #include <shellapi.h>
 
 #include <memory>
@@ -33,6 +34,8 @@ class FlutterWindow : public Win32Window {
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      window_channel_;
 
   void AddTrayIcon(HWND window);
   void RemoveTrayIcon();
@@ -40,6 +43,7 @@ class FlutterWindow : public Win32Window {
   void ShowTrayMenu(HWND window);
   void RestoreFromTray();
   void RunVpnTask(const wchar_t* task_name);
+  void RequestDisconnectAndExit();
   void ShowTrayTaskResult(bool success, bool connecting);
   void ExitApplication();
 
@@ -47,7 +51,14 @@ class FlutterWindow : public Win32Window {
   bool tray_stale_cleanup_done_ = false;
   int tray_icon_add_attempts_ = 0;
   bool tray_task_running_ = false;
+  bool exit_after_tray_task_ = false;
   bool exit_requested_ = false;
+  enum class CloseBehavior {
+    kMinimizeToTray,
+    kAsk,
+    kDisconnectAndExit,
+  };
+  CloseBehavior close_behavior_ = CloseBehavior::kMinimizeToTray;
   NOTIFYICONDATAW tray_icon_data_{};
 };
 

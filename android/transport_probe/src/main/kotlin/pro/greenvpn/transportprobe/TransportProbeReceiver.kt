@@ -3,6 +3,8 @@ package pro.greenvpn.transportprobe
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -25,7 +27,10 @@ class TransportProbeReceiver : BroadcastReceiver() {
                 val uri = targets[target] ?: throw IllegalArgumentException("Unsupported probe target")
                 val timeoutMs = intent.getIntExtra("timeoutMs", DEFAULT_TIMEOUT_MS)
                     .coerceIn(MIN_TIMEOUT_MS, MAX_TIMEOUT_MS)
-                val probe = probe(uri, timeoutMs)
+                val connectivity = context.getSystemService(ConnectivityManager::class.java)
+                val network = connectivity.activeNetwork
+                    ?: throw IllegalStateException("No active network")
+                val probe = probe(network, uri, timeoutMs)
                 val result = JSONObject()
                     .put("target", target)
                     .put("timeoutMs", timeoutMs)
@@ -50,8 +55,8 @@ class TransportProbeReceiver : BroadcastReceiver() {
         }, "GreenVPN-External-Transport-Probe").start()
     }
 
-    private fun probe(uri: String, timeoutMs: Int): Probe = try {
-        val connection = URL(uri).openConnection() as HttpURLConnection
+    private fun probe(network: Network, uri: String, timeoutMs: Int): Probe = try {
+        val connection = network.openConnection(URL(uri)) as HttpURLConnection
         try {
             connection.instanceFollowRedirects = true
             connection.connectTimeout = timeoutMs

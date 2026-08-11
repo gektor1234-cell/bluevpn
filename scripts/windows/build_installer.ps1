@@ -281,6 +281,10 @@ if (-not (Test-Path -LiteralPath $ProjectRoot)) {
     throw "ProjectRoot does not exist: $ProjectRoot"
 }
 
+if ($EnableFusionUi -and (-not $PaidBetaBuild -or $PublicProductBuild)) {
+    throw "Fusion UI is allowed only in an isolated paid-beta build."
+}
+
 if ($PaidBetaBuild) {
     if ($TrialOnlyNoAdsBuild) {
         throw "Paid beta build cannot also be a Trial-only build."

@@ -52,12 +52,13 @@ const bool kStoreDistributionBuild = bool.fromEnvironment(
   'GREENVPN_STORE_DISTRIBUTION_BUILD',
   defaultValue: false,
 );
-const bool kFusionUiEnabled = bool.fromEnvironment(
+const bool kFusionUiRequested = bool.fromEnvironment(
   'GREENVPN_FUSION_UI_ENABLED',
   defaultValue: false,
 );
 const bool kSelfUpdateEnabled = !kStoreDistributionBuild;
 const bool kPaidBetaCustomerUi = kPaidBetaBuild && !kPublicProductBuild;
+const bool kFusionUiEnabled = kPaidBetaCustomerUi && kFusionUiRequested;
 const String kPaidBetaClientMarker = String.fromEnvironment(
   'GREENVPN_PAID_BETA_CLIENT_MARKER',
   defaultValue: 'green-vpn-paid-beta-v1',
@@ -139,6 +140,15 @@ const String kBuildMarker = 'bluevpn-safety-runtime-20260428-2355';
 const MethodChannel kAndroidPlatformChannel = MethodChannel(
   'green_vpn/android_vpn',
 );
+const MethodChannel kWindowsWindowChannel = MethodChannel(
+  'green_vpn/windows_window',
+);
+
+const String kFusionConnectionActionsFlag = 'fusion.connection_actions';
+const String kFusionLocationMemoryFlag = 'fusion.location_memory';
+const String kFusionConnectionDetailsFlag = 'fusion.connection_details';
+const String kFusionWindowsCloseBehaviorFlag = 'fusion.windows_close_behavior';
+const String kFusionFriendlyErrorsFlag = 'fusion.friendly_errors';
 
 const Color kBrandPrimary = Color(0xFF12A36F);
 const Color kBrandPrimaryDeep = Color(0xFF08785D);
@@ -151,6 +161,27 @@ const Color kBrandText = Color(0xFF101828);
 const Color kBrandMuted = Color(0xFF667085);
 const Color kBrandWarm = Color(0xFFFACC15);
 const Color kBrandDanger = Color(0xFFE5484D);
+
+enum WindowsCloseBehavior {
+  minimizeToTray('minimize_to_tray', 'Сворачивать в трей'),
+  ask('ask', 'Спрашивать при закрытии'),
+  disconnectAndExit('disconnect_and_exit', 'Отключать VPN и выходить');
+
+  const WindowsCloseBehavior(this.code, this.title);
+
+  final String code;
+  final String title;
+
+  static WindowsCloseBehavior fromCode(String? value) {
+    final clean = (value ?? '').trim().toLowerCase();
+    return values.firstWhere(
+      (item) => item.code == clean,
+      orElse: () => WindowsCloseBehavior.minimizeToTray,
+    );
+  }
+}
+
+void _noopSettingsAction() {}
 
 String greenVpnClientPlatform() {
   if (kIsWeb) return 'web';
@@ -2520,6 +2551,10 @@ class Prefs {
   final String lastSuccessfulRouteId;
   final String lastSuccessfulRouteProtocol;
   final String lastSuccessfulRouteAt;
+  final List<String> favoriteLocationIds;
+  final List<String> recentLocationIds;
+  final String vpnPauseUntil;
+  final String windowsCloseBehavior;
 
   const Prefs({
     required this.themeMode,
@@ -2541,6 +2576,10 @@ class Prefs {
     required this.lastSuccessfulRouteId,
     required this.lastSuccessfulRouteProtocol,
     required this.lastSuccessfulRouteAt,
+    required this.favoriteLocationIds,
+    required this.recentLocationIds,
+    required this.vpnPauseUntil,
+    required this.windowsCloseBehavior,
   });
 
   static Prefs defaults() => const Prefs(
@@ -2563,6 +2602,10 @@ class Prefs {
     lastSuccessfulRouteId: '',
     lastSuccessfulRouteProtocol: '',
     lastSuccessfulRouteAt: '',
+    favoriteLocationIds: [],
+    recentLocationIds: [],
+    vpnPauseUntil: '',
+    windowsCloseBehavior: 'minimize_to_tray',
   );
 
   Prefs copyWith({
@@ -2585,6 +2628,10 @@ class Prefs {
     String? lastSuccessfulRouteId,
     String? lastSuccessfulRouteProtocol,
     String? lastSuccessfulRouteAt,
+    List<String>? favoriteLocationIds,
+    List<String>? recentLocationIds,
+    String? vpnPauseUntil,
+    String? windowsCloseBehavior,
   }) {
     return Prefs(
       themeMode: themeMode ?? this.themeMode,
@@ -2612,6 +2659,10 @@ class Prefs {
           lastSuccessfulRouteProtocol ?? this.lastSuccessfulRouteProtocol,
       lastSuccessfulRouteAt:
           lastSuccessfulRouteAt ?? this.lastSuccessfulRouteAt,
+      favoriteLocationIds: favoriteLocationIds ?? this.favoriteLocationIds,
+      recentLocationIds: recentLocationIds ?? this.recentLocationIds,
+      vpnPauseUntil: vpnPauseUntil ?? this.vpnPauseUntil,
+      windowsCloseBehavior: windowsCloseBehavior ?? this.windowsCloseBehavior,
     );
   }
 
@@ -2635,6 +2686,10 @@ class Prefs {
     'lastSuccessfulRouteId': lastSuccessfulRouteId,
     'lastSuccessfulRouteProtocol': lastSuccessfulRouteProtocol,
     'lastSuccessfulRouteAt': lastSuccessfulRouteAt,
+    'favoriteLocationIds': favoriteLocationIds,
+    'recentLocationIds': recentLocationIds,
+    'vpnPauseUntil': vpnPauseUntil,
+    'windowsCloseBehavior': windowsCloseBehavior,
   };
 
   static Prefs fromJson(Map<String, dynamic> map) {
@@ -2733,6 +2788,12 @@ class Prefs {
         'lastSuccessfulRouteAt',
         d.lastSuccessfulRouteAt,
       ),
+      favoriteLocationIds: ls('favoriteLocationIds', d.favoriteLocationIds),
+      recentLocationIds: ls('recentLocationIds', d.recentLocationIds),
+      vpnPauseUntil: s0('vpnPauseUntil', d.vpnPauseUntil),
+      windowsCloseBehavior: WindowsCloseBehavior.fromCode(
+        s0('windowsCloseBehavior', d.windowsCloseBehavior),
+      ).code,
     );
   }
 }
@@ -4601,6 +4662,21 @@ while True:
         ),
       );
     }
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> fetchNetworkInfo({
+    required String accessToken,
+  }) async {
+    final result = await _jsonRequest(
+      method: 'GET',
+      path: '/api/v1/client/network-info',
+      bearerToken: accessToken,
+    );
+    if (!result.ok) return ApiResult.err(result.message);
+    if (result.data is! Map) {
+      return const ApiResult.err('Некорректный ответ network-info.');
+    }
+    return ApiResult.ok(Map<String, dynamic>.from(result.data as Map));
   }
 
   Future<ApiResult<WireGuardConfigResponse>> fetchWireGuardConfig({
@@ -7077,6 +7153,78 @@ String greenVpnPublicServerTitle(ServerLocation server) {
   return text;
 }
 
+ServerLocation? greenVpnResolveConnectedServerRoute({
+  required Iterable<ServerLocation> servers,
+  ServerLocation? activeRoute,
+  bool runtimeDesired = false,
+  String runtimeServerId = '',
+  String runtimeProtocol = '',
+  String cachedServerId = '',
+  String cachedProtocol = '',
+  DateTime? cachedAt,
+  ServerLocation? selectedRoute,
+  DateTime? now,
+}) {
+  ServerLocation? findRoute(String id, String protocol) {
+    final normalizedId = greenVpnNormalizeManagedRouteId(id);
+    final normalizedProtocol = protocol.trim().toLowerCase();
+    if (normalizedId.isEmpty) return null;
+    for (final server in servers) {
+      if (server.isAuto ||
+          greenVpnNormalizeManagedRouteId(server.id) != normalizedId) {
+        continue;
+      }
+      if (normalizedProtocol.isNotEmpty &&
+          server.protocolCode.trim().toLowerCase() != normalizedProtocol) {
+        continue;
+      }
+      return server;
+    }
+    return null;
+  }
+
+  if (runtimeDesired) {
+    final runtimeRoute = findRoute(runtimeServerId, runtimeProtocol);
+    if (runtimeRoute != null) return runtimeRoute;
+  }
+
+  if (activeRoute != null && !activeRoute.isAuto) return activeRoute;
+
+  final cachedRoute = findRoute(cachedServerId, cachedProtocol);
+  final currentTime = now ?? DateTime.now().toUtc();
+  if (cachedRoute != null &&
+      greenVpnIsFreshPreferredRoute(
+        candidateId: cachedRoute.id,
+        candidateProtocol: cachedRoute.protocolCode,
+        preferredId: cachedServerId,
+        preferredProtocol: cachedProtocol,
+        preferredAt: cachedAt,
+        now: currentTime,
+      )) {
+    return cachedRoute;
+  }
+
+  if (selectedRoute != null && !selectedRoute.isAuto) return selectedRoute;
+  return null;
+}
+
+String greenVpnConnectionRouteKey(ServerLocation? route) {
+  if (route == null || route.isAuto) return '';
+  return '${greenVpnNormalizeManagedRouteId(route.id)}|${route.protocolCode.trim().toLowerCase()}';
+}
+
+bool greenVpnShouldApplyConnectionNetworkInfo({
+  required bool vpnEnabled,
+  required int requestEpoch,
+  required int currentEpoch,
+  required String requestRouteKey,
+  required String currentRouteKey,
+}) {
+  return vpnEnabled &&
+      requestEpoch == currentEpoch &&
+      requestRouteKey == currentRouteKey;
+}
+
 String greenVpnPublicServerSubtitle(
   ServerLocation server, {
   bool includeUnavailable = false,
@@ -7440,7 +7588,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   bool optDedicatedIp = false;
   bool optAutoRenew = false;
 
-  // ===== SETTINGS (косметика) =====
+  // Legacy builds retain the existing single-language settings row.
   String sLanguage = 'Русский';
 
   // Local prefs (persist UI settings)
@@ -7454,7 +7602,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   Timer? _windowsRuntimeFailoverTimer;
   Timer? _windowsRouteMaintenanceTimer;
   Timer? _windowsStatusReconciliationTimer;
+  Timer? _vpnPauseTimer;
+  Timer? _connectionUiTimer;
+  int _androidPauseResumePollCount = 0;
   ServerLocation? _activeWindowsRuntimeRoute;
+  ServerLocation? _activeConnectionRoute;
   int _windowsRuntimeFailoverEpoch = 0;
   int _windowsRuntimeFailureCount = 0;
   bool _windowsRuntimeProbeRunning = false;
@@ -7495,6 +7647,16 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   bool _pendingBillingCheckRunning = false;
   String? _vpnBusyStage;
   String? _vpnBusyHint;
+  DateTime? _vpnPausedUntil;
+  DateTime? _connectionStartedAt;
+  int? _activeConnectionLatencyMs;
+  String? _connectionPublicIp;
+  int _connectionNetworkInfoEpoch = 0;
+  final Set<String> _favoriteLocationIds = <String>{};
+  final List<String> _recentLocationIds = <String>[];
+  WindowsCloseBehavior _windowsCloseBehavior =
+      WindowsCloseBehavior.minimizeToTray;
+  Map<String, bool> _clientFeatures = const <String, bool>{};
   bool _pendingVpnResumeScheduled = false;
   Map<String, dynamic>? _pendingBillingOrder;
   late bool _emailVerified;
@@ -7511,6 +7673,457 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   void goToTab(int i) => setState(() => _index = i);
 
   bool get _vpnInteractionLocked => vpnBusy || _vpnTapCooldown;
+
+  bool _clientFeatureEnabled(String key) {
+    if (!kFusionUiEnabled) return false;
+    if (widget.session.accessToken == 'dev-token') return true;
+    return _clientFeatures[key] == true;
+  }
+
+  bool get _vpnPauseActive {
+    final until = _vpnPausedUntil;
+    return until != null && until.isAfter(DateTime.now());
+  }
+
+  bool get _vpnPausePending => _vpnPausedUntil != null && !vpnEnabled;
+
+  void _applyClientFeatures(Object? raw) {
+    final next = <String, bool>{};
+    if (raw is Map) {
+      for (final entry in raw.entries) {
+        final key = entry.key.toString().trim();
+        if (key.isNotEmpty) next[key] = entry.value == true;
+      }
+    }
+    _clientFeatures = Map<String, bool>.unmodifiable(next);
+  }
+
+  Future<void> _applyWindowsCloseBehavior() async {
+    if (kIsWeb || !Platform.isWindows) return;
+    final effectiveBehavior =
+        _clientFeatureEnabled(kFusionWindowsCloseBehaviorFlag)
+        ? _windowsCloseBehavior
+        : WindowsCloseBehavior.minimizeToTray;
+    try {
+      await kWindowsWindowChannel.invokeMethod<void>('setCloseBehavior', {
+        'behavior': effectiveBehavior.code,
+      });
+    } catch (error) {
+      await appendBlueVpnClientLog(
+        'windows close behavior apply failed error=$error',
+      );
+    }
+  }
+
+  Future<void> _setWindowsCloseBehavior(WindowsCloseBehavior behavior) async {
+    if (_windowsCloseBehavior == behavior) return;
+    setState(() => _windowsCloseBehavior = behavior);
+    _schedulePrefsSave();
+    await _applyWindowsCloseBehavior();
+  }
+
+  void _startConnectionUiTimer() {
+    _connectionUiTimer ??= Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted || !vpnEnabled) return;
+      setState(() {});
+    });
+  }
+
+  void _stopConnectionUiTimer() {
+    _connectionUiTimer?.cancel();
+    _connectionUiTimer = null;
+  }
+
+  void _rememberLocation(ServerLocation? route) {
+    if (route == null || route.isAuto) return;
+    final locationId = route.publicLocationId.trim();
+    if (locationId.isEmpty) return;
+    _recentLocationIds
+      ..remove(locationId)
+      ..insert(0, locationId);
+    if (_recentLocationIds.length > 8) {
+      _recentLocationIds.removeRange(8, _recentLocationIds.length);
+    }
+    _schedulePrefsSave();
+  }
+
+  void _toggleFavoriteLocation(ServerLocation route) {
+    if (route.isAuto) return;
+    final locationId = route.publicLocationId.trim();
+    if (locationId.isEmpty) return;
+    setState(() {
+      if (!_favoriteLocationIds.add(locationId)) {
+        _favoriteLocationIds.remove(locationId);
+      }
+    });
+    _schedulePrefsSave();
+  }
+
+  void _trackConnectionState(
+    bool connected, {
+    ServerLocation? route,
+    int? latencyMs,
+  }) {
+    if (!kFusionUiEnabled || !mounted) return;
+    if (connected) {
+      final effectiveRoute = route ?? _activeConnectionRoute;
+      final previousRouteKey = _connectionRouteKey(_activeConnectionRoute);
+      final effectiveRouteKey = _connectionRouteKey(effectiveRoute);
+      final routeChanged =
+          previousRouteKey.isNotEmpty &&
+          effectiveRouteKey.isNotEmpty &&
+          previousRouteKey != effectiveRouteKey;
+      final newConnection = _connectionStartedAt == null;
+      final refreshNetworkInfo =
+          _connectionPublicIp == null || routeChanged || newConnection;
+      setState(() {
+        if (routeChanged || newConnection) {
+          _connectionNetworkInfoEpoch += 1;
+        }
+        _connectionStartedAt ??= DateTime.now();
+        if (effectiveRoute != null) _activeConnectionRoute = effectiveRoute;
+        if (routeChanged) {
+          _connectionPublicIp = null;
+          _activeConnectionLatencyMs = latencyMs != null && latencyMs >= 0
+              ? latencyMs
+              : effectiveRoute?.pingMs;
+        } else if (latencyMs != null && latencyMs >= 0) {
+          _activeConnectionLatencyMs = latencyMs;
+        } else {
+          _activeConnectionLatencyMs ??= effectiveRoute?.pingMs;
+        }
+      });
+      _startConnectionUiTimer();
+      _rememberLocation(effectiveRoute);
+      if (refreshNetworkInfo) {
+        unawaited(_refreshConnectionNetworkInfo());
+      }
+      return;
+    }
+
+    _connectionNetworkInfoEpoch += 1;
+    if (_connectionStartedAt == null &&
+        _activeConnectionRoute == null &&
+        _activeConnectionLatencyMs == null &&
+        _connectionPublicIp == null) {
+      return;
+    }
+    _stopConnectionUiTimer();
+    setState(() {
+      _connectionStartedAt = null;
+      _activeConnectionRoute = null;
+      _activeConnectionLatencyMs = null;
+      _connectionPublicIp = null;
+    });
+  }
+
+  String _connectionRouteKey(ServerLocation? route) {
+    return greenVpnConnectionRouteKey(route);
+  }
+
+  Future<ServerLocation?> _resolveAndroidConnectedRoute() async {
+    Map<String, dynamic> runtimeStatus = const <String, dynamic>{};
+    try {
+      runtimeStatus =
+          await kAndroidPlatformChannel.invokeMapMethod<String, dynamic>(
+            'runtimeFailoverStatus',
+          ) ??
+          const <String, dynamic>{};
+    } catch (error) {
+      await appendBlueVpnClientLog(
+        'android connected route runtime status failed error=$error',
+      );
+    }
+
+    final route = greenVpnResolveConnectedServerRoute(
+      servers: servers,
+      activeRoute: _activeConnectionRoute,
+      runtimeDesired: runtimeStatus['desired'] == true,
+      runtimeServerId: (runtimeStatus['serverId'] ?? '').toString(),
+      runtimeProtocol: (runtimeStatus['protocol'] ?? '').toString(),
+      cachedServerId: _lastSuccessfulRouteId,
+      cachedProtocol: _lastSuccessfulRouteProtocol,
+      cachedAt: _lastSuccessfulRouteAt,
+      selectedRoute: selectedServer,
+      now: DateTime.now().toUtc(),
+    );
+    if (route != null && route.id != _activeConnectionRoute?.id) {
+      await appendBlueVpnClientLog(
+        'android connected route restored server=${route.id} protocol=${route.protocolCode} runtimeDesired=${runtimeStatus['desired'] == true}',
+      );
+    }
+    return route;
+  }
+
+  Future<void> _refreshConnectionNetworkInfo() async {
+    if (kIsWeb || !vpnEnabled || widget.session.accessToken == 'dev-token') {
+      return;
+    }
+    final requestEpoch = _connectionNetworkInfoEpoch;
+    final requestRouteKey = _connectionRouteKey(_activeConnectionRoute);
+    final response = await _api.fetchNetworkInfo(
+      accessToken: widget.session.accessToken,
+    );
+    if (!mounted ||
+        !greenVpnShouldApplyConnectionNetworkInfo(
+          vpnEnabled: vpnEnabled,
+          requestEpoch: requestEpoch,
+          currentEpoch: _connectionNetworkInfoEpoch,
+          requestRouteKey: requestRouteKey,
+          currentRouteKey: _connectionRouteKey(_activeConnectionRoute),
+        ) ||
+        !response.ok ||
+        response.data == null) {
+      return;
+    }
+    final publicIp = (response.data!['publicIp'] ?? '').toString().trim();
+    if (publicIp.isEmpty) return;
+    setState(() => _connectionPublicIp = publicIp);
+  }
+
+  Future<bool> _cancelAndroidPauseResume() async {
+    if (kIsWeb || !Platform.isAndroid) return true;
+    try {
+      final response = await kAndroidPlatformChannel
+          .invokeMapMethod<String, dynamic>('cancelRuntimeResume');
+      return response?['ok'] == true;
+    } catch (error) {
+      await appendBlueVpnClientLog(
+        'android pause resume cancel failed error=$error',
+      );
+      return false;
+    }
+  }
+
+  Future<bool> _scheduleAndroidPauseResume(
+    DateTime until,
+    ServerLocation? route,
+  ) async {
+    if (kIsWeb || !Platform.isAndroid) return true;
+    try {
+      final response = await kAndroidPlatformChannel
+          .invokeMapMethod<String, dynamic>('scheduleRuntimeResume', {
+            'resumeAtMs': until.millisecondsSinceEpoch,
+            'serverId': route?.id ?? '',
+            'protocol': route?.protocolCode ?? 'wireguard_udp',
+          });
+      return response?['ok'] == true;
+    } catch (error) {
+      await appendBlueVpnClientLog(
+        'android pause resume schedule failed error=$error',
+      );
+      return false;
+    }
+  }
+
+  void _armVpnPauseTimer() {
+    _vpnPauseTimer?.cancel();
+    _vpnPauseTimer = null;
+    final until = _vpnPausedUntil;
+    if (until == null) return;
+    final delay = until.difference(DateTime.now());
+    if (delay <= Duration.zero) {
+      unawaited(_resumeVpnAfterPause(automatic: true));
+      return;
+    }
+    _vpnPauseTimer = Timer(delay, () {
+      unawaited(_resumeVpnAfterPause(automatic: true));
+    });
+  }
+
+  Future<void> _pauseVpn(Duration duration) async {
+    if (!_clientFeatureEnabled(kFusionConnectionActionsFlag) ||
+        !vpnEnabled ||
+        _vpnInteractionLocked) {
+      return;
+    }
+    final route =
+        _activeConnectionRoute ??
+        _activeWindowsRuntimeRoute ??
+        _connectCandidatesForCurrentSelection().firstOrNull;
+    final until = DateTime.now().add(duration);
+    _androidPauseResumePollCount = 0;
+    setState(() => _vpnPausedUntil = until);
+    _schedulePrefsSave();
+    await _toggleVpnReal();
+    if (!mounted) return;
+    if (vpnEnabled) {
+      setState(() => _vpnPausedUntil = null);
+      _schedulePrefsSave();
+      _toast(context, 'Не удалось приостановить VPN. Подключение сохранено.');
+      return;
+    }
+    final scheduled = await _scheduleAndroidPauseResume(until, route);
+    if (!mounted) return;
+    if (!scheduled && !kIsWeb && Platform.isAndroid) {
+      setState(() => _vpnPausedUntil = null);
+      _schedulePrefsSave();
+      _toast(
+        context,
+        'Android не смог запланировать автозапуск. VPN оставлен выключенным.',
+      );
+      return;
+    }
+    _armVpnPauseTimer();
+    final minutes = duration.inMinutes;
+    _toast(context, 'VPN приостановлен на $minutes мин.');
+  }
+
+  Future<void> _resumeVpnAfterPause({required bool automatic}) async {
+    final hadPause = _vpnPausedUntil != null;
+    _vpnPauseTimer?.cancel();
+    _vpnPauseTimer = null;
+    if (!hadPause) return;
+
+    if (!kIsWeb && Platform.isAndroid && automatic) {
+      await Future<void>.delayed(const Duration(seconds: 2));
+      await _syncVpnStatus(source: 'android_pause_elapsed');
+      if (!mounted) return;
+      if (!vpnEnabled) {
+        _androidPauseResumePollCount += 1;
+        if (_androidPauseResumePollCount >= 60) {
+          await appendBlueVpnClientLog(
+            'android pause resume UI polling stopped after five minutes',
+          );
+          final cancelled = await _cancelAndroidPauseResume();
+          if (!cancelled) {
+            _vpnPauseTimer = Timer(const Duration(seconds: 5), () {
+              unawaited(_resumeVpnAfterPause(automatic: true));
+            });
+            return;
+          }
+          if (mounted) {
+            setState(() => _vpnPausedUntil = null);
+            _schedulePrefsSave();
+            _toast(
+              context,
+              'Не удалось автоматически возобновить VPN. Нажмите кнопку подключения.',
+            );
+          }
+          return;
+        }
+        _vpnPauseTimer = Timer(const Duration(seconds: 5), () {
+          unawaited(_resumeVpnAfterPause(automatic: true));
+        });
+        return;
+      }
+    } else {
+      _androidPauseResumePollCount = 0;
+      final cancelled = await _cancelAndroidPauseResume();
+      if (!cancelled) {
+        if (mounted) {
+          _toast(
+            context,
+            'Не удалось отменить автозапуск. Повторите через несколько секунд.',
+          );
+        }
+        return;
+      }
+      if (!kIsWeb && Platform.isAndroid) {
+        await _syncVpnStatus(source: 'android_pause_manual_resume');
+        if (!mounted) return;
+      }
+      if (!vpnEnabled) {
+        setState(() => _vpnPausedUntil = null);
+        _schedulePrefsSave();
+        await _toggleVpnReal();
+        if (!mounted || !vpnEnabled) return;
+      }
+    }
+
+    if (mounted) setState(() => _vpnPausedUntil = null);
+    _androidPauseResumePollCount = 0;
+    _schedulePrefsSave();
+    if (!automatic && mounted) _toast(context, 'VPN возобновлён.');
+  }
+
+  Future<void> _openVpnPauseMenu() async {
+    if (!_clientFeatureEnabled(kFusionConnectionActionsFlag)) return;
+    if (_vpnPauseActive) {
+      await _resumeVpnAfterPause(automatic: false);
+      return;
+    }
+    if (!vpnEnabled) return;
+    final duration = await showModalBottomSheet<Duration>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'Приостановить VPN',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'VPN включится автоматически.',
+                style: TextStyle(
+                  color: Theme.of(
+                    ctx,
+                  ).colorScheme.onSurface.withValues(alpha: 0.62),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 12),
+              for (final minutes in const <int>[5, 30, 60])
+                ListTile(
+                  leading: const Icon(Icons.timer_outlined),
+                  title: Text('$minutes минут'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () =>
+                      Navigator.of(ctx).pop(Duration(minutes: minutes)),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (duration != null) await _pauseVpn(duration);
+  }
+
+  Future<void> _changeRouteAutomatically() async {
+    if (!_clientFeatureEnabled(kFusionConnectionActionsFlag) ||
+        !vpnEnabled ||
+        _vpnInteractionLocked) {
+      return;
+    }
+    await _refreshServerCatalog(showToast: false);
+    if (!mounted) return;
+    final activeLocation =
+        (_activeConnectionRoute ?? selectedServer).publicLocationId;
+    final alternatives = _serverPickerLocations()
+        .where(
+          (route) =>
+              !route.isAuto &&
+              route.isCurrentClientReady &&
+              (!route.requiresPaidSubscription ||
+                  _hasPaidSubscriptionEntitlement) &&
+              route.publicLocationId != activeLocation,
+        )
+        .toList();
+    if (alternatives.isEmpty) {
+      _toast(context, 'Сейчас нет другой готовой локации.');
+      return;
+    }
+    final originalSelection = selectedServer;
+    final originalPersistedId = _persistedServerId;
+    try {
+      await _selectServerAndReconnectIfNeeded(
+        alternatives.first,
+        persistSelection: false,
+      );
+    } finally {
+      if (mounted) {
+        setState(() => selectedServer = originalSelection);
+        _persistedServerId = originalPersistedId;
+        _schedulePrefsSave();
+      }
+    }
+  }
 
   bool get _hasPaidSubscriptionEntitlement => greenVpnHasPaidEntitlement(
     isActive: _subscriptionActive,
@@ -7608,11 +8221,14 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         'android resume vpn status connected=$connected systemVpnActive=$systemVpnActive externalVpnActive=$externalVpnActive wasEnabled=$wasEnabledBeforeResume state=${status['state'] ?? ""} status=$status',
       );
       if (connected) {
+        final activeRoute = await _resolveAndroidConnectedRoute();
+        if (!mounted) return;
         if (mounted) {
           setState(() {
             vpnEnabled = true;
             _androidExternalVpnActive = false;
           });
+          _trackConnectionState(true, route: activeRoute);
         }
         return;
       }
@@ -7623,6 +8239,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             vpnEnabled = false;
             _androidExternalVpnActive = true;
           });
+          _trackConnectionState(false);
         }
         await appendBlueVpnClientLog(
           'android resume detected external system VPN without confirmed own tunnel',
@@ -7641,8 +8258,13 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   void _toast(BuildContext context, String text) {
-    final visibleText = kPublicProductBuild
-        ? greenVpnPublicErrorMessage(rawError: text)
+    final friendlyErrorsEnabled =
+        kPublicProductBuild || _clientFeatureEnabled(kFusionFriendlyErrorsFlag);
+    final visibleText = friendlyErrorsEnabled
+        ? greenVpnPublicErrorMessage(
+            rawError: text,
+            fallback: 'Не удалось выполнить действие. Попробуйте ещё раз.',
+          )
         : text;
     ScaffoldMessenger.of(
       context,
@@ -7916,7 +8538,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       final p = await _prefsStore.readPrefs();
       if (!mounted) return;
 
-      // English UI is not shipped yet, so do not expose a fake broken switch.
+      // English UI is not shipped yet, so the legacy row remains Russian-only.
       sLanguage = 'Русский';
 
       // Apply server
@@ -7938,6 +8560,29 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       _lastSuccessfulRouteAt = DateTime.tryParse(
         p.lastSuccessfulRouteAt,
       )?.toUtc();
+      _favoriteLocationIds.clear();
+      _recentLocationIds.clear();
+      _vpnPausedUntil = null;
+      _windowsCloseBehavior = WindowsCloseBehavior.minimizeToTray;
+      if (kFusionUiEnabled) {
+        _favoriteLocationIds.addAll(
+          p.favoriteLocationIds
+              .map((value) => value.trim())
+              .where((value) => value.isNotEmpty)
+              .take(24),
+        );
+        _recentLocationIds.addAll(
+          p.recentLocationIds
+              .map((value) => value.trim())
+              .where((value) => value.isNotEmpty)
+              .toSet()
+              .take(8),
+        );
+        _vpnPausedUntil = DateTime.tryParse(p.vpnPauseUntil)?.toLocal();
+        _windowsCloseBehavior = WindowsCloseBehavior.fromCode(
+          p.windowsCloseBehavior,
+        );
+      }
 
       // Apply social-only
       _socialOnlyPreferenceRequested = p.socialOnlyEnabled;
@@ -8044,14 +8689,25 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       }
 
       if (mounted) setState(() {});
+      await _applyWindowsCloseBehavior();
+      if (kFusionUiEnabled) _armVpnPauseTimer();
     } catch (_) {
       // ignore
     } finally {
       _prefsLoaded = true;
       if (mounted && vpnEnabled) {
-        unawaited(
-          _restoreWindowsRuntimeFailoverIfPossible(source: 'prefs_loaded'),
-        );
+        if (!kIsWeb && Platform.isAndroid) {
+          unawaited(() async {
+            final activeRoute = await _resolveAndroidConnectedRoute();
+            if (mounted && vpnEnabled) {
+              _trackConnectionState(true, route: activeRoute);
+            }
+          }());
+        } else {
+          unawaited(
+            _restoreWindowsRuntimeFailoverIfPossible(source: 'prefs_loaded'),
+          );
+        }
       }
       if (!_pendingVpnResumeScheduled) {
         _pendingVpnResumeScheduled = true;
@@ -8120,6 +8776,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           'lastSuccessfulRouteProtocol': _lastSuccessfulRouteProtocol,
           'lastSuccessfulRouteAt':
               _lastSuccessfulRouteAt?.toUtc().toIso8601String() ?? '',
+          'favoriteLocationIds': _favoriteLocationIds.toList()..sort(),
+          'recentLocationIds': _recentLocationIds.take(8).toList(),
+          'vpnPauseUntil': _vpnPausedUntil?.toUtc().toIso8601String() ?? '',
+          'windowsCloseBehavior': _windowsCloseBehavior.code,
         }),
       );
     });
@@ -8461,11 +9121,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         _tariffQuote = quoteRes.data;
         final quote = quoteRes.data!['quote'];
         final monthly = quote is Map ? quote['monthlyPriceRub'] : null;
-        _tariffStatus = monthly == null
-            ? 'Цена обновлена.'
-            : usesFixedBillingPlans
-            ? 'Стоимость: $monthly ₽.'
-            : 'Цена обновлена: $monthly ₽/мес.';
+        _tariffStatus = greenVpnTariffRefreshStatus(
+          usesFixedBillingPlans: usesFixedBillingPlans,
+          monthlyPriceRub: monthly,
+        );
       });
 
       if (showToast) {
@@ -9546,7 +10205,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     return true;
   }
 
-  void _setLanguage(String v) {
+  void _setLanguage(String value) {
     setState(() => sLanguage = 'Русский');
     _schedulePrefsSave();
   }
@@ -9620,6 +10279,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           _windowsRuntimeFailoverTimer != null) {
         _disarmWindowsRuntimeFailover(reason: 'status_disconnected');
       }
+      _trackConnectionState(
+        on,
+        route: _activeWindowsRuntimeRoute ?? _activeConnectionRoute,
+      );
       return;
     }
 
@@ -9630,6 +10293,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           vpnEnabled = false;
           _androidExternalVpnActive = false;
         });
+        _trackConnectionState(false);
       }
       return;
     }
@@ -9639,15 +10303,16 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       );
       final own = _androidStatusLooksLikeOwnTunnel(status);
       final external = _androidStatusLooksLikeExternalVpn(status);
+      final activeRoute = own ? await _resolveAndroidConnectedRoute() : null;
+      if (!mounted || syncEpoch != _vpnStatusSyncEpoch) return;
       await appendBlueVpnClientLog(
         'android sync status ownTunnel=$own externalVpn=$external status=$status',
       );
-      if (mounted) {
-        setState(() {
-          vpnEnabled = own;
-          _androidExternalVpnActive = external;
-        });
-      }
+      setState(() {
+        vpnEnabled = own;
+        _androidExternalVpnActive = external;
+      });
+      _trackConnectionState(own, route: activeRoute);
       return;
     }
     final on = await _vpnBackend.isConnected();
@@ -9662,6 +10327,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           _windowsRuntimeFailoverTimer != null) {
         _disarmWindowsRuntimeFailover(reason: 'status_disconnected');
       }
+      _trackConnectionState(
+        on,
+        route: _activeWindowsRuntimeRoute ?? _activeConnectionRoute,
+      );
     }
   }
 
@@ -9983,6 +10652,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         return;
       }
       if (!boot.ok || boot.data == null) return;
+
+      if (mounted) {
+        setState(() => _applyClientFeatures(boot.data!['clientFeatures']));
+        await _applyWindowsCloseBehavior();
+      }
 
       final did = await _ensureDeviceId();
       if (did == null || did.isEmpty) return;
@@ -10500,6 +11174,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
 
     final bootMap = boot.data!;
+    setState(() => _applyClientFeatures(bootMap['clientFeatures']));
+    await _applyWindowsCloseBehavior();
+    if (!mounted) {
+      return const ProvisionedConfigResult.err('screen_closed');
+    }
     final sub = bootMap['subscription'];
     if (sub is Map) {
       final subMap = Map<String, dynamic>.from(sub);
@@ -10729,7 +11408,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     final duration = _routeFailureCooldown.recordFailure(key);
     final failedPreferredRoute =
         !kIsWeb &&
-        Platform.isWindows &&
+        (Platform.isWindows || (Platform.isAndroid && kFusionUiEnabled)) &&
         stage != 'config_fetch' &&
         server.id == _lastSuccessfulRouteId &&
         server.protocolCode == _lastSuccessfulRouteProtocol;
@@ -10749,7 +11428,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   Future<void> _recordRouteSuccess(ServerLocation server) async {
     if (!kTransportPreviewFallbackEnabled || server.isAuto) return;
     _routeFailureCooldown.recordSuccess(_routeCooldownKey(server));
-    if (!kIsWeb && Platform.isWindows) {
+    if (!kIsWeb &&
+        (Platform.isWindows || (Platform.isAndroid && kFusionUiEnabled))) {
       final routeId = greenVpnNormalizeManagedRouteId(server.id);
       final protocol = server.protocolCode.trim().toLowerCase();
       final confirmedAt = DateTime.now().toUtc();
@@ -11331,6 +12011,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
       final route = matches.first;
       await _armRuntimeFailover(route);
+      _trackConnectionState(true, route: route, latencyMs: route.pingMs);
       await appendBlueVpnClientLog(
         'windows runtime failover restored source=$source server=${route.id} protocol=${route.protocolCode}',
       );
@@ -12327,6 +13008,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               'toggle tunnel confirmed server=${candidate.id} clickToTunnelMs=${toggleWatch.elapsedMilliseconds}',
             ),
           );
+          var connectionLatencyMs = candidate.pingMs;
 
           if (greenVpnShouldBlockForegroundForPostConnectProbe(
             probeRequested: _shouldRunPostConnectProbe,
@@ -12337,6 +13019,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               hint: 'VPN включён. Проверяем, что YouTube открывается.',
             );
             final probe = await _probeConnectedTunnelRoute(candidate);
+            connectionLatencyMs = probe.latencyMs;
             if (!mounted) return;
             unawaited(
               _reportRouteEvent(
@@ -12410,9 +13093,15 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           );
           if (!mounted) return;
           if (kIsWeb || !Platform.isWindows) {
-            unawaited(_recordRouteSuccess(candidate));
+            await _recordRouteSuccess(candidate);
           }
+          if (!mounted) return;
           unawaited(_armRuntimeFailover(candidate));
+          _trackConnectionState(
+            true,
+            route: candidate,
+            latencyMs: connectionLatencyMs,
+          );
           _refreshConnectionOptionsAfterConnect(candidate);
           if (kPaidBetaBuild) {
             unawaited(_recordPaidBetaEvent('vpn_connected'));
@@ -12468,6 +13157,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           'toggle disconnect sync done vpnEnabled=$vpnEnabled',
         );
         if (!mounted) return;
+        _trackConnectionState(false);
         _startVpnTapCooldown(
           hint:
               'VPN только что выключился. Кнопка разблокируется через секунду, чтобы состояние успело обновиться.',
@@ -12637,90 +13327,234 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     if (!context.mounted) return;
     final pickerServers = _serverPickerLocations();
     final automaticLatencyMs = _backendAutoCandidate().pingMs;
-    final picked = await showDialog<ServerLocation>(
-      context: context,
-      builder: (ctx) {
-        return AlertDialog(
-          title: const Text('Выбор сервера'),
-          content: SizedBox(
-            width: 420,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: pickerServers.map((s) {
-                  final locked =
-                      s.requiresPaidSubscription &&
-                      !_hasPaidSubscriptionEntitlement;
-                  final selected = s.isAuto
-                      ? selectedServer.isAuto
-                      : !selectedServer.isAuto &&
-                            s.publicLocationId ==
-                                selectedServer.publicLocationId;
-                  final title = greenVpnPublicServerTitle(s);
-                  final latency = greenVpnPublicLatencyLabel(
-                    s.isAuto ? automaticLatencyMs : s.pingMs,
+    final searchController = TextEditingController();
+    ServerLocation? picked;
+    try {
+      picked = await showDialog<ServerLocation>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setLocal) {
+            final memoryEnabled = _clientFeatureEnabled(
+              kFusionLocationMemoryFlag,
+            );
+            final query = searchController.text.trim().toLowerCase();
+            bool matches(ServerLocation server) {
+              if (query.isEmpty) return true;
+              final haystack = <String>[
+                greenVpnPublicServerTitle(server),
+                greenVpnPublicServerSubtitle(server),
+                server.country,
+                server.city,
+              ].join(' ').toLowerCase();
+              return haystack.contains(query);
+            }
+
+            final visible = pickerServers.where(matches).toList();
+            final favorites = visible
+                .where(
+                  (server) =>
+                      memoryEnabled &&
+                      !server.isAuto &&
+                      _favoriteLocationIds.contains(server.publicLocationId),
+                )
+                .toList();
+            final recent =
+                visible
+                    .where(
+                      (server) =>
+                          memoryEnabled &&
+                          !server.isAuto &&
+                          !_favoriteLocationIds.contains(
+                            server.publicLocationId,
+                          ) &&
+                          _recentLocationIds.contains(server.publicLocationId),
+                    )
+                    .toList()
+                  ..sort(
+                    (left, right) => _recentLocationIds
+                        .indexOf(left.publicLocationId)
+                        .compareTo(
+                          _recentLocationIds.indexOf(right.publicLocationId),
+                        ),
                   );
-                  final subtitle = locked ? '$latency • По подписке' : latency;
-                  return ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(
-                      s.isAuto
-                          ? Icons.auto_awesome_rounded
-                          : (locked
-                                ? Icons.lock_rounded
-                                : s.isCurrentClientReady
-                                ? Icons.public_rounded
-                                : Icons.warning_amber_rounded),
-                      color: locked
-                          ? kBrandWarm
-                          : s.isAuto || s.isCurrentClientReady
-                          ? kBrandPrimary
-                          : kBrandWarm,
-                    ),
-                    title: Text(
-                      title,
-                      style: const TextStyle(fontWeight: FontWeight.w900),
-                    ),
-                    subtitle: Text(subtitle),
-                    enabled: true,
-                    trailing: locked
-                        ? const Icon(Icons.lock_outline_rounded)
-                        : selected
-                        ? const Icon(
-                            Icons.check_circle_rounded,
-                            color: kBrandPrimary,
-                          )
-                        : const Icon(Icons.chevron_right_rounded),
-                    onTap: () {
-                      if (locked) {
-                        Navigator.of(ctx).pop();
-                        _openTariff();
-                        _toast(context, 'Эта локация доступна по подписке.');
-                        return;
-                      }
-                      Navigator.of(ctx).pop(s);
-                    },
-                  );
-                }).toList(),
+            final other = visible
+                .where(
+                  (server) =>
+                      !server.isAuto &&
+                      !favorites.contains(server) &&
+                      !recent.contains(server),
+                )
+                .toList();
+            final automatic = visible.where((server) => server.isAuto).toList();
+
+            Widget sectionTitle(String title) => Padding(
+              padding: const EdgeInsets.fromLTRB(0, 12, 0, 4),
+              child: Text(
+                title.toUpperCase(),
+                style: const TextStyle(
+                  color: kBrandMuted,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w900,
+                ),
               ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Закрыть'),
-            ),
-          ],
-        );
-      },
-    );
+            );
+
+            Widget locationTile(ServerLocation server) {
+              final locked =
+                  server.requiresPaidSubscription &&
+                  !_hasPaidSubscriptionEntitlement;
+              final selected = server.isAuto
+                  ? selectedServer.isAuto
+                  : !selectedServer.isAuto &&
+                        server.publicLocationId ==
+                            selectedServer.publicLocationId;
+              final latency = greenVpnPublicLatencyLabel(
+                server.isAuto ? automaticLatencyMs : server.pingMs,
+              );
+              final subtitle = locked ? '$latency • По подписке' : latency;
+              final favorite = _favoriteLocationIds.contains(
+                server.publicLocationId,
+              );
+              return ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  server.isAuto
+                      ? Icons.auto_awesome_rounded
+                      : locked
+                      ? Icons.lock_rounded
+                      : server.isCurrentClientReady
+                      ? Icons.public_rounded
+                      : Icons.warning_amber_rounded,
+                  color: locked
+                      ? kBrandWarm
+                      : server.isAuto || server.isCurrentClientReady
+                      ? kBrandPrimary
+                      : kBrandWarm,
+                ),
+                title: Text(
+                  greenVpnPublicServerTitle(server),
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+                subtitle: Text(subtitle),
+                trailing: server.isAuto
+                    ? Icon(
+                        selected
+                            ? Icons.check_circle_rounded
+                            : Icons.chevron_right_rounded,
+                        color: selected ? kBrandPrimary : null,
+                      )
+                    : !memoryEnabled
+                    ? Icon(
+                        locked
+                            ? Icons.lock_outline_rounded
+                            : selected
+                            ? Icons.check_circle_rounded
+                            : Icons.chevron_right_rounded,
+                        color: selected ? kBrandPrimary : null,
+                      )
+                    : Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            key: Key(
+                              'fusion_location_favorite_${server.publicLocationId}',
+                            ),
+                            tooltip: favorite
+                                ? 'Убрать из избранного'
+                                : 'В избранное',
+                            onPressed: () {
+                              _toggleFavoriteLocation(server);
+                              setLocal(() {});
+                            },
+                            icon: Icon(
+                              favorite
+                                  ? Icons.star_rounded
+                                  : Icons.star_border_rounded,
+                              color: favorite ? kBrandWarm : null,
+                            ),
+                          ),
+                          Icon(
+                            locked
+                                ? Icons.lock_outline_rounded
+                                : selected
+                                ? Icons.check_circle_rounded
+                                : Icons.chevron_right_rounded,
+                            color: selected ? kBrandPrimary : null,
+                          ),
+                        ],
+                      ),
+                onTap: () {
+                  if (locked) {
+                    Navigator.of(ctx).pop();
+                    _openTariff();
+                    _toast(context, 'Эта локация доступна по подписке.');
+                    return;
+                  }
+                  Navigator.of(ctx).pop(server);
+                },
+              );
+            }
+
+            final sections = <Widget>[
+              for (final server in automatic) locationTile(server),
+              if (favorites.isNotEmpty) sectionTitle('Избранное'),
+              for (final server in favorites) locationTile(server),
+              if (recent.isNotEmpty) sectionTitle('Недавние'),
+              for (final server in recent) locationTile(server),
+              if (other.isNotEmpty) sectionTitle('Все локации'),
+              for (final server in other) locationTile(server),
+            ];
+
+            return AlertDialog(
+              title: const Text('Выбор локации'),
+              content: SizedBox(
+                width: 440,
+                height: min(MediaQuery.of(ctx).size.height * 0.68, 620.0),
+                child: Column(
+                  children: [
+                    if (memoryEnabled) ...[
+                      TextField(
+                        key: const Key('fusion_location_search'),
+                        controller: searchController,
+                        onChanged: (_) => setLocal(() {}),
+                        decoration: const InputDecoration(
+                          hintText: 'Поиск локации',
+                          prefixIcon: Icon(Icons.search_rounded),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                    Expanded(
+                      child: sections.isEmpty
+                          ? const Center(child: Text('Ничего не найдено'))
+                          : ListView(children: sections),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('Закрыть'),
+                ),
+              ],
+            );
+          },
+        ),
+      );
+    } finally {
+      searchController.dispose();
+    }
 
     if (picked != null) {
       await _selectServerAndReconnectIfNeeded(picked);
     }
   }
 
-  Future<void> _selectServerAndReconnectIfNeeded(ServerLocation picked) async {
+  Future<void> _selectServerAndReconnectIfNeeded(
+    ServerLocation picked, {
+    bool persistSelection = true,
+  }) async {
     if (picked.requiresPaidSubscription && !_hasPaidSubscriptionEntitlement) {
       _openTariff();
       _toast(context, 'Эта локация доступна по подписке.');
@@ -12734,9 +13568,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       return;
     }
 
-    _persistedServerId = _serverSelectionKey(picked);
     setState(() => selectedServer = picked);
-    _schedulePrefsSave();
+    if (persistSelection) {
+      _persistedServerId = _serverSelectionKey(picked);
+      _schedulePrefsSave();
+    }
 
     await _syncVpnStatus();
     if (!mounted) return;
@@ -12823,7 +13659,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
         if (effectiveServer.id != selectedServer.id) {
           setState(() => selectedServer = effectiveServer);
-          _schedulePrefsSave();
+          if (persistSelection) _schedulePrefsSave();
         }
 
         _setVpnBusyUi(
@@ -12896,12 +13732,14 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           break;
         }
 
+        var connectionLatencyMs = effectiveServer.pingMs;
         if (_shouldRunPostConnectProbe) {
           _setVpnBusyUi(
             stage: 'Проверяем YouTube...',
             hint: 'VPN включён. Проверяем, что YouTube открывается.',
           );
           final probe = await _probeConnectedTunnelRoute(effectiveServer);
+          connectionLatencyMs = probe.latencyMs;
           if (!mounted) return;
           unawaited(
             _reportRouteEvent(
@@ -12953,6 +13791,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
         await _recordRouteSuccess(effectiveServer);
         await _armRuntimeFailover(effectiveServer);
+        _trackConnectionState(
+          true,
+          route: effectiveServer,
+          latencyMs: connectionLatencyMs,
+        );
         if (!mounted) return;
 
         _startVpnTapCooldown(
@@ -14020,6 +14863,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _vpnTapCooldownTimer?.cancel();
     _pendingBillingPollTimer?.cancel();
     _freeAdSessionTimer?.cancel();
+    _vpnPauseTimer?.cancel();
+    _connectionUiTimer?.cancel();
     _windowsStatusReconciliationTimer?.cancel();
     _disarmWindowsRuntimeFailover(reason: 'dispose');
     super.dispose();
@@ -14547,8 +15392,26 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             );
             return;
           }
-          unawaited(_toggleVpnReal());
+          if (_vpnPausePending) {
+            unawaited(_resumeVpnAfterPause(automatic: false));
+          } else {
+            unawaited(_toggleVpnReal());
+          }
         },
+        connectionActionsEnabled: _clientFeatureEnabled(
+          kFusionConnectionActionsFlag,
+        ),
+        connectionDetailsEnabled: _clientFeatureEnabled(
+          kFusionConnectionDetailsFlag,
+        ),
+        vpnPaused: _vpnPausePending,
+        vpnPausedUntil: _vpnPausedUntil,
+        onOpenPause: () => unawaited(_openVpnPauseMenu()),
+        onChangeRoute: () => unawaited(_changeRouteAutomatically()),
+        activeConnectionRoute: _activeConnectionRoute,
+        connectionStartedAt: _connectionStartedAt,
+        connectionLatencyMs: _activeConnectionLatencyMs,
+        connectionPublicIp: _connectionPublicIp,
 
         // Сервер
         selectedServer: selectedServer,
@@ -14589,7 +15452,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           title: 'Язык',
           current: sLanguage,
           items: const ['Русский'],
-          onSelect: (v) => _setLanguage(v),
+          onSelect: _setLanguage,
         ),
         email: widget.session.email,
         isGuest: widget.session.isGuest,
@@ -14599,7 +15462,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         emailStatusMessage: _emailStatusMessage,
         onResendEmailConfirmation: _resendEmailConfirmation,
         onRefreshEmailStatus: () => _refreshEmailStatus(showToast: true),
-        subscriptionActive: _subscriptionActive,
+        hasPaidEntitlement: _hasPaidSubscriptionEntitlement,
         subscriptionAutoRenew: _subscriptionAutoRenew,
         paymentMethodSaved: _paymentMethodSaved,
         onOpenTariff: _openTariff,
@@ -14612,6 +15475,26 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           ).push(MaterialPageRoute(builder: (_) => const UpdatesPage()));
         },
         onOpenDiagnostics: _openDiagnosticsPage,
+        showWindowsCloseBehavior:
+            !kIsWeb &&
+            Platform.isWindows &&
+            _clientFeatureEnabled(kFusionWindowsCloseBehaviorFlag),
+        windowsCloseBehavior: _windowsCloseBehavior,
+        onPickWindowsCloseBehavior: () => _pickOne(
+          context,
+          title: 'Закрытие окна',
+          current: _windowsCloseBehavior.title,
+          items: WindowsCloseBehavior.values
+              .map((item) => item.title)
+              .toList(growable: false),
+          onSelect: (title) {
+            final selected = WindowsCloseBehavior.values.firstWhere(
+              (item) => item.title == title,
+              orElse: () => WindowsCloseBehavior.minimizeToTray,
+            );
+            unawaited(_setWindowsCloseBehavior(selected));
+          },
+        ),
       ),
     ];
     final currentIndex = _index.clamp(0, pages.length - 1).toInt();
@@ -14941,6 +15824,16 @@ class VpnPage extends StatelessWidget {
   final Future<void> Function() onInstallWireGuard;
   final Future<void> Function() onRefreshWireGuard;
   final VoidCallback onToggleVpn;
+  final bool connectionActionsEnabled;
+  final bool connectionDetailsEnabled;
+  final bool vpnPaused;
+  final DateTime? vpnPausedUntil;
+  final VoidCallback? onOpenPause;
+  final VoidCallback? onChangeRoute;
+  final ServerLocation? activeConnectionRoute;
+  final DateTime? connectionStartedAt;
+  final int? connectionLatencyMs;
+  final String? connectionPublicIp;
   final VoidCallback onOpenTariff;
   final VoidCallback? onOpenDiagnostics;
   final ServerLocation selectedServer;
@@ -14975,6 +15868,16 @@ class VpnPage extends StatelessWidget {
     required this.onInstallWireGuard,
     required this.onRefreshWireGuard,
     required this.onToggleVpn,
+    this.connectionActionsEnabled = false,
+    this.connectionDetailsEnabled = false,
+    this.vpnPaused = false,
+    this.vpnPausedUntil,
+    this.onOpenPause,
+    this.onChangeRoute,
+    this.activeConnectionRoute,
+    this.connectionStartedAt,
+    this.connectionLatencyMs,
+    this.connectionPublicIp,
     required this.onOpenTariff,
     this.onOpenDiagnostics,
     required this.selectedServer,
@@ -15018,8 +15921,11 @@ class VpnPage extends StatelessWidget {
         ),
       if (usesWindowsApplications) ...socialOnlyWindowsSites,
     ]..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    final paused = vpnPaused && !vpnEnabled;
     final statusText = vpnBusy
         ? (vpnBusyStage ?? (vpnEnabled ? 'Отключаем...' : 'Подключаем...'))
+        : paused
+        ? 'Защита приостановлена'
         : (vpnEnabled
               ? 'Защита активна'
               : (androidExternalVpnActive
@@ -15027,15 +15933,24 @@ class VpnPage extends StatelessWidget {
                     : 'Готов к защите'));
     final statusDetail = vpnBusy
         ? (vpnBusyHint ?? 'Подождите, Green VPN завершает операцию.')
+        : paused
+        ? (vpnPausedUntil == null
+              ? 'Нажмите кнопку, чтобы возобновить VPN.'
+              : vpnPausedUntil!.isAfter(DateTime.now())
+              ? 'Автоматически включится в ${_formatClock(vpnPausedUntil!)}.'
+              : 'Возобновляем защищённое подключение...')
         : (vpnEnabled
               ? 'Интернет проходит через Green VPN.'
               : (androidExternalVpnActive
                     ? 'Нажмите кнопку, чтобы переключиться на Green VPN.'
                     : 'Подключим первый доступный маршрут.'));
-    final serverTitle = selectedServer.isAuto
+    final displayedRoute = vpnEnabled && activeConnectionRoute != null
+        ? activeConnectionRoute!
+        : selectedServer;
+    final serverTitle = displayedRoute.isAuto
         ? 'Самая быстрая локация'
-        : greenVpnPublicServerTitle(selectedServer);
-    final serverSubtitle = greenVpnPublicServerSubtitle(selectedServer);
+        : greenVpnPublicServerTitle(displayedRoute);
+    final serverSubtitle = greenVpnPublicServerSubtitle(displayedRoute);
     final displayedPlanName = isGuest
         ? 'Бесплатный'
         : kPublicProductBuild
@@ -15062,7 +15977,11 @@ class VpnPage extends StatelessWidget {
     }
 
     Widget connectionPanel() {
-      final powerColor = vpnEnabled ? kBrandPrimaryDeep : kBrandPrimary;
+      final powerColor = paused
+          ? kBrandWarm
+          : vpnEnabled
+          ? kBrandPrimaryDeep
+          : kBrandPrimary;
       return surface(
         padding: const EdgeInsets.all(18),
         child: Column(
@@ -15083,15 +16002,25 @@ class VpnPage extends StatelessWidget {
                         decoration: BoxDecoration(
                           color: vpnEnabled
                               ? kBrandPrimarySoft
+                              : paused
+                              ? const Color(0xFFFFF4D6)
                               : (isDark
                                     ? Colors.white.withValues(alpha: 0.08)
                                     : const Color(0xFFEEF3F0)),
                           borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
-                          vpnEnabled ? 'ЗАЩИЩЕНО' : 'НЕ ЗАЩИЩЕНО',
+                          vpnEnabled
+                              ? 'ЗАЩИЩЕНО'
+                              : paused
+                              ? 'ПАУЗА'
+                              : 'НЕ ЗАЩИЩЕНО',
                           style: TextStyle(
-                            color: vpnEnabled ? kBrandPrimaryDeep : mutedColor,
+                            color: vpnEnabled
+                                ? kBrandPrimaryDeep
+                                : paused
+                                ? const Color(0xFF9A6700)
+                                : mutedColor,
                             fontSize: 10,
                             fontWeight: FontWeight.w900,
                           ),
@@ -15121,7 +16050,11 @@ class VpnPage extends StatelessWidget {
                 const SizedBox(width: 14),
                 Semantics(
                   button: true,
-                  label: vpnEnabled ? 'Отключить VPN' : 'Подключить VPN',
+                  label: vpnEnabled
+                      ? 'Отключить VPN'
+                      : paused
+                      ? 'Возобновить VPN'
+                      : 'Подключить VPN',
                   child: InkWell(
                     key: const Key('fusion_connect_button'),
                     onTap: wireGuardInstalled && !vpnInteractionLocked
@@ -15159,6 +16092,8 @@ class VpnPage extends StatelessWidget {
                               : Icon(
                                   vpnEnabled
                                       ? Icons.stop_rounded
+                                      : paused
+                                      ? Icons.play_arrow_rounded
                                       : Icons.power_settings_new_rounded,
                                   color: Colors.white,
                                   size: 31,
@@ -15200,7 +16135,7 @@ class VpnPage extends StatelessWidget {
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
-                          selectedServer.isAuto
+                          displayedRoute.isAuto
                               ? 'A'
                               : serverTitle.characters.first,
                           style: const TextStyle(
@@ -15239,7 +16174,7 @@ class VpnPage extends StatelessWidget {
                           ],
                         ),
                       ),
-                      if (selectedServer.isAuto &&
+                      if (displayedRoute.isAuto &&
                           constraints.maxWidth >= 360) ...[
                         Container(
                           padding: const EdgeInsets.symmetric(
@@ -15268,6 +16203,30 @@ class VpnPage extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 12),
+            if (connectionActionsEnabled && vpnEnabled) ...[
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      key: const Key('fusion_pause_button'),
+                      onPressed: vpnInteractionLocked ? null : onOpenPause,
+                      icon: const Icon(Icons.timer_outlined),
+                      label: const Text('Пауза'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      key: const Key('fusion_change_route_button'),
+                      onPressed: vpnInteractionLocked ? null : onChangeRoute,
+                      icon: const Icon(Icons.sync_alt_rounded),
+                      label: const Text('Сменить маршрут'),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+            ],
             Row(
               children: [
                 Expanded(
@@ -15278,7 +16237,7 @@ class VpnPage extends StatelessWidget {
                     label: const Text('Диагностика'),
                   ),
                 ),
-                if (vpnEnabled) ...[
+                if (vpnEnabled && connectionDetailsEnabled) ...[
                   const SizedBox(width: 8),
                   Expanded(
                     child: OutlinedButton.icon(
@@ -15289,6 +16248,11 @@ class VpnPage extends StatelessWidget {
                         modeTitle: socialOnlyEnabled
                             ? 'Только выбранное'
                             : 'Весь интернет',
+                        route: activeConnectionRoute ?? displayedRoute,
+                        connectedAt: connectionStartedAt,
+                        latencyMs: connectionLatencyMs,
+                        publicIp: connectionPublicIp,
+                        trafficUsage: trafficUsage,
                       ),
                       icon: const Icon(Icons.info_outline_rounded),
                       label: const Text('Детали'),
@@ -15545,6 +16509,29 @@ class VpnPage extends StatelessWidget {
                 ),
               ),
             ),
+            if (!kStoreDistributionBuild &&
+                isGuest &&
+                onRestoreAccess != null) ...[
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                key: const Key('restore_access_home'),
+                onPressed: onRestoreAccess,
+                icon: const Icon(Icons.login_rounded),
+                label: const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Уже есть подписка?',
+                        style: TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                      Text('Войти по email', style: TextStyle(fontSize: 12)),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       );
@@ -15619,16 +16606,45 @@ class VpnPage extends StatelessWidget {
     );
   }
 
+  static String _formatClock(DateTime value) {
+    final local = value.toLocal();
+    final hours = local.hour.toString().padLeft(2, '0');
+    final minutes = local.minute.toString().padLeft(2, '0');
+    return '$hours:$minutes';
+  }
+
+  static String _formatConnectionDuration(DateTime? connectedAt) {
+    if (connectedAt == null) return 'Определяется...';
+    final elapsed = DateTime.now().difference(connectedAt);
+    final safeSeconds = max(0, elapsed.inSeconds);
+    final hours = safeSeconds ~/ 3600;
+    final minutes = (safeSeconds % 3600) ~/ 60;
+    final seconds = safeSeconds % 60;
+    if (hours > 0) {
+      return '${hours.toString().padLeft(2, '0')}:'
+          '${minutes.toString().padLeft(2, '0')}:'
+          '${seconds.toString().padLeft(2, '0')}';
+    }
+    return '${minutes.toString().padLeft(2, '0')}:'
+        '${seconds.toString().padLeft(2, '0')}';
+  }
+
   Future<void> _showFusionConnectionDetails(
     BuildContext context, {
     required String serverTitle,
     required String modeTitle,
+    required ServerLocation route,
+    required DateTime? connectedAt,
+    required int? latencyMs,
+    required String? publicIp,
+    required Map<String, dynamic> trafficUsage,
   }) async {
+    final trafficSummary = greenVpnTrafficUsageSummary(trafficUsage);
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
       builder: (ctx) => SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -15639,9 +16655,34 @@ class VpnPage extends StatelessWidget {
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
               ),
               const SizedBox(height: 16),
-              _FusionDetailRow(label: 'Состояние', value: 'Защита активна'),
+              const _FusionDetailRow(
+                label: 'Состояние',
+                value: 'Защита активна',
+              ),
               _FusionDetailRow(label: 'Локация', value: serverTitle),
               _FusionDetailRow(label: 'Режим', value: modeTitle),
+              _FusionDetailRow(
+                label: 'Время подключения',
+                value: _formatConnectionDuration(connectedAt),
+              ),
+              _FusionDetailRow(
+                label: 'Задержка',
+                value: latencyMs == null ? 'Определяется...' : '$latencyMs мс',
+              ),
+              _FusionDetailRow(
+                label: 'Публичный IP',
+                value: (publicIp ?? '').trim().isEmpty
+                    ? 'Определяется...'
+                    : publicIp!.trim(),
+              ),
+              _FusionDetailRow(label: 'Трафик за месяц', value: trafficSummary),
+              if (!route.isAuto)
+                _FusionDetailRow(
+                  label: 'Маршрут',
+                  value: route.protocolLabel.trim().isEmpty
+                      ? 'Автоматический'
+                      : route.protocolLabel.trim(),
+                ),
             ],
           ),
         ),
@@ -18421,9 +19462,9 @@ class _GbPricePoint {
 class SettingsPage extends StatelessWidget {
   final ThemeMode themeMode;
   final void Function(ThemeMode mode) onThemeModeChanged;
-
   final String language;
   final VoidCallback onPickLanguage;
+  final bool showLanguage;
 
   final String email;
   final bool isGuest;
@@ -18433,7 +19474,7 @@ class SettingsPage extends StatelessWidget {
   final String? emailStatusMessage;
   final Future<void> Function() onResendEmailConfirmation;
   final Future<void> Function() onRefreshEmailStatus;
-  final bool subscriptionActive;
+  final bool hasPaidEntitlement;
   final bool subscriptionAutoRenew;
   final bool paymentMethodSaved;
   final VoidCallback onOpenTariff;
@@ -18442,13 +19483,17 @@ class SettingsPage extends StatelessWidget {
   final Future<void> Function() onLogout;
   final VoidCallback onOpenUpdates;
   final VoidCallback onOpenDiagnostics;
+  final bool showWindowsCloseBehavior;
+  final WindowsCloseBehavior windowsCloseBehavior;
+  final VoidCallback onPickWindowsCloseBehavior;
 
   const SettingsPage({
     super.key,
     required this.themeMode,
     required this.onThemeModeChanged,
-    required this.language,
-    required this.onPickLanguage,
+    this.language = 'Русский',
+    this.onPickLanguage = _noopSettingsAction,
+    this.showLanguage = !kFusionUiEnabled,
     required this.email,
     required this.isGuest,
     required this.emailVerified,
@@ -18457,7 +19502,7 @@ class SettingsPage extends StatelessWidget {
     required this.emailStatusMessage,
     required this.onResendEmailConfirmation,
     required this.onRefreshEmailStatus,
-    required this.subscriptionActive,
+    required this.hasPaidEntitlement,
     required this.subscriptionAutoRenew,
     required this.paymentMethodSaved,
     required this.onOpenTariff,
@@ -18466,6 +19511,9 @@ class SettingsPage extends StatelessWidget {
     required this.onLogout,
     required this.onOpenUpdates,
     required this.onOpenDiagnostics,
+    this.showWindowsCloseBehavior = false,
+    this.windowsCloseBehavior = WindowsCloseBehavior.minimizeToTray,
+    this.onPickWindowsCloseBehavior = _noopSettingsAction,
   });
 
   void _openAutoRenewSettings(BuildContext context) {
@@ -18512,29 +19560,50 @@ class SettingsPage extends StatelessWidget {
                   onChanged: (v) =>
                       onThemeModeChanged(v ? ThemeMode.dark : ThemeMode.light),
                 ),
-                const Divider(height: 18),
-                _SettingsNavRow(
-                  title: 'Язык',
-                  subtitle: language,
-                  icon: Icons.language_rounded,
-                  onTap: onPickLanguage,
-                ),
+                if (showLanguage) ...[
+                  const Divider(height: 18),
+                  _SettingsNavRow(
+                    title: 'Язык',
+                    subtitle: language,
+                    icon: Icons.language_rounded,
+                    onTap: onPickLanguage,
+                  ),
+                ],
               ],
             ),
           ),
           const SizedBox(height: 12),
+          if (showWindowsCloseBehavior) ...[
+            _Card(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const _SectionTitle('Поведение Windows'),
+                  const SizedBox(height: 8),
+                  _SettingsNavRow(
+                    key: const Key('fusion_windows_close_behavior'),
+                    title: 'Закрытие окна',
+                    subtitle: windowsCloseBehavior.title,
+                    icon: Icons.close_fullscreen_rounded,
+                    onTap: onPickWindowsCloseBehavior,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           if (kPaidBetaCustomerUi) ...[
             _Card(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const _SectionTitle('Beta и оплата'),
+                  const _SectionTitle('Доступ и оплата'),
                   const SizedBox(height: 8),
                   _SettingsNavRow(
-                    title: 'Тариф Beta',
-                    subtitle: subscriptionActive
+                    title: 'Тарифы и доступ',
+                    subtitle: hasPaidEntitlement
                         ? 'Текущий доступ и оплата'
-                        : 'Оплатить 30 дней',
+                        : 'Выбрать тариф или восстановить доступ',
                     icon: Icons.payment_rounded,
                     onTap: onOpenTariff,
                   ),
@@ -21144,6 +22213,7 @@ class _SettingsNavRow extends StatelessWidget {
   final VoidCallback onTap;
 
   const _SettingsNavRow({
+    super.key,
     required this.title,
     required this.subtitle,
     required this.icon,

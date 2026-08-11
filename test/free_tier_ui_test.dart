@@ -4,6 +4,7 @@ import 'package:greenvpn/main.dart';
 
 void main() {
   const paidBetaBuild = bool.fromEnvironment('GREENVPN_PAID_BETA_BUILD');
+  const fusionEnabled = kFusionUiEnabled;
   const usage = <String, dynamic>{
     'usedGb': 2.4,
     'trafficLimitGb': 3,
@@ -254,7 +255,12 @@ void main() {
       const Size(390, 844),
       vpnApp(planName: 'Beta Trial', freeTierActive: false),
     );
-    expect(find.textContaining('Текущий: Бесплатный'), findsOneWidget);
+    expect(
+      fusionEnabled
+          ? find.text('Бесплатный')
+          : find.textContaining('Текущий: Бесплатный'),
+      fusionEnabled ? findsWidgets : findsOneWidget,
+    );
     expect(find.textContaining('Пробный период'), findsNothing);
 
     await pumpAt(

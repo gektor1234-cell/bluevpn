@@ -5,6 +5,11 @@
   "androidBuildNumber": "2026073101",
   "windowsBuildNumber": 3105,
   "backendVersion": "0.9.153-update-channel-alias.1",
+  "paidBeta": {
+    "appVersion": "0.4.5-paid-beta.1",
+    "androidBuildNumber": "2026081105",
+    "windowsBuildNumber": 4501
+  },
   "api": {
     "primary": "https://api.greenvpn.pro",
     "fallbacks": [

@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 from threading import Event
 from unittest.mock import patch
 
+from starlette.requests import Request
+
 
 _TEST_ROOT = tempfile.TemporaryDirectory(
     prefix="greenvpn-paid-beta-tests-",
@@ -46,6 +48,7 @@ class PaidBetaPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         main.init_db()
+        main.seed_default_feature_flags_and_runbooks()
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -254,6 +257,49 @@ class PaidBetaPolicyTests(unittest.TestCase):
                 "paid-beta",
             )
         )
+
+    def test_fusion_flags_are_exposed_only_to_exact_paid_beta_client(self) -> None:
+        self.enroll_beta()
+        paid_beta = self.bootstrap(paid_beta=True, device_uid="fusion-beta-device")
+        features = paid_beta["clientFeatures"]
+        self.assertTrue(features["fusion.connection_actions"])
+        self.assertTrue(features["fusion.location_memory"])
+        self.assertTrue(features["fusion.connection_details"])
+        self.assertTrue(features["fusion.friendly_errors"])
+        self.assertFalse(features["fusion.windows_close_behavior"])
+
+        stable = self.bootstrap(paid_beta=False, device_uid="fusion-stable-device")
+        self.assertEqual(
+            stable["clientFeatures"],
+            {key: False for key in main.CLIENT_EXPOSED_FEATURE_FLAGS},
+        )
+
+    def test_fusion_windows_flag_is_platform_scoped(self) -> None:
+        features = main.client_feature_flags(
+            client_marker="green-vpn-paid-beta-v1",
+            release_channel="paid-beta",
+            platform="windows",
+            device_uid="fusion-windows-device",
+        )
+        self.assertTrue(features["fusion.windows_close_behavior"])
+
+    def test_network_info_uses_first_valid_proxy_ip(self) -> None:
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/api/v1/client/network-info",
+                "headers": [
+                    (b"x-real-ip", b"not-an-ip"),
+                    (b"x-forwarded-for", b"203.0.113.10, 198.51.100.4"),
+                ],
+                "client": ("127.0.0.1", 443),
+                "server": ("testserver", 443),
+                "scheme": "https",
+                "query_string": b"",
+            }
+        )
+        self.assertEqual(main.validated_request_public_ip(request), "203.0.113.10")
 
     def test_public_product_requires_exact_marker_and_channel(self) -> None:
         with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):

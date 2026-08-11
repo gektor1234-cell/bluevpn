@@ -3,7 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:greenvpn/main.dart';
 
 void main() {
-  const fusionEnabled = bool.fromEnvironment('GREENVPN_FUSION_UI_ENABLED');
+  const fusionEnabled = kFusionUiEnabled;
 
   Future<void> pumpAt(WidgetTester tester, Size size, Widget child) async {
     tester.view.devicePixelRatio = 1;
@@ -124,4 +124,319 @@ void main() {
     expect(configured, isTrue);
     expect(tester.takeException(), isNull);
   }, skip: !fusionEnabled);
+
+  testWidgets(
+    'Settings hides the unavailable one-item language picker',
+    (tester) async {
+      await pumpAt(
+        tester,
+        const Size(390, 844),
+        SettingsPage(
+          themeMode: ThemeMode.light,
+          onThemeModeChanged: (_) {},
+          email: '',
+          isGuest: true,
+          emailVerified: false,
+          emailConfirmationRequired: false,
+          emailStatusBusy: false,
+          emailStatusMessage: null,
+          onResendEmailConfirmation: () async {},
+          onRefreshEmailStatus: () async {},
+          hasPaidEntitlement: false,
+          subscriptionAutoRenew: false,
+          paymentMethodSaved: false,
+          onOpenTariff: () {},
+          onRestoreAccess: () {},
+          onCancelAutoRenew: () async => true,
+          onLogout: () async {},
+          onOpenUpdates: () {},
+          onOpenDiagnostics: () {},
+        ),
+      );
+
+      expect(find.text('Тёмная тема'), findsOneWidget);
+      expect(find.text('Язык'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+    skip: !fusionEnabled,
+  );
+
+  testWidgets('Legacy settings can still expose the language row', (
+    tester,
+  ) async {
+    await pumpAt(
+      tester,
+      const Size(390, 844),
+      SettingsPage(
+        themeMode: ThemeMode.light,
+        onThemeModeChanged: (_) {},
+        language: 'Русский',
+        onPickLanguage: () {},
+        showLanguage: true,
+        email: '',
+        isGuest: true,
+        emailVerified: false,
+        emailConfirmationRequired: false,
+        emailStatusBusy: false,
+        emailStatusMessage: null,
+        onResendEmailConfirmation: () async {},
+        onRefreshEmailStatus: () async {},
+        hasPaidEntitlement: false,
+        subscriptionAutoRenew: false,
+        paymentMethodSaved: false,
+        onOpenTariff: () {},
+        onRestoreAccess: () {},
+        onCancelAutoRenew: () async => true,
+        onLogout: () async {},
+        onOpenUpdates: () {},
+        onOpenDiagnostics: () {},
+      ),
+    );
+
+    expect(find.text('Язык'), findsOneWidget);
+    expect(find.text('Русский'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'Paid beta settings distinguish free access from a paid entitlement',
+    (tester) async {
+      await pumpAt(
+        tester,
+        const Size(390, 844),
+        SettingsPage(
+          themeMode: ThemeMode.light,
+          onThemeModeChanged: (_) {},
+          email: '',
+          isGuest: true,
+          emailVerified: false,
+          emailConfirmationRequired: false,
+          emailStatusBusy: false,
+          emailStatusMessage: null,
+          onResendEmailConfirmation: () async {},
+          onRefreshEmailStatus: () async {},
+          hasPaidEntitlement: false,
+          subscriptionAutoRenew: false,
+          paymentMethodSaved: false,
+          onOpenTariff: () {},
+          onRestoreAccess: () {},
+          onCancelAutoRenew: () async => true,
+          onLogout: () async {},
+          onOpenUpdates: () {},
+          onOpenDiagnostics: () {},
+        ),
+      );
+
+      expect(find.text('Тарифы и доступ'), findsOneWidget);
+      expect(
+        find.text('Выбрать тариф или восстановить доступ'),
+        findsOneWidget,
+      );
+      expect(find.text('Текущий доступ и оплата'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+    skip: !fusionEnabled || !kPaidBetaCustomerUi,
+  );
+
+  testWidgets(
+    'Fusion connected state exposes actions and useful details',
+    (tester) async {
+      var pauseOpened = false;
+      var routeChanged = false;
+      const route = ServerLocation(
+        id: 'nl-fast',
+        title: 'Нидерланды',
+        subtitle: 'Амстердам',
+        protocolLabel: 'WireGuard',
+      );
+
+      await pumpAt(
+        tester,
+        const Size(390, 844),
+        VpnPage(
+          planName: 'Бесплатный',
+          freeTierActive: true,
+          trafficUsage: const <String, dynamic>{
+            'usedGb': 0.4,
+            'trafficLimitGb': 3,
+            'remainingGb': 2.6,
+            'overLimit': false,
+          },
+          isGuest: true,
+          vpnEnabled: true,
+          androidExternalVpnActive: false,
+          vpnBusy: false,
+          vpnInteractionLocked: false,
+          vpnBusyStage: null,
+          vpnBusyHint: null,
+          wireGuardInstalled: true,
+          wireGuardStatusText: null,
+          wireGuardBusy: false,
+          onInstallWireGuard: () async {},
+          onRefreshWireGuard: () async {},
+          onToggleVpn: () {},
+          connectionActionsEnabled: true,
+          connectionDetailsEnabled: true,
+          onOpenPause: () => pauseOpened = true,
+          onChangeRoute: () => routeChanged = true,
+          activeConnectionRoute: route,
+          connectionStartedAt: DateTime.now().subtract(
+            const Duration(minutes: 2),
+          ),
+          connectionLatencyMs: 42,
+          connectionPublicIp: '203.0.113.7',
+          onOpenTariff: () {},
+          onOpenDiagnostics: () {},
+          selectedServer: const ServerLocation(
+            id: 'auto',
+            title: 'Автоматически',
+            subtitle: '',
+            isAuto: true,
+          ),
+          onOpenServerPicker: () {},
+          socialOnlyEnabled: false,
+          socialOnlyAllowed: true,
+          socialOnlyApps: const <SocialApp>{SocialApp.youtube},
+          socialOnlyCustomPackages: const <String>{},
+          socialOnlyWindowsApplications: const <String>{},
+          socialOnlyWindowsSites: const <String>{},
+          socialOnlyCustomLabels: const <String, String>{},
+          socialOnlyWindowsApplicationLabels: const <String, String>{},
+          onToggleSocialOnly: (_) {},
+          onConfigureSocialApps: () {},
+        ),
+      );
+
+      expect(find.text('Защита активна'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('fusion_pause_button')));
+      await tester.tap(find.byKey(const Key('fusion_change_route_button')));
+      expect(pauseOpened, isTrue);
+      expect(routeChanged, isTrue);
+
+      await tester.tap(find.byKey(const Key('fusion_details_button')));
+      await tester.pumpAndSettle();
+      expect(find.text('Детали соединения'), findsOneWidget);
+      expect(find.text('42 мс'), findsOneWidget);
+      expect(find.text('203.0.113.7'), findsOneWidget);
+      expect(find.text('WireGuard'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+    skip: !fusionEnabled,
+  );
+
+  test('connected route restoration prefers authoritative Android runtime', () {
+    final now = DateTime.utc(2026, 8, 11, 7);
+    const nl = ServerLocation(
+      id: 'nl-route',
+      title: 'Нидерланды',
+      subtitle: 'Амстердам',
+    );
+    const london = ServerLocation(
+      id: 'gb-route',
+      title: 'Лондон',
+      subtitle: 'Великобритания',
+    );
+
+    final route = greenVpnResolveConnectedServerRoute(
+      servers: const [nl, london],
+      activeRoute: nl,
+      runtimeDesired: true,
+      runtimeServerId: london.id,
+      runtimeProtocol: london.protocolCode,
+      cachedServerId: nl.id,
+      cachedProtocol: nl.protocolCode,
+      cachedAt: now,
+      selectedRoute: const ServerLocation(
+        id: 'auto',
+        title: 'Авто',
+        subtitle: 'Автовыбор',
+        isAuto: true,
+      ),
+      now: now,
+    );
+
+    expect(route?.id, london.id);
+  });
+
+  test('connected route restoration survives Android process recreation', () {
+    final now = DateTime.utc(2026, 8, 11, 7);
+    const london = ServerLocation(
+      id: 'gb-route',
+      title: 'Лондон',
+      subtitle: 'Великобритания',
+    );
+
+    final restored = greenVpnResolveConnectedServerRoute(
+      servers: const [london],
+      cachedServerId: london.id,
+      cachedProtocol: london.protocolCode,
+      cachedAt: now.subtract(const Duration(minutes: 5)),
+      selectedRoute: const ServerLocation(
+        id: 'auto',
+        title: 'Авто',
+        subtitle: 'Автовыбор',
+        isAuto: true,
+      ),
+      now: now,
+    );
+    final stale = greenVpnResolveConnectedServerRoute(
+      servers: const [london],
+      cachedServerId: london.id,
+      cachedProtocol: london.protocolCode,
+      cachedAt: now.subtract(const Duration(hours: 25)),
+      selectedRoute: const ServerLocation(
+        id: 'auto',
+        title: 'Авто',
+        subtitle: 'Автовыбор',
+        isAuto: true,
+      ),
+      now: now,
+    );
+
+    expect(restored?.id, london.id);
+    expect(stale, isNull);
+  });
+
+  test('network details reject stale route responses', () {
+    expect(
+      greenVpnShouldApplyConnectionNetworkInfo(
+        vpnEnabled: true,
+        requestEpoch: 7,
+        currentEpoch: 7,
+        requestRouteKey: 'london|wireguard_udp',
+        currentRouteKey: 'london|wireguard_udp',
+      ),
+      isTrue,
+    );
+    expect(
+      greenVpnShouldApplyConnectionNetworkInfo(
+        vpnEnabled: true,
+        requestEpoch: 7,
+        currentEpoch: 8,
+        requestRouteKey: 'london|wireguard_udp',
+        currentRouteKey: 'london|wireguard_udp',
+      ),
+      isFalse,
+    );
+    expect(
+      greenVpnShouldApplyConnectionNetworkInfo(
+        vpnEnabled: true,
+        requestEpoch: 7,
+        currentEpoch: 7,
+        requestRouteKey: 'netherlands|wireguard_udp',
+        currentRouteKey: 'london|wireguard_udp',
+      ),
+      isFalse,
+    );
+    expect(
+      greenVpnShouldApplyConnectionNetworkInfo(
+        vpnEnabled: false,
+        requestEpoch: 7,
+        currentEpoch: 7,
+        requestRouteKey: 'london|wireguard_udp',
+        currentRouteKey: 'london|wireguard_udp',
+      ),
+      isFalse,
+    );
+  });
 }

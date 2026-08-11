@@ -20,6 +20,8 @@ import java.util.concurrent.TimeUnit
 class GreenVpnRuntimeFailoverService : Service() {
     companion object {
         private const val ACTION_ARM = "pro.greenvpn.app.action.ARM_RUNTIME_FAILOVER"
+        private const val ACTION_SCHEDULE_RESUME =
+            "pro.greenvpn.app.action.SCHEDULE_RUNTIME_RESUME"
         private const val PREFS_NAME = "greenvpn_runtime_failover_v1"
         private const val KEY_DESIRED = "desired"
         private const val KEY_SERVER_ID = "server_id"
@@ -33,6 +35,8 @@ class GreenVpnRuntimeFailoverService : Service() {
         private const val KEY_LAST_PROBE_AT_MS = "last_probe_at_ms"
         private const val KEY_LAST_PROBE_OK = "last_probe_ok"
         private const val KEY_NEXT_RECOVERY_AT_MS = "next_recovery_at_ms"
+        private const val KEY_PAUSE_UNTIL_MS = "pause_until_ms"
+        private const val KEY_RESUME_SCHEDULED = "resume_scheduled"
         private const val KEY_UPDATED_AT_MS = "updated_at_ms"
         private const val CHANNEL_ID = "greenvpn_runtime_connection"
         private const val NOTIFICATION_ID = 7302
@@ -49,6 +53,8 @@ class GreenVpnRuntimeFailoverService : Service() {
             }
 
         private fun previewEnabled(): Boolean = supportedProtocols.size > 1
+
+        private fun serviceEnabled(): Boolean = supportedProtocols.isNotEmpty()
 
         fun arm(context: Context, serverId: String, protocol: String): Boolean {
             val normalizedServerId = serverId.trim()
@@ -71,6 +77,8 @@ class GreenVpnRuntimeFailoverService : Service() {
                 .putLong(KEY_LAST_PROBE_AT_MS, now)
                 .putBoolean(KEY_LAST_PROBE_OK, true)
                 .putLong(KEY_NEXT_RECOVERY_AT_MS, 0L)
+                .putLong(KEY_PAUSE_UNTIL_MS, 0L)
+                .putBoolean(KEY_RESUME_SCHEDULED, false)
                 .putLong(KEY_UPDATED_AT_MS, now)
                 .commit()
             if (!committed) return false
@@ -86,6 +94,57 @@ class GreenVpnRuntimeFailoverService : Service() {
             return true
         }
 
+        fun scheduleResume(
+            context: Context,
+            resumeAtMs: Long,
+            serverId: String,
+            protocol: String,
+        ): Boolean {
+            val now = System.currentTimeMillis()
+            val normalizedServerId = serverId.trim().take(160)
+            val normalizedProtocol = protocol.trim().lowercase()
+                .takeIf { it in supportedProtocols } ?: "wireguard_udp"
+            if (!serviceEnabled() ||
+                !GreenVpnRuntimeFailoverPolicy.validPauseResumeAt(now, resumeAtMs)
+            ) {
+                return false
+            }
+            val committed = prefs(context).edit()
+                .putBoolean(KEY_DESIRED, true)
+                .putString(KEY_SERVER_ID, normalizedServerId)
+                .putString(KEY_PROTOCOL, normalizedProtocol)
+                .putString(KEY_STATE, "paused")
+                .putInt(KEY_ROUTE_FAILURES, 0)
+                .putInt(KEY_RECOVERY_FAILURES, 0)
+                .putString(KEY_LAST_REASON, "user_pause")
+                .putString(KEY_LAST_ERROR, "")
+                .putLong(KEY_NEXT_RECOVERY_AT_MS, 0L)
+                .putLong(KEY_PAUSE_UNTIL_MS, resumeAtMs)
+                .putBoolean(KEY_RESUME_SCHEDULED, true)
+                .putLong(KEY_UPDATED_AT_MS, now)
+                .commit()
+            if (!committed) return false
+            GreenVpnNetworkTransition.markInactive(context)
+            val intent = Intent(context, GreenVpnRuntimeFailoverService::class.java)
+                .setAction(ACTION_SCHEDULE_RESUME)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+            return true
+        }
+
+        fun cancelScheduledResume(context: Context) {
+            val values = prefs(context)
+            val shouldCancel = GreenVpnRuntimeFailoverPolicy.shouldCancelScheduledResume(
+                resumeScheduled = values.getBoolean(KEY_RESUME_SCHEDULED, false),
+                state = values.getString(KEY_STATE, "").orEmpty(),
+            )
+            if (!shouldCancel) return
+            disarm(context)
+        }
+
         fun disarm(context: Context) {
             prefs(context).edit()
                 .putBoolean(KEY_DESIRED, false)
@@ -93,6 +152,8 @@ class GreenVpnRuntimeFailoverService : Service() {
                 .putInt(KEY_ROUTE_FAILURES, 0)
                 .putInt(KEY_RECOVERY_FAILURES, 0)
                 .putLong(KEY_NEXT_RECOVERY_AT_MS, 0L)
+                .putLong(KEY_PAUSE_UNTIL_MS, 0L)
+                .putBoolean(KEY_RESUME_SCHEDULED, false)
                 .putLong(KEY_UPDATED_AT_MS, System.currentTimeMillis())
                 .commit()
             context.stopService(Intent(context, GreenVpnRuntimeFailoverService::class.java))
@@ -102,6 +163,7 @@ class GreenVpnRuntimeFailoverService : Service() {
             val values = prefs(context)
             return linkedMapOf(
                 "enabled" to previewEnabled(),
+                "pauseResumeSupported" to serviceEnabled(),
                 "desired" to values.getBoolean(KEY_DESIRED, false),
                 "serverId" to values.getString(KEY_SERVER_ID, "").orEmpty(),
                 "protocol" to values.getString(KEY_PROTOCOL, "").orEmpty(),
@@ -114,6 +176,8 @@ class GreenVpnRuntimeFailoverService : Service() {
                 "lastProbeAtMs" to values.getLong(KEY_LAST_PROBE_AT_MS, 0L),
                 "lastProbeOk" to values.getBoolean(KEY_LAST_PROBE_OK, false),
                 "nextRecoveryAtMs" to values.getLong(KEY_NEXT_RECOVERY_AT_MS, 0L),
+                "pauseUntilMs" to values.getLong(KEY_PAUSE_UNTIL_MS, 0L),
+                "resumeScheduled" to values.getBoolean(KEY_RESUME_SCHEDULED, false),
                 "updatedAtMs" to values.getLong(KEY_UPDATED_AT_MS, 0L),
             )
         }
@@ -129,14 +193,14 @@ class GreenVpnRuntimeFailoverService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        if (previewEnabled()) {
+        if (serviceEnabled()) {
             ensureForeground()
             startMonitor()
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (!previewEnabled()) {
+        if (!serviceEnabled()) {
             stopSelf()
             return START_NOT_STICKY
         }
@@ -147,7 +211,9 @@ class GreenVpnRuntimeFailoverService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        if (intent?.action == ACTION_ARM) updateNotification()
+        if (intent?.action == ACTION_ARM || intent?.action == ACTION_SCHEDULE_RESUME) {
+            updateNotification()
+        }
         return START_STICKY
     }
 
@@ -194,10 +260,16 @@ class GreenVpnRuntimeFailoverService : Service() {
         }
         val values = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
+        val state = values.getString(KEY_STATE, "monitoring").orEmpty()
+        if (state == "paused") {
+            val pauseUntil = values.getLong(KEY_PAUSE_UNTIL_MS, 0L)
+            if (pauseUntil > now) return
+            recover("pause_elapsed", markCurrentRouteFailed = false)
+            return
+        }
         val nextRecoveryAt = values.getLong(KEY_NEXT_RECOVERY_AT_MS, 0L)
         if (nextRecoveryAt > now) return
 
-        val state = values.getString(KEY_STATE, "monitoring").orEmpty()
         if (state == "error" || state == "recovering") {
             recover("retry", markCurrentRouteFailed = false)
             return
@@ -272,6 +344,8 @@ class GreenVpnRuntimeFailoverService : Service() {
                 .putLong(KEY_LAST_PROBE_AT_MS, now)
                 .putBoolean(KEY_LAST_PROBE_OK, true)
                 .putLong(KEY_NEXT_RECOVERY_AT_MS, 0L)
+                .putLong(KEY_PAUSE_UNTIL_MS, 0L)
+                .putBoolean(KEY_RESUME_SCHEDULED, false)
                 .putLong(KEY_UPDATED_AT_MS, now)
                 .apply()
             debug("recovered protocol=${result.protocol}")
@@ -358,6 +432,7 @@ class GreenVpnRuntimeFailoverService : Service() {
         val state = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .getString(KEY_STATE, "monitoring")
         val text = when (state) {
+            "paused" -> "VPN приостановлен и включится автоматически"
             "recovering" -> "Восстанавливаем подключение"
             "degraded" -> "Проверяем подключение"
             "error" -> "Ожидаем восстановления подключения"

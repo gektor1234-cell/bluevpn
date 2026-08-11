@@ -96,6 +96,26 @@ void main() {
     );
   });
 
+  test(
+    'fixed catalog refresh does not present one plan as the total price',
+    () {
+      expect(
+        greenVpnTariffRefreshStatus(
+          usesFixedBillingPlans: true,
+          monthlyPriceRub: 249,
+        ),
+        'Тарифы обновлены.',
+      );
+      expect(
+        greenVpnTariffRefreshStatus(
+          usesFixedBillingPlans: false,
+          monthlyPriceRub: 249,
+        ),
+        'Цена обновлена: 249 ₽/мес.',
+      );
+    },
+  );
+
   test('server selection never silently enables auto-renew', () {
     expect(
       greenVpnSelectionAutoRenewEnabled(const {
@@ -312,5 +332,18 @@ void main() {
       final visible = greenVpnPublicErrorMessage(rawError: internal);
       expect(visible, 'Не удалось выполнить действие. Повторите попытку.');
     }
+
+    expect(
+      greenVpnPublicErrorMessage(rawError: 'competing VPN is still active'),
+      contains('другой VPN'),
+    );
+    expect(
+      greenVpnPublicErrorMessage(rawError: 'previous route is still active'),
+      contains('безопасно сменить маршрут'),
+    );
+    expect(
+      greenVpnPublicErrorMessage(rawError: 'VPN_PERMISSION_REQUIRED'),
+      contains('Разрешите'),
+    );
   });
 }

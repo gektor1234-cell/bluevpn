@@ -121,9 +121,6 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
     }
 
     fun connectBest(continueRequested: () -> Boolean): GreenVpnNativeCascadeResult {
-        if (SUPPORTED_PROTOCOLS.size <= 1) {
-            return GreenVpnNativeCascadeResult(false, error = "transport_preview_disabled")
-        }
         if (VpnService.prepare(appContext) != null) {
             return GreenVpnNativeCascadeResult(false, error = "vpn_permission_required")
         }

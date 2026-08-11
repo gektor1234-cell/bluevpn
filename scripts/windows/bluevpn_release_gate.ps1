@@ -205,6 +205,9 @@ $deployBackendWindowsPath = Join-Path $ProjectRoot "scripts\windows\deploy_backe
 $configureBackendEnvShellPath = Join-Path $ProjectRoot "scripts\configure_backend_env_wsl.sh"
 $deployBackendShellPath = Join-Path $ProjectRoot "scripts\deploy_backend_wsl.sh"
 $androidLegacyE2ePath = Join-Path $ProjectRoot "scripts\windows\run_android_vpn_e2e.ps1"
+$androidRuntimeFailoverServicePath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\GreenVpnRuntimeFailoverService.kt"
+$androidRuntimeFailoverPolicyPath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\GreenVpnRuntimeFailoverPolicy.kt"
+$androidMainActivityPath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\MainActivity.kt"
 
 $main = Read-Text $mainPath
 $releaseContractText = Read-Text $releaseContractPath
@@ -213,6 +216,9 @@ $versionFile = Read-Text $versionFilePath
 $finalCandidateBuildScript = Read-Text $finalCandidateBuildPath
 $publicProductBuildScript = Read-Text $publicProductBuildPath
 $paidBetaBuildScript = Read-Text $paidBetaBuildPath
+$androidRuntimeFailoverService = Read-Text $androidRuntimeFailoverServicePath
+$androidRuntimeFailoverPolicy = Read-Text $androidRuntimeFailoverPolicyPath
+$androidMainActivity = Read-Text $androidMainActivityPath
 $windowsSelectiveRouting = Read-Text $windowsSelectiveRoutingPath
 $runtimeConfig = Read-Text $runtimeConfigPath
 $backend = Read-Text $backendPath
@@ -369,6 +375,7 @@ if ($null -ne $releaseContract) {
         'androidBuildNumber',
         'windowsBuildNumber',
         'backendVersion',
+        'paidBeta',
         'api',
         'billing',
         'publication'
@@ -392,7 +399,9 @@ if ($null -ne $releaseContract) {
         $androidBuildNumber = [string]$releaseContract.androidBuildNumber
         $windowsBuildNumber = [int]$releaseContract.windowsBuildNumber
         $backendVersion = [string]$releaseContract.backendVersion
-        $paidBetaVersion = "$appVersion-paid-beta.1"
+        $paidBetaVersion = [string]$releaseContract.paidBeta.appVersion
+        $paidBetaAndroidBuildNumber = [string]$releaseContract.paidBeta.androidBuildNumber
+        $paidBetaWindowsBuildNumber = [int]$releaseContract.paidBeta.windowsBuildNumber
 
         $releaseIdentityChecks = [ordered]@{
             'pubspec version' = @($pubspec, "version: $appVersion+$androidBuildNumber")
@@ -410,8 +419,8 @@ if ($null -ne $releaseContract) {
             'Public product Windows build' = @($publicProductBuildScript, "[int]`$WindowsBuildNumber = $windowsBuildNumber")
             'Paid-beta app version' = @($paidBetaBuildScript, "[string]`$AppVersion = `"$paidBetaVersion`"")
             'Paid-beta Windows app version' = @($paidBetaBuildScript, "[string]`$WindowsAppVersion = `"$paidBetaVersion`"")
-            'Paid-beta Android build' = @($paidBetaBuildScript, "[string]`$AndroidBuildNumber = `"$androidBuildNumber`"")
-            'Paid-beta Windows build' = @($paidBetaBuildScript, "[int]`$WindowsBuildNumber = $windowsBuildNumber")
+            'Paid-beta Android build' = @($paidBetaBuildScript, "[string]`$AndroidBuildNumber = `"$paidBetaAndroidBuildNumber`"")
+            'Paid-beta Windows build' = @($paidBetaBuildScript, "[int]`$WindowsBuildNumber = $paidBetaWindowsBuildNumber")
             'Trusted Windows finalizer build' = @($trustedWindowsFinalizer, "[int]`$WindowsBuildNumber = $windowsBuildNumber")
         }
         foreach ($check in $releaseIdentityChecks.GetEnumerator()) {
@@ -574,6 +583,31 @@ foreach ($fragment in $windowsParityFragments) {
     }
     else {
         Add-Error "Windows product parity marker missing: $fragment"
+    }
+}
+
+if ($runnerSource -match 'case\s+kTrayMenuExit:\s*RequestDisconnectAndExit\(\);') {
+    Add-Pass "Windows tray exit disconnects before process exit"
+}
+else {
+    Add-Error "Windows tray exit must call RequestDisconnectAndExit before process exit."
+}
+
+$fusionIsolationChecks = [ordered]@{
+    'Flutter Fusion compile-time gate' = @($main, 'kFusionUiEnabled = kPaidBetaCustomerUi && kFusionUiRequested')
+    'Windows Fusion build gate' = @($installer, 'Fusion UI is allowed only in an isolated paid-beta build.')
+    'Paid-beta orchestrator Fusion gate' = @($paidBetaBuildScript, 'Fusion UI is allowed only in the isolated paid-beta product.')
+    'Android scheduled-resume marker' = @($androidRuntimeFailoverService, 'KEY_RESUME_SCHEDULED')
+    'Android scheduled-resume cancellation policy' = @($androidRuntimeFailoverPolicy, 'shouldCancelScheduledResume')
+    'Android cancellation waits for transition idle' = @($androidMainActivity, 'GreenVpnConnectionOperationGate.awaitIdle()')
+    'Flutter cancels abandoned Android resume' = @($main, 'android pause resume UI polling stopped after five minutes')
+}
+foreach ($check in $fusionIsolationChecks.GetEnumerator()) {
+    if ($check.Value[0].Contains($check.Value[1])) {
+        Add-Pass "$($check.Key) marker present"
+    }
+    else {
+        Add-Error "$($check.Key) marker missing: $($check.Value[1])"
     }
 }
 
@@ -946,7 +980,7 @@ $requiredAutoRouteClientFragments = @(
     "res.data!['resilience']",
     "resilienceMap['routeDecision']",
     'selectedRouteMap',
-    's.isAuto || s.isCurrentClientReady',
+    'server.isAuto || server.isCurrentClientReady',
     'const bool kAwg2PreviewEnabled = bool.fromEnvironment(',
     "'GREENVPN_AWG2_PREVIEW_ENABLED'",
     'defaultValue: false',

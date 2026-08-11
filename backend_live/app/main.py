@@ -1328,6 +1328,13 @@ FEATURE_FLAG_SCOPES = [
     "vpn",
     "experimental",
 ]
+CLIENT_EXPOSED_FEATURE_FLAGS = (
+    "fusion.connection_actions",
+    "fusion.location_memory",
+    "fusion.connection_details",
+    "fusion.windows_close_behavior",
+    "fusion.friendly_errors",
+)
 RUNBOOK_CATEGORIES = [
     "vpn",
     "auth",
@@ -16884,6 +16891,51 @@ def seed_default_feature_flags_and_runbooks() -> None:
             "rollout": 100,
         },
         {
+            "key": "fusion.connection_actions",
+            "title": "Fusion: действия активного соединения",
+            "description": "Пауза с автозапуском и безопасная смена маршрута в paid-beta.",
+            "value": {"channels": ["paid-beta"], "platforms": ["android", "windows"]},
+            "scope": "vpn",
+            "enabled": True,
+            "rollout": 100,
+        },
+        {
+            "key": "fusion.location_memory",
+            "title": "Fusion: поиск и память локаций",
+            "description": "Поиск, избранные и недавние локации в paid-beta.",
+            "value": {"channels": ["paid-beta"], "platforms": ["android", "windows"]},
+            "scope": "vpn",
+            "enabled": True,
+            "rollout": 100,
+        },
+        {
+            "key": "fusion.connection_details",
+            "title": "Fusion: детали соединения",
+            "description": "Публичный IP, длительность, задержка, трафик и маршрут в paid-beta.",
+            "value": {"channels": ["paid-beta"], "platforms": ["android", "windows"]},
+            "scope": "vpn",
+            "enabled": True,
+            "rollout": 100,
+        },
+        {
+            "key": "fusion.windows_close_behavior",
+            "title": "Fusion: закрытие окна Windows",
+            "description": "Выбор между треем, подтверждением и отключением перед выходом.",
+            "value": {"channels": ["paid-beta"], "platforms": ["windows"]},
+            "scope": "vpn",
+            "enabled": True,
+            "rollout": 100,
+        },
+        {
+            "key": "fusion.friendly_errors",
+            "title": "Fusion: безопасные сообщения об ошибках",
+            "description": "Не показывает пользователю технические исключения и внутренние адреса.",
+            "value": {"channels": ["paid-beta"], "platforms": ["android", "windows"]},
+            "scope": "vpn",
+            "enabled": True,
+            "rollout": 100,
+        },
+        {
             "key": "monitoring.service_alerts_enabled",
             "title": "Оповещения о доступности сервисов",
             "description": "Инциденты и alert hooks по YouTube/Discord/Telegram/API/update targets.",
@@ -17423,6 +17475,71 @@ def rollout_bucket(seed: Optional[str]) -> Optional[int]:
         return None
     digest = hashlib.sha256(clean.encode("utf-8")).hexdigest()
     return int(digest[:8], 16) % 100
+
+
+def client_feature_flags(
+    *,
+    client_marker: Optional[str],
+    release_channel: Optional[str],
+    platform: Optional[str],
+    device_uid: Optional[str],
+) -> dict[str, bool]:
+    result = {key: False for key in CLIENT_EXPOSED_FEATURE_FLAGS}
+    if not paid_beta_request_allowed(client_marker, release_channel):
+        return result
+
+    normalized_channel = clean_limited_text(release_channel, 40).strip().lower()
+    normalized_platform = clean_limited_text(platform, 40).strip().lower()
+    placeholders = ",".join("?" for _ in CLIENT_EXPOSED_FEATURE_FLAGS)
+    with db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT flag_key, value_json, is_enabled, rollout_percent
+            FROM admin_feature_flags
+            WHERE flag_key IN ({placeholders})
+            """,
+            tuple(CLIENT_EXPOSED_FEATURE_FLAGS),
+        ).fetchall()
+
+    for row in rows:
+        key = str(row["flag_key"] or "").strip()
+        if key not in result or not bool(row["is_enabled"]):
+            continue
+        try:
+            value = json.loads(row["value_json"] or "null")
+        except Exception:
+            value = None
+        if isinstance(value, dict):
+            raw_channels = value.get("channels", [])
+            raw_platforms = value.get("platforms", [])
+            if not isinstance(raw_channels, (list, tuple, set)):
+                raw_channels = []
+            if not isinstance(raw_platforms, (list, tuple, set)):
+                raw_platforms = []
+            channels = {
+                clean_limited_text(item, 40).strip().lower()
+                for item in raw_channels
+                if isinstance(item, str)
+            }
+            platforms = {
+                clean_limited_text(item, 40).strip().lower()
+                for item in raw_platforms
+                if isinstance(item, str)
+            }
+            if channels and normalized_channel not in channels:
+                continue
+            if platforms and normalized_platform not in platforms:
+                continue
+
+        rollout_percent = max(0, min(100, int(row["rollout_percent"] or 0)))
+        if rollout_percent >= 100:
+            result[key] = True
+            continue
+        if rollout_percent <= 0:
+            continue
+        bucket = rollout_bucket(f"{key}:{device_uid or ''}")
+        result[key] = bucket is not None and bucket < rollout_percent
+    return result
 
 
 def release_rollout_decision(
@@ -31036,6 +31153,39 @@ def subscription_apply(
     )
 
 
+def validated_request_public_ip(request: Request) -> Optional[str]:
+    candidates: list[str] = []
+    real_ip = request.headers.get("x-real-ip", "").strip()
+    if real_ip:
+        candidates.append(real_ip)
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        candidates.extend(part.strip() for part in forwarded.split(","))
+    if request.client and request.client.host:
+        candidates.append(request.client.host.strip())
+
+    for candidate in candidates:
+        clean = candidate.strip().strip("[]")
+        try:
+            return str(ipaddress.ip_address(clean))
+        except ValueError:
+            continue
+    return None
+
+
+@app.get("/api/v1/client/network-info")
+def client_network_info(
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+):
+    get_user_by_token(authorization)
+    return {
+        "ok": True,
+        "publicIp": validated_request_public_ip(request),
+        "checkedAt": utc_now_iso(),
+    }
+
+
 @app.post("/api/v1/client/bootstrap")
 def client_bootstrap(
     payload: BootstrapIn,
@@ -31176,6 +31326,12 @@ def client_bootstrap(
         "rateLimitPolicy": sub.get("rateLimitPolicy"),
         "fairUsePolicy": sub.get("fairUsePolicy"),
         "adGate": ad_gate,
+        "clientFeatures": client_feature_flags(
+            client_marker=payload.clientMarker,
+            release_channel=payload.releaseChannel,
+            platform=device["platform"],
+            device_uid=device["device_uid"],
+        ),
     }
 
 

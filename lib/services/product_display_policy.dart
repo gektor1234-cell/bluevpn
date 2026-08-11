@@ -182,6 +182,15 @@ List<String> greenVpnFixedBillingPlanCodesFromCatalog(
 bool greenVpnCatalogHasFixedBillingPlans(Map<String, dynamic>? catalog) =>
     greenVpnFixedBillingPlanCodesFromCatalog(catalog).isNotEmpty;
 
+String greenVpnTariffRefreshStatus({
+  required bool usesFixedBillingPlans,
+  Object? monthlyPriceRub,
+}) {
+  if (usesFixedBillingPlans) return 'Тарифы обновлены.';
+  if (monthlyPriceRub == null) return 'Цена обновлена.';
+  return 'Цена обновлена: $monthlyPriceRub ₽/мес.';
+}
+
 String greenVpnPublicBillingPeriodTitle(String rawPlanCode, int periodDays) {
   switch (rawPlanCode.trim()) {
     case 'green_30d':
@@ -287,6 +296,21 @@ String greenVpnPublicErrorMessage({
       lower.contains('connection reset') ||
       lower.contains('handshakeexception')) {
     return 'Не удалось связаться с сервисом. Проверьте интернет и повторите попытку.';
+  }
+  if (lower.contains('competing_vpn') ||
+      lower.contains('competing vpn') ||
+      lower.contains('another vpn') ||
+      lower.contains('другой vpn')) {
+    return 'На устройстве активен другой VPN. Отключите его и повторите подключение.';
+  }
+  if (lower.contains('previous_route_still_active') ||
+      lower.contains('previous route') ||
+      lower.contains('не удалось полностью остановить')) {
+    return 'Не удалось безопасно сменить маршрут. Отключите VPN и попробуйте ещё раз.';
+  }
+  if (lower.contains('vpn_permission_required') ||
+      lower.contains('не выдал разрешение на vpn')) {
+    return 'Разрешите Green VPN создать VPN-подключение в системном окне Android.';
   }
 
   final containsInternalDetails = RegExp(

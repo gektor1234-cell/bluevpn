@@ -1,18 +1,18 @@
 param(
     [ValidateSet("android", "windows", "both")]
     [string]$Mode = "both",
-    [string]$AppVersion = "0.3.26-paid-beta.1",
-    [string]$WindowsAppVersion = "0.3.26-paid-beta.1",
+    [string]$AppVersion = "0.4.5-paid-beta.1",
+    [string]$WindowsAppVersion = "0.4.5-paid-beta.1",
     [ValidateRange(0, 65535)]
-    [int]$WindowsBuildNumber = 3105,
-    [string]$AndroidBuildName = "0.3.26",
-    [string]$AndroidBuildNumber = "2026073101",
+    [int]$WindowsBuildNumber = 4501,
+    [string]$AndroidBuildName = "0.4.5",
+    [string]$AndroidBuildNumber = "2026081105",
     [string]$AndroidApplicationId = "pro.greenvpn.app.beta",
     [string]$AndroidAppLabel = "Green VPN Beta",
     [string]$ApiBaseUrl = "https://api.greenvpn.pro/paid-beta-api",
     [string]$ApiFallbackBaseUrls = "https://176-113-81-35.sslip.io/paid-beta-api",
     [string]$ClientMarker = "green-vpn-paid-beta-v1",
-    [string]$OutDir = "C:\BlueVPN_Builds\paid_beta_20260801_b3105",
+    [string]$OutDir = "C:\BlueVPN_Builds\paid_beta_20260811_fusion_actions_v6_0.4.5",
     [bool]$EnableTransportCascade = $true,
     [bool]$EnableFusionUi = $true,
     [string]$WindowsCodeSigningCertificateThumbprint = $env:GREENVPN_WINDOWS_CODE_SIGNING_CERT_THUMBPRINT,
@@ -35,6 +35,9 @@ if (-not $ApiBaseUrl.Contains("/paid-beta-api")) {
 }
 if (-not $ApiFallbackBaseUrls.Contains("/paid-beta-api")) {
     throw "Fallback API must use the isolated /paid-beta-api contour."
+}
+if ($EnableFusionUi -and $PublicProductCandidate) {
+    throw "Fusion UI is allowed only in the isolated paid-beta product."
 }
 $expectedClientMarker = if ($PublicProductCandidate) {
     "green-vpn-public-product-v1"
@@ -84,6 +87,8 @@ if (-not $SkipChecks) {
     if ($LASTEXITCODE -ne 0) { throw "flutter test failed" }
     if ($EnableFusionUi) {
         flutter test --no-pub `
+            --dart-define="GREENVPN_PAID_BETA_BUILD=true" `
+            --dart-define="GREENVPN_PUBLIC_PRODUCT_BUILD=false" `
             --dart-define="GREENVPN_FUSION_UI_ENABLED=true" `
             "test\fusion_ui_test.dart" | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "Fusion UI test failed" }
