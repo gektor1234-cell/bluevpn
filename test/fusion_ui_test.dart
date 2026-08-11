@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:greenvpn/main.dart';
 
@@ -252,7 +253,7 @@ void main() {
 
       await pumpAt(
         tester,
-        const Size(390, 844),
+        const Size(360, 800),
         VpnPage(
           planName: 'Бесплатный',
           freeTierActive: true,
@@ -308,6 +309,15 @@ void main() {
       );
 
       expect(find.text('Защита активна'), findsOneWidget);
+      final diagnosticsLabel = tester.widget<Text>(find.text('Диагностика'));
+      expect(diagnosticsLabel.maxLines, 1);
+      expect(diagnosticsLabel.softWrap, isFalse);
+      expect(
+        tester
+            .renderObject<RenderParagraph>(find.text('Диагностика'))
+            .didExceedMaxLines,
+        isFalse,
+      );
       await tester.tap(find.byKey(const Key('fusion_pause_button')));
       await tester.tap(find.byKey(const Key('fusion_change_route_button')));
       expect(pauseOpened, isTrue);

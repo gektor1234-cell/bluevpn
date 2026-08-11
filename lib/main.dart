@@ -15976,6 +15976,35 @@ class VpnPage extends StatelessWidget {
       );
     }
 
+    Widget compactActionButton({
+      required Key buttonKey,
+      required VoidCallback? onPressed,
+      required IconData icon,
+      required String label,
+    }) {
+      return OutlinedButton(
+        key: buttonKey,
+        onPressed: onPressed,
+        style: OutlinedButton.styleFrom(
+          minimumSize: const Size.fromHeight(48),
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 20),
+            const SizedBox(width: 8),
+            Flexible(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(label, maxLines: 1, softWrap: false),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     Widget connectionPanel() {
       final powerColor = paused
           ? kBrandWarm
@@ -16207,20 +16236,20 @@ class VpnPage extends StatelessWidget {
               Row(
                 children: [
                   Expanded(
-                    child: OutlinedButton.icon(
-                      key: const Key('fusion_pause_button'),
+                    child: compactActionButton(
+                      buttonKey: const Key('fusion_pause_button'),
                       onPressed: vpnInteractionLocked ? null : onOpenPause,
-                      icon: const Icon(Icons.timer_outlined),
-                      label: const Text('Пауза'),
+                      icon: Icons.timer_outlined,
+                      label: 'Пауза',
                     ),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: OutlinedButton.icon(
-                      key: const Key('fusion_change_route_button'),
+                    child: compactActionButton(
+                      buttonKey: const Key('fusion_change_route_button'),
                       onPressed: vpnInteractionLocked ? null : onChangeRoute,
-                      icon: const Icon(Icons.sync_alt_rounded),
-                      label: const Text('Сменить маршрут'),
+                      icon: Icons.sync_alt_rounded,
+                      label: 'Сменить маршрут',
                     ),
                   ),
                 ],
@@ -16230,18 +16259,18 @@ class VpnPage extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: OutlinedButton.icon(
-                    key: const Key('fusion_diagnostics_button'),
+                  child: compactActionButton(
+                    buttonKey: const Key('fusion_diagnostics_button'),
                     onPressed: onOpenDiagnostics,
-                    icon: const Icon(Icons.health_and_safety_outlined),
-                    label: const Text('Диагностика'),
+                    icon: Icons.health_and_safety_outlined,
+                    label: 'Диагностика',
                   ),
                 ),
                 if (vpnEnabled && connectionDetailsEnabled) ...[
                   const SizedBox(width: 8),
                   Expanded(
-                    child: OutlinedButton.icon(
-                      key: const Key('fusion_details_button'),
+                    child: compactActionButton(
+                      buttonKey: const Key('fusion_details_button'),
                       onPressed: () => _showFusionConnectionDetails(
                         context,
                         serverTitle: serverTitle,
@@ -16254,8 +16283,8 @@ class VpnPage extends StatelessWidget {
                         publicIp: connectionPublicIp,
                         trafficUsage: trafficUsage,
                       ),
-                      icon: const Icon(Icons.info_outline_rounded),
-                      label: const Text('Детали'),
+                      icon: Icons.info_outline_rounded,
+                      label: 'Детали',
                     ),
                   ),
                 ],
