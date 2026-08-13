@@ -1510,10 +1510,18 @@ try {
 
   static Future<void> prepareSharedStateFile(String path) async {
     if (kIsWeb || !Platform.isWindows || path.trim().isEmpty) return;
+    await repairSharedStateFileAcl(path);
+  }
+
+  static Future<bool> repairSharedStateFileAcl(String path) async {
+    if (kIsWeb || !Platform.isWindows || path.trim().isEmpty) return false;
     try {
       await Process.run('attrib', ['+h', path], runInShell: true);
       await _prepareProtectedSharedPath(path, directory: false);
-    } catch (_) {}
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   static Future<void> prepareSharedConfigDirectory(String path) async {
@@ -2243,14 +2251,31 @@ class PendingVpnActionStore {
 
 Future<void> _greenVpnAuthLogWriteTail = Future<void>.value();
 
+Future<void> _appendGreenVpnAuthLogLineNow(String line) async {
+  final file = File(greenVpnAuthLogPathSync());
+  final existedBeforeWrite = file.existsSync();
+  var repairedExistingAcl = false;
+  try {
+    await file.writeAsString(line, mode: FileMode.append);
+  } on FileSystemException {
+    await WindowsLocalSecurity.prepareSharedStateDirectory(file.parent.path);
+    repairedExistingAcl = await WindowsLocalSecurity.repairSharedStateFileAcl(
+      file.path,
+    );
+    await file.writeAsString(line, mode: FileMode.append);
+  }
+  if (!existedBeforeWrite && !repairedExistingAcl) {
+    await WindowsLocalSecurity.prepareSharedStateFile(file.path);
+  }
+}
+
 Future<void> appendGreenVpnAuthLogLine(String message) {
   if (kIsWeb || !Platform.isWindows) return Future<void>.value();
   final timestamp = DateTime.now().toIso8601String();
   final line = '[$timestamp] $message\n';
   final write = _greenVpnAuthLogWriteTail.then((_) async {
     try {
-      final file = File(greenVpnAuthLogPathSync());
-      await file.writeAsString(line, mode: FileMode.append);
+      await _appendGreenVpnAuthLogLineNow(line);
     } catch (_) {}
   });
   _greenVpnAuthLogWriteTail = write;
@@ -2287,6 +2312,9 @@ Future<void> applyStartupLocalHardening() async {
       sharedStateDir.createSync(recursive: true);
     }
     await WindowsLocalSecurity.prepareSharedStateDirectory(sharedStateDir.path);
+    await WindowsLocalSecurity.repairSharedStateFileAcl(
+      greenVpnAuthLogPathSync(),
+    );
 
     final appData = Platform.environment['APPDATA'];
     if (appData != null && appData.trim().isNotEmpty) {
@@ -6032,12 +6060,7 @@ class _AuthPageState extends State<AuthPage>
 
   Future<void> _authLog(String text) async {
     if (!widget.authLoggingEnabled) return;
-    if (kIsWeb || !Platform.isWindows) return;
-    try {
-      final f = File(greenVpnAuthLogPathSync());
-      final ts = DateTime.now().toIso8601String();
-      await f.writeAsString('[$ts] $text\n', mode: FileMode.append);
-    } catch (_) {}
+    await appendGreenVpnAuthLogLine(text);
   }
 
   Future<void> _refreshWireGuardState() async {

@@ -109,20 +109,26 @@ function Ensure-BetaProgramData {
 
     New-Item -ItemType Directory -Force -Path $programDataRoot | Out-Null
     attrib -H -S -R $programDataRoot 2>$null | Out-Null
+    & takeown.exe /F $programDataRoot /A /R /D Y | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to take ownership of existing Green VPN Beta state.' }
     & icacls.exe $programDataRoot /grant:r `
         ('*' + $UserSid + ':(OI)(CI)M') `
         '*S-1-5-18:(OI)(CI)F' `
-        '*S-1-5-32-544:(OI)(CI)F' /T /C | Out-Null
+        '*S-1-5-32-544:(OI)(CI)F' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to seed protected Green VPN Beta state ACLs.' }
-    & icacls.exe $programDataRoot /inheritance:r /T /C | Out-Null
+    & icacls.exe $programDataRoot /inheritance:r | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to disable inherited Green VPN Beta state ACLs.' }
-    & icacls.exe $programDataRoot /remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' /T /C | Out-Null
+    & icacls.exe $programDataRoot /remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to remove broad Green VPN Beta state access.' }
     & icacls.exe $programDataRoot /grant:r `
         ('*' + $UserSid + ':(OI)(CI)M') `
         '*S-1-5-18:(OI)(CI)F' `
-        '*S-1-5-32-544:(OI)(CI)F' /T /C | Out-Null
+        '*S-1-5-32-544:(OI)(CI)F' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to apply protected Green VPN Beta state ACLs.' }
+    if (Get-ChildItem -LiteralPath $programDataRoot -Force -ErrorAction SilentlyContinue) {
+        & icacls.exe (Join-Path $programDataRoot '*') /reset /T /C | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Failed to restore inherited Green VPN Beta child state ACLs.' }
+    }
     & icacls.exe $programDataRoot /setowner ('*' + $UserSid) /T /C | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to bind Green VPN Beta state to the installing Windows account.' }
 

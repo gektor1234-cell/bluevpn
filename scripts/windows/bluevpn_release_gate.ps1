@@ -1427,7 +1427,7 @@ foreach ($check in @(
     foreach ($required in @(
         'Resolve-InstallingUserSid',
         '-OwnerSid',
-        "/remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' /T /C",
+        "/remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545'",
         "('*' + `$UserSid + ':(OI)(CI)M')"
     )) {
         if ($check.Source.Contains($required)) {
@@ -1436,6 +1436,26 @@ foreach ($check in @(
         else {
             Add-Error "$($check.Name) protected ProgramData marker missing: $required"
         }
+    }
+}
+
+foreach ($check in @(
+    [pscustomobject]@{
+        Name = 'production'
+        Source = $installer
+        ChildReset = "(Join-Path `$root '*') /reset /T /C"
+    },
+    [pscustomobject]@{
+        Name = 'paid-beta'
+        Source = $paidBetaWindowsInstaller
+        ChildReset = "(Join-Path `$programDataRoot '*') /reset /T /C"
+    }
+)) {
+    if ($check.Source.Contains($check.ChildReset)) {
+        Add-Pass "$($check.Name) installer resets child ACLs to inherit the protected root"
+    }
+    else {
+        Add-Error "$($check.Name) installer does not reset child ACLs to inherit the protected root"
     }
 }
 
@@ -2523,6 +2543,8 @@ foreach ($fragment in @(
     "'*S-1-5-32-545'",
     "'*`$userSid:(OI)(CI)M'",
     "'*`$userSid:M'",
+    'repairSharedStateFileAcl',
+    'on FileSystemException',
     "WindowsLocalSecurity.prepareSharedConfigDirectory(f.parent.path)",
     "WindowsLocalSecurity.prepareSharedConfigFile(f.path)"
 )) {

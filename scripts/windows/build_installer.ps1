@@ -741,24 +741,31 @@ function Ensure-GreenVpnProgramDataAcl {
     $root = Join-Path $env:ProgramData 'BlueVPN'
     New-Item -ItemType Directory -Force -Path $root | Out-Null
     attrib -H -S -R $root 2>$null | Out-Null
+    & takeown.exe /F $root /A /R /D Y | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to take ownership of existing Green VPN state.' }
 
     & icacls.exe $root /grant:r `
         ('*' + $UserSid + ':(OI)(CI)M') `
         '*S-1-5-18:(OI)(CI)F' `
-        '*S-1-5-32-544:(OI)(CI)F' /T /C | Out-Null
+        '*S-1-5-32-544:(OI)(CI)F' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to seed protected Green VPN state ACLs.' }
 
-    & icacls.exe $root /inheritance:r /T /C | Out-Null
+    & icacls.exe $root /inheritance:r | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to disable inherited Green VPN state ACLs.' }
 
-    & icacls.exe $root /remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' /T /C | Out-Null
+    & icacls.exe $root /remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to remove broad Green VPN state access.' }
 
     & icacls.exe $root /grant:r `
         ('*' + $UserSid + ':(OI)(CI)M') `
         '*S-1-5-18:(OI)(CI)F' `
-        '*S-1-5-32-544:(OI)(CI)F' /T /C | Out-Null
+        '*S-1-5-32-544:(OI)(CI)F' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to apply protected Green VPN state ACLs.' }
+
+    if (Get-ChildItem -LiteralPath $root -Force -ErrorAction SilentlyContinue) {
+        & icacls.exe (Join-Path $root '*') /reset /T /C | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Failed to restore inherited Green VPN child state ACLs.' }
+    }
 
     & icacls.exe $root /setowner ('*' + $UserSid) /T /C | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Failed to bind Green VPN state to the installing Windows account.' }
