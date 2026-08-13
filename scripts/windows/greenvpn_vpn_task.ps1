@@ -11,6 +11,8 @@ $ServiceName = 'WireGuardTunnel$BlueVPNDev1'
 $ProgramDataRoot = Join-Path $env:ProgramData 'BlueVPN'
 $runtimeScope = if ($ProgramDataRoot -match '(?i)BlueVPNBeta$') { 'paid-beta' } else { 'stable' }
 $PrivilegedRuntimeRegistryPath = "HKLM:\SOFTWARE\GreenVPN\Runtime\$runtimeScope"
+$PrivilegedRuntimeRegistrySubKey = "SOFTWARE\GreenVPN\Runtime\$runtimeScope"
+$RuntimeMutationMutexName = 'Global\GreenVPN.RuntimeMutation'
 $ConfigPath = Join-Path $ProgramDataRoot 'BlueVPNDev1.conf'
 $LogPath = Join-Path $ProgramDataRoot 'backend.log'
 $RoutingModePath = Join-Path $ProgramDataRoot 'routing_mode'
@@ -67,6 +69,29 @@ function Invoke-External {
     }
 }
 
+function Open-GreenPrivilegedRuntimeRegistryKey {
+    param([switch]$Writable)
+
+    $baseKey = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+        [Microsoft.Win32.RegistryHive]::LocalMachine,
+        [Microsoft.Win32.RegistryView]::Registry64
+    )
+    try {
+        if ($Writable) {
+            return $baseKey.CreateSubKey(
+                $PrivilegedRuntimeRegistrySubKey,
+                [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree
+            )
+        }
+        return $baseKey.OpenSubKey(
+            $PrivilegedRuntimeRegistrySubKey,
+            [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadSubTree
+        )
+    } finally {
+        $baseKey.Dispose()
+    }
+}
+
 function Write-GreenPrivilegedRuntimeValue {
     param(
         [Parameter(Mandatory=$true)][ValidateSet('ActiveRoutingMode', 'ProcessRouterPid', 'ProcessRouterRequired', 'RuntimeStateGeneration')][string]$Name,
@@ -74,40 +99,92 @@ function Write-GreenPrivilegedRuntimeValue {
         [ValidateSet('String', 'DWord')][string]$PropertyType = 'String'
     )
 
-    New-Item -Path $PrivilegedRuntimeRegistryPath -Force | Out-Null
-    Remove-ItemProperty `
-        -LiteralPath $PrivilegedRuntimeRegistryPath `
-        -Name $Name `
-        -Force `
-        -ErrorAction SilentlyContinue
-    New-ItemProperty `
-        -Path $PrivilegedRuntimeRegistryPath `
-        -Name $Name `
-        -PropertyType $PropertyType `
-        -Value $Value `
-        -Force |
-        Out-Null
+    $registryKey = $null
+    try {
+        $registryKey = Open-GreenPrivilegedRuntimeRegistryKey -Writable
+        if ($null -eq $registryKey) {
+            throw 'Privileged runtime registry key could not be opened for writing.'
+        }
+        $valueKind = if ($PropertyType -eq 'DWord') {
+            [Microsoft.Win32.RegistryValueKind]::DWord
+        } else {
+            [Microsoft.Win32.RegistryValueKind]::String
+        }
+        $typedValue = if ($PropertyType -eq 'DWord') {
+            [BitConverter]::ToInt32(
+                [BitConverter]::GetBytes([uint32]$Value),
+                0
+            )
+        } else {
+            [string]$Value
+        }
+        $registryKey.SetValue($Name, $typedValue, $valueKind)
+        if ($registryKey.GetValueKind($Name) -ne $valueKind) {
+            throw "Privileged runtime value type readback failed: $Name"
+        }
+    } finally {
+        if ($null -ne $registryKey) { $registryKey.Dispose() }
+    }
 }
 
 function Read-GreenPrivilegedRuntimeValue {
     param([Parameter(Mandatory=$true)][string]$Name)
+    $registryKey = $null
     try {
-        return (Get-ItemProperty `
-            -LiteralPath $PrivilegedRuntimeRegistryPath `
-            -Name $Name `
-            -ErrorAction Stop).$Name
-    } catch {
-        return $null
+        $registryKey = Open-GreenPrivilegedRuntimeRegistryKey
+        if ($null -eq $registryKey) { return $null }
+        $value = $registryKey.GetValue(
+            $Name,
+            $null,
+            [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+        )
+        if ($null -ne $value -and
+                $registryKey.GetValueKind($Name) -eq
+                    [Microsoft.Win32.RegistryValueKind]::DWord) {
+            return [BitConverter]::ToUInt32(
+                [BitConverter]::GetBytes([int]$value),
+                0
+            )
+        }
+        return $value
+    } finally {
+        if ($null -ne $registryKey) { $registryKey.Dispose() }
     }
+}
+
+function Get-GreenPrivilegedRuntimeValueKind {
+    param([Parameter(Mandatory=$true)][string]$Name)
+
+    $lastError = $null
+    for ($attempt = 0; $attempt -lt 3; $attempt++) {
+        $registryKey = $null
+        try {
+            $registryKey = Open-GreenPrivilegedRuntimeRegistryKey
+            if ($null -eq $registryKey) {
+                throw 'Privileged runtime registry key is unavailable.'
+            }
+            return $registryKey.GetValueKind($Name)
+        } catch {
+            $lastError = $_.Exception.Message
+        } finally {
+            if ($null -ne $registryKey) { $registryKey.Dispose() }
+        }
+        if ($attempt -lt 2) { Start-Sleep -Milliseconds 25 }
+    }
+    throw "Privileged runtime value type is unavailable: $Name ($lastError)"
 }
 
 function Remove-GreenPrivilegedRuntimeValue {
     param([Parameter(Mandatory=$true)][string]$Name)
-    Remove-ItemProperty `
-        -LiteralPath $PrivilegedRuntimeRegistryPath `
-        -Name $Name `
-        -Force `
-        -ErrorAction SilentlyContinue
+    $registryKey = $null
+    try {
+        $registryKey = Open-GreenPrivilegedRuntimeRegistryKey -Writable
+        if ($null -ne $registryKey) {
+            $registryKey.DeleteValue($Name, $false)
+        }
+    } finally {
+        if ($null -ne $registryKey) { $registryKey.Dispose() }
+    }
     if ($null -ne (Read-GreenPrivilegedRuntimeValue -Name $Name)) {
         throw "Privileged runtime value was not removed: $Name"
     }
@@ -124,7 +201,7 @@ function Start-GreenRuntimeStateTransition {
     } elseif (($generation % 2) -eq 0) {
         $transitionGeneration = [uint32]($generation + 1)
     } else {
-        $transitionGeneration = [uint32]($generation + 2)
+        throw 'A privileged runtime transition is already active.'
     }
     Write-GreenPrivilegedRuntimeValue `
         -Name 'RuntimeStateGeneration' `
@@ -141,6 +218,83 @@ function Start-GreenRuntimeStateTransition {
         throw 'Privileged runtime transition generation was not committed.'
     }
     return $transitionGeneration
+}
+
+function Get-GreenRuntimeTransitionGenerationForCleanup {
+    $activeVariable = Get-Variable `
+        -Name 'ActiveRuntimeTransitionGeneration' `
+        -Scope Script `
+        -ErrorAction SilentlyContinue
+    if ($null -ne $activeVariable -and $null -ne $activeVariable.Value) {
+        $activeGeneration = [uint32]$activeVariable.Value
+        $currentGeneration = [uint32]0
+        if (-not [uint32]::TryParse(
+                [string](Read-GreenPrivilegedRuntimeValue `
+                    -Name 'RuntimeStateGeneration'),
+                [ref]$currentGeneration
+            ) -or $currentGeneration -ne $activeGeneration -or
+                ($activeGeneration % 2) -ne 1) {
+            throw 'Active runtime transition ownership was lost before cleanup.'
+        }
+        Remove-GreenPrivilegedRuntimeValue -Name 'ActiveRoutingMode'
+        return $activeGeneration
+    }
+
+    $currentGeneration = [uint32]0
+    if ([uint32]::TryParse(
+            [string](Read-GreenPrivilegedRuntimeValue `
+                -Name 'RuntimeStateGeneration'),
+            [ref]$currentGeneration
+        ) -and ($currentGeneration % 2) -eq 1) {
+        Remove-GreenPrivilegedRuntimeValue -Name 'ActiveRoutingMode'
+        $script:ActiveRuntimeTransitionGeneration = $currentGeneration
+        return $currentGeneration
+    }
+
+    $transitionGeneration = [uint32](Start-GreenRuntimeStateTransition)
+    $script:ActiveRuntimeTransitionGeneration = $transitionGeneration
+    return $transitionGeneration
+}
+
+function Enter-GreenRuntimeMutationLock {
+    $mutexSecurity = [Security.AccessControl.MutexSecurity]::new()
+    foreach ($sidValue in @('S-1-5-18', 'S-1-5-32-544')) {
+        $mutexSecurity.AddAccessRule(
+            [Security.AccessControl.MutexAccessRule]::new(
+                [Security.Principal.SecurityIdentifier]::new($sidValue),
+                [Security.AccessControl.MutexRights]::FullControl,
+                [Security.AccessControl.AccessControlType]::Allow
+            )
+        )
+    }
+    $createdNew = $false
+    $mutex = [Threading.Mutex]::new(
+        $false,
+        $RuntimeMutationMutexName,
+        [ref]$createdNew,
+        $mutexSecurity
+    )
+    $acquired = $false
+    try {
+        try {
+            $acquired = $mutex.WaitOne([TimeSpan]::FromSeconds(15))
+        } catch [Threading.AbandonedMutexException] {
+            $acquired = $true
+        }
+        if (-not $acquired) {
+            throw 'Another privileged Green VPN runtime mutation is still active.'
+        }
+        return $mutex
+    } catch {
+        $mutex.Dispose()
+        throw
+    }
+}
+
+function Exit-GreenRuntimeMutationLock {
+    param([Threading.Mutex]$Mutex)
+    if ($null -eq $Mutex) { return }
+    try { $Mutex.ReleaseMutex() } finally { $Mutex.Dispose() }
 }
 
 function Complete-GreenRuntimeStateTransition {
@@ -286,14 +440,8 @@ function Stop-GreenProcessRouter {
 function Confirm-GreenProcessRouterRuntimeContract {
     param([Parameter(Mandatory=$true)][bool]$Required)
 
-    try {
-        $requiredValueKind = (
-            Get-Item -LiteralPath $PrivilegedRuntimeRegistryPath `
-                -ErrorAction Stop
-        ).GetValueKind('ProcessRouterRequired')
-    } catch {
-        throw 'Privileged process router requirement type is unavailable.'
-    }
+    $requiredValueKind = Get-GreenPrivilegedRuntimeValueKind `
+        -Name 'ProcessRouterRequired'
     if ($requiredValueKind -ne [Microsoft.Win32.RegistryValueKind]::DWord) {
         throw 'Privileged process router requirement is not a REG_DWORD.'
     }
@@ -310,14 +458,8 @@ function Confirm-GreenProcessRouterRuntimeContract {
         [int]::TryParse([string]$pidValue, [ref]$routerPid) -and
         $routerPid -gt 0
     if ($Required) {
-        try {
-            $pidValueKind = (
-                Get-Item -LiteralPath $PrivilegedRuntimeRegistryPath `
-                    -ErrorAction Stop
-            ).GetValueKind('ProcessRouterPid')
-        } catch {
-            throw 'Required process router PID type is unavailable.'
-        }
+        $pidValueKind = Get-GreenPrivilegedRuntimeValueKind `
+            -Name 'ProcessRouterPid'
         if ($pidValueKind -ne [Microsoft.Win32.RegistryValueKind]::DWord) {
             throw 'Required process router PID is not a REG_DWORD.'
         }
@@ -864,13 +1006,13 @@ function Stop-GreenTunnel {
 }
 
 function Complete-GreenDisconnectedRuntimeState {
-    $script:ActiveRuntimeTransitionGeneration = [uint32](
-        Start-GreenRuntimeStateTransition
+    $transitionGeneration = [uint32](
+        Get-GreenRuntimeTransitionGenerationForCleanup
     )
     Stop-GreenTunnel
     Confirm-GreenProcessRouterRuntimeContract -Required $false
     Complete-GreenRuntimeStateTransition `
-        -TransitionGeneration $script:ActiveRuntimeTransitionGeneration
+        -TransitionGeneration $transitionGeneration
     $script:ActiveRuntimeTransitionGeneration = $null
     Write-GreenLog 'disconnected runtime state committed'
 }
@@ -1011,7 +1153,10 @@ function Invoke-GreenGuard {
     $script:ActiveRuntimeTransitionGeneration = $null
 }
 
+$runtimeMutationMutex = $null
+$taskExitCode = 0
 try {
+    $runtimeMutationMutex = Enter-GreenRuntimeMutationLock
     Write-GreenLog 'started'
     switch ($Action) {
         'Connect' { Start-GreenTunnel }
@@ -1023,12 +1168,13 @@ try {
         'Guard' { Invoke-GreenGuard }
     }
     Write-GreenLog 'finished'
-    exit 0
 } catch {
     Write-GreenLog "failed: $($_.Exception.Message)"
-    $mustRecover = $Action -eq 'Connect' -or
+    $mustRecover = $null -ne $runtimeMutationMutex -and (
+        $Action -eq 'Connect' -or
         $null -ne $script:ActiveRuntimeTransitionGeneration -or
         -not (Test-GreenRuntimeStateStable)
+    )
     if ($mustRecover) {
         try {
             Complete-GreenDisconnectedRuntimeState
@@ -1041,5 +1187,8 @@ try {
             Write-GreenLog "failed competitor restore: $($_.Exception.Message)"
         }
     }
-    exit 10
+    $taskExitCode = 10
+} finally {
+    Exit-GreenRuntimeMutationLock -Mutex $runtimeMutationMutex
 }
+exit $taskExitCode

@@ -1764,13 +1764,13 @@ function Stop-OwnTunnel {
 }
 
 function Complete-GreenDisconnectedRuntimeState {
-    $script:ActiveRuntimeTransitionGeneration = [uint32](
-        Start-GreenRuntimeStateTransition
+    $transitionGeneration = [uint32](
+        Get-GreenRuntimeTransitionGenerationForCleanup
     )
     Stop-OwnTunnel
     Confirm-GreenProcessRouterRuntimeContract -Required $false
     Complete-GreenRuntimeStateTransition `
-        -TransitionGeneration $script:ActiveRuntimeTransitionGeneration
+        -TransitionGeneration $transitionGeneration
     $script:ActiveRuntimeTransitionGeneration = $null
     Write-GreenLog 'disconnected runtime state committed'
 }
@@ -2060,7 +2060,10 @@ function Write-StandbyProbeFallbackResult {
     }
 }
 
+$runtimeMutationMutex = $null
+$taskExitCode = 0
 try {
+    $runtimeMutationMutex = Enter-GreenRuntimeMutationLock
     Write-GreenLog 'started'
     switch ($Action) {
         'Connect' { Start-OwnTunnel }
@@ -2093,13 +2096,14 @@ try {
         }
     }
     Write-GreenLog 'finished'
-    exit 0
 } catch {
     $failure = $_
     Write-GreenLog "failed line=$($failure.InvocationInfo.ScriptLineNumber): $($failure.Exception.Message)"
-    $mustRecover = $Action -eq 'Connect' -or
+    $mustRecover = $null -ne $runtimeMutationMutex -and (
+        $Action -eq 'Connect' -or
         $null -ne $script:ActiveRuntimeTransitionGeneration -or
         -not (Test-GreenRuntimeStateStable)
+    )
     if ($mustRecover) {
         try {
             Complete-GreenDisconnectedRuntimeState
@@ -2112,5 +2116,8 @@ try {
             Write-GreenLog "failed competitor restore line=$($_.InvocationInfo.ScriptLineNumber): $($_.Exception.Message)"
         }
     }
-    exit 10
+    $taskExitCode = 10
+} finally {
+    Exit-GreenRuntimeMutationLock -Mutex $runtimeMutationMutex
 }
+exit $taskExitCode

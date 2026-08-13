@@ -6,6 +6,8 @@ $ErrorActionPreference = 'Stop'
 $tempBoundary = [IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
 $testRoot = Join-Path $env:TEMP ("GreenVpnSelectiveRoutingTest_" + [guid]::NewGuid().ToString('N'))
 $resolvedTestRoot = [IO.Path]::GetFullPath($testRoot)
+$registryTestId = [guid]::NewGuid().ToString('N')
+$registryTestSubKey = "Software\GreenVPN\CodexTests\$registryTestId"
 if (-not ($resolvedTestRoot + '\').StartsWith($tempBoundary, [StringComparison]::OrdinalIgnoreCase)) {
     throw "Unsafe selective-routing test path: $resolvedTestRoot"
 }
@@ -21,6 +23,168 @@ try {
     }
 
     . (Join-Path $PSScriptRoot 'greenvpn_selective_routing.ps1')
+
+    $RuntimeMutationMutexName =
+        "Global\GreenVPN.RuntimeMutation.Test.$registryTestId"
+    $runtimeMutationMutex = Enter-GreenRuntimeMutationLock
+    if ($null -eq $runtimeMutationMutex) {
+        throw 'Runtime mutation mutex was not acquired.'
+    }
+    Exit-GreenRuntimeMutationLock -Mutex $runtimeMutationMutex
+
+    $script:simulateRegistryReadFailures = 0
+    $script:registryOpenReadAttempts = 0
+    function Open-GreenPrivilegedRuntimeRegistryKey {
+        param([switch]$Writable)
+
+        if (-not $Writable -and $script:simulateRegistryReadFailures -gt 0) {
+            $script:registryOpenReadAttempts++
+            if ($script:registryOpenReadAttempts -le
+                    $script:simulateRegistryReadFailures) {
+                throw 'synthetic transient registry read failure'
+            }
+        }
+        $baseKey = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+            [Microsoft.Win32.RegistryHive]::CurrentUser,
+            [Microsoft.Win32.RegistryView]::Registry64
+        )
+        try {
+            if ($Writable) {
+                return $baseKey.CreateSubKey(
+                    $script:registryTestSubKey,
+                    [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree
+                )
+            }
+            return $baseKey.OpenSubKey(
+                $script:registryTestSubKey,
+                [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadSubTree
+            )
+        } finally {
+            $baseKey.Dispose()
+        }
+    }
+
+    Write-GreenPrivilegedRuntimeValue `
+        -Name 'ProcessRouterRequired' `
+        -Value 0 `
+        -PropertyType DWord
+    $script:simulateRegistryReadFailures = 2
+    $script:registryOpenReadAttempts = 0
+    $requiredKind = Get-GreenPrivilegedRuntimeValueKind `
+        -Name 'ProcessRouterRequired'
+    $script:simulateRegistryReadFailures = 0
+    if ($requiredKind -ne [Microsoft.Win32.RegistryValueKind]::DWord -or
+            $script:registryOpenReadAttempts -ne 3) {
+        throw 'REG_DWORD type retry contract was not preserved.'
+    }
+    Write-GreenPrivilegedRuntimeValue `
+        -Name 'ProcessRouterPid' `
+        -Value 12345 `
+        -PropertyType DWord
+    $script:simulateRegistryReadFailures = 2
+    $script:registryOpenReadAttempts = 0
+    $pidKind = Get-GreenPrivilegedRuntimeValueKind -Name 'ProcessRouterPid'
+    $script:simulateRegistryReadFailures = 0
+    if ($pidKind -ne [Microsoft.Win32.RegistryValueKind]::DWord -or
+            $script:registryOpenReadAttempts -ne 3) {
+        throw 'Process-router PID type retry contract was not preserved.'
+    }
+    Remove-GreenPrivilegedRuntimeValue -Name 'ProcessRouterPid'
+
+    $script:simulateRegistryReadFailures = 3
+    $script:registryOpenReadAttempts = 0
+    $persistentTypeFailureRejected = $false
+    try {
+        [void](Get-GreenPrivilegedRuntimeValueKind `
+                -Name 'ProcessRouterRequired')
+    } catch {
+        $persistentTypeFailureRejected = $true
+    }
+    $script:simulateRegistryReadFailures = 0
+    if (-not $persistentTypeFailureRejected) {
+        throw 'Persistent registry type failure was not rejected.'
+    }
+
+    Write-GreenPrivilegedRuntimeValue `
+        -Name 'ProcessRouterRequired' `
+        -Value '0' `
+        -PropertyType String
+    $wrongTypeRejected = $false
+    try { Confirm-GreenProcessRouterRuntimeContract -Required $false }
+    catch { $wrongTypeRejected = $true }
+    Write-GreenPrivilegedRuntimeValue `
+        -Name 'ProcessRouterRequired' `
+        -Value 1 `
+        -PropertyType DWord
+    $wrongValueRejected = $false
+    try { Confirm-GreenProcessRouterRuntimeContract -Required $false }
+    catch { $wrongValueRejected = $true }
+    if (-not $wrongTypeRejected -or -not $wrongValueRejected -or
+            $null -ne (Read-GreenPrivilegedRuntimeValue `
+                -Name 'ActiveRoutingMode')) {
+        throw 'Invalid runtime contract did not remain fail-closed.'
+    }
+    Write-GreenPrivilegedRuntimeValue `
+        -Name 'ProcessRouterRequired' `
+        -Value 0 `
+        -PropertyType DWord
+
+    Write-GreenPrivilegedRuntimeValue `
+        -Name 'RuntimeStateGeneration' `
+        -Value ([uint32]0) `
+        -PropertyType DWord
+    $script:ActiveRuntimeTransitionGeneration = $null
+    $firstCleanupGeneration = [uint32](
+        Get-GreenRuntimeTransitionGenerationForCleanup
+    )
+    $nestedStartRejected = $false
+    try { [void](Start-GreenRuntimeStateTransition) }
+    catch { $nestedStartRejected = $true }
+    $reusedCleanupGeneration = [uint32](
+        Get-GreenRuntimeTransitionGenerationForCleanup
+    )
+    if ($firstCleanupGeneration -ne 1 -or
+            $reusedCleanupGeneration -ne $firstCleanupGeneration -or
+            -not $nestedStartRejected -or
+            [uint32](Read-GreenPrivilegedRuntimeValue `
+                -Name 'RuntimeStateGeneration') -ne 1) {
+        throw 'Nested cleanup replaced an active runtime transition.'
+    }
+    Complete-GreenRuntimeStateTransition `
+        -TransitionGeneration $firstCleanupGeneration
+    $script:ActiveRuntimeTransitionGeneration = $null
+    if ([uint32](Read-GreenPrivilegedRuntimeValue `
+            -Name 'RuntimeStateGeneration') -ne 2) {
+        throw 'Runtime cleanup did not publish a stable even generation.'
+    }
+    Write-GreenPrivilegedRuntimeValue `
+        -Name 'RuntimeStateGeneration' `
+        -Value ([uint32]3) `
+        -PropertyType DWord
+    Write-GreenPrivilegedRuntimeValue `
+        -Name 'ActiveRoutingMode' `
+        -Value 'full' `
+        -PropertyType String
+    $adoptedCleanupGeneration = [uint32](
+        Get-GreenRuntimeTransitionGenerationForCleanup
+    )
+    if ($adoptedCleanupGeneration -ne 3 -or
+            $null -ne (Read-GreenPrivilegedRuntimeValue `
+                -Name 'ActiveRoutingMode')) {
+        throw 'Cleanup did not safely adopt an abandoned odd generation.'
+    }
+    Complete-GreenRuntimeStateTransition `
+        -TransitionGeneration $adoptedCleanupGeneration
+    $script:ActiveRuntimeTransitionGeneration = $null
+    $nextCleanupGeneration = [uint32](
+        Get-GreenRuntimeTransitionGenerationForCleanup
+    )
+    if ($nextCleanupGeneration -ne 5) {
+        throw 'Independent cleanup did not start the next transition.'
+    }
+    Complete-GreenRuntimeStateTransition `
+        -TransitionGeneration $nextCleanupGeneration
+    $script:ActiveRuntimeTransitionGeneration = $null
 
     [IO.File]::WriteAllText(
         $RoutingModePath,
@@ -79,9 +243,25 @@ try {
         routingMode = Get-GreenRoutingMode
         defaultRoutesRemoved = $true
         privateCidrRejected = $privateCidrRejected
+        registryTypeRetryPassed = $true
+        runtimeMutationMutexPassed = $true
+        invalidRegistryContractRejected = $true
+        nestedTransitionStartRejected = $nestedStartRejected
+        nestedCleanupGenerationReused = $true
+        abandonedGenerationAdopted = $true
     } | ConvertTo-Json
 }
 finally {
+    $registryBaseKey = $null
+    try {
+        $registryBaseKey = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+            [Microsoft.Win32.RegistryHive]::CurrentUser,
+            [Microsoft.Win32.RegistryView]::Registry64
+        )
+        $registryBaseKey.DeleteSubKeyTree($registryTestSubKey, $false)
+    } finally {
+        if ($null -ne $registryBaseKey) { $registryBaseKey.Dispose() }
+    }
     $cleanupTarget = [IO.Path]::GetFullPath($resolvedTestRoot)
     if (($cleanupTarget + '\').StartsWith($tempBoundary, [StringComparison]::OrdinalIgnoreCase)) {
         Remove-Item -LiteralPath $cleanupTarget -Recurse -Force -ErrorAction SilentlyContinue
