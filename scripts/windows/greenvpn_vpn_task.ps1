@@ -29,6 +29,7 @@ $ProcessRouterHashes = @{
     'WinDivert.dll' = 'C1E060EE19444A259B2162F8AF0F3FE8C4428A1C6F694DCE20DE194AC8D7D9A2'
     'WinDivert64.sys' = '8DA085332782708D8767BCACE5327A6EC7283C17CFB85E40B03CD2323A90DDC2'
 }
+$ActiveRuntimeTransitionGeneration = $null
 
 function Write-GreenLog {
     param([string]$Message)
@@ -68,12 +69,17 @@ function Invoke-External {
 
 function Write-GreenPrivilegedRuntimeValue {
     param(
-        [Parameter(Mandatory=$true)][ValidateSet('ActiveRoutingMode', 'ProcessRouterPid', 'ProcessRouterRequired')][string]$Name,
+        [Parameter(Mandatory=$true)][ValidateSet('ActiveRoutingMode', 'ProcessRouterPid', 'ProcessRouterRequired', 'RuntimeStateGeneration')][string]$Name,
         [Parameter(Mandatory=$true)][object]$Value,
         [ValidateSet('String', 'DWord')][string]$PropertyType = 'String'
     )
 
     New-Item -Path $PrivilegedRuntimeRegistryPath -Force | Out-Null
+    Remove-ItemProperty `
+        -LiteralPath $PrivilegedRuntimeRegistryPath `
+        -Name $Name `
+        -Force `
+        -ErrorAction SilentlyContinue
     New-ItemProperty `
         -Path $PrivilegedRuntimeRegistryPath `
         -Name $Name `
@@ -102,6 +108,81 @@ function Remove-GreenPrivilegedRuntimeValue {
         -Name $Name `
         -Force `
         -ErrorAction SilentlyContinue
+    if ($null -ne (Read-GreenPrivilegedRuntimeValue -Name $Name)) {
+        throw "Privileged runtime value was not removed: $Name"
+    }
+}
+
+function Start-GreenRuntimeStateTransition {
+    $generationValue = Read-GreenPrivilegedRuntimeValue `
+        -Name 'RuntimeStateGeneration'
+    $generation = [uint32]0
+    $generationKnown = $null -ne $generationValue -and
+        [uint32]::TryParse([string]$generationValue, [ref]$generation)
+    if (-not $generationKnown -or $generation -ge [uint32]::MaxValue - 2) {
+        $transitionGeneration = [uint32]1
+    } elseif (($generation % 2) -eq 0) {
+        $transitionGeneration = [uint32]($generation + 1)
+    } else {
+        $transitionGeneration = [uint32]($generation + 2)
+    }
+    Write-GreenPrivilegedRuntimeValue `
+        -Name 'RuntimeStateGeneration' `
+        -Value $transitionGeneration `
+        -PropertyType DWord
+    Remove-GreenPrivilegedRuntimeValue -Name 'ActiveRoutingMode'
+    $committed = [uint32]0
+    if (-not [uint32]::TryParse(
+            [string](Read-GreenPrivilegedRuntimeValue `
+                -Name 'RuntimeStateGeneration'),
+            [ref]$committed
+        ) -or $committed -ne $transitionGeneration -or
+            ($committed % 2) -ne 1) {
+        throw 'Privileged runtime transition generation was not committed.'
+    }
+    return $transitionGeneration
+}
+
+function Complete-GreenRuntimeStateTransition {
+    param(
+        [Parameter(Mandatory=$true)]
+        [ValidateRange(1, 4294967294)][uint32]$TransitionGeneration
+    )
+
+    if (($TransitionGeneration % 2) -ne 1) {
+        throw 'Runtime transition generation must be odd.'
+    }
+    $current = [uint32]0
+    if (-not [uint32]::TryParse(
+            [string](Read-GreenPrivilegedRuntimeValue `
+                -Name 'RuntimeStateGeneration'),
+            [ref]$current
+        ) -or $current -ne $TransitionGeneration) {
+        throw 'Privileged runtime transition generation changed unexpectedly.'
+    }
+    $stableGeneration = [uint32]($TransitionGeneration + 1)
+    Write-GreenPrivilegedRuntimeValue `
+        -Name 'RuntimeStateGeneration' `
+        -Value $stableGeneration `
+        -PropertyType DWord
+    $committed = [uint32]0
+    if (-not [uint32]::TryParse(
+            [string](Read-GreenPrivilegedRuntimeValue `
+                -Name 'RuntimeStateGeneration'),
+            [ref]$committed
+        ) -or $committed -ne $stableGeneration -or
+            ($committed % 2) -ne 0) {
+        throw 'Privileged stable runtime generation was not committed.'
+    }
+}
+
+function Test-GreenRuntimeStateStable {
+    $generation = [uint32]0
+    return [uint32]::TryParse(
+        [string](Read-GreenPrivilegedRuntimeValue `
+            -Name 'RuntimeStateGeneration'),
+        [ref]$generation
+    ) -and ($generation % 2) -eq 0
 }
 
 function Resolve-WireGuardExe {
@@ -166,23 +247,95 @@ function Test-GreenProcessRouterRunning {
     }
 }
 
+function Get-GreenProcessRouterProcesses {
+    $expectedPath = [IO.Path]::GetFullPath($ProcessRouterExe)
+    return @(
+        Get-Process -Name ([IO.Path]::GetFileNameWithoutExtension($ProcessRouterExe)) `
+            -ErrorAction SilentlyContinue |
+            Where-Object {
+                try {
+                    [IO.Path]::GetFullPath([string]$_.Path).Equals(
+                        $expectedPath,
+                        [StringComparison]::OrdinalIgnoreCase
+                    )
+                } catch {
+                    $false
+                }
+            }
+    )
+}
+
 function Stop-GreenProcessRouter {
     Write-GreenPrivilegedRuntimeValue `
         -Name 'ProcessRouterRequired' `
         -Value 0 `
         -PropertyType DWord
-    if (Test-GreenProcessRouterRunning) {
-        $routerPid = [int](Read-GreenPrivilegedRuntimeValue -Name 'ProcessRouterPid')
-        Stop-Process -Id $routerPid -Force -ErrorAction SilentlyContinue
-        for ($i = 0; $i -lt 20; $i++) {
-            if ($null -eq (Get-Process -Id $routerPid -ErrorAction SilentlyContinue)) { break }
-            Start-Sleep -Milliseconds 100
-        }
-        if ($null -ne (Get-Process -Id $routerPid -ErrorAction SilentlyContinue)) {
-            throw 'Process router did not stop completely.'
-        }
+    foreach ($process in @(Get-GreenProcessRouterProcesses)) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    }
+    for ($i = 0; $i -lt 20; $i++) {
+        if (@(Get-GreenProcessRouterProcesses).Count -eq 0) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    if (@(Get-GreenProcessRouterProcesses).Count -ne 0) {
+        throw 'Process router did not stop completely.'
     }
     Remove-GreenPrivilegedRuntimeValue -Name 'ProcessRouterPid'
+}
+
+function Confirm-GreenProcessRouterRuntimeContract {
+    param([Parameter(Mandatory=$true)][bool]$Required)
+
+    try {
+        $requiredValueKind = (
+            Get-Item -LiteralPath $PrivilegedRuntimeRegistryPath `
+                -ErrorAction Stop
+        ).GetValueKind('ProcessRouterRequired')
+    } catch {
+        throw 'Privileged process router requirement type is unavailable.'
+    }
+    if ($requiredValueKind -ne [Microsoft.Win32.RegistryValueKind]::DWord) {
+        throw 'Privileged process router requirement is not a REG_DWORD.'
+    }
+    $requiredValue = Read-GreenPrivilegedRuntimeValue -Name 'ProcessRouterRequired'
+    $expectedRequiredValue = if ($Required) { 1 } else { 0 }
+    if ($null -eq $requiredValue -or
+            [int]$requiredValue -ne $expectedRequiredValue) {
+        throw 'Privileged process router requirement was not committed.'
+    }
+    $processes = @(Get-GreenProcessRouterProcesses)
+    $pidValue = Read-GreenPrivilegedRuntimeValue -Name 'ProcessRouterPid'
+    $routerPid = 0
+    $pidKnown = $null -ne $pidValue -and
+        [int]::TryParse([string]$pidValue, [ref]$routerPid) -and
+        $routerPid -gt 0
+    if ($Required) {
+        try {
+            $pidValueKind = (
+                Get-Item -LiteralPath $PrivilegedRuntimeRegistryPath `
+                    -ErrorAction Stop
+            ).GetValueKind('ProcessRouterPid')
+        } catch {
+            throw 'Required process router PID type is unavailable.'
+        }
+        if ($pidValueKind -ne [Microsoft.Win32.RegistryValueKind]::DWord) {
+            throw 'Required process router PID is not a REG_DWORD.'
+        }
+        if ($processes.Count -ne 1 -or -not $pidKnown -or
+                [int]$processes[0].Id -ne $routerPid) {
+            throw 'Required process router identity was not committed.'
+        }
+        return
+    }
+    if ($processes.Count -ne 0) {
+        throw 'A stale process router is still running.'
+    }
+    if ($null -ne $pidValue) {
+        Remove-GreenPrivilegedRuntimeValue -Name 'ProcessRouterPid'
+        if ($null -ne (Read-GreenPrivilegedRuntimeValue -Name 'ProcessRouterPid')) {
+            throw 'A stale process router PID is still published.'
+        }
+    }
 }
 
 function Assert-GreenProcessRouterPayload {
@@ -386,13 +539,35 @@ function Ensure-GreenProgramDataAcl {
 }
 
 function Write-GreenActiveRoutingMode {
-    param([Parameter(Mandatory=$true)][ValidateSet('full', 'applications')][string]$Mode)
+    param(
+        [Parameter(Mandatory=$true)]
+        [ValidateSet('full', 'applications')][string]$Mode,
+        [Parameter(Mandatory=$true)][bool]$ProcessRouterRequired,
+        [Parameter(Mandatory=$true)][uint32]$TransitionGeneration
+    )
 
+    Remove-GreenPrivilegedRuntimeValue -Name 'ActiveRoutingMode'
+    Confirm-GreenProcessRouterRuntimeContract -Required $ProcessRouterRequired
     Write-GreenPrivilegedRuntimeValue `
         -Name 'ActiveRoutingMode' `
         -Value $Mode `
         -PropertyType String
-    Write-GreenLog "active routing mode committed mode=$Mode"
+    $committedMode = [string](
+        Read-GreenPrivilegedRuntimeValue -Name 'ActiveRoutingMode'
+    )
+    try {
+        if ($committedMode -ne $Mode) {
+            throw 'Privileged active routing mode readback failed.'
+        }
+        Confirm-GreenProcessRouterRuntimeContract `
+            -Required $ProcessRouterRequired
+        Complete-GreenRuntimeStateTransition `
+            -TransitionGeneration $TransitionGeneration
+    } catch {
+        Remove-GreenPrivilegedRuntimeValue -Name 'ActiveRoutingMode'
+        throw
+    }
+    Write-GreenLog "active routing mode committed mode=$Mode routerRequired=$ProcessRouterRequired generation=$($TransitionGeneration + 1)"
 }
 
 function Ensure-NativeFullTunnelKillSwitch {
@@ -688,24 +863,43 @@ function Stop-GreenTunnel {
     }
 }
 
+function Complete-GreenDisconnectedRuntimeState {
+    $script:ActiveRuntimeTransitionGeneration = [uint32](
+        Start-GreenRuntimeStateTransition
+    )
+    Stop-GreenTunnel
+    Confirm-GreenProcessRouterRuntimeContract -Required $false
+    Complete-GreenRuntimeStateTransition `
+        -TransitionGeneration $script:ActiveRuntimeTransitionGeneration
+    $script:ActiveRuntimeTransitionGeneration = $null
+    Write-GreenLog 'disconnected runtime state committed'
+}
+
 function Start-GreenTunnel {
     Ensure-GreenProgramDataAcl
+
+    if (-not (Test-Path -LiteralPath $ConfigPath)) {
+        Write-GreenLog "config missing: $ConfigPath"
+        throw "Config missing: $ConfigPath"
+    }
+
+    $wg = Resolve-WireGuardExe
+    if ([string]::IsNullOrWhiteSpace($wg)) {
+        throw 'WireGuard executable not found.'
+    }
+
+    $script:ActiveRuntimeTransitionGeneration = [uint32](
+        Start-GreenRuntimeStateTransition
+    )
     Write-GreenPrivilegedRuntimeValue `
         -Name 'ProcessRouterRequired' `
         -Value 0 `
         -PropertyType DWord
 
-    if (-not (Test-Path -LiteralPath $ConfigPath)) {
-        Write-GreenLog "config missing: $ConfigPath"
-        exit 3
-    }
-
     $competitors = @(Stop-CompetingVpnTunnels -Reason 'connect')
     if ($competitors.Count -gt 0) {
         Write-GreenLog "connect takeover blocked by competitor count=$($competitors.Count)"
-        Stop-GreenTunnel
-        Restore-CompetingVpnTunnels
-        exit 2
+        throw 'Competing VPN takeover did not complete.'
     }
 
     $routingMode = Get-GreenRoutingMode
@@ -717,12 +911,6 @@ function Start-GreenTunnel {
         Ensure-GreenApplicationTunnelRoutes -Policy $routingPolicy
     } else {
         Ensure-NativeFullTunnelKillSwitch
-    }
-
-    $wg = Resolve-WireGuardExe
-    if ([string]::IsNullOrWhiteSpace($wg)) {
-        Write-GreenLog 'WireGuard executable not found'
-        exit 4
     }
 
     Stop-GreenTunnel
@@ -760,7 +948,10 @@ function Start-GreenTunnel {
         Stop-GreenProcessRouter
         Write-GreenLog 'selective tunnel uses destination routes only; process router not required'
     }
-    Write-GreenActiveRoutingMode -Mode $routingMode
+    Write-GreenActiveRoutingMode -Mode $routingMode `
+        -ProcessRouterRequired ($routingMode -eq 'applications' -and $applicationPaths.Count -gt 0) `
+        -TransitionGeneration $script:ActiveRuntimeTransitionGeneration
+    $script:ActiveRuntimeTransitionGeneration = $null
 }
 
 function Invoke-GreenGuard {
@@ -778,21 +969,46 @@ function Invoke-GreenGuard {
 
     if ($svc.State -ne 'Running') { return }
 
+    if (-not (Test-GreenRuntimeStateStable)) {
+        Write-GreenLog 'guard skipped during an incomplete runtime transition'
+        return
+    }
+
     if (
         ([int](Read-GreenPrivilegedRuntimeValue -Name 'ProcessRouterRequired') -eq 1) -and
         -not (Test-GreenProcessRouterRunning)
     ) {
         Write-GreenLog 'guard disconnecting application-only tunnel because process router stopped'
-        Stop-GreenTunnel
+        Complete-GreenDisconnectedRuntimeState
+        Restore-CompetingVpnTunnels
         return
     }
 
+    $competitorLabels = @(Get-CompetingVpnLabels)
+    if ($competitorLabels.Count -eq 0) { return }
+    $activeMode = [string](
+        Read-GreenPrivilegedRuntimeValue -Name 'ActiveRoutingMode'
+    )
+    $routerRequired = [int](
+        Read-GreenPrivilegedRuntimeValue -Name 'ProcessRouterRequired'
+    ) -eq 1
+    $script:ActiveRuntimeTransitionGeneration = [uint32](
+        Start-GreenRuntimeStateTransition
+    )
     $competitors = @(Stop-CompetingVpnTunnels -Reason 'guard')
     if ($competitors.Count -gt 0) {
         Write-GreenLog "guard disconnecting Green VPN because takeover remained incomplete count=$($competitors.Count)"
-        Stop-GreenTunnel
+        Complete-GreenDisconnectedRuntimeState
         Restore-CompetingVpnTunnels
+        return
     }
+    if ($activeMode -notin @('full', 'applications')) {
+        throw 'Guard cannot republish an unknown active routing mode.'
+    }
+    Write-GreenActiveRoutingMode -Mode $activeMode `
+        -ProcessRouterRequired $routerRequired `
+        -TransitionGeneration $script:ActiveRuntimeTransitionGeneration
+    $script:ActiveRuntimeTransitionGeneration = $null
 }
 
 try {
@@ -801,7 +1017,7 @@ try {
         'Connect' { Start-GreenTunnel }
         'Disconnect' {
             Ensure-GreenProgramDataAcl
-            Stop-GreenTunnel
+            Complete-GreenDisconnectedRuntimeState
             Restore-CompetingVpnTunnels
         }
         'Guard' { Invoke-GreenGuard }
@@ -810,9 +1026,12 @@ try {
     exit 0
 } catch {
     Write-GreenLog "failed: $($_.Exception.Message)"
-    if ($Action -eq 'Connect') {
+    $mustRecover = $Action -eq 'Connect' -or
+        $null -ne $script:ActiveRuntimeTransitionGeneration -or
+        -not (Test-GreenRuntimeStateStable)
+    if ($mustRecover) {
         try {
-            Stop-GreenTunnel
+            Complete-GreenDisconnectedRuntimeState
         } catch {
             Write-GreenLog "failed tunnel cleanup: $($_.Exception.Message)"
         }

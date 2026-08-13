@@ -63,6 +63,7 @@ constexpr wchar_t kRuntimeRegistryPath[] =
 constexpr wchar_t kActiveRoutingModeValue[] = L"ActiveRoutingMode";
 constexpr wchar_t kProcessRouterPidValue[] = L"ProcessRouterPid";
 constexpr wchar_t kProcessRouterRequiredValue[] = L"ProcessRouterRequired";
+constexpr wchar_t kRuntimeStateGenerationValue[] = L"RuntimeStateGeneration";
 constexpr wchar_t kStandbyProbeWireGuardServiceName[] =
     L"WireGuardTunnel$" GREENVPN_RUNTIME_TUNNEL_NAME_W L"StandbyProbe";
 constexpr wchar_t kStandbyProbeAmneziaServiceName[] =
@@ -722,6 +723,9 @@ std::string QueryPidFileProcessState(const char* pid_path,
 }
 
 std::string QueryTunnelStatusJson() {
+  DWORD runtime_state_generation_before = 0;
+  const bool runtime_state_generation_before_known = ReadRuntimeRegistryDword(
+      kRuntimeStateGenerationValue, &runtime_state_generation_before);
   const std::string wireguard_state = QueryServiceState(kTunnelServiceName);
   const std::string amneziawg_state =
       QueryServiceState(kAmneziaWgTunnelServiceName);
@@ -763,11 +767,6 @@ std::string QueryTunnelStatusJson() {
       active_routing_mode_known
           ? LowerAsciiFromWide(active_routing_mode_value)
           : "";
-  const std::string routing_mode =
-      managed_tunnel_running && active_routing_mode == "applications"
-          ? "applications"
-          : managed_tunnel_running && active_routing_mode == "full" ? "full"
-                                                                     : "unknown";
   DWORD process_router_pid = 0;
   const bool process_router_pid_known =
       ReadRuntimeRegistryDword(kProcessRouterPidValue, &process_router_pid);
@@ -778,13 +777,31 @@ std::string QueryTunnelStatusJson() {
                 module_dir + L"\\tools\\process-router\\ProxyBridge_CLI.exe")
           : "missing";
   DWORD process_router_required_value = 0;
-  const bool process_router_requirement_known = ReadRuntimeRegistryDword(
-      kProcessRouterRequiredValue, &process_router_required_value);
+  const bool process_router_requirement_known =
+      ReadRuntimeRegistryDword(kProcessRouterRequiredValue,
+                               &process_router_required_value) &&
+      process_router_required_value <= 1;
   const bool process_router_required =
       process_router_requirement_known && process_router_required_value == 1;
   const std::string external_vpn_state = QueryRunningCompetingVpnState();
   const bool external_vpn_active = external_vpn_state == "active";
   const bool external_vpn_state_known = external_vpn_state != "unknown";
+  DWORD runtime_state_generation_after = 0;
+  const bool runtime_state_generation_after_known = ReadRuntimeRegistryDword(
+      kRuntimeStateGenerationValue, &runtime_state_generation_after);
+  const bool runtime_state_consistent =
+      runtime_state_generation_before_known &&
+      runtime_state_generation_after_known &&
+      runtime_state_generation_before == runtime_state_generation_after &&
+      (runtime_state_generation_after % 2) == 0;
+  const std::string routing_mode =
+      runtime_state_consistent && managed_tunnel_running &&
+              active_routing_mode == "applications"
+          ? "applications"
+          : runtime_state_consistent && managed_tunnel_running &&
+                    active_routing_mode == "full"
+                ? "full"
+                : "unknown";
 
   std::string selected_service = kTunnelServiceNameUtf8;
   std::string selected_state = wireguard_state;
@@ -845,6 +862,15 @@ std::string QueryTunnelStatusJson() {
          (process_router_required ? "true" : "false") + "," +
          "\"processRouterRequirementKnown\":" +
          (process_router_requirement_known ? "true" : "false") + "," +
+         "\"runtimeStateGenerationKnown\":" +
+         (runtime_state_generation_before_known &&
+                  runtime_state_generation_after_known
+              ? "true"
+              : "false") +
+         ",\"runtimeStateGeneration\":" +
+         std::to_string(runtime_state_generation_after) + "," +
+         "\"runtimeStateConsistent\":" +
+         (runtime_state_consistent ? "true" : "false") + "," +
          "\"externalVpnActive\":" +
          (external_vpn_active ? "true" : "false") + "," +
          "\"externalVpnStateKnown\":" +
@@ -1115,6 +1141,13 @@ DWORD WINAPI HttpWorkerThread(LPVOID) {
 DWORD WINAPI ProcessRouterGuardThread(LPVOID) {
   bool disconnect_attempted = false;
   while (WaitForSingleObject(g_stop_event, 500) == WAIT_TIMEOUT) {
+    DWORD runtime_state_generation_before = 0;
+    if (!ReadRuntimeRegistryDword(kRuntimeStateGenerationValue,
+                                  &runtime_state_generation_before) ||
+        (runtime_state_generation_before % 2) != 0) {
+      disconnect_attempted = false;
+      continue;
+    }
     DWORD process_router_required = 0;
     if (!ReadRuntimeRegistryDword(kProcessRouterRequiredValue,
                                   &process_router_required) ||
@@ -1134,6 +1167,14 @@ DWORD WINAPI ProcessRouterGuardThread(LPVOID) {
                   GetModuleDirectory() +
                       L"\\tools\\process-router\\ProxyBridge_CLI.exe")
             : "missing";
+    DWORD runtime_state_generation_after = 0;
+    if (!ReadRuntimeRegistryDword(kRuntimeStateGenerationValue,
+                                  &runtime_state_generation_after) ||
+        runtime_state_generation_before != runtime_state_generation_after ||
+        (runtime_state_generation_after % 2) != 0) {
+      disconnect_attempted = false;
+      continue;
+    }
     const bool native_tunnel_running = wireguard_state == "running" ||
                                        amneziawg_state == "running";
     if (!native_tunnel_running || router_state == "running") {

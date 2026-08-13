@@ -23,6 +23,14 @@ const Set<String> _greenVpnWindowsStoppedStates = <String>{
 String _greenVpnWindowsStatusValue(Object? value) =>
     (value ?? '').toString().trim().toLowerCase();
 
+bool _greenVpnWindowsRuntimeStateIsConsistent(Map<String, dynamic> data) {
+  final generation = data['runtimeStateGeneration'];
+  return data['runtimeStateGenerationKnown'] == true &&
+      data['runtimeStateConsistent'] == true &&
+      generation is num &&
+      generation.toInt().isEven;
+}
+
 GreenVpnWindowsManagedTunnelState greenVpnClassifyWindowsManagedTunnelStatus({
   required bool requestOk,
   required Map<String, dynamic> data,
@@ -73,6 +81,9 @@ GreenVpnWindowsRoutingMode greenVpnClassifyWindowsRoutingMode({
   if (!requestOk || data['ok'] != true) {
     return GreenVpnWindowsRoutingMode.unknown;
   }
+  if (!_greenVpnWindowsRuntimeStateIsConsistent(data)) {
+    return GreenVpnWindowsRoutingMode.unknown;
+  }
   return switch (_greenVpnWindowsStatusValue(data['routingMode'])) {
     'full' => GreenVpnWindowsRoutingMode.full,
     'applications' => GreenVpnWindowsRoutingMode.applications,
@@ -86,7 +97,8 @@ bool greenVpnWindowsRoutingModeIsConfirmed({
   required bool applicationsOnly,
   required bool processRouterRequired,
 }) {
-  if (data['externalVpnStateKnown'] != true ||
+  if (!_greenVpnWindowsRuntimeStateIsConsistent(data) ||
+      data['externalVpnStateKnown'] != true ||
       data['externalVpnActive'] == true ||
       data['processRouterRequirementKnown'] != true) {
     return false;
@@ -128,7 +140,8 @@ GreenVpnWindowsRoutingMode? greenVpnAuthoritativeActiveRoutingMode({
   required Map<String, dynamic> data,
   required bool processRouterRequired,
 }) {
-  if (data['externalVpnStateKnown'] != true ||
+  if (!_greenVpnWindowsRuntimeStateIsConsistent(data) ||
+      data['externalVpnStateKnown'] != true ||
       data['externalVpnActive'] == true ||
       data['processRouterRequirementKnown'] != true) {
     return null;

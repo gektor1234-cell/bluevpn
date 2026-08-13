@@ -1864,6 +1864,8 @@ $vpnTaskApplicationRoutingFragments = @(
     '$PrivilegedRuntimeRegistryPath',
     'Write-GreenPrivilegedRuntimeValue',
     'ProcessRouterRequired',
+    'Confirm-GreenProcessRouterRuntimeContract',
+    'Get-GreenProcessRouterProcesses',
     'ApplicationProxyPort = 1080'
 )
 foreach ($fragment in $vpnTaskApplicationRoutingFragments) {
@@ -1922,7 +1924,8 @@ $transportPreviewRouteFragments = @(
     "'MSFT_NetRoute'",
     'No physical gateway route is available',
     'endpoint bypass route ready',
-    'if ($Action -eq ''Connect'') {',
+    '$mustRecover = $Action -eq ''Connect'' -or',
+    '$null -ne $script:ActiveRuntimeTransitionGeneration',
     'failed competitor restore line=',
     'Broad write ACL is forbidden for transport preview state',
     "@('S-1-1-0', 'S-1-5-11', 'S-1-5-32-545')",
@@ -2289,16 +2292,24 @@ $windowsRuntimeFailoverChecks = [ordered]@{
         'externalVpnActive',
         'externalVpnStateKnown',
         'processRouterRequired',
-        'processRouterRequirementKnown'
+        'processRouterRequirementKnown',
+        'RuntimeStateGeneration',
+        'runtimeStateConsistent'
     )
     'Windows privileged tasks commit a protected active mode marker' = @(
         ($vpnTaskScript + "`n" + $transportPreviewVpnTaskScript + "`n" + $transportSelectiveRoutingScript),
         'Write-GreenActiveRoutingMode',
         'Write-GreenPrivilegedRuntimeValue',
+        'Remove-ItemProperty',
         '$PrivilegedRuntimeRegistryPath',
         'HKLM:\SOFTWARE\GreenVPN\Runtime',
         'ProcessRouterPid',
         'ProcessRouterRequired',
+        'Confirm-GreenProcessRouterRuntimeContract',
+        'Start-GreenRuntimeStateTransition',
+        'Complete-GreenRuntimeStateTransition',
+        'RuntimeStateGeneration',
+        "Remove-GreenPrivilegedRuntimeValue -Name 'ActiveRoutingMode'",
         "ValidateSet('full', 'applications')",
         'Remove-GreenPrivilegedRuntimeValue'
     )
@@ -2485,6 +2496,13 @@ $windowsRuntimeFailoverChecks = [ordered]@{
         "'protected_selected'",
         'processRouterRequired',
         'Assert-RuntimeMode',
+        'Capture-RuntimeEvidence',
+        'windows-mode-runtime-evidence.json',
+        'processRouterRequirementValueKind',
+        'runtimeStateGenerationValueKind',
+        'runtimeStateGenerationEven',
+        'runtimeStateConsistent',
+        'processRouterPidValueKind',
         'Get-EgressFingerprint',
         'originalStateUnmodified',
         'exactInstallRetained',

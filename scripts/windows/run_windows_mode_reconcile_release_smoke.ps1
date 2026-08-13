@@ -52,6 +52,7 @@ $runtimeRegistryPath = 'HKLM:\SOFTWARE\GreenVPN\Runtime\stable'
 $summaryPath = Join-Path $resolvedArtifactRoot 'windows-mode-reconcile-autonomous-summary.json'
 $logPath = Join-Path $resolvedArtifactRoot 'windows-mode-reconcile-autonomous.log'
 $diagnosticPath = Join-Path $resolvedArtifactRoot 'windows-fusion-ui-state.json'
+$runtimeEvidencePath = Join-Path $resolvedArtifactRoot 'windows-mode-runtime-evidence.json'
 $recoveryReportPath = Join-Path $resolvedArtifactRoot 'windows-mode-reconcile-final-recovery.json'
 $deadmanReportPath = Join-Path $resolvedArtifactRoot 'windows-mode-reconcile-deadman-recovery.json'
 $externalScreenshotPath = Join-Path $resolvedArtifactRoot 'windows-mode-external-vpn.png'
@@ -84,6 +85,7 @@ $expectedServiceHash = $ExpectedServiceSha256.ToUpperInvariant()
 $mutex = [Threading.Mutex]::new($false, 'Local\GreenVPNModeReconcileReleaseSmoke')
 $mutexAcquired = $false
 $deadman = $null
+$runtimeEvidenceHistory = [Collections.Generic.List[object]]::new()
 
 New-Item -ItemType Directory -Force -Path $resolvedArtifactRoot | Out-Null
 
@@ -624,11 +626,52 @@ function Get-RuntimeRegistryEvidence {
     } else {
         @()
     }
-    $pidValue = if ($valueNames -contains 'ProcessRouterPid') {
-        [int]$values.ProcessRouterPid
-    } else {
-        0
+    $registryKey = Get-Item -LiteralPath $runtimeRegistryPath `
+        -ErrorAction SilentlyContinue
+    $processRouterRequiredKind = if (
+        $null -ne $registryKey -and
+        $valueNames -contains 'ProcessRouterRequired'
+    ) {
+        [string]$registryKey.GetValueKind('ProcessRouterRequired')
+    } else { '' }
+    $processRouterPidKind = if (
+        $null -ne $registryKey -and
+        $valueNames -contains 'ProcessRouterPid'
+    ) {
+        [string]$registryKey.GetValueKind('ProcessRouterPid')
+    } else { '' }
+    $runtimeGenerationKind = if (
+        $null -ne $registryKey -and
+        $valueNames -contains 'RuntimeStateGeneration'
+    ) {
+        [string]$registryKey.GetValueKind('RuntimeStateGeneration')
+    } else { '' }
+    $pidValue = 0
+    $pidValueParsed = $false
+    if ($valueNames -contains 'ProcessRouterPid') {
+        $pidValueParsed = [int]::TryParse(
+            [string]$values.ProcessRouterPid,
+            [ref]$pidValue
+        ) -and $pidValue -gt 0
     }
+    $requiredValue = 0
+    $requiredValueParsed = $false
+    if ($valueNames -contains 'ProcessRouterRequired') {
+        $requiredValueParsed = [int]::TryParse(
+            [string]$values.ProcessRouterRequired,
+            [ref]$requiredValue
+        )
+    }
+    $runtimeGeneration = [uint32]0
+    $runtimeGenerationParsed = $false
+    if ($valueNames -contains 'RuntimeStateGeneration') {
+        $runtimeGenerationParsed = [uint32]::TryParse(
+            [string]$values.RuntimeStateGeneration,
+            [ref]$runtimeGeneration
+        )
+    }
+    $expectedProcessPath = Join-Path $resolvedInstallRoot `
+        'tools\process-router\ProxyBridge_CLI.exe'
     $processPath = ''
     if ($pidValue -gt 0) {
         try {
@@ -637,17 +680,100 @@ function Get-RuntimeRegistryEvidence {
             )
         } catch {}
     }
+    $exactProcesses = @(
+        Get-Process -Name 'ProxyBridge_CLI' -ErrorAction SilentlyContinue |
+            Where-Object {
+                try {
+                    [IO.Path]::GetFullPath([string]$_.Path).Equals(
+                        [IO.Path]::GetFullPath($expectedProcessPath),
+                        [StringComparison]::OrdinalIgnoreCase
+                    )
+                } catch { $false }
+            }
+    )
     return [ordered]@{
         activeRoutingMode = if ($valueNames -contains 'ActiveRoutingMode') {
             [string]$values.ActiveRoutingMode
         } else { '' }
-        processRouterRequired = if ($valueNames -contains 'ProcessRouterRequired') {
-            [int]$values.ProcessRouterRequired
-        } else { 0 }
-        processRouterPid = $pidValue
-        processRouterRunning = [bool]$processPath
-        processRouterPath = $processPath
+        processRouterRequirementKnown =
+            $valueNames -contains 'ProcessRouterRequired'
+        processRouterRequirementValueKind = $processRouterRequiredKind
+        processRouterRequirementValueParsed = $requiredValueParsed
+        processRouterRequired = $requiredValue
+        processRouterPidKnown = $pidValueParsed
+        processRouterPidValuePresent =
+            $valueNames -contains 'ProcessRouterPid'
+        processRouterPidValueKind = $processRouterPidKind
+        processRouterExactProcessCount = $exactProcesses.Count
+        processRouterRunning = $exactProcesses.Count -gt 0
+        processRouterPidMatchesExactProcess =
+            $pidValueParsed -and
+            $exactProcesses.Count -eq 1 -and
+            [int]$exactProcesses[0].Id -eq $pidValue -and
+            [bool]$processPath
+        runtimeStateGenerationKnown =
+            $valueNames -contains 'RuntimeStateGeneration'
+        runtimeStateGenerationValueKind = $runtimeGenerationKind
+        runtimeStateGenerationValueParsed = $runtimeGenerationParsed
+        runtimeStateGeneration = $runtimeGeneration
+        runtimeStateGenerationEven =
+            $runtimeGenerationParsed -and ($runtimeGeneration % 2) -eq 0
     }
+}
+
+function Capture-RuntimeEvidence {
+    param([Parameter(Mandatory = $true)][string]$Label)
+
+    $status = $null
+    $statusError = $null
+    try {
+        $status = Invoke-GreenLocal -Method GET -Path '/status' -TimeoutSeconds 8
+    } catch {
+        $statusError = $_.Exception.Message
+    }
+    $evidence = [ordered]@{
+        capturedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+        label = $Label
+        serviceRequestOk = $null -ne $status
+        serviceError = $statusError
+        service = if ($null -eq $status) { $null } else {
+            [ordered]@{
+                ok = [bool]$status.ok
+                tunnelState = [string]$status.tunnelState
+                wireGuardState = [string]$status.wireGuardState
+                amneziaWgState = [string]$status.amneziaWgState
+                hysteriaClientState = [string]$status.hysteriaClientState
+                hysteriaTunState = [string]$status.hysteriaTunState
+                vlessClientState = [string]$status.vlessClientState
+                vlessTunState = [string]$status.vlessTunState
+                naiveClientState = [string]$status.naiveClientState
+                naiveTunState = [string]$status.naiveTunState
+                dnsttClientState = [string]$status.dnsttClientState
+                dnsttTunState = [string]$status.dnsttTunState
+                routingMode = [string]$status.routingMode
+                processRouterState = [string]$status.processRouterState
+                processRouterRequirementKnown =
+                    [bool]$status.processRouterRequirementKnown
+                processRouterRequired = [bool]$status.processRouterRequired
+                runtimeStateGenerationKnown =
+                    [bool]$status.runtimeStateGenerationKnown
+                runtimeStateGeneration =
+                    [uint32]$status.runtimeStateGeneration
+                runtimeStateConsistent =
+                    [bool]$status.runtimeStateConsistent
+                externalVpnStateKnown = [bool]$status.externalVpnStateKnown
+                externalVpnActive = [bool]$status.externalVpnActive
+            }
+        }
+        registry = Get-RuntimeRegistryEvidence
+        ui = Get-UiDiagnostic
+    }
+    $runtimeEvidenceHistory.Add($evidence)
+    ConvertTo-Json `
+        -InputObject ([object[]]$runtimeEvidenceHistory.ToArray()) `
+        -Depth 12 |
+        Set-Content -LiteralPath $runtimeEvidencePath -Encoding UTF8
+    return $evidence
 }
 
 function Assert-RuntimeMode {
@@ -659,6 +785,9 @@ function Assert-RuntimeMode {
     $status = Invoke-GreenLocal -Method GET -Path '/status' -TimeoutSeconds 8
     if ([string]$status.tunnelState -ne 'running' -or
             [string]$status.routingMode -ne $Mode -or
+            $status.runtimeStateGenerationKnown -ne $true -or
+            $status.runtimeStateConsistent -ne $true -or
+            ([uint32]$status.runtimeStateGeneration % 2) -ne 0 -or
             $status.externalVpnStateKnown -ne $true -or
             $status.externalVpnActive -eq $true -or
             $status.processRouterRequirementKnown -ne $true -or
@@ -676,14 +805,39 @@ function Assert-RuntimeMode {
     }
     $registry = Get-RuntimeRegistryEvidence
     if ([string]$registry.activeRoutingMode -ne $Mode -or
+            [string]$registry.runtimeStateGenerationValueKind -ne 'DWord' -or
+            -not [bool]$registry.runtimeStateGenerationValueParsed -or
+            -not [bool]$registry.runtimeStateGenerationEven -or
+            [uint32]$registry.runtimeStateGeneration -ne
+                [uint32]$status.runtimeStateGeneration -or
+            [string]$registry.processRouterRequirementValueKind -ne 'DWord' -or
+            -not [bool]$registry.processRouterRequirementValueParsed -or
+            [int]$registry.processRouterRequired -notin @(0, 1) -or
             [bool]$registry.processRouterRunning -ne $ProcessRouterRequired -or
             [bool]([int]$registry.processRouterRequired -eq 1) -ne
                 $ProcessRouterRequired) {
         throw "HKLM runtime registry did not confirm exact $Mode state."
     }
+    if ($ProcessRouterRequired -and (
+            [string]$registry.processRouterPidValueKind -ne 'DWord' -or
+            -not [bool]$registry.processRouterPidKnown -or
+            -not [bool]$registry.processRouterPidMatchesExactProcess
+        )) {
+        throw "HKLM process router identity did not confirm exact $Mode state."
+    }
+    if (-not $ProcessRouterRequired -and (
+            [bool]$registry.processRouterPidKnown -or
+            [bool]$registry.processRouterPidValuePresent
+        )) {
+        throw "HKLM retained a process router PID in exact $Mode state."
+    }
     return [ordered]@{
         tunnelState = [string]$status.tunnelState
         routingMode = [string]$status.routingMode
+        runtimeStateGenerationKnown =
+            [bool]$status.runtimeStateGenerationKnown
+        runtimeStateGeneration = [uint32]$status.runtimeStateGeneration
+        runtimeStateConsistent = [bool]$status.runtimeStateConsistent
         externalVpnStateKnown = [bool]$status.externalVpnStateKnown
         externalVpnActive = [bool]$status.externalVpnActive
         processRouterRequirementKnown = [bool]$status.processRouterRequirementKnown
@@ -714,14 +868,27 @@ function Invoke-ForegroundConnect {
     param([Parameter(Mandatory = $true)][Diagnostics.Process]$Process)
     $afterLine = Get-AuthLogLineCount
     $watch = [Diagnostics.Stopwatch]::StartNew()
+    $deadline = (Get-Date).AddSeconds($MaxConnectSeconds)
     Invoke-NormalizedClick -Process $Process -X 0.52 -Y 0.255 `
         -Label 'Fusion connect'
     $requested = Wait-AuthLogMarker -AfterLine $afterLine `
         -Pattern 'UI toggle requested' -TimeoutSeconds 8
+    $remainingProbeSeconds = [Math]::Max(
+        1,
+        [int][Math]::Ceiling(($deadline - (Get-Date)).TotalSeconds)
+    )
     $probe = Wait-AuthLogMarker -AfterLine $afterLine `
         -Pattern 'UI post connect probe .* status=\d+ ok=true' `
-        -TimeoutSeconds 120
-    $ui = Wait-UiDiagnostic -TimeoutSeconds 120 -Label 'Full-mode protected UI' `
+        -TimeoutSeconds $remainingProbeSeconds
+    $runtime = Assert-RuntimeMode -Mode full -ProcessRouterRequired $false
+    $runtimeAfterProbe = Capture-RuntimeEvidence `
+        -Label 'foreground_after_data_plane_probe'
+    $remainingUiSeconds = [Math]::Max(
+        1,
+        [int][Math]::Ceiling(($deadline - (Get-Date)).TotalSeconds)
+    )
+    $ui = Wait-UiDiagnostic -TimeoutSeconds $remainingUiSeconds `
+        -Label 'Full-mode protected UI' `
         -Predicate {
             param($state)
             [string]$state.statusKey -eq 'protected_full' -and
@@ -736,7 +903,9 @@ function Invoke-ForegroundConnect {
     $logSeconds = if ($requestedAt -and $probeAt) {
         [Math]::Round(($probeAt - $requestedAt).TotalSeconds, 3)
     } else { $null }
-    if ($null -eq $logSeconds -or [double]$logSeconds -gt $MaxConnectSeconds) {
+    if ($null -eq $logSeconds -or
+            [double]$logSeconds -gt $MaxConnectSeconds -or
+            $watch.Elapsed.TotalSeconds -gt $MaxConnectSeconds) {
         throw "Foreground connect exceeded $MaxConnectSeconds seconds."
     }
     $candidates = @(
@@ -756,8 +925,9 @@ function Invoke-ForegroundConnect {
         oneCandidate = $true
         probeConfirmed = $true
         privilegedTakeoverConfirmed = $true
+        runtimeAfterProbe = $runtimeAfterProbe
         ui = $ui
-        runtime = Assert-RuntimeMode -Mode full -ProcessRouterRequired $false
+        runtime = $runtime
     }
 }
 
@@ -769,20 +939,31 @@ function Invoke-ModeSwitch {
     )
     $afterLine = Get-AuthLogLineCount
     $watch = [Diagnostics.Stopwatch]::StartNew()
+    $deadline = (Get-Date).AddSeconds($MaxModeSwitchSeconds)
     Invoke-NormalizedClick -Process $Process `
         -X $(if ($Mode -eq 'applications') { 0.875 } else { 0.695 }) `
         -Y 0.255 -Label "Fusion mode $Mode"
     $requested = Wait-AuthLogMarker -AfterLine $afterLine `
         -Pattern "routing preference requested .* to=$Mode" `
         -TimeoutSeconds 8
+    $remainingConfirmSeconds = [Math]::Max(
+        1,
+        [int][Math]::Ceiling(($deadline - (Get-Date)).TotalSeconds)
+    )
     $confirmed = Wait-AuthLogMarker -AfterLine $afterLine `
         -Pattern "routing preference confirmed mode=$Mode" `
-        -TimeoutSeconds $MaxModeSwitchSeconds
+        -TimeoutSeconds $remainingConfirmSeconds
     $expectedStatusKey = if ($Mode -eq 'applications') {
         'protected_selected'
     } else { 'protected_full' }
     $expectedRouter = $Mode -eq 'applications'
-    $ui = Wait-UiDiagnostic -TimeoutSeconds $MaxModeSwitchSeconds `
+    $runtime = Assert-RuntimeMode -Mode $Mode `
+        -ProcessRouterRequired $expectedRouter
+    $remainingUiSeconds = [Math]::Max(
+        1,
+        [int][Math]::Ceiling(($deadline - (Get-Date)).TotalSeconds)
+    )
+    $ui = Wait-UiDiagnostic -TimeoutSeconds $remainingUiSeconds `
         -Label "$Mode protected UI" -Predicate {
             param($state)
             [string]$state.statusKey -eq $expectedStatusKey -and
@@ -791,13 +972,16 @@ function Invoke-ModeSwitch {
                 [bool]$state.socialOnlyEnabled -eq ($Mode -eq 'applications') -and
                 [bool]$state.processRouterRequired -eq $expectedRouter
         }
+    $runtimeAfterUi = Capture-RuntimeEvidence -Label "${Mode}_after_ui_confirmation"
     $watch.Stop()
     $requestedAt = Get-LogTimestamp -Line $requested
     $confirmedAt = Get-LogTimestamp -Line $confirmed
     $logSeconds = if ($requestedAt -and $confirmedAt) {
         [Math]::Round(($confirmedAt - $requestedAt).TotalSeconds, 3)
     } else { $null }
-    if ($null -eq $logSeconds -or [double]$logSeconds -gt $MaxModeSwitchSeconds) {
+    if ($null -eq $logSeconds -or
+            [double]$logSeconds -gt $MaxModeSwitchSeconds -or
+            $watch.Elapsed.TotalSeconds -gt $MaxModeSwitchSeconds) {
         throw "$Mode switch exceeded $MaxModeSwitchSeconds seconds."
     }
     return [ordered]@{
@@ -805,8 +989,8 @@ function Invoke-ModeSwitch {
         wallSeconds = [Math]::Round($watch.Elapsed.TotalSeconds, 3)
         logSeconds = $logSeconds
         ui = $ui
-        runtime = Assert-RuntimeMode -Mode $Mode `
-            -ProcessRouterRequired $expectedRouter
+        runtimeAfterUi = $runtimeAfterUi
+        runtime = $runtime
     }
 }
 
@@ -826,8 +1010,10 @@ $summary = [ordered]@{
     foreground = $null
     selectedMode = $null
     returnedFullMode = $null
+    failureEvidence = $null
     reports = [ordered]@{
         uiDiagnostic = $diagnosticPath
+        runtimeEvidence = $runtimeEvidencePath
         externalScreenshot = $externalScreenshotPath
         fullScreenshot = $fullScreenshotPath
         selectedScreenshot = $selectedScreenshotPath
@@ -875,6 +1061,7 @@ try {
     }
     $staleEvidence = @(
         $summaryPath, $diagnosticPath, $recoveryReportPath,
+        $runtimeEvidencePath,
         $deadmanReportPath, $externalScreenshotPath, $fullScreenshotPath,
         $selectedScreenshotPath, $returnedFullScreenshotPath
     ) | Where-Object { Test-Path -LiteralPath $_ }
@@ -974,6 +1161,15 @@ try {
     $summary.success = $true
 } catch {
     $summary.failure = $_.Exception.Message
+    try {
+        $summary.failureEvidence = Capture-RuntimeEvidence `
+            -Label 'failure_before_recovery'
+    } catch {
+        $summary.failureEvidence = [ordered]@{
+            captureFailed = $true
+            message = $_.Exception.Message
+        }
+    }
     Write-RunnerLog "failed: $($summary.failure)"
 } finally {
     $env:APPDATA = $originalAppData

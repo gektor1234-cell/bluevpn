@@ -1,6 +1,12 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:greenvpn/services/windows_vpn_status_policy.dart';
 
+const Map<String, dynamic> _stableRuntimeState = <String, dynamic>{
+  'runtimeStateGenerationKnown': true,
+  'runtimeStateGeneration': 2,
+  'runtimeStateConsistent': true,
+};
+
 void main() {
   test('privileged running status remains authoritative for Windows UI', () {
     expect(
@@ -121,6 +127,7 @@ void main() {
         requestOk: true,
         data: const <String, dynamic>{
           'ok': true,
+          ..._stableRuntimeState,
           'routingMode': 'applications',
         },
       ),
@@ -141,6 +148,7 @@ void main() {
         requestOk: true,
         data: const <String, dynamic>{
           'ok': true,
+          ..._stableRuntimeState,
           'wireGuardState': 'running',
           'routingMode': 'full',
           'externalVpnStateKnown': true,
@@ -156,6 +164,7 @@ void main() {
         requestOk: true,
         data: const <String, dynamic>{
           'ok': true,
+          ..._stableRuntimeState,
           'wireGuardState': 'running',
           'routingMode': 'applications',
           'externalVpnStateKnown': true,
@@ -171,6 +180,7 @@ void main() {
         requestOk: true,
         data: const <String, dynamic>{
           'ok': true,
+          ..._stableRuntimeState,
           'wireGuardState': 'running',
           'routingMode': 'full',
           'processRouterState': 'running',
@@ -191,6 +201,7 @@ void main() {
         requestOk: true,
         data: const <String, dynamic>{
           'ok': true,
+          ..._stableRuntimeState,
           'wireGuardState': 'running',
           'routingMode': 'applications',
           'processRouterState': 'running',
@@ -208,6 +219,7 @@ void main() {
   test('a stale process router cannot be reported as full protection', () {
     const data = <String, dynamic>{
       'ok': true,
+      ..._stableRuntimeState,
       'wireGuardState': 'running',
       'routingMode': 'full',
       'processRouterState': 'running',
@@ -242,6 +254,7 @@ void main() {
           requestOk: true,
           data: const <String, dynamic>{
             'ok': true,
+            ..._stableRuntimeState,
             'wireGuardState': 'running',
             'routingMode': 'applications',
             'processRouterState': 'running',
@@ -262,6 +275,7 @@ void main() {
         requestOk: true,
         data: const <String, dynamic>{
           'ok': true,
+          ..._stableRuntimeState,
           'wireGuardState': 'running',
           'routingMode': 'applications',
           'processRouterState': 'running',
@@ -279,6 +293,7 @@ void main() {
         requestOk: true,
         data: const <String, dynamic>{
           'ok': true,
+          ..._stableRuntimeState,
           'wireGuardState': 'running',
           'routingMode': 'applications',
           'processRouterState': 'missing',
@@ -295,6 +310,7 @@ void main() {
         requestOk: true,
         data: const <String, dynamic>{
           'ok': true,
+          ..._stableRuntimeState,
           'wireGuardState': 'running',
           'routingMode': 'applications',
           'processRouterState': 'missing',
@@ -311,6 +327,7 @@ void main() {
   test('a competing VPN prevents Green VPN confirmation', () {
     const data = <String, dynamic>{
       'ok': true,
+      ..._stableRuntimeState,
       'wireGuardState': 'running',
       'routingMode': 'full',
       'externalVpnActive': true,
@@ -339,6 +356,7 @@ void main() {
   test('unknown competing VPN state fails closed', () {
     const data = <String, dynamic>{
       'ok': true,
+      ..._stableRuntimeState,
       'wireGuardState': 'running',
       'routingMode': 'full',
       'externalVpnActive': false,
@@ -382,6 +400,7 @@ void main() {
         requestOk: true,
         data: const <String, dynamic>{
           'ok': true,
+          ..._stableRuntimeState,
           'wireGuardState': 'running',
           'routingMode': 'applications',
           'processRouterState': 'running',
@@ -398,6 +417,7 @@ void main() {
   test('unknown process-router requirement fails closed', () {
     const data = <String, dynamic>{
       'ok': true,
+      ..._stableRuntimeState,
       'wireGuardState': 'running',
       'routingMode': 'full',
       'externalVpnActive': false,
@@ -455,5 +475,30 @@ void main() {
       ),
       isFalse,
     );
+  });
+
+  test('routing mode rejects missing, odd, and mixed runtime snapshots', () {
+    for (final data in const <Map<String, dynamic>>[
+      <String, dynamic>{'ok': true, 'routingMode': 'full'},
+      <String, dynamic>{
+        'ok': true,
+        'routingMode': 'full',
+        'runtimeStateGenerationKnown': true,
+        'runtimeStateGeneration': 3,
+        'runtimeStateConsistent': true,
+      },
+      <String, dynamic>{
+        'ok': true,
+        'routingMode': 'full',
+        'runtimeStateGenerationKnown': true,
+        'runtimeStateGeneration': 4,
+        'runtimeStateConsistent': false,
+      },
+    ]) {
+      expect(
+        greenVpnClassifyWindowsRoutingMode(requestOk: true, data: data),
+        GreenVpnWindowsRoutingMode.unknown,
+      );
+    }
   });
 }

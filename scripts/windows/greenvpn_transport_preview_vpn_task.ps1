@@ -105,6 +105,7 @@ $DiagnosticLogPath = Join-Path $ProgramDataRoot 'state\transport-task.log'
 $CompetingVpnStatePath = Join-Path $ProgramDataRoot 'state\competing-vpn-services.json'
 $DiagnosticLogAclReady = $false
 $CompetingVpnTakeoverOccurred = $false
+$ActiveRuntimeTransitionGeneration = $null
 $SelectiveRoutingHelper = Join-Path $PSScriptRoot 'greenvpn_selective_routing.ps1'
 
 $ExpectedHysteriaRuntimeHashes = @{
@@ -520,12 +521,34 @@ function Write-PrivateRuntimeFile {
 }
 
 function Write-GreenActiveRoutingMode {
-    param([Parameter(Mandatory=$true)][ValidateSet('full', 'applications')][string]$Mode)
+    param(
+        [Parameter(Mandatory=$true)]
+        [ValidateSet('full', 'applications')][string]$Mode,
+        [Parameter(Mandatory=$true)][bool]$ProcessRouterRequired,
+        [Parameter(Mandatory=$true)][uint32]$TransitionGeneration
+    )
+    Remove-GreenPrivilegedRuntimeValue -Name 'ActiveRoutingMode'
+    Confirm-GreenProcessRouterRuntimeContract -Required $ProcessRouterRequired
     Write-GreenPrivilegedRuntimeValue `
         -Name 'ActiveRoutingMode' `
         -Value $Mode `
         -PropertyType String
-    Write-GreenLog "active routing mode committed mode=$Mode"
+    $committedMode = [string](
+        Read-GreenPrivilegedRuntimeValue -Name 'ActiveRoutingMode'
+    )
+    try {
+        if ($committedMode -ne $Mode) {
+            throw 'Privileged active routing mode readback failed.'
+        }
+        Confirm-GreenProcessRouterRuntimeContract `
+            -Required $ProcessRouterRequired
+        Complete-GreenRuntimeStateTransition `
+            -TransitionGeneration $TransitionGeneration
+    } catch {
+        Remove-GreenPrivilegedRuntimeValue -Name 'ActiveRoutingMode'
+        throw
+    }
+    Write-GreenLog "active routing mode committed mode=$Mode routerRequired=$ProcessRouterRequired generation=$($TransitionGeneration + 1)"
 }
 
 function Protect-PrivateRuntimeFile {
@@ -1740,20 +1763,33 @@ function Stop-OwnTunnel {
     throw 'Previous Green VPN transport did not stop completely.'
 }
 
+function Complete-GreenDisconnectedRuntimeState {
+    $script:ActiveRuntimeTransitionGeneration = [uint32](
+        Start-GreenRuntimeStateTransition
+    )
+    Stop-OwnTunnel
+    Confirm-GreenProcessRouterRuntimeContract -Required $false
+    Complete-GreenRuntimeStateTransition `
+        -TransitionGeneration $script:ActiveRuntimeTransitionGeneration
+    $script:ActiveRuntimeTransitionGeneration = $null
+    Write-GreenLog 'disconnected runtime state committed'
+}
+
 function Start-OwnTunnel {
     if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "Config missing: $ConfigPath" }
+    $protocol = Get-ManagedProtocol
+    Write-GreenLog "connect phase=preflight protocol=$protocol"
+    $script:ActiveRuntimeTransitionGeneration = [uint32](
+        Start-GreenRuntimeStateTransition
+    )
     Write-GreenPrivilegedRuntimeValue `
         -Name 'ProcessRouterRequired' `
         -Value 0 `
         -PropertyType DWord
-    $protocol = Get-ManagedProtocol
-    Write-GreenLog "connect phase=preflight protocol=$protocol"
     $competitors = @(Stop-CompetingVpnTunnels -Reason 'connect')
     if ($competitors.Count -gt 0) {
         Write-GreenLog "connect takeover blocked by competitor count=$($competitors.Count)"
-        Stop-OwnTunnel
-        Restore-CompetingVpnTunnels
-        exit 2
+        throw 'Competing VPN takeover did not complete.'
     }
 
     $engine = if ($protocol -eq 'amneziawg') { Resolve-AmneziaWgExe } else { Resolve-WireGuardExe }
@@ -1774,25 +1810,33 @@ function Start-OwnTunnel {
     if ($protocol -eq 'hysteria2') {
         Ensure-GreenProgramDataAcl
         Start-Hysteria2Tunnel
-        Write-GreenActiveRoutingMode -Mode 'full'
+        Write-GreenActiveRoutingMode -Mode 'full' -ProcessRouterRequired $false `
+            -TransitionGeneration $script:ActiveRuntimeTransitionGeneration
+        $script:ActiveRuntimeTransitionGeneration = $null
         return
     }
     if ($protocol -eq 'vless_reality') {
         Ensure-GreenProgramDataAcl
         Start-VlessRealityTunnel
-        Write-GreenActiveRoutingMode -Mode 'full'
+        Write-GreenActiveRoutingMode -Mode 'full' -ProcessRouterRequired $false `
+            -TransitionGeneration $script:ActiveRuntimeTransitionGeneration
+        $script:ActiveRuntimeTransitionGeneration = $null
         return
     }
     if ($protocol -eq 'naive_https') {
         Ensure-GreenProgramDataAcl
         Start-NaiveHttpsTunnel
-        Write-GreenActiveRoutingMode -Mode 'full'
+        Write-GreenActiveRoutingMode -Mode 'full' -ProcessRouterRequired $false `
+            -TransitionGeneration $script:ActiveRuntimeTransitionGeneration
+        $script:ActiveRuntimeTransitionGeneration = $null
         return
     }
     if ($protocol -eq 'dnstt') {
         Ensure-GreenProgramDataAcl
         Start-DnsttTunnel
-        Write-GreenActiveRoutingMode -Mode 'full'
+        Write-GreenActiveRoutingMode -Mode 'full' -ProcessRouterRequired $false `
+            -TransitionGeneration $script:ActiveRuntimeTransitionGeneration
+        $script:ActiveRuntimeTransitionGeneration = $null
         return
     }
     if ([string]::IsNullOrWhiteSpace($engine)) { throw "Engine unavailable for $protocol" }
@@ -1856,7 +1900,10 @@ function Start-OwnTunnel {
         Stop-GreenProcessRouter
         Write-GreenLog 'selective tunnel uses destination routes only; process router not required'
     }
-    Write-GreenActiveRoutingMode -Mode $routingMode
+    Write-GreenActiveRoutingMode -Mode $routingMode `
+        -ProcessRouterRequired ($routingMode -eq 'applications' -and $applicationPaths.Count -gt 0) `
+        -TransitionGeneration $script:ActiveRuntimeTransitionGeneration
+    $script:ActiveRuntimeTransitionGeneration = $null
 }
 
 function Invoke-GreenGuard {
@@ -1870,20 +1917,44 @@ function Invoke-GreenGuard {
     $dnsttRunning = (Test-ExactProcess -ProcessId (Read-ManagedPid -Path $DnsttPidPath) -ExpectedPath $DnsttExe) -and
         (Test-ExactProcess -ProcessId (Read-ManagedPid -Path $DnsttHevPidPath) -ExpectedPath $DnsttHevExe)
     if ($ownRunning.Count -eq 0 -and -not $hysteriaRunning -and -not $vlessRunning -and -not $naiveRunning -and -not $dnsttRunning) { return }
+    if (-not (Test-GreenRuntimeStateStable)) {
+        Write-GreenLog 'guard skipped during an incomplete runtime transition'
+        return
+    }
     if (
         ([int](Read-GreenPrivilegedRuntimeValue -Name 'ProcessRouterRequired') -eq 1) -and
         -not (Test-GreenProcessRouterRunning)
     ) {
         Write-GreenLog 'guard disconnecting application-only tunnel because process router stopped'
-        Stop-OwnTunnel
+        Complete-GreenDisconnectedRuntimeState
+        Restore-CompetingVpnTunnels
         return
     }
+    $competitorLabels = @(Get-CompetingVpnLabels)
+    if ($competitorLabels.Count -eq 0) { return }
+    $activeMode = [string](
+        Read-GreenPrivilegedRuntimeValue -Name 'ActiveRoutingMode'
+    )
+    $routerRequired = [int](
+        Read-GreenPrivilegedRuntimeValue -Name 'ProcessRouterRequired'
+    ) -eq 1
+    $script:ActiveRuntimeTransitionGeneration = [uint32](
+        Start-GreenRuntimeStateTransition
+    )
     $competitors = @(Stop-CompetingVpnTunnels -Reason 'guard')
     if ($competitors.Count -gt 0) {
         Write-GreenLog "guard disconnecting preview because takeover remained incomplete count=$($competitors.Count)"
-        Stop-OwnTunnel
+        Complete-GreenDisconnectedRuntimeState
         Restore-CompetingVpnTunnels
+        return
     }
+    if ($activeMode -notin @('full', 'applications')) {
+        throw 'Guard cannot republish an unknown active routing mode.'
+    }
+    Write-GreenActiveRoutingMode -Mode $activeMode `
+        -ProcessRouterRequired $routerRequired `
+        -TransitionGeneration $script:ActiveRuntimeTransitionGeneration
+    $script:ActiveRuntimeTransitionGeneration = $null
 }
 
 function Remove-StandbyProbeFallbackArtifacts {
@@ -1995,7 +2066,7 @@ try {
         'Connect' { Start-OwnTunnel }
         'Disconnect' {
             Ensure-GreenProgramDataAcl
-            Stop-OwnTunnel
+            Complete-GreenDisconnectedRuntimeState
             Restore-CompetingVpnTunnels
         }
         'Guard' { Invoke-GreenGuard }
@@ -2026,9 +2097,12 @@ try {
 } catch {
     $failure = $_
     Write-GreenLog "failed line=$($failure.InvocationInfo.ScriptLineNumber): $($failure.Exception.Message)"
-    if ($Action -eq 'Connect') {
+    $mustRecover = $Action -eq 'Connect' -or
+        $null -ne $script:ActiveRuntimeTransitionGeneration -or
+        -not (Test-GreenRuntimeStateStable)
+    if ($mustRecover) {
         try {
-            Stop-OwnTunnel
+            Complete-GreenDisconnectedRuntimeState
         } catch {
             Write-GreenLog "failed tunnel cleanup line=$($_.InvocationInfo.ScriptLineNumber): $($_.Exception.Message)"
         }
