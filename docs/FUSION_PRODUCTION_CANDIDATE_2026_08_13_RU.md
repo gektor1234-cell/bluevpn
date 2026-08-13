@@ -113,4 +113,3 @@ services, процессов, routes и runtime. Fail-closed поведение 
 primary, только с атомарными backup/rollback и последующей проверкой четырёх
 публичных тел, обоих backend и полного public-surface probe. Friendly Linnet
 `5.129.237.163` исключён из rollout.
-
