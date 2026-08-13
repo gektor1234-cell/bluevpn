@@ -1193,6 +1193,8 @@ try {
         -Mode applications
     $summary.selectedMode['screenshot'] = Get-WindowScreenshot -Process $process `
         -Path $selectedScreenshotPath
+    New-Item -ItemType Directory -Force `
+        -Path (Split-Path -Parent $directControlExecutable) | Out-Null
     Copy-Item -LiteralPath $selectedExecutable `
         -Destination $directControlExecutable -Force
     if (
