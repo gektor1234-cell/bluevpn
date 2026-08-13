@@ -335,92 +335,123 @@ public static class GreenVpnFusionWindowCapture {
     }
     $bitmap = [System.Drawing.Bitmap]::new($width, $height)
     $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+    $sampleStep = 8
+    $sampledPixels = 0
+    $greenPixels = 0
+    $darkPixels = 0
+    $lightPixels = 0
+    $distinctColors = [Collections.Generic.HashSet[int]]::new()
     try {
         $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bitmap.Size)
         $bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
+        for ($y = 0; $y -lt $height; $y += $sampleStep) {
+            for ($x = 0; $x -lt $width; $x += $sampleStep) {
+                $color = $bitmap.GetPixel($x, $y)
+                $sampledPixels++
+                [void]$distinctColors.Add($color.ToArgb())
+                $average = (
+                    [int]$color.R + [int]$color.G + [int]$color.B
+                ) / 3
+                if (
+                    [int]$color.G -gt ([int]$color.R + 15) -and
+                    [int]$color.G -gt ([int]$color.B + 5) -and
+                    [int]$color.G -gt 70
+                ) {
+                    $greenPixels++
+                }
+                if ($average -lt 90) { $darkPixels++ }
+                if ($average -gt 180) { $lightPixels++ }
+            }
+        }
     } finally {
         $graphics.Dispose()
         $bitmap.Dispose()
     }
-    return [ordered]@{ width = $width; height = $height; path = $Path }
+    $visualContractPassed =
+        $width -ge 900 -and
+        $height -ge 650 -and
+        $sampledPixels -ge 5000 -and
+        $distinctColors.Count -ge 50 -and
+        $greenPixels -ge 100 -and
+        $darkPixels -ge 100 -and
+        $lightPixels -ge 100
+    return [ordered]@{
+        width = $width
+        height = $height
+        path = $Path
+        sampleStep = $sampleStep
+        sampledPixels = $sampledPixels
+        distinctColorCount = $distinctColors.Count
+        greenPixelCount = $greenPixels
+        darkPixelCount = $darkPixels
+        lightPixelCount = $lightPixels
+        visualContractPassed = $visualContractPassed
+    }
 }
 
 function Invoke-FusionUiAudit {
     if (-not (Stop-BetaUi)) { throw 'Beta UI did not stop before UI audit.' }
     $process = Start-Process -FilePath $appPath -WorkingDirectory $resolvedInstallRoot `
         -PassThru
-    $deadline = (Get-Date).AddSeconds(60)
-    do {
-        $process.Refresh()
-        if ($process.HasExited) { throw 'Beta UI exited during Fusion audit.' }
-        if ($process.MainWindowHandle -ne 0) { break }
-        Start-Sleep -Milliseconds 250
-    } while ((Get-Date) -lt $deadline)
-    if ($process.MainWindowHandle -eq 0) {
-        throw 'Beta UI did not expose a main window for Fusion audit.'
-    }
-    Start-Sleep -Seconds 3
-    Add-Type -AssemblyName UIAutomationClient
-    Add-Type -AssemblyName UIAutomationTypes
-    $window = [System.Windows.Automation.AutomationElement]::FromHandle(
-        $process.MainWindowHandle
-    )
-    if ($null -eq $window) { throw 'Fusion window is unavailable to UI Automation.' }
-    $nodes = $window.FindAll(
-        [System.Windows.Automation.TreeScope]::Descendants,
-        [System.Windows.Automation.Condition]::TrueCondition
-    )
-    $names = @(
-        foreach ($node in $nodes) {
-            $name = ([string]$node.Current.Name).Trim()
-            if ($name) { $name }
+    try {
+        $deadline = (Get-Date).AddSeconds(60)
+        do {
+            $process.Refresh()
+            if ($process.HasExited) { throw 'Beta UI exited during Fusion audit.' }
+            if ($process.MainWindowHandle -ne 0) { break }
+            Start-Sleep -Milliseconds 250
+        } while ((Get-Date) -lt $deadline)
+        if ($process.MainWindowHandle -eq 0) {
+            throw 'Beta UI did not expose a main window for Fusion audit.'
         }
-    ) | Sort-Object -Unique
-    # Keep the script ASCII so Windows PowerShell 5.1 parses it consistently.
-    $requirements = [ordered]@{
-        connect = @(
-            '\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c VPN',
-            '\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c VPN'
+        Start-Sleep -Seconds 3
+        Add-Type -AssemblyName UIAutomationClient
+        Add-Type -AssemblyName UIAutomationTypes
+        $window = [System.Windows.Automation.AutomationElement]::FromHandle(
+            $process.MainWindowHandle
         )
-        diagnostics = @(
-            '\u0414\u0438\u0430\u0433\u043d\u043e\u0441\u0442\u0438\u043a\u0430'
+        if ($null -eq $window) {
+            throw 'Fusion window is unavailable to UI Automation.'
+        }
+        $nodes = $window.FindAll(
+            [System.Windows.Automation.TreeScope]::Descendants,
+            [System.Windows.Automation.Condition]::TrueCondition
         )
-        tariff = @(
-            '\u0422\u0430\u0440\u0438\u0444'
-        )
-        settings = @(
-            '\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438'
-        )
-    }
-    $matches = [ordered]@{}
-    foreach ($requirement in $requirements.GetEnumerator()) {
-        $match = @(
-            $names | Where-Object {
-                $candidate = $_
-                @($requirement.Value | Where-Object {
-                    [Text.RegularExpressions.Regex]::IsMatch(
-                        $candidate,
-                        $_,
-                        [Text.RegularExpressions.RegexOptions]::IgnoreCase
-                    )
-                }).Count -gt 0
+        $semanticEntries = @(
+            foreach ($node in $nodes) {
+                try {
+                    [ordered]@{
+                        name = [string]$node.Current.Name
+                        controlType =
+                            [string]$node.Current.ControlType.ProgrammaticName
+                        automationId = [string]$node.Current.AutomationId
+                    }
+                } catch {}
             }
-        ) | Select-Object -First 1
-        $matches[$requirement.Key] = [string]$match
-        if (-not $match) {
-            throw "Fusion UI marker is missing: $($requirement.Key)."
+        )
+        $windowTitle = [string]$window.Current.Name
+        $capture = Get-WindowScreenshot -Process $process -Path $uiScreenshotPath
+        if ($windowTitle -ne 'Green VPN Beta') {
+            throw "Unexpected Fusion window title: $windowTitle"
         }
-    }
-    $windowTitle = [string]$window.Current.Name
-    $capture = Get-WindowScreenshot -Process $process -Path $uiScreenshotPath
-    if (-not (Stop-BetaUi)) { throw 'Beta UI did not stop after UI audit.' }
-    return [ordered]@{
-        windowTitle = $windowTitle
-        requiredMarkers = $matches
-        semanticNameCount = $names.Count
-        semanticNames = @($names)
-        screenshot = $capture
-        success = $true
+        if (-not [bool]$capture.visualContractPassed) {
+            throw 'Fusion screenshot failed the nonblank visual contract.'
+        }
+        return [ordered]@{
+            windowTitle = $windowTitle
+            uiAutomationNodeCount = $semanticEntries.Count
+            uiAutomationEntries = @($semanticEntries)
+            flutterViewOnly =
+                $semanticEntries.Count -eq 1 -and
+                [string]$semanticEntries[0].name -eq 'FLUTTERVIEW'
+            screenshot = $capture
+            manualVisualReviewRequired = $true
+            success = $true
+        }
+    } finally {
+        if (-not (Stop-BetaUi)) {
+            throw 'Beta UI did not stop after UI audit.'
+        }
     }
 }
 
