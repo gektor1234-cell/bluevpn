@@ -161,7 +161,7 @@ Paid-beta клиенты опубликованы fallback-first с резерв
 ## Границы готовности
 
 - Это готовый Android и Windows paid-beta, а не разрешение на production.
-- Production-кандидат получает новый Windows build `4603`, потому что его
+- Production-кандидат получает новый Windows build `4604`, потому что его
   stable-runtime байты отличаются от уже проверенного beta `4602`.
 - До stable-публикации точный production installer должен пройти отдельный
   автономный smoke с recovery.

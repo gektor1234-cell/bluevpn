@@ -41,6 +41,14 @@ must receive its own exact physical smoke because stable-runtime bytes differ
 from the beta installer. Publication additionally requires owner UI acceptance,
 a Windows signing/SmartScreen decision and explicit stable-promotion approval.
 
+Production candidate `0.4.6+4603` was rejected by that exact physical smoke.
+Installation, tray lifecycle and foreground takeover passed, but the runtime
+monitor accepted a YouTube `204` that had fallen through to the physical route
+after the managed WireGuard service was stopped. Recovery restored Amnezia,
+API and YouTube and removed every temporary route and failsafe. The corrected
+policy requires both a live managed transport and a successful data-plane
+probe; replacement build `4604` must pass a fresh detached physical smoke.
+
 ## Post-Release Repository Safety Closure (2026-08-02 MSK)
 
 The owner confirmed on 2026-08-02 that `v1` is the permanent-Free

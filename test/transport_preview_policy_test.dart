@@ -154,13 +154,13 @@ void main() {
     );
   });
 
-  test('Windows runtime health follows the routed data-plane probe', () {
+  test('Windows runtime health requires transport and routed data plane', () {
     expect(
       greenVpnRuntimeRouteHealthy(
         backendConnected: false,
         dataPlaneProbeOk: true,
       ),
-      isTrue,
+      isFalse,
     );
     expect(
       greenVpnRuntimeRouteHealthy(
@@ -175,6 +175,13 @@ void main() {
         dataPlaneProbeOk: true,
       ),
       isTrue,
+    );
+    expect(
+      greenVpnRuntimeRouteHealthy(
+        backendConnected: false,
+        dataPlaneProbeOk: false,
+      ),
+      isFalse,
     );
   });
 

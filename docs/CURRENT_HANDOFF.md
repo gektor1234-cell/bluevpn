@@ -35,6 +35,15 @@ This is the current operational entry point. Read it together with
   use a new build number because its stable-runtime bytes differ from the
   accepted beta installer. It still requires an exact production-candidate
   smoke plus separate UI, SmartScreen/signing and stable-promotion decisions.
+- Production candidate `0.4.6+4603` is rejected and must never be published.
+  Its exact physical smoke passed installation, five tray lifecycles and the
+  one-candidate foreground takeover, but an injected WireGuard service failure
+  still reached YouTube through the restored physical route and was therefore
+  misclassified as a healthy VPN route. Final recovery was complete: Green
+  transports and UI stopped, Amnezia restored, API `200`, YouTube `204`, and no
+  failsafe or metric-`42739` route remained. Runtime health now requires both a
+  live managed transport and a successful routed probe; replacement production
+  candidate build `4604` requires a new exact delayed physical smoke.
 - Full evidence and rollback paths:
   `docs/FUSION_PAID_BETA_2026_08_11_RU.md`.
 

@@ -110,9 +110,10 @@ bool greenVpnRuntimeRouteHealthy({
   required bool backendConnected,
   required bool dataPlaneProbeOk,
 }) {
-  // The real routed probe is authoritative. A freshly started WireGuard
-  // service may not expose a handshake until that probe creates traffic.
-  return dataPlaneProbeOk;
+  // A data-plane probe can fall through to the physical connection after a
+  // failed tunnel. Runtime monitoring must prove both the managed transport
+  // and the routed Internet path before it keeps the active route armed.
+  return backendConnected && dataPlaneProbeOk;
 }
 
 bool greenVpnShouldBlockForegroundForPostConnectProbe({
