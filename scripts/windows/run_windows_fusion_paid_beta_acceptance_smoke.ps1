@@ -496,6 +496,9 @@ function Invoke-PhysicalConnect {
         ConvertFrom-Json
     $takeover = $report.competingVpnTakeover
     $candidates = @($takeover.candidates)
+    $cachedRouteConfirmed =
+        $null -ne $takeover.PSObject.Properties['cachedRouteConfirmed'] -and
+        [bool]$takeover.cachedRouteConfirmed
     if (-not [bool]$report.success -or
             $candidates.Count -ne 1 -or
             -not [bool]$takeover.probeConfirmed -or
@@ -511,7 +514,7 @@ function Invoke-PhysicalConnect {
             -not [bool]$report.cleanup.restoreFailsafeRemoved) {
         throw "Physical connect contract failed: $($report.failure)"
     }
-    if ($RequireCachedRoute -and -not [bool]$takeover.cachedRouteConfirmed) {
+    if ($RequireCachedRoute -and -not $cachedRouteConfirmed) {
         throw 'Cached physical connect did not confirm the persisted route.'
     }
     return [ordered]@{
@@ -521,7 +524,7 @@ function Invoke-PhysicalConnect {
         uiAutomationAction = [string]$takeover.uiAutomationAction
         probeConfirmed = $true
         privilegedTakeoverConfirmed = $true
-        cachedRouteConfirmed = [bool]$takeover.cachedRouteConfirmed
+        cachedRouteConfirmed = $cachedRouteConfirmed
         cleanupConfirmed = $true
     }
 }

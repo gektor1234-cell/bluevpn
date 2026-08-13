@@ -63,4 +63,20 @@ void main() {
       contains("/remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' /T /C"),
     );
   });
+
+  test(
+    'Fusion acceptance treats cached proof as optional only on fresh run',
+    () {
+      final runner = _read(
+        'scripts/windows/run_windows_fusion_paid_beta_acceptance_smoke.ps1',
+      );
+
+      expect(runner, contains("PSObject.Properties['cachedRouteConfirmed']"));
+      expect(
+        runner,
+        contains('if (\$RequireCachedRoute -and -not \$cachedRouteConfirmed)'),
+      );
+      expect(runner, contains('cachedRouteConfirmed = \$cachedRouteConfirmed'));
+    },
+  );
 }

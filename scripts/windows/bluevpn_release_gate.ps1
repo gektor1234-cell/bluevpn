@@ -2348,6 +2348,7 @@ $windowsRuntimeFailoverChecks = [ordered]@{
         'windows-fusion-paid-beta-main.png',
         'ArtifactRoot contains stale acceptance evidence; use a new unique path.',
         'Invoke-PhysicalConnect -ReportPath $freshReportPath',
+        "PSObject.Properties['cachedRouteConfirmed']",
         '-RequireCachedRoute',
         'privilegedTakeoverConfirmed',
         'exactInstallRetained',
