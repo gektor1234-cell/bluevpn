@@ -2,9 +2,9 @@ param(
     [ValidateSet("android", "windows", "both")]
     [string]$Mode = "both",
     [string]$AppVersion = "0.4.6-paid-beta.1",
-    [string]$WindowsAppVersion = "0.4.6-paid-beta.1",
+    [string]$WindowsAppVersion = "0.4.6-paid-beta.2",
     [ValidateRange(0, 65535)]
-    [int]$WindowsBuildNumber = 4601,
+    [int]$WindowsBuildNumber = 4602,
     [string]$AndroidBuildName = "0.4.6",
     [string]$AndroidBuildNumber = "2026081106",
     [string]$AndroidApplicationId = "pro.greenvpn.app.beta",
@@ -12,7 +12,7 @@ param(
     [string]$ApiBaseUrl = "https://api.greenvpn.pro/paid-beta-api",
     [string]$ApiFallbackBaseUrls = "https://176-113-81-35.sslip.io/paid-beta-api",
     [string]$ClientMarker = "green-vpn-paid-beta-v1",
-    [string]$OutDir = "C:\BlueVPN_Builds\paid_beta_20260811_fusion_actions_v7_0.4.6",
+    [string]$OutDir = "C:\BlueVPN_Builds\paid_beta_20260813_fusion_acl_fix_v1_0.4.6",
     [bool]$EnableTransportCascade = $true,
     [bool]$EnableFusionUi = $true,
     [string]$WindowsCodeSigningCertificateThumbprint = $env:GREENVPN_WINDOWS_CODE_SIGNING_CERT_THUMBPRINT,

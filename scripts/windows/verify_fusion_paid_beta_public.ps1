@@ -1,12 +1,14 @@
 [CmdletBinding()]
 param(
-    [string]$BetaVersion = '0.4.6-paid-beta.1',
+    [string]$BetaVersion = '',
+    [string]$BetaAndroidVersion = '0.4.6-paid-beta.1',
+    [string]$BetaWindowsVersion = '0.4.6-paid-beta.2',
     [string]$BetaAndroidBuild = '2026081106',
-    [int]$BetaWindowsBuild = 4601,
+    [int]$BetaWindowsBuild = 4602,
     [string]$BetaAndroidSha256 = 'F2FF98B569C574910CEB4ED7BA18EBC33FD54013A1DD15DE808DEC69986F883D',
     [long]$BetaAndroidSize = 56340949,
-    [string]$BetaWindowsSha256 = '1D752ADFFFB33D60B2693E6AE888EA62AA82EFA1EF0A7462513C35CF2FBCCC89',
-    [long]$BetaWindowsSize = 55497216,
+    [string]$BetaWindowsSha256 = 'B882DB6EEF672C21786608888431126FAFC997EC6D7C5CEADB6CA16DD0AEC4B3',
+    [long]$BetaWindowsSize = 55497728,
     [string]$StableWindowsVersion = '0.3.26',
     [string]$StableWindowsBuild = '3105',
     [string]$StableWindowsSha256 = '1E5505E73B735A00E1C7C44BD1919F96F98EA8DC5F03497205EA39E89AAE00F6',
@@ -24,6 +26,21 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Net.Http
 
+if (
+    $PSBoundParameters.ContainsKey('BetaVersion') -and
+    -not [string]::IsNullOrWhiteSpace($BetaVersion) -and
+    -not $PSBoundParameters.ContainsKey('BetaAndroidVersion')
+) {
+    $BetaAndroidVersion = $BetaVersion
+}
+if (
+    $PSBoundParameters.ContainsKey('BetaVersion') -and
+    -not [string]::IsNullOrWhiteSpace($BetaVersion) -and
+    -not $PSBoundParameters.ContainsKey('BetaWindowsVersion')
+) {
+    $BetaWindowsVersion = $BetaVersion
+}
+
 $hosts = @(
     [pscustomobject]@{
         name = 'primary'
@@ -38,13 +55,13 @@ $hosts = @(
 )
 $betaExpected = @{
     android = [pscustomobject]@{
-        version = $BetaVersion
+        version = $BetaAndroidVersion
         build = $BetaAndroidBuild
         sha256 = $BetaAndroidSha256.ToUpperInvariant()
         size = $BetaAndroidSize
     }
     windows = [pscustomobject]@{
-        version = $BetaVersion
+        version = $BetaWindowsVersion
         build = [string]$BetaWindowsBuild
         sha256 = $BetaWindowsSha256.ToUpperInvariant()
         size = $BetaWindowsSize
@@ -243,7 +260,14 @@ $report = [ordered]@{
     checksPassed = $rows.Count + $backendRows.Count
     artifactChecksPassed = $rows.Count
     backendChecksPassed = $backendRows.Count
-    paidBetaVersion = $BetaVersion
+    paidBetaVersion = if ($BetaAndroidVersion -eq $BetaWindowsVersion) {
+        $BetaAndroidVersion
+    }
+    else {
+        $null
+    }
+    paidBetaAndroidVersion = $BetaAndroidVersion
+    paidBetaWindowsVersion = $BetaWindowsVersion
     paidBetaBackendVersion = $BetaBackendVersion
     stableBackendVersion = $StableBackendVersion
     paidSalesDisabled = $true

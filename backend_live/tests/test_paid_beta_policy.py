@@ -190,7 +190,16 @@ class PaidBetaPolicyTests(unittest.TestCase):
             ),
         )
 
-    def bootstrap(self, *, paid_beta: bool, device_uid: str):
+    def bootstrap(
+        self,
+        *,
+        paid_beta: bool,
+        device_uid: str,
+        app_version: str | None = None,
+        release_channel: str | None = None,
+        client_marker: str | None = None,
+        platform: str = "android",
+    ):
         server = {
             "id": "test-nl",
             "title": "Netherlands #1",
@@ -216,10 +225,20 @@ class PaidBetaPolicyTests(unittest.TestCase):
                 main.BootstrapIn(
                     deviceUid=device_uid,
                     deviceName="Test device",
-                    platform="android",
-                    appVersion="0.3.0-paid-beta" if paid_beta else "0.2.44",
-                    releaseChannel="paid-beta" if paid_beta else "stable",
-                    clientMarker=("green-vpn-paid-beta-v1" if paid_beta else None),
+                    platform=platform,
+                    appVersion=(
+                        app_version
+                        or ("0.3.0-paid-beta" if paid_beta else "0.2.44")
+                    ),
+                    releaseChannel=(
+                        release_channel
+                        or ("paid-beta" if paid_beta else "stable")
+                    ),
+                    clientMarker=(
+                        client_marker
+                        if client_marker is not None
+                        else ("green-vpn-paid-beta-v1" if paid_beta else None)
+                    ),
                 ),
                 authorization=f"Bearer {self.access_token}",
             )
@@ -258,7 +277,7 @@ class PaidBetaPolicyTests(unittest.TestCase):
             )
         )
 
-    def test_fusion_flags_are_exposed_only_to_exact_paid_beta_client(self) -> None:
+    def test_fusion_flags_are_exposed_to_exact_paid_beta_client(self) -> None:
         self.enroll_beta()
         paid_beta = self.bootstrap(paid_beta=True, device_uid="fusion-beta-device")
         features = paid_beta["clientFeatures"]
@@ -274,12 +293,171 @@ class PaidBetaPolicyTests(unittest.TestCase):
             {key: False for key in main.CLIENT_EXPOSED_FEATURE_FLAGS},
         )
 
+    def test_fusion_flags_require_exact_public_product_and_minimum_version(self) -> None:
+        def flags(*, marker, channel, version, platform="android"):
+            with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+                return main.client_feature_flags(
+                    client_marker=marker,
+                    release_channel=channel,
+                    platform=platform,
+                    device_uid="fusion-public-device",
+                    app_version=version,
+                )
+
+        allowed = flags(
+            marker="green-vpn-public-product-v1",
+            channel="public-product",
+            version="0.4.6",
+        )
+        self.assertTrue(allowed["fusion.connection_actions"])
+        self.assertTrue(allowed["fusion.location_memory"])
+        self.assertTrue(allowed["fusion.connection_details"])
+        self.assertTrue(allowed["fusion.friendly_errors"])
+        self.assertFalse(allowed["fusion.windows_close_behavior"])
+
+        denied_cases = (
+            ("green-vpn-public-product-v1", "public-product", "0.4.5", "android"),
+            ("green-vpn-public-product-v1", "public-product", "garbage", "android"),
+            ("green-vpn-public-product-v1", "public-product", "999", "android"),
+            (
+                "green-vpn-public-product-v1",
+                "public-product",
+                "0.4.6-paid-beta.2",
+                "android",
+            ),
+            ("wrong-marker", "public-product", "0.4.6", "android"),
+            ("green-vpn-public-product-v1", "stable", "0.4.6", "android"),
+            ("green-vpn-public-product-v1", "public-product", "0.4.6", "linux"),
+        )
+        for marker, channel, version, platform in denied_cases:
+            with self.subTest(
+                marker=marker,
+                channel=channel,
+                version=version,
+                platform=platform,
+            ):
+                denied = flags(
+                    marker=marker,
+                    channel=channel,
+                    version=version,
+                    platform=platform,
+                )
+                self.assertEqual(
+                    denied,
+                    {key: False for key in main.CLIENT_EXPOSED_FEATURE_FLAGS},
+                )
+
+        allowed_with_build = flags(
+            marker="green-vpn-public-product-v1",
+            channel="public-product",
+            version="0.4.6+4603",
+        )
+        self.assertTrue(allowed_with_build["fusion.connection_actions"])
+
+    def test_public_product_bootstrap_applies_fusion_version_gate(self) -> None:
+        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+            current = self.bootstrap(
+                paid_beta=False,
+                device_uid="fusion-public-bootstrap",
+                app_version="0.4.6",
+                release_channel="public-product",
+                client_marker="green-vpn-public-product-v1",
+                platform="windows",
+            )
+            legacy = self.bootstrap(
+                paid_beta=False,
+                device_uid="fusion-public-bootstrap",
+                app_version="0.3.26",
+                release_channel="public-product",
+                client_marker="green-vpn-public-product-v1",
+                platform="windows",
+            )
+
+        self.assertTrue(current["clientFeatures"]["fusion.connection_actions"])
+        self.assertTrue(current["clientFeatures"]["fusion.windows_close_behavior"])
+        self.assertEqual(
+            legacy["clientFeatures"],
+            {key: False for key in main.CLIENT_EXPOSED_FEATURE_FLAGS},
+        )
+
+    def test_public_fusion_supports_legacy_flag_rows_and_keeps_kill_switch(self) -> None:
+        with main.db() as conn:
+            rows = conn.execute(
+                """
+                SELECT flag_key, value_json, is_enabled, rollout_percent
+                FROM admin_feature_flags
+                WHERE flag_key IN ({})
+                """.format(",".join("?" for _ in main.CLIENT_EXPOSED_FEATURE_FLAGS)),
+                tuple(main.CLIENT_EXPOSED_FEATURE_FLAGS),
+            ).fetchall()
+            snapshot = {
+                str(row["flag_key"]): (
+                    row["value_json"],
+                    int(row["is_enabled"]),
+                    int(row["rollout_percent"]),
+                )
+                for row in rows
+            }
+            try:
+                conn.execute(
+                    """
+                    UPDATE admin_feature_flags
+                    SET value_json = ?
+                    WHERE flag_key IN ({})
+                    """.format(",".join("?" for _ in main.CLIENT_EXPOSED_FEATURE_FLAGS)),
+                    (
+                        '{"channels":["paid-beta"],"platforms":["android","windows"]}',
+                        *main.CLIENT_EXPOSED_FEATURE_FLAGS,
+                    ),
+                )
+                conn.commit()
+
+                with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+                    allowed = main.client_feature_flags(
+                        client_marker="green-vpn-public-product-v1",
+                        release_channel="public-product",
+                        platform="android",
+                        device_uid="fusion-legacy-row-device",
+                        app_version="0.4.6+4603",
+                    )
+                self.assertTrue(allowed["fusion.connection_actions"])
+
+                conn.execute(
+                    """
+                    UPDATE admin_feature_flags
+                    SET is_enabled = 0
+                    WHERE flag_key = 'fusion.connection_actions'
+                    """
+                )
+                conn.commit()
+                with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+                    disabled = main.client_feature_flags(
+                        client_marker="green-vpn-public-product-v1",
+                        release_channel="public-product",
+                        platform="android",
+                        device_uid="fusion-legacy-row-device",
+                        app_version="0.4.6+4603",
+                    )
+                self.assertFalse(disabled["fusion.connection_actions"])
+            finally:
+                for key, (value_json, is_enabled, rollout_percent) in snapshot.items():
+                    conn.execute(
+                        """
+                        UPDATE admin_feature_flags
+                        SET value_json = ?, is_enabled = ?, rollout_percent = ?
+                        WHERE flag_key = ?
+                        """,
+                        (value_json, is_enabled, rollout_percent, key),
+                    )
+                conn.commit()
+
     def test_fusion_windows_flag_is_platform_scoped(self) -> None:
         features = main.client_feature_flags(
             client_marker="green-vpn-paid-beta-v1",
             release_channel="paid-beta",
             platform="windows",
             device_uid="fusion-windows-device",
+            app_version="0.4.6-paid-beta.2",
         )
         self.assertTrue(features["fusion.windows_close_behavior"])
 

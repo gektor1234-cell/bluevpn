@@ -13,6 +13,7 @@
     [bool]$PaidBetaBuild = $false,
     [bool]$PublicProductBuild = $false,
     [bool]$EnableFusionUi = $false,
+    [switch]$AllowFusionProductionPromotionCandidate,
     [bool]$EnableTransportCascade = $false,
     [ValidateSet('stable', 'paid-beta')]
     [string]$WindowsRuntimeScope = 'stable',
@@ -281,8 +282,15 @@ if (-not (Test-Path -LiteralPath $ProjectRoot)) {
     throw "ProjectRoot does not exist: $ProjectRoot"
 }
 
-if ($EnableFusionUi -and (-not $PaidBetaBuild -or $PublicProductBuild)) {
-    throw "Fusion UI is allowed only in an isolated paid-beta build."
+if (
+    $EnableFusionUi -and
+    -not $PaidBetaBuild -and
+    -not ($PublicProductBuild -and $AllowFusionProductionPromotionCandidate)
+) {
+    throw "Fusion UI requires isolated paid-beta or an explicit production promotion candidate gate."
+}
+if ($AllowFusionProductionPromotionCandidate -and (-not $EnableFusionUi -or -not $PublicProductBuild)) {
+    throw "Fusion production promotion gate requires EnableFusionUi=true and PublicProductBuild=true."
 }
 
 if ($PaidBetaBuild) {
@@ -380,6 +388,9 @@ if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
         $paidBetaDefine = $PaidBetaBuild.ToString().ToLowerInvariant()
         $publicProductDefine = $PublicProductBuild.ToString().ToLowerInvariant()
         $fusionUiDefine = $EnableFusionUi.ToString().ToLowerInvariant()
+        $fusionProductionPromotionCandidateDefine = (
+            $AllowFusionProductionPromotionCandidate.IsPresent
+        ).ToString().ToLowerInvariant()
         $transportCascadeDefine = $EnableTransportCascade.ToString().ToLowerInvariant()
         $previousRuntimeEnvironment = @{}
         foreach ($name in $runtime.Keys) {
@@ -405,6 +416,7 @@ if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
                 --dart-define="GREENVPN_PAID_BETA_BUILD=$paidBetaDefine" `
                 --dart-define="GREENVPN_PUBLIC_PRODUCT_BUILD=$publicProductDefine" `
                 --dart-define="GREENVPN_FUSION_UI_ENABLED=$fusionUiDefine" `
+                --dart-define="GREENVPN_FUSION_PRODUCTION_PROMOTION_CANDIDATE=$fusionProductionPromotionCandidateDefine" `
                 --dart-define="GREENVPN_AWG2_PREVIEW_ENABLED=$transportCascadeDefine" `
                 --dart-define="GREENVPN_HYSTERIA2_PREVIEW_ENABLED=$transportCascadeDefine" `
                 --dart-define="GREENVPN_VLESS_REALITY_PREVIEW_ENABLED=$transportCascadeDefine" `

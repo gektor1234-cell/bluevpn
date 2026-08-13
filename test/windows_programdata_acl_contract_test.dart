@@ -79,4 +79,55 @@ void main() {
       expect(runner, contains('cachedRouteConfirmed = \$cachedRouteConfirmed'));
     },
   );
+
+  test('Fusion production build remains behind two explicit gates', () {
+    final main = _read('lib/main.dart');
+    final installer = _read('scripts/windows/build_installer.ps1');
+    final publicBuild = _read('scripts/windows/build_public_product.ps1');
+
+    expect(main, contains('GREENVPN_FUSION_PRODUCTION_PROMOTION_CANDIDATE'));
+    expect(
+      main,
+      contains('kPublicProductBuild && kFusionProductionPromotionCandidate'),
+    );
+    expect(installer, contains('AllowFusionProductionPromotionCandidate'));
+    expect(
+      installer,
+      contains(
+        'Fusion production promotion gate requires EnableFusionUi=true and PublicProductBuild=true.',
+      ),
+    );
+    expect(publicBuild, contains('PrepareFusionProductionPromotionCandidate'));
+    expect(publicBuild, contains('ownerApprovalRequired = \$true'));
+    expect(publicBuild, contains('productionPublished = \$false'));
+    expect(publicBuild, contains("'fusion_ui_acceptance'"));
+    expect(
+      publicBuild,
+      contains("'windows_signature_or_smartscreen_acceptance'"),
+    );
+    expect(publicBuild, contains("'stable_production_promotion'"));
+  });
+
+  test(
+    'Fusion promotion package is clean-source, evidence-bound and local',
+    () {
+      final promotion = _read(
+        'scripts/windows/prepare_fusion_production_promotion.ps1',
+      );
+      final backend = _read(
+        'scripts/windows/prepare_public_product_backend_bundle.ps1',
+      );
+
+      expect(promotion, contains('git status --porcelain=v1'));
+      expect(promotion, contains('Paid-beta Windows smoke did not succeed.'));
+      expect(promotion, contains('checksPassed -eq 12'));
+      expect(promotion, contains('productionPublished = \$false'));
+      expect(promotion, contains('deploymentAttempted = \$false'));
+      expect(promotion, contains("'stable_production_promotion'"));
+      expect(promotion, isNot(contains('ssh ')));
+      expect(backend, contains("contour = 'public-product'"));
+      expect(backend, contains('productionPublished = \$false'));
+      expect(backend, isNot(contains('ssh ')));
+    },
+  );
 }

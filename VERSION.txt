@@ -3,7 +3,7 @@ Android build: 2026073101
 Windows build: 3105
 Platforms: Android, Windows
 Source backend: 0.9.153-update-channel-alias.4
-Status: production remains Android 0.3.19 and Windows 0.3.26; isolated Fusion paid-beta 0.4.6 is published on Android and Windows, with exact Android physical smoke complete
+Status: production remains Android 0.3.19 and Windows 0.3.26; isolated Fusion paid-beta 0.4.6 is published on Android and Windows, with exact physical smokes complete on both platforms
 Production sales: disabled
 Refund execution: disabled
 Auto-renew: disabled

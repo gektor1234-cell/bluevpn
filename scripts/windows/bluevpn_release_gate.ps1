@@ -92,6 +92,8 @@ $windowsStandbyTrayReleaseLauncherPath = Join-Path $ProjectRoot "scripts\windows
 $windowsSmokeNetworkRestorePath = Join-Path $ProjectRoot "scripts\windows\restore_windows_smoke_network.ps1"
 $windowsFusionPaidBetaAcceptanceSmokePath = Join-Path $ProjectRoot "scripts\windows\run_windows_fusion_paid_beta_acceptance_smoke.ps1"
 $windowsFusionPaidBetaAcceptanceLauncherPath = Join-Path $ProjectRoot "scripts\windows\launch_windows_fusion_paid_beta_acceptance_smoke.ps1"
+$fusionProductionPromotionPath = Join-Path $ProjectRoot "scripts\windows\prepare_fusion_production_promotion.ps1"
+$publicProductBackendBundlePath = Join-Path $ProjectRoot "scripts\windows\prepare_public_product_backend_bundle.ps1"
 $transportCascadeStagePath = Join-Path $ProjectRoot "scripts\windows\stage_windows_transport_cascade.ps1"
 $publicInstallerAuditPath = Join-Path $ProjectRoot "scripts\windows\test_public_installer_package.ps1"
 $transportPreviewInstallPath = Join-Path $ProjectRoot "scripts\windows\install_windows_transport_preview.ps1"
@@ -248,6 +250,8 @@ $windowsStandbyTrayReleaseLauncherScript = Read-Text $windowsStandbyTrayReleaseL
 $windowsSmokeNetworkRestoreScript = Read-Text $windowsSmokeNetworkRestorePath
 $windowsFusionPaidBetaAcceptanceSmokeScript = Read-Text $windowsFusionPaidBetaAcceptanceSmokePath
 $windowsFusionPaidBetaAcceptanceLauncherScript = Read-Text $windowsFusionPaidBetaAcceptanceLauncherPath
+$fusionProductionPromotionScript = Read-Text $fusionProductionPromotionPath
+$publicProductBackendBundleScript = Read-Text $publicProductBackendBundlePath
 $transportCascadeStageScript = Read-Text $transportCascadeStagePath
 $publicInstallerAuditScript = Read-Text $publicInstallerAuditPath
 $transportPreviewInstallScript = Read-Text $transportPreviewInstallPath
@@ -404,6 +408,14 @@ if ($null -ne $releaseContract) {
         $windowsBuildNumber = [int]$releaseContract.windowsBuildNumber
         $backendVersion = [string]$releaseContract.backendVersion
         $paidBetaVersion = [string]$releaseContract.paidBeta.appVersion
+        $paidBetaWindowsVersion = if (
+            $releaseContract.paidBeta.PSObject.Properties.Name -contains 'windowsAppVersion'
+        ) {
+            [string]$releaseContract.paidBeta.windowsAppVersion
+        }
+        else {
+            $paidBetaVersion
+        }
         $paidBetaAndroidBuildNumber = [string]$releaseContract.paidBeta.androidBuildNumber
         $paidBetaWindowsBuildNumber = [int]$releaseContract.paidBeta.windowsBuildNumber
 
@@ -422,7 +434,7 @@ if ($null -ne $releaseContract) {
             'Public product Android build' = @($publicProductBuildScript, "[string]`$AndroidBuildNumber = `"$androidBuildNumber`"")
             'Public product Windows build' = @($publicProductBuildScript, "[int]`$WindowsBuildNumber = $windowsBuildNumber")
             'Paid-beta app version' = @($paidBetaBuildScript, "[string]`$AppVersion = `"$paidBetaVersion`"")
-            'Paid-beta Windows app version' = @($paidBetaBuildScript, "[string]`$WindowsAppVersion = `"$paidBetaVersion`"")
+            'Paid-beta Windows app version' = @($paidBetaBuildScript, "[string]`$WindowsAppVersion = `"$paidBetaWindowsVersion`"")
             'Paid-beta Android build' = @($paidBetaBuildScript, "[string]`$AndroidBuildNumber = `"$paidBetaAndroidBuildNumber`"")
             'Paid-beta Windows build' = @($paidBetaBuildScript, "[int]`$WindowsBuildNumber = $paidBetaWindowsBuildNumber")
             'Trusted Windows finalizer build' = @($trustedWindowsFinalizer, "[int]`$WindowsBuildNumber = $windowsBuildNumber")
@@ -598,8 +610,14 @@ else {
 }
 
 $fusionIsolationChecks = [ordered]@{
-    'Flutter Fusion compile-time gate' = @($main, 'kFusionUiEnabled = kPaidBetaCustomerUi && kFusionUiRequested')
-    'Windows Fusion build gate' = @($installer, 'Fusion UI is allowed only in an isolated paid-beta build.')
+    'Flutter Fusion compile-time gate' = @($main, 'kPublicProductBuild && kFusionProductionPromotionCandidate')
+    'Windows Fusion build gate' = @($installer, 'Fusion production promotion gate requires EnableFusionUi=true and PublicProductBuild=true.')
+    'Public-product Fusion orchestrator gate' = @($publicProductBuildScript, 'Fusion production build requires PrepareFusionProductionPromotionCandidate.')
+    'Fusion promotion clean-source gate' = @($fusionProductionPromotionScript, 'git status --porcelain=v1')
+    'Fusion promotion exact smoke gate' = @($fusionProductionPromotionScript, 'Paid-beta Windows smoke did not succeed.')
+    'Fusion promotion owner gate' = @($fusionProductionPromotionScript, 'stable_production_promotion')
+    'Fusion promotion no-deploy marker' = @($fusionProductionPromotionScript, 'deploymentAttempted = $false')
+    'Public-product backend bundle contour' = @($publicProductBackendBundleScript, "contour = 'public-product'")
     'Paid-beta orchestrator Fusion gate' = @($paidBetaBuildScript, 'Fusion UI is allowed only in the isolated paid-beta product.')
     'Android scheduled-resume marker' = @($androidRuntimeFailoverService, 'KEY_RESUME_SCHEDULED')
     'Android scheduled-resume cancellation policy' = @($androidRuntimeFailoverPolicy, 'shouldCancelScheduledResume')
@@ -2489,6 +2507,14 @@ foreach ($parserCheck in @(
     [pscustomobject]@{
         Label = 'Windows Fusion paid-beta acceptance launcher'
         Path = $windowsFusionPaidBetaAcceptanceLauncherPath
+    },
+    [pscustomobject]@{
+        Label = 'Fusion production promotion preparer'
+        Path = $fusionProductionPromotionPath
+    },
+    [pscustomobject]@{
+        Label = 'Public-product backend bundle preparer'
+        Path = $publicProductBackendBundlePath
     }
 )) {
     if (Test-Path -LiteralPath $parserCheck.Path) {

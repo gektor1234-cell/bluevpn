@@ -56,9 +56,16 @@ const bool kFusionUiRequested = bool.fromEnvironment(
   'GREENVPN_FUSION_UI_ENABLED',
   defaultValue: false,
 );
+const bool kFusionProductionPromotionCandidate = bool.fromEnvironment(
+  'GREENVPN_FUSION_PRODUCTION_PROMOTION_CANDIDATE',
+  defaultValue: false,
+);
 const bool kSelfUpdateEnabled = !kStoreDistributionBuild;
 const bool kPaidBetaCustomerUi = kPaidBetaBuild && !kPublicProductBuild;
-const bool kFusionUiEnabled = kPaidBetaCustomerUi && kFusionUiRequested;
+const bool kFusionUiEnabled =
+    kFusionUiRequested &&
+    (kPaidBetaCustomerUi ||
+        (kPublicProductBuild && kFusionProductionPromotionCandidate));
 const String kPaidBetaClientMarker = String.fromEnvironment(
   'GREENVPN_PAID_BETA_CLIENT_MARKER',
   defaultValue: 'green-vpn-paid-beta-v1',

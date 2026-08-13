@@ -2,8 +2,8 @@
 
 ## Итог
 
-Изолированный контур Fusion paid-beta обновлен на обоих control-plane и готов
-для пользовательской приемки на Android. Stable production не изменялся.
+Изолированный контур Fusion paid-beta обновлен на обоих control-plane и прошел
+физическую приемку на Android и Windows. Stable production не изменялся.
 Реклама, продажи, возвраты, автосписания и принудительный таймер отключения
 остались выключены.
 
@@ -14,7 +14,7 @@
 | Production Android | `0.3.19+2026072914`, без изменений |
 | Production Windows | `0.3.26+3105`, без изменений |
 | Paid-beta Android | `0.4.6-paid-beta.1+2026081106` |
-| Paid-beta Windows | `0.4.6-paid-beta.1+4601`, `NotSigned` |
+| Paid-beta Windows | `0.4.6-paid-beta.2+4602`, `NotSigned` |
 
 ## Что вошло
 
@@ -51,14 +51,16 @@ Android:
 
 Windows:
 
-- файл: `GreenVPN_Beta_Setup_0.4.6-paid-beta.1.exe`;
-- размер: `55497216` байт;
-- SHA-256: `1D752ADFFFB33D60B2693E6AE888EA62AA82EFA1EF0A7462513C35CF2FBCCC89`;
-- package audit: `63` записи, `success=true`;
+- файл: `GreenVPN_Beta_Setup_0.4.6-paid-beta.2.exe`;
+- размер: `55497728` байт;
+- SHA-256: `B882DB6EEF672C21786608888431126FAFC997EC6D7C5CEADB6CA16DD0AEC4B3`;
+- установленный payload: `0.4.6+4602`, SHA-256
+  `200838477BCBA22C7AB2CC29A716B56D927249197754C0DC3035E61CC2549F80`;
+- package audit: `success=true`;
 - Authenticode: `NotSigned`, это известное ограничение paid-beta.
 
 Локальный корень доказательств:
-`C:\BlueVPN_Builds\paid_beta_20260811_fusion_actions_v7_0.4.6`.
+`C:\BlueVPN_Builds\paid_beta_20260813_fusion_acl_fix_v1_0.4.6`.
 
 ## Развертывание и rollback
 
@@ -72,9 +74,9 @@ Paid-beta backend установлен атомарно с резервными 
 Paid-beta клиенты опубликованы fallback-first с резервными копиями:
 
 - Timeweb:
-  `/root/greenvpn-paid-beta-client-release-backups/20260811T081651Z-timeweb-0.4.6-paid-beta.1-0.4.6-paid-beta.1`;
+  `/root/greenvpn-paid-beta-client-release-backups/20260813T060548Z-timeweb-0.4.6-paid-beta.1-0.4.6-paid-beta.2`;
 - RUVDS:
-  `/root/greenvpn-paid-beta-client-release-backups/20260811T081351Z-ruvds-0.4.6-paid-beta.1-0.4.6-paid-beta.1`.
+  `/root/greenvpn-paid-beta-client-release-backups/20260813T060415Z-ruvds-0.4.6-paid-beta.1-0.4.6-paid-beta.2`.
 
 Обе публикации подтвердили `production_changed=false`.
 
@@ -125,11 +127,44 @@ Paid-beta клиенты опубликованы fallback-first с резерв
 Машинный итог:
 `C:\BlueVPN_Builds\paid_beta_20260811_fusion_actions_v7_0.4.6\android-physical\android-physical-smoke-summary.json`.
 
+## Физический Windows smoke
+
+Точный `0.4.6-paid-beta.2+4602` проверен единственным delayed detached runner с
+начальной задержкой, независимым deadman и без сетевых переключений внутри
+активного Codex-запроса.
+
+Последовательность проверки:
+
+1. До установки подтверждены работа внешнего Amnezia-туннеля, production и
+   paid-beta API, YouTube и отсутствие активных компонентов Green VPN.
+2. SHA-256 и размер установщика повторно сверены до задержки и установки.
+3. Fusion-окно прошло визуальный контракт: `980x720`, `405` различимых цветов,
+   непустой интерфейс и видимая отдельная кнопка `Диагностика`.
+4. Fresh connect использовал единственный кандидат `current_wg0`; клиентский
+   лог зафиксировал `22.323` секунды, реальный wall-time тестовой обвязки был
+   `30.535` секунды. Probe и privileged takeover подтверждены.
+5. Cached connect снова использовал единственный кандидат; клиентский лог
+   зафиксировал `16.257` секунды, wall-time `26.802` секунды. Свежая
+   config-bound cached-route proof подтверждена.
+6. Оба запуска завершились полным cleanup. Green VPN остановлен, внешний
+   Amnezia-туннель восстановлен, production API ответил `200`, YouTube `204`,
+   failsafe и deadman удалены.
+
+Машинный итог и скриншот:
+`C:\BlueVPN_Builds\fusion_windows_acceptance_20260813_physical_v5_b4602_afeccc7`.
+
+После smoke точный Windows installer опубликован только в paid-beta на Timeweb
+и RUVDS. Строгая проверка двух stable и двух paid-beta manifests/тел плюс
+четырех backend health/version ответов прошла `12/12`; production остался
+побайтно прежним.
+
 ## Границы готовности
 
-- Это готовый Android paid-beta smoke, а не разрешение на production.
-- Windows installer опубликован и статически проверен, но физический Windows
-  tunnel-smoke точного `0.4.6` в этой задаче не выполнялся.
-- Для переноса Fusion в stable production требуется отдельная пользовательская
-  приемка и явное разрешение владельца.
+- Это готовый Android и Windows paid-beta, а не разрешение на production.
+- Production-кандидат получает новый Windows build `4603`, потому что его
+  stable-runtime байты отличаются от уже проверенного beta `4602`.
+- До stable-публикации точный production installer должен пройти отдельный
+  автономный smoke с recovery.
+- Для переноса Fusion в stable production требуются приемка интерфейса, решение
+  по Authenticode/SmartScreen и отдельное явное разрешение владельца.
 - Коммерческие и рекламные функции остаются fail-closed.

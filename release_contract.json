@@ -7,8 +7,9 @@
   "backendVersion": "0.9.153-update-channel-alias.4",
   "paidBeta": {
     "appVersion": "0.4.6-paid-beta.1",
+    "windowsAppVersion": "0.4.6-paid-beta.2",
     "androidBuildNumber": "2026081106",
-    "windowsBuildNumber": 4601
+    "windowsBuildNumber": 4602
   },
   "api": {
     "primary": "https://api.greenvpn.pro",

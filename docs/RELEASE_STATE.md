@@ -1,6 +1,6 @@
 # Green VPN Release State
 
-## Fusion Paid-Beta Closure (2026-08-11 MSK)
+## Fusion Paid-Beta Closure (2026-08-13 MSK)
 
 | Layer | Current state |
 |---|---|
@@ -9,7 +9,7 @@
 | Production Android | `0.3.19+2026072914`, unchanged |
 | Production Windows | `0.3.26+3105`, unchanged and `NotSigned` |
 | Paid-beta Android | `0.4.6-paid-beta.1+2026081106` |
-| Paid-beta Windows | `0.4.6-paid-beta.1+4601`, `NotSigned` |
+| Paid-beta Windows | `0.4.6-paid-beta.2+4602`, `NotSigned` |
 | Money and advertising | disabled, unchanged |
 
 Both paid-beta control planes expose exact Android and Windows artifacts;
@@ -23,11 +23,23 @@ connected through Netherlands in `5.951` seconds, changed to London in no more
 than `8.090` seconds, retained London after Activity recreation, completed
 pause/manual-resume, advanced real YouTube playback from `10` to `52` seconds
 and disconnected cleanly. The corrected diagnostics action stayed on one line.
-The installed `base.apk` matched the public candidate byte-for-byte. Windows
-was built, package-audited and published, but its exact Fusion installer did
-not receive a physical Windows tunnel smoke in this task. Fusion therefore
-remains paid-beta and requires separate owner acceptance before any stable
-production promotion.
+The installed `base.apk` matched the public candidate byte-for-byte.
+
+The exact Windows installer of `55497728` bytes with SHA-256
+`B882DB6EEF672C21786608888431126FAFC997EC6D7C5CEADB6CA16DD0AEC4B3`
+passed an autonomous delayed physical smoke. Its Fusion screen passed the
+nonblank visual contract. Fresh and cached connects each used one foreground
+candidate with confirmed data-plane probe and privileged takeover; client-log
+times were `22.323` and `16.257` seconds. Cached-route proof, cleanup, external
+Amnezia recovery, API `200`, YouTube `204` and failsafe removal were confirmed.
+Both paid-beta nodes now serve this exact `0.4.6-paid-beta.2+4602`; strict public
+verification passed `12/12` while stable production remained unchanged.
+
+Fusion remains paid-beta. The production build is separately gated by two
+compile-time flags and a local-only promotion preparer. A new production build
+must receive its own exact physical smoke because stable-runtime bytes differ
+from the beta installer. Publication additionally requires owner UI acceptance,
+a Windows signing/SmartScreen decision and explicit stable-promotion approval.
 
 ## Post-Release Repository Safety Closure (2026-08-02 MSK)
 

@@ -12,6 +12,8 @@ param(
     [string]$ApiFallbackBaseUrls = "https://176-113-81-35.sslip.io",
     [string]$OutDir = "C:\BlueVPN_Builds\public_product_20260801_b3105",
     [bool]$EnableTransportCascade = $true,
+    [bool]$EnableFusionUi = $false,
+    [switch]$PrepareFusionProductionPromotionCandidate,
     [string]$WindowsCodeSigningCertificateThumbprint = $env:GREENVPN_WINDOWS_CODE_SIGNING_CERT_THUMBPRINT,
     [string]$WindowsCodeSigningPublisher = $env:GREENVPN_WINDOWS_CODE_SIGNING_PUBLISHER,
     [string]$WindowsCodeSigningTimestampUrl = 'http://timestamp.digicert.com',
@@ -43,6 +45,12 @@ if ($AndroidStoreDistribution -and $EnableAndroidRewardedAds) {
 if ($BuildAndroidAppBundle -and $Mode -notin @("android", "both")) {
     throw "BuildAndroidAppBundle requires an Android build mode."
 }
+if ($EnableFusionUi -and -not $PrepareFusionProductionPromotionCandidate) {
+    throw "Fusion production build requires PrepareFusionProductionPromotionCandidate."
+}
+if ($PrepareFusionProductionPromotionCandidate -and -not $EnableFusionUi) {
+    throw "Fusion production promotion gate requires EnableFusionUi=true."
+}
 if (-not (Get-Command flutter -ErrorAction SilentlyContinue)) {
     throw "flutter was not found in PATH."
 }
@@ -56,6 +64,14 @@ if (-not $SkipChecks) {
     if ($LASTEXITCODE -ne 0) { throw "flutter analyze failed" }
     flutter test --no-pub | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "flutter test failed" }
+    if ($EnableFusionUi) {
+        flutter test --no-pub `
+            --dart-define="GREENVPN_PUBLIC_PRODUCT_BUILD=true" `
+            --dart-define="GREENVPN_FUSION_UI_ENABLED=true" `
+            --dart-define="GREENVPN_FUSION_PRODUCTION_PROMOTION_CANDIDATE=true" `
+            "test\fusion_ui_test.dart" "test\free_tier_ui_test.dart" | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "Fusion production UI test failed" }
+    }
 }
 
 $artifacts = New-Object System.Collections.Generic.List[object]
@@ -78,6 +94,10 @@ if ($Mode -in @("android", "both")) {
     $trialOnlyNoAdsValue = $AndroidStoreDistribution.ToString().ToLowerInvariant()
     $rewardedAdsValue = $EnableAndroidRewardedAds.ToString().ToLowerInvariant()
     $transportCascadeValue = $EnableTransportCascade.ToString().ToLowerInvariant()
+    $fusionUiValue = $EnableFusionUi.ToString().ToLowerInvariant()
+    $fusionProductionPromotionCandidateValue = (
+        $PrepareFusionProductionPromotionCandidate.IsPresent
+    ).ToString().ToLowerInvariant()
 
     $oldEnvironment = @{}
     $buildEnvironment = [ordered]@{
@@ -150,6 +170,8 @@ if ($Mode -in @("android", "both")) {
             "--dart-define=GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=$trialOnlyNoAdsValue"
             '--dart-define=GREENVPN_PAID_BETA_BUILD=false'
             '--dart-define=GREENVPN_PUBLIC_PRODUCT_BUILD=true'
+            "--dart-define=GREENVPN_FUSION_UI_ENABLED=$fusionUiValue"
+            "--dart-define=GREENVPN_FUSION_PRODUCTION_PROMOTION_CANDIDATE=$fusionProductionPromotionCandidateValue"
             "--dart-define=GREENVPN_STORE_DISTRIBUTION_BUILD=$storeDistributionValue"
             "--dart-define=GREENVPN_PUBLIC_PRODUCT_CLIENT_MARKER=$androidClientMarker"
             "--dart-define=GREENVPN_YANDEX_REWARDED_ADS_ENABLED=$rewardedAdsValue"
@@ -299,6 +321,8 @@ if ($Mode -in @("windows", "both")) {
         -TrialOnlyNoAdsBuild $false `
         -PaidBetaBuild $false `
         -PublicProductBuild $true `
+        -EnableFusionUi $EnableFusionUi `
+        -AllowFusionProductionPromotionCandidate:$PrepareFusionProductionPromotionCandidate `
         -EnableTransportCascade $EnableTransportCascade `
         -WindowsRuntimeScope stable `
         -CertificateThumbprint $WindowsCodeSigningCertificateThumbprint `
@@ -341,6 +365,14 @@ $manifest = [ordered]@{
     autoRenewRequiresExplicitConsent = $true
     adsEnabled = [bool]$EnableAndroidRewardedAds
     androidStoreDistribution = [bool]$AndroidStoreDistribution
+    fusionUiEnabled = [bool]$EnableFusionUi
+    fusionProductionPromotionCandidate = [bool]$PrepareFusionProductionPromotionCandidate
+    ownerApprovalRequired = $true
+    requiredOwnerGates = @(
+        'fusion_ui_acceptance'
+        'windows_signature_or_smartscreen_acceptance'
+        'stable_production_promotion'
+    )
     transportCascade = $effectiveTransportCascade
     generatedAt = (Get-Date).ToUniversalTime().ToString("o")
     artifacts = [object[]]$artifacts

@@ -1335,6 +1335,7 @@ CLIENT_EXPOSED_FEATURE_FLAGS = (
     "fusion.windows_close_behavior",
     "fusion.friendly_errors",
 )
+FUSION_PUBLIC_PRODUCT_MIN_VERSION = "0.4.6"
 RUNBOOK_CATEGORIES = [
     "vpn",
     "auth",
@@ -16893,8 +16894,8 @@ def seed_default_feature_flags_and_runbooks() -> None:
         {
             "key": "fusion.connection_actions",
             "title": "Fusion: действия активного соединения",
-            "description": "Пауза с автозапуском и безопасная смена маршрута в paid-beta.",
-            "value": {"channels": ["paid-beta"], "platforms": ["android", "windows"]},
+            "description": "Пауза с автозапуском и безопасная смена маршрута в Fusion-клиенте.",
+            "value": {"channels": ["paid-beta", "public-product"], "platforms": ["android", "windows"]},
             "scope": "vpn",
             "enabled": True,
             "rollout": 100,
@@ -16902,8 +16903,8 @@ def seed_default_feature_flags_and_runbooks() -> None:
         {
             "key": "fusion.location_memory",
             "title": "Fusion: поиск и память локаций",
-            "description": "Поиск, избранные и недавние локации в paid-beta.",
-            "value": {"channels": ["paid-beta"], "platforms": ["android", "windows"]},
+            "description": "Поиск, избранные и недавние локации в Fusion-клиенте.",
+            "value": {"channels": ["paid-beta", "public-product"], "platforms": ["android", "windows"]},
             "scope": "vpn",
             "enabled": True,
             "rollout": 100,
@@ -16911,8 +16912,8 @@ def seed_default_feature_flags_and_runbooks() -> None:
         {
             "key": "fusion.connection_details",
             "title": "Fusion: детали соединения",
-            "description": "Публичный IP, длительность, задержка, трафик и маршрут в paid-beta.",
-            "value": {"channels": ["paid-beta"], "platforms": ["android", "windows"]},
+            "description": "Публичный IP, длительность, задержка, трафик и маршрут в Fusion-клиенте.",
+            "value": {"channels": ["paid-beta", "public-product"], "platforms": ["android", "windows"]},
             "scope": "vpn",
             "enabled": True,
             "rollout": 100,
@@ -16921,7 +16922,7 @@ def seed_default_feature_flags_and_runbooks() -> None:
             "key": "fusion.windows_close_behavior",
             "title": "Fusion: закрытие окна Windows",
             "description": "Выбор между треем, подтверждением и отключением перед выходом.",
-            "value": {"channels": ["paid-beta"], "platforms": ["windows"]},
+            "value": {"channels": ["paid-beta", "public-product"], "platforms": ["windows"]},
             "scope": "vpn",
             "enabled": True,
             "rollout": 100,
@@ -16930,7 +16931,7 @@ def seed_default_feature_flags_and_runbooks() -> None:
             "key": "fusion.friendly_errors",
             "title": "Fusion: безопасные сообщения об ошибках",
             "description": "Не показывает пользователю технические исключения и внутренние адреса.",
-            "value": {"channels": ["paid-beta"], "platforms": ["android", "windows"]},
+            "value": {"channels": ["paid-beta", "public-product"], "platforms": ["android", "windows"]},
             "scope": "vpn",
             "enabled": True,
             "rollout": 100,
@@ -17477,15 +17478,31 @@ def rollout_bucket(seed: Optional[str]) -> Optional[int]:
     return int(digest[:8], 16) % 100
 
 
+def public_product_fusion_version_allowed(app_version: Optional[str]) -> bool:
+    clean = clean_limited_text(app_version, 120).strip()
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:\+[0-9A-Za-z.-]+)?", clean)
+    if not match:
+        return False
+    current = tuple(int(match.group(index)) for index in range(1, 4))
+    minimum = tuple(int(part) for part in FUSION_PUBLIC_PRODUCT_MIN_VERSION.split("."))
+    return current >= minimum
+
+
 def client_feature_flags(
     *,
     client_marker: Optional[str],
     release_channel: Optional[str],
     platform: Optional[str],
     device_uid: Optional[str],
+    app_version: Optional[str] = None,
 ) -> dict[str, bool]:
     result = {key: False for key in CLIENT_EXPOSED_FEATURE_FLAGS}
-    if not paid_beta_request_allowed(client_marker, release_channel):
+    beta_client = paid_beta_request_allowed(client_marker, release_channel)
+    public_client = bool(
+        public_product_request_allowed(client_marker, release_channel)
+        and public_product_fusion_version_allowed(app_version)
+    )
+    if not beta_client and not public_client:
         return result
 
     normalized_channel = clean_limited_text(release_channel, 40).strip().lower()
@@ -17526,7 +17543,10 @@ def client_feature_flags(
                 for item in raw_platforms
                 if isinstance(item, str)
             }
-            if channels and normalized_channel not in channels:
+            channel_allowed = not channels or normalized_channel in channels
+            if public_client and key in CLIENT_EXPOSED_FEATURE_FLAGS:
+                channel_allowed = normalized_channel == PUBLIC_PRODUCT_RELEASE_CHANNEL
+            if not channel_allowed:
                 continue
             if platforms and normalized_platform not in platforms:
                 continue
@@ -31331,6 +31351,7 @@ def client_bootstrap(
             release_channel=payload.releaseChannel,
             platform=device["platform"],
             device_uid=device["device_uid"],
+            app_version=device["app_version"],
         ),
     }
 
