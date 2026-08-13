@@ -761,42 +761,97 @@ try {
     try { $result.latencyMs = [int]$watch.ElapsedMilliseconds } catch {
         Add-CleanupError -Code 'latency'
     }
-    try { Stop-ProbeProcesses } catch { Add-CleanupError -Code 'tracked_processes' }
-    try { Stop-StaleProbeProcesses } catch { Add-CleanupError -Code 'stale_processes' }
-    try { Stop-NativeProbe } catch { Add-CleanupError -Code 'native_services' }
-    try { Remove-ProbeEndpointBypassRoutes } catch {
-        Add-CleanupError -Code 'tracked_bypass_routes'
+    $cleanupOperationFailures = [ordered]@{
+        tracked_processes = $false
+        stale_processes = $false
+        native_services = $false
+        tracked_bypass_routes = $false
+        all_bypass_routes = $false
+        runtime = $false
     }
-    try { Remove-AllProbeEndpointBypassRoutes } catch {
-        Add-CleanupError -Code 'all_bypass_routes'
-    }
+    $cleanupAttemptsUsed = 0
     $runtimeGone = $false
-    try { $runtimeGone = Remove-ProbeRuntime } catch {
+    $nativeGone = $false
+    $processesGone = $false
+    $bypassRoutesGone = $false
+    for ($cleanupAttempt = 1; $cleanupAttempt -le 4; $cleanupAttempt++) {
+        $cleanupAttemptsUsed = $cleanupAttempt
+        try {
+            Stop-ProbeProcesses
+            $cleanupOperationFailures['tracked_processes'] = $false
+        } catch { $cleanupOperationFailures['tracked_processes'] = $true }
+        try {
+            Stop-StaleProbeProcesses
+            $cleanupOperationFailures['stale_processes'] = $false
+        } catch { $cleanupOperationFailures['stale_processes'] = $true }
+        try {
+            Stop-NativeProbe
+            $cleanupOperationFailures['native_services'] = $false
+        } catch { $cleanupOperationFailures['native_services'] = $true }
+        try {
+            Remove-ProbeEndpointBypassRoutes
+            $cleanupOperationFailures['tracked_bypass_routes'] = $false
+        } catch { $cleanupOperationFailures['tracked_bypass_routes'] = $true }
+        try {
+            Remove-AllProbeEndpointBypassRoutes
+            $cleanupOperationFailures['all_bypass_routes'] = $false
+        } catch { $cleanupOperationFailures['all_bypass_routes'] = $true }
+        try {
+            $runtimeGone = [bool](Remove-ProbeRuntime)
+            $cleanupOperationFailures['runtime'] = -not $runtimeGone
+        } catch {
+            $runtimeGone = $false
+            $cleanupOperationFailures['runtime'] = $true
+        }
+
+        try {
+            $nativeGone = @(Get-Service -Name @(
+                $ProbeWireGuardService, $ProbeAmneziaService
+            ) -ErrorAction SilentlyContinue).Count -eq 0
+        } catch { $nativeGone = $false }
+        try {
+            $processesGone = @($processes | Where-Object {
+                try { $_.Refresh(); -not $_.HasExited } catch { $false }
+            }).Count -eq 0
+        } catch { $processesGone = $false }
+        try {
+            $bypassRoutesGone = (Test-ProbeEndpointBypassRoutesRemoved) -and
+                (Test-AllProbeEndpointBypassRoutesRemoved)
+        } catch { $bypassRoutesGone = $false }
+
+        $operationFailuresRemain = @(
+            $cleanupOperationFailures.Values | Where-Object { [bool]$_ }
+        ).Count -gt 0
+        if ($nativeGone -and $processesGone -and $bypassRoutesGone -and
+            $runtimeGone -and -not $operationFailuresRemain) {
+            break
+        }
+        Write-ProbeLog (
+            "cleanup retry attempt=$cleanupAttempt nativeGone=$nativeGone " +
+            "processesGone=$processesGone bypassGone=$bypassRoutesGone " +
+            "runtimeGone=$runtimeGone"
+        )
+        if ($cleanupAttempt -lt 4) { Start-Sleep -Milliseconds 500 }
+    }
+    foreach ($entry in $cleanupOperationFailures.GetEnumerator()) {
+        if ([bool]$entry.Value) { Add-CleanupError -Code ([string]$entry.Key) }
+    }
+    if (-not $nativeGone) { Add-CleanupError -Code 'native_verification' }
+    if (-not $processesGone) { Add-CleanupError -Code 'process_verification' }
+    if (-not $bypassRoutesGone) { Add-CleanupError -Code 'bypass_verification' }
+    if (-not $runtimeGone -and 'runtime' -notin @($cleanupErrors)) {
         Add-CleanupError -Code 'runtime'
     }
-    $nativeGone = $false
-    try {
-        $nativeGone = @(Get-Service -Name @(
-            $ProbeWireGuardService, $ProbeAmneziaService
-        ) -ErrorAction SilentlyContinue).Count -eq 0
-    } catch { Add-CleanupError -Code 'native_verification' }
-    $processesGone = $false
-    try {
-        $processesGone = @($processes | Where-Object {
-            try { $_.Refresh(); -not $_.HasExited } catch { $false }
-        }).Count -eq 0
-    } catch { Add-CleanupError -Code 'process_verification' }
-    $bypassRoutesGone = $false
-    try {
-        $bypassRoutesGone = (Test-ProbeEndpointBypassRoutesRemoved) -and
-            (Test-AllProbeEndpointBypassRoutesRemoved)
-    } catch { Add-CleanupError -Code 'bypass_verification' }
     $result.cleanupOk = $nativeGone -and $processesGone -and $bypassRoutesGone -and
         $runtimeGone -and $cleanupErrors.Count -eq 0
     $result.cleanupErrors = @($cleanupErrors)
     if (-not $result.cleanupOk) {
         $result.success = $false
         $result.errorCode = 'cleanup_failed'
+        Write-ProbeLog (
+            "cleanup failed attempts=$cleanupAttemptsUsed errors=" +
+            (@($cleanupErrors) -join ',')
+        )
     }
     try { Write-ProbeResult } catch {
         Write-ProbeDiagnostic -Code "result_write_failed:$($_.Exception.GetType().Name)"

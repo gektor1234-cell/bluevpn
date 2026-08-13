@@ -28,24 +28,29 @@ $report = [ordered]@{
     cleanupOk = $null
     errorCode = ''
     cleanupErrors = @()
+    transientChildExitCode = $null
+    transientCleanupOk = $null
+    transientErrorCode = ''
+    transientCleanupErrors = @()
     success = $false
     failure = ''
 }
 
 try {
     New-Item -ItemType Directory -Force -Path $dataRoot | Out-Null
-    $source = [IO.File]::ReadAllText(
+    $baseSource = [IO.File]::ReadAllText(
         $sourcePath,
         [Text.UTF8Encoding]::new($true)
     )
-    if ($source.Contains('@($bypassRoutes)') -or
+    if ($baseSource.Contains('@($bypassRoutes)') -or
         ([regex]::Matches(
-            $source,
+            $baseSource,
             'foreach \(\$route in \[object\[\]\]\$bypassRoutes\)'
         )).Count -lt 2) {
         throw 'Standby route cleanup must safely enumerate List[object] on Windows PowerShell 5.'
     }
     $quotedRoot = $dataRoot.Replace("'", "''")
+    $source = $baseSource
     $source = $source.Replace(
         '$ProgramDataRoot = Join-Path $env:ProgramData ''BlueVPNTransportPreview''',
         ('$ProgramDataRoot = ''' + $quotedRoot + '''')
@@ -53,6 +58,10 @@ try {
     $source = $source.Replace(
         '$ProbeTunnelName = ''GreenVPNTransportPreviewStandbyProbe''',
         '$ProbeTunnelName = ''GreenVPNStandbyProbeContractTest'''
+    )
+    $source = $source.Replace(
+        '    Protect-PrivatePath -Path $RuntimeRoot -Directory',
+        '    # The disposable contract runtime stays accessible to both child runs.'
     )
     $injection = @'
 function Stop-ProbeProcesses { throw 'injected cleanup failure' }
@@ -94,6 +103,63 @@ function Remove-AllProbeEndpointBypassRoutes {}
         [string]$result.errorCode -ne 'cleanup_failed' -or
         'tracked_processes' -notin @($result.cleanupErrors)) {
         throw 'Standby result did not preserve the injected cleanup failure.'
+    }
+
+    Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
+    $source = $baseSource
+    $source = $source.Replace(
+        '$ProgramDataRoot = Join-Path $env:ProgramData ''BlueVPNTransportPreview''',
+        ('$ProgramDataRoot = ''' + $quotedRoot + '''')
+    )
+    $source = $source.Replace(
+        '$ProbeTunnelName = ''GreenVPNTransportPreviewStandbyProbe''',
+        '$ProbeTunnelName = ''GreenVPNStandbyProbeContractTest'''
+    )
+    $source = $source.Replace(
+        '    Protect-PrivatePath -Path $RuntimeRoot -Directory',
+        '    # The disposable contract runtime stays accessible to both child runs.'
+    )
+    $transientInjection = @'
+$transientCleanupCallCount = 0
+function Stop-ProbeProcesses {
+    $script:transientCleanupCallCount++
+    if ($script:transientCleanupCallCount -eq 2) {
+        throw 'injected transient cleanup failure'
+    }
+}
+function Stop-StaleProbeProcesses {}
+function Stop-NativeProbe {}
+function Remove-ProbeEndpointBypassRoutes {}
+function Remove-AllProbeEndpointBypassRoutes {}
+'@
+    $source = $source.Replace(
+        '$stage = ''request''',
+        ($transientInjection + [Environment]::NewLine + '$stage = ''request''')
+    )
+    [IO.File]::WriteAllText(
+        $testScript,
+        $source,
+        [Text.UTF8Encoding]::new($false)
+    )
+    $transientChild = Start-Process -FilePath 'powershell.exe' -ArgumentList @(
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy', 'RemoteSigned',
+        '-File', ('"' + $testScript + '"')
+    ) -WindowStyle Hidden -Wait -PassThru
+    $report.transientChildExitCode = [int]$transientChild.ExitCode
+    if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
+        throw 'Transient cleanup failure did not produce a standby result.'
+    }
+    $transientResult = Get-Content -LiteralPath $resultPath -Raw -Encoding UTF8 |
+        ConvertFrom-Json
+    $report.transientCleanupOk = $transientResult.cleanupOk
+    $report.transientErrorCode = [string]$transientResult.errorCode
+    $report.transientCleanupErrors = @($transientResult.cleanupErrors)
+    if ($transientResult.cleanupOk -ne $true -or
+        [string]$transientResult.errorCode -eq 'cleanup_failed' -or
+        'tracked_processes' -in @($transientResult.cleanupErrors)) {
+        throw 'Standby cleanup did not recover from a transient cleanup race.'
     }
     $report.success = $true
 } catch {

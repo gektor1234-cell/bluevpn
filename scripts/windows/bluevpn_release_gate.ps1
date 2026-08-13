@@ -2069,7 +2069,7 @@ foreach ($scriptPath in @(
 
 try {
     & $windowsStandbyResultContractTestPath -ProjectRoot $ProjectRoot | Out-Null
-    Add-Pass 'Windows standby probe writes a failure result when cleanup throws'
+    Add-Pass 'Windows standby probe fails closed and recovers from transient cleanup races'
 }
 catch {
     Add-Error "Windows standby result contract test failed: $($_.Exception.Message)"
@@ -2151,6 +2151,8 @@ $windowsRuntimeFailoverChecks = [ordered]@{
         'https://www.youtube.com/generate_204',
         '$result.cleanupOk',
         '$result.cleanupErrors',
+        '$cleanupAttempt -le 4',
+        'cleanup retry attempt=',
         'try { Write-ProbeResult } catch',
         'finally'
     )
