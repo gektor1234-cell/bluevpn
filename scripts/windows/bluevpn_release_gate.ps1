@@ -62,6 +62,7 @@ $finalCandidateBuildPath = Join-Path $ProjectRoot "scripts\windows\build_final_r
 $publicProductBuildPath = Join-Path $ProjectRoot "scripts\windows\build_public_product.ps1"
 $paidBetaBuildPath = Join-Path $ProjectRoot "scripts\windows\build_paid_beta.ps1"
 $windowsSelectiveRoutingPath = Join-Path $ProjectRoot "lib\services\windows_selective_routing_service.dart"
+$windowsVpnStatusPolicyPath = Join-Path $ProjectRoot "lib\services\windows_vpn_status_policy.dart"
 $runtimeConfigPath = Join-Path $ProjectRoot "lib\runtime_config.dart"
 $backendPath = Join-Path $ProjectRoot "backend_live\app\main.py"
 $installerPath = Join-Path $ProjectRoot "scripts\windows\build_installer.ps1"
@@ -224,6 +225,7 @@ $androidRuntimeFailoverService = Read-Text $androidRuntimeFailoverServicePath
 $androidRuntimeFailoverPolicy = Read-Text $androidRuntimeFailoverPolicyPath
 $androidMainActivity = Read-Text $androidMainActivityPath
 $windowsSelectiveRouting = Read-Text $windowsSelectiveRoutingPath
+$windowsVpnStatusPolicy = Read-Text $windowsVpnStatusPolicyPath
 $runtimeConfig = Read-Text $runtimeConfigPath
 $backend = Read-Text $backendPath
 $installer = Read-Text $installerPath
@@ -1830,7 +1832,9 @@ $vpnTaskApplicationRoutingFragments = @(
     'selective tunnel uses destination routes only; process router not required',
     'routing_apps.json',
     'ProxyBridge_CLI.exe',
-    'process-router.active',
+    '$PrivilegedRuntimeRegistryPath',
+    'Write-GreenPrivilegedRuntimeValue',
+    'ProcessRouterRequired',
     'ApplicationProxyPort = 1080'
 )
 foreach ($fragment in $vpnTaskApplicationRoutingFragments) {
@@ -2235,6 +2239,39 @@ $windowsRuntimeFailoverChecks = [ordered]@{
         'naiveClientState',
         'dnsttClientState',
         'processRouterState'
+    )
+    'Windows routing mode UI is authoritative and fail-closed' = @(
+        ($main + "`n" + $windowsVpnStatusPolicy),
+        'greenVpnWindowsRoutingModeIsConfirmed',
+        'greenVpnAuthoritativeActiveRoutingMode',
+        'externalVpnStateKnown',
+        '_restoreRoutingPreferenceAfterFailure',
+        '_failClosedRoutingPreference',
+        'greenVpnWindowsUiProtectionIsConfirmed',
+        '_windowsFullTunnelDataPlaneConfirmed',
+        'windowsProtectionConfirmed'
+    )
+    'Windows service reports active mode and competing VPN state' = @(
+        $serviceSource,
+        'kRuntimeRegistryPath',
+        'ReadRuntimeRegistryDword',
+        'QueryRunningCompetingVpnState',
+        'GREENVPN_RUNTIME_TUNNEL_NAME_W L"StandbyProbe"',
+        'externalVpnActive',
+        'externalVpnStateKnown',
+        'processRouterRequired',
+        'processRouterRequirementKnown'
+    )
+    'Windows privileged tasks commit a protected active mode marker' = @(
+        ($vpnTaskScript + "`n" + $transportPreviewVpnTaskScript + "`n" + $transportSelectiveRoutingScript),
+        'Write-GreenActiveRoutingMode',
+        'Write-GreenPrivilegedRuntimeValue',
+        '$PrivilegedRuntimeRegistryPath',
+        'HKLM:\SOFTWARE\GreenVPN\Runtime',
+        'ProcessRouterPid',
+        'ProcessRouterRequired',
+        "ValidateSet('full', 'applications')",
+        'Remove-GreenPrivilegedRuntimeValue'
     )
     'Windows runtime failover physical proof is reversible' = @(
         $windowsRuntimeFailoverPhysicalTestScript,

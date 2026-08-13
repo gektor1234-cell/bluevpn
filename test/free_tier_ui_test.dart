@@ -152,7 +152,7 @@ void main() {
           isGuest: true,
           onRestoreAccess: () {},
           vpnEnabled: false,
-          androidExternalVpnActive: false,
+          externalVpnActive: false,
           vpnBusy: false,
           vpnInteractionLocked: false,
           vpnBusyStage: null,

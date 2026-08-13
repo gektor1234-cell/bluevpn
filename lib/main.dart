@@ -7285,6 +7285,46 @@ class PostConnectProbeResult {
   });
 }
 
+class _GreenVpnWindowsRuntimeSnapshot {
+  final GreenVpnWindowsManagedTunnelState tunnelState;
+  final GreenVpnWindowsRoutingMode routingMode;
+  final bool processRouterRequired;
+  final bool protectionConfirmed;
+  final bool externalVpnActive;
+  final bool externalVpnStateKnown;
+
+  const _GreenVpnWindowsRuntimeSnapshot({
+    required this.tunnelState,
+    required this.routingMode,
+    required this.processRouterRequired,
+    required this.protectionConfirmed,
+    required this.externalVpnActive,
+    required this.externalVpnStateKnown,
+  });
+}
+
+class _RoutingPreferenceSnapshot {
+  final bool socialOnlyEnabled;
+  final bool preferenceRequested;
+  final Set<SocialApp> apps;
+  final Set<String> customPackages;
+  final Set<String> windowsApplications;
+  final Set<String> windowsSites;
+  final List<String> windowsDestinationCidrs;
+  final ServerLocation? runtimeRoute;
+
+  const _RoutingPreferenceSnapshot({
+    required this.socialOnlyEnabled,
+    required this.preferenceRequested,
+    required this.apps,
+    required this.customPackages,
+    required this.windowsApplications,
+    required this.windowsSites,
+    required this.windowsDestinationCidrs,
+    required this.runtimeRoute,
+  });
+}
+
 enum SocialApp {
   telegram('Telegram', Icons.send_rounded),
   vk('VK', Icons.people_alt_rounded),
@@ -7562,7 +7602,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   // VPN state
   bool vpnEnabled = false;
   bool vpnBusy = false;
-  bool _androidExternalVpnActive = false;
+  bool _externalVpnActive = false;
+  bool _windowsProtectionConfirmed = false;
+  bool _windowsFullTunnelDataPlaneConfirmed = false;
 
   // "Только для соцсетей"
   bool socialOnlyEnabled = false;
@@ -8124,18 +8166,23 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _emailVerified = widget.session.emailVerified;
     _emailConfirmationRequired = widget.session.emailConfirmationRequired;
 
-    _loadPrefsAndApply();
+    unawaited(() async {
+      await _loadPrefsAndApply();
+      await _syncVpnStatus(source: 'startup_after_prefs');
+    }());
     if (kPaidBetaBuild) {
       unawaited(_recordPaidBetaEvent('app_open'));
     }
 
-    unawaited(_syncVpnStatus(source: 'startup'));
     if (!kIsWeb && Platform.isWindows) {
       unawaited(_loadWindowsStandbyProofs());
       _windowsStatusReconciliationTimer = Timer.periodic(
         const Duration(seconds: 5),
         (_) {
-          if (mounted && !vpnBusy && !_windowsRuntimeRecoveryRunning) {
+          if (mounted &&
+              _prefsLoaded &&
+              !vpnBusy &&
+              !_windowsRuntimeRecoveryRunning) {
             unawaited(_syncVpnStatus(source: 'windows_periodic'));
           }
         },
@@ -8210,7 +8257,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         if (mounted) {
           setState(() {
             vpnEnabled = true;
-            _androidExternalVpnActive = false;
+            _externalVpnActive = false;
           });
           _trackConnectionState(true, route: activeRoute);
         }
@@ -8221,7 +8268,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         if (mounted) {
           setState(() {
             vpnEnabled = false;
-            _androidExternalVpnActive = true;
+            _externalVpnActive = true;
           });
           _trackConnectionState(false);
         }
@@ -8370,7 +8417,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         setState(() {
           if (disconnectVpn) {
             vpnEnabled = false;
-            _androidExternalVpnActive = false;
+            _externalVpnActive = false;
           }
           vpnBusy = false;
           _vpnBusyStage = null;
@@ -8970,6 +9017,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
 
     if (!socialModeChanged && replacementServer == null) return;
+    final previousRouting = _captureRoutingPreference();
+    final wasConnected = vpnEnabled;
+    _prefsDebounce?.cancel();
     setState(() {
       socialOnlyEnabled = shouldEnableSocial;
       if (!paid) _socialOnlyPreferenceRequested = false;
@@ -8978,20 +9028,35 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         _persistedServerId = _serverSelectionKey(replacementServer);
       }
     });
-    _schedulePrefsSave();
-
     if (socialModeChanged) {
       try {
-        await _applyCurrentConfigMode(
+        final applied = await _applyCurrentConfigMode(
           reconnectIfNeeded: vpnEnabled,
           showToastOnSuccess: false,
         );
+        if (!applied) {
+          throw StateError(
+            'Subscription routing mode was not confirmed by the system.',
+          );
+        }
       } catch (e) {
         await appendBlueVpnClientLog(
           'premium entitlement config reconcile failed error=$e',
         );
+        if (shouldEnableSocial) {
+          await _restoreRoutingPreferenceAfterFailure(
+            snapshot: previousRouting,
+            wasConnected: wasConnected,
+          );
+          return;
+        }
+        await _failClosedRoutingPreference(
+          reason: 'entitlement_full_mode_not_confirmed',
+        );
+        return;
       }
     }
+    _schedulePrefsSave();
   }
 
   Future<bool> _cancelAutoRenew() async {
@@ -10100,16 +10165,207 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
   }
 
+  bool get _windowsProcessRouterRequired =>
+      socialOnlyEnabled && socialOnlyWindowsApplications.isNotEmpty;
+
+  _RoutingPreferenceSnapshot _captureRoutingPreference() {
+    return _RoutingPreferenceSnapshot(
+      socialOnlyEnabled: socialOnlyEnabled,
+      preferenceRequested: _socialOnlyPreferenceRequested,
+      apps: Set<SocialApp>.from(socialOnlyApps),
+      customPackages: Set<String>.from(socialOnlyCustomPackages),
+      windowsApplications: Set<String>.from(socialOnlyWindowsApplications),
+      windowsSites: Set<String>.from(socialOnlyWindowsSites),
+      windowsDestinationCidrs: List<String>.from(
+        _windowsSelectiveDestinationCidrs,
+      ),
+      runtimeRoute: _activeWindowsRuntimeRoute,
+    );
+  }
+
+  void _restoreRoutingPreferenceInMemory(_RoutingPreferenceSnapshot snapshot) {
+    socialOnlyEnabled = snapshot.socialOnlyEnabled;
+    _socialOnlyPreferenceRequested = snapshot.preferenceRequested;
+    socialOnlyApps
+      ..clear()
+      ..addAll(snapshot.apps);
+    socialOnlyCustomPackages
+      ..clear()
+      ..addAll(snapshot.customPackages);
+    socialOnlyWindowsApplications
+      ..clear()
+      ..addAll(snapshot.windowsApplications);
+    socialOnlyWindowsSites
+      ..clear()
+      ..addAll(snapshot.windowsSites);
+    _windowsSelectiveDestinationCidrs = List<String>.from(
+      snapshot.windowsDestinationCidrs,
+    );
+  }
+
+  Future<void> _writeCurrentRoutingConfig() async {
+    await _syncWindowsRoutingPolicy();
+    await _cfg.ensureBaseSeededFromManagedIfMissing();
+    final base = await _cfg.readBaseConfig();
+    if (base != null && base.trim().isNotEmpty) {
+      await _cfg.writeManagedConfig(_buildManagedConfigFromBase(base));
+    }
+  }
+
+  Future<_GreenVpnWindowsRuntimeSnapshot> _readWindowsRuntimeSnapshot() async {
+    const service = _GreenVpnSystemServiceClient();
+    final response = await service.status();
+    final tunnelState = greenVpnClassifyWindowsManagedTunnelStatus(
+      requestOk: response.ok,
+      data: response.data,
+    );
+    final routingMode = greenVpnClassifyWindowsRoutingMode(
+      requestOk: response.ok,
+      data: response.data,
+    );
+    final processRouterRequired =
+        response.data['processRouterRequired'] == true;
+    final externalVpnActive = response.data['externalVpnActive'] == true;
+    final externalVpnStateKnown =
+        response.ok && response.data['externalVpnStateKnown'] == true;
+    final authoritativeMode = greenVpnAuthoritativeActiveRoutingMode(
+      requestOk: response.ok,
+      data: response.data,
+      processRouterRequired: processRouterRequired,
+    );
+    return _GreenVpnWindowsRuntimeSnapshot(
+      tunnelState: tunnelState,
+      routingMode: routingMode,
+      processRouterRequired: processRouterRequired,
+      protectionConfirmed: authoritativeMode != null,
+      externalVpnActive: externalVpnActive,
+      externalVpnStateKnown: externalVpnStateKnown,
+    );
+  }
+
+  Future<bool> _windowsRequestedRoutingModeIsConfirmed({
+    bool? applicationsOnly,
+    bool? processRouterRequired,
+  }) async {
+    const service = _GreenVpnSystemServiceClient();
+    final response = await service.status();
+    return greenVpnWindowsRoutingModeIsConfirmed(
+      requestOk: response.ok,
+      data: response.data,
+      applicationsOnly: applicationsOnly ?? socialOnlyEnabled,
+      processRouterRequired:
+          processRouterRequired ?? _windowsProcessRouterRequired,
+    );
+  }
+
+  Future<bool> _failClosedRoutingPreference({required String reason}) async {
+    _disarmWindowsRuntimeFailover(reason: 'routing_mode_fail_closed');
+    var disconnectAccepted = false;
+    try {
+      final off = await _vpnBackend.disconnect();
+      disconnectAccepted = off.ok;
+      if (!off.ok) {
+        await appendBlueVpnClientLog(
+          'routing preference fail-closed disconnect rejected reason=$reason message=${off.message ?? ""}',
+        );
+      }
+    } catch (error) {
+      await appendBlueVpnClientLog(
+        'routing preference fail-closed disconnect failed reason=$reason error=$error',
+      );
+    }
+    await _syncVpnStatus(source: 'routing_mode_fail_closed');
+    var disconnected = !vpnEnabled;
+    if (!kIsWeb && Platform.isWindows) {
+      final snapshot = await _readWindowsManagedTunnelState();
+      disconnected =
+          snapshot.tunnelState ==
+          GreenVpnWindowsManagedTunnelState.disconnected;
+    }
+    await appendBlueVpnClientLog(
+      'routing preference fail-closed completed reason=$reason accepted=$disconnectAccepted disconnected=$disconnected',
+    );
+    _schedulePrefsSave();
+    return disconnected;
+  }
+
+  Future<bool> _restoreRoutingPreferenceAfterFailure({
+    required _RoutingPreferenceSnapshot snapshot,
+    required bool wasConnected,
+  }) async {
+    if (!mounted) return false;
+    _disarmWindowsRuntimeFailover(reason: 'routing_mode_rollback');
+    setState(() => _restoreRoutingPreferenceInMemory(snapshot));
+    try {
+      await _writeCurrentRoutingConfig();
+      if (wasConnected) {
+        final alreadyRestored = !kIsWeb && Platform.isWindows
+            ? await _windowsRequestedRoutingModeIsConfirmed()
+            : false;
+        if (!alreadyRestored) {
+          final off = await _vpnBackend.disconnect();
+          if (!off.ok) {
+            throw StateError(
+              off.message ?? 'Не удалось остановить новый режим.',
+            );
+          }
+          final on = await _vpnBackend.connect(
+            configPath: _cfg.managedConfigPath,
+          );
+          if (!on.ok) {
+            throw StateError(
+              on.message ?? 'Не удалось восстановить предыдущий режим.',
+            );
+          }
+        }
+        if (!kIsWeb && Platform.isWindows) {
+          final confirmed = alreadyRestored
+              ? true
+              : await _windowsRequestedRoutingModeIsConfirmed();
+          if (!confirmed) {
+            throw StateError(
+              'Служба не подтвердила восстановленный режим защиты.',
+            );
+          }
+          if (!snapshot.socialOnlyEnabled && snapshot.runtimeRoute != null) {
+            await _armRuntimeFailover(snapshot.runtimeRoute!);
+          }
+        }
+      }
+      await _syncVpnStatus(source: 'routing_mode_rollback');
+      await appendBlueVpnClientLog(
+        'routing preference rollback completed connectedBefore=$wasConnected mode=${snapshot.socialOnlyEnabled ? "applications" : "full"}',
+      );
+      return true;
+    } catch (error) {
+      await appendBlueVpnClientLog(
+        'routing preference rollback failed connectedBefore=$wasConnected error=$error',
+      );
+      await _failClosedRoutingPreference(reason: 'rollback_failed');
+      return false;
+    } finally {
+      _schedulePrefsSave();
+    }
+  }
+
   Future<bool> _applyCurrentConfigMode({
     required bool reconnectIfNeeded,
     required bool showToastOnSuccess,
   }) async {
+    final requestedApplicationsOnly = socialOnlyEnabled;
+    final requestedProcessRouterRequired = _windowsProcessRouterRequired;
     await _syncWindowsRoutingPolicy();
     await _cfg.ensureBaseSeededFromManagedIfMissing();
 
     final base = await _cfg.readBaseConfig();
     if (!mounted) return false;
     if (base == null || base.trim().isEmpty) {
+      if (reconnectIfNeeded && vpnEnabled) {
+        if (showToastOnSuccess) {
+          _toast(context, 'Нет сохранённой конфигурации для смены режима.');
+        }
+        return false;
+      }
       if (showToastOnSuccess) {
         _toast(
           context,
@@ -10163,20 +10419,51 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         }
       }
 
-      await _syncVpnStatus();
+      await _syncVpnStatus(source: 'routing_mode_apply');
       if (!mounted) return false;
-      if (!vpnEnabled) {
-        _toast(context, 'Android не подтвердил новое VPN-подключение.');
+      var modeConfirmed = !kIsWeb && Platform.isWindows
+          ? await _windowsRequestedRoutingModeIsConfirmed(
+              applicationsOnly: requestedApplicationsOnly,
+              processRouterRequired: requestedProcessRouterRequired,
+            )
+          : vpnEnabled;
+      if (!modeConfirmed && !kIsWeb && Platform.isWindows) {
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+        if (!mounted) return false;
+        modeConfirmed = await _windowsRequestedRoutingModeIsConfirmed(
+          applicationsOnly: requestedApplicationsOnly,
+          processRouterRequired: requestedProcessRouterRequired,
+        );
+      }
+      if (!mounted) return false;
+      if (!vpnEnabled || !modeConfirmed) {
+        _toast(
+          context,
+          !kIsWeb && Platform.isWindows
+              ? 'Windows не подтвердила новый режим защиты.'
+              : 'Android не подтвердил новое VPN-подключение.',
+        );
         return false;
+      }
+      if (!kIsWeb &&
+          Platform.isWindows &&
+          !requestedApplicationsOnly &&
+          _windowsRuntimeFailoverTimer == null) {
+        await _restoreWindowsRuntimeFailoverIfPossible(
+          source: 'routing_mode_apply',
+        );
       }
     }
 
+    if (!mounted) return false;
     if (showToastOnSuccess) {
       _toast(
         context,
         socialOnlyEnabled
-            ? 'Режим соцсетей применён.'
-            : 'Обычный режим восстановлен.',
+            ? 'Режим «Только выбранное» применён.'
+            : (!kIsWeb && Platform.isWindows
+                  ? 'Режим «Весь интернет» применён. Проверяем защиту.'
+                  : 'Обычный режим восстановлен.'),
       );
     }
 
@@ -10188,35 +10475,66 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _schedulePrefsSave();
   }
 
-  Future<GreenVpnWindowsManagedTunnelState>
+  Future<_GreenVpnWindowsRuntimeSnapshot>
   _readWindowsManagedTunnelState() async {
-    const service = _GreenVpnSystemServiceClient();
-    final response = await service.status();
-    final serviceState = greenVpnClassifyWindowsManagedTunnelStatus(
-      requestOk: response.ok,
-      data: response.data,
-    );
-    if (serviceState != GreenVpnWindowsManagedTunnelState.unknown) {
-      return serviceState;
+    final snapshot = await _readWindowsRuntimeSnapshot();
+    if (snapshot.tunnelState != GreenVpnWindowsManagedTunnelState.unknown) {
+      return snapshot;
     }
     if (await _vpnBackend.isConnected()) {
-      return GreenVpnWindowsManagedTunnelState.connected;
+      return const _GreenVpnWindowsRuntimeSnapshot(
+        tunnelState: GreenVpnWindowsManagedTunnelState.connected,
+        routingMode: GreenVpnWindowsRoutingMode.unknown,
+        processRouterRequired: false,
+        protectionConfirmed: false,
+        externalVpnActive: false,
+        externalVpnStateKnown: false,
+      );
     }
-    return GreenVpnWindowsManagedTunnelState.unknown;
+    return const _GreenVpnWindowsRuntimeSnapshot(
+      tunnelState: GreenVpnWindowsManagedTunnelState.unknown,
+      routingMode: GreenVpnWindowsRoutingMode.unknown,
+      processRouterRequired: false,
+      protectionConfirmed: false,
+      externalVpnActive: false,
+      externalVpnStateKnown: false,
+    );
   }
 
   Future<void> _syncVpnStatus({String source = 'unspecified'}) async {
     final syncEpoch = ++_vpnStatusSyncEpoch;
     if (!kIsWeb && Platform.isWindows) {
-      final state = await _readWindowsManagedTunnelState();
+      final snapshot = await _readWindowsManagedTunnelState();
       if (!mounted || syncEpoch != _vpnStatusSyncEpoch) return;
+      final state = snapshot.tunnelState;
       if (state == GreenVpnWindowsManagedTunnelState.unknown) {
+        if (_windowsProtectionConfirmed ||
+            _windowsFullTunnelDataPlaneConfirmed) {
+          setState(() {
+            _windowsProtectionConfirmed = false;
+            _windowsFullTunnelDataPlaneConfirmed = false;
+          });
+        }
         await appendBlueVpnClientLog(
-          'windows status sync source=$source result=unknown preserved=$vpnEnabled',
+          'windows status sync source=$source result=unknown preserved=$vpnEnabled protectionConfirmed=false',
         );
         return;
       }
       final on = state == GreenVpnWindowsManagedTunnelState.connected;
+      final authoritativeMode = on && snapshot.protectionConfirmed
+          ? snapshot.routingMode
+          : GreenVpnWindowsRoutingMode.unknown;
+      if (authoritativeMode != GreenVpnWindowsRoutingMode.full) {
+        _windowsFullTunnelDataPlaneConfirmed = false;
+      }
+      final actualSocialOnly =
+          authoritativeMode == GreenVpnWindowsRoutingMode.applications;
+      final effectiveProtectionConfirmed =
+          greenVpnWindowsUiProtectionIsConfirmed(
+            systemStateConfirmed: snapshot.protectionConfirmed,
+            routingMode: authoritativeMode,
+            fullTunnelDataPlaneConfirmed: _windowsFullTunnelDataPlaneConfirmed,
+          );
       final activeRuntimeRoute = _activeWindowsRuntimeRoute;
       final recoverUnexpectedDisconnect =
           greenVpnShouldRecoverUnexpectedWindowsDisconnect(
@@ -10229,8 +10547,15 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             vpnBusy: vpnBusy,
           );
       if (recoverUnexpectedDisconnect && activeRuntimeRoute != null) {
+        if (_windowsProtectionConfirmed ||
+            _windowsFullTunnelDataPlaneConfirmed) {
+          setState(() {
+            _windowsProtectionConfirmed = false;
+            _windowsFullTunnelDataPlaneConfirmed = false;
+          });
+        }
         await appendBlueVpnClientLog(
-          'windows status sync source=$source connected=false preserved=true reason=runtime_failover_armed',
+          'windows status sync source=$source connected=false preserved=true protectionConfirmed=false reason=runtime_failover_armed',
         );
         unawaited(
           _pollWindowsRuntimeFailover(
@@ -10240,15 +10565,28 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         );
         return;
       }
-      final changed = vpnEnabled != on;
+      final changed =
+          vpnEnabled != on ||
+          _windowsProtectionConfirmed != effectiveProtectionConfirmed ||
+          _externalVpnActive != snapshot.externalVpnActive ||
+          (authoritativeMode != GreenVpnWindowsRoutingMode.unknown &&
+              socialOnlyEnabled != actualSocialOnly);
       if (changed) {
         final previous = vpnEnabled;
         setState(() {
           vpnEnabled = on;
-          _androidExternalVpnActive = false;
+          _windowsProtectionConfirmed = effectiveProtectionConfirmed;
+          if (authoritativeMode != GreenVpnWindowsRoutingMode.unknown) {
+            socialOnlyEnabled = actualSocialOnly;
+            _socialOnlyPreferenceRequested = actualSocialOnly;
+          }
+          _externalVpnActive = snapshot.externalVpnActive;
         });
+        if (authoritativeMode != GreenVpnWindowsRoutingMode.unknown) {
+          _schedulePrefsSave();
+        }
         await appendBlueVpnClientLog(
-          'windows status sync source=$source connected=$on previous=$previous',
+          'windows status sync source=$source connected=$on systemProtected=${snapshot.protectionConfirmed} dataPlane=$_windowsFullTunnelDataPlaneConfirmed protected=$effectiveProtectionConfirmed mode=${snapshot.routingMode.name} externalVpn=${snapshot.externalVpnActive} externalVpnKnown=${snapshot.externalVpnStateKnown} previous=$previous',
         );
       }
       if (on) {
@@ -10269,7 +10607,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       if (mounted) {
         setState(() {
           vpnEnabled = false;
-          _androidExternalVpnActive = false;
+          _externalVpnActive = false;
         });
         _trackConnectionState(false);
       }
@@ -10288,7 +10626,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       );
       setState(() {
         vpnEnabled = own;
-        _androidExternalVpnActive = external;
+        _externalVpnActive = external;
       });
       _trackConnectionState(own, route: activeRoute);
       return;
@@ -10297,7 +10635,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     if (mounted) {
       setState(() {
         vpnEnabled = on;
-        _androidExternalVpnActive = false;
+        _externalVpnActive = false;
       });
       if (on) {
         await _restoreWindowsRuntimeFailoverIfPossible(source: 'status_sync');
@@ -10360,7 +10698,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         if (mounted && externalVpnActive) {
           setState(() {
             vpnEnabled = false;
-            _androidExternalVpnActive = true;
+            _externalVpnActive = true;
           });
         }
         return;
@@ -10393,7 +10731,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       }
       if (!systemVpnActive) return;
       if (mounted && externalVpnActive) {
-        setState(() => _androidExternalVpnActive = true);
+        setState(() => _externalVpnActive = true);
       }
       await appendBlueVpnClientLog(
         'android connect preflight external vpn is active; next real connect will request Green VPN takeover with fresh config',
@@ -11874,6 +12212,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _activeWindowsRuntimeRoute = null;
     _windowsRuntimeFailureCount = 0;
     _windowsRuntimeLastHealthyAt = null;
+    _windowsFullTunnelDataPlaneConfirmed = false;
     _windowsRuntimeRecoveryProofCutoff = null;
     _windowsRuntimeFailoverEpoch += 1;
     _cancelWindowsStandbyProbe(reason: reason);
@@ -11927,7 +12266,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _activeWindowsRuntimeRoute = server;
     final epoch = _windowsRuntimeFailoverEpoch;
     _windowsRuntimeFailoverTimer = Timer.periodic(
-      const Duration(seconds: 15),
+      const Duration(seconds: 5),
       (_) => unawaited(_pollWindowsRuntimeFailover(server, epoch)),
     );
     _windowsRouteMaintenanceTimer = Timer.periodic(const Duration(minutes: 1), (
@@ -11943,7 +12282,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     });
     unawaited(_runInitialWindowsRuntimeChecks(server, epoch));
     await appendBlueVpnClientLog(
-      'windows runtime failover armed server=${server.id} protocol=${server.protocolCode} intervalSeconds=15 initialChecksSeconds=2,5 catalogRefreshSeconds=60 threshold=$greenVpnRuntimeFailoverFailureThreshold',
+      'windows runtime failover armed server=${server.id} protocol=${server.protocolCode} intervalSeconds=5 initialChecksSeconds=2,5 catalogRefreshSeconds=60 threshold=$greenVpnRuntimeFailoverFailureThreshold',
     );
   }
 
@@ -12082,6 +12421,19 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     );
     if (routeHealthy) {
       _windowsRuntimeLastHealthyAt = DateTime.now().toUtc();
+      final confirmationChanged = !_windowsFullTunnelDataPlaneConfirmed;
+      _windowsFullTunnelDataPlaneConfirmed = true;
+      if (confirmationChanged) {
+        await _syncVpnStatus(source: 'windows_data_plane_healthy');
+        if (!mounted || epoch != _windowsRuntimeFailoverEpoch) return;
+        if (!_windowsProtectionConfirmed) {
+          _windowsFullTunnelDataPlaneConfirmed = false;
+          await appendBlueVpnClientLog(
+            'windows data-plane proof rejected by authoritative system status server=${server.id}',
+          );
+          return;
+        }
+      }
       await _recordRouteSuccess(server);
       unawaited(_runWindowsStandbyCycle(server, epoch));
       if (previousFailureCount > 0) {
@@ -12092,6 +12444,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       return;
     }
 
+    if (_windowsFullTunnelDataPlaneConfirmed) {
+      _windowsFullTunnelDataPlaneConfirmed = false;
+      await _syncVpnStatus(source: 'windows_data_plane_unhealthy');
+      if (!mounted || epoch != _windowsRuntimeFailoverEpoch) return;
+    }
     if (previousFailureCount == 0) {
       _cancelWindowsStandbyProbe(reason: 'runtime_probe_unhealthy');
     }
@@ -13006,9 +13363,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
           if (!kIsWeb && Platform.isWindows) {
             setState(() {
-              vpnEnabled = true;
-              _androidExternalVpnActive = false;
+              _windowsProtectionConfirmed = false;
+              _windowsFullTunnelDataPlaneConfirmed = false;
+              _externalVpnActive = false;
             });
+            await _syncVpnStatus(source: 'toggle_connect');
           } else {
             _setVpnBusyUi(
               stage: 'Проверяем статус...',
@@ -14224,6 +14583,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     required Set<String> windowsApplications,
     required Set<String> windowsSites,
   }) async {
+    final previous = _captureRoutingPreference();
+    final wasConnected = vpnEnabled;
+    _prefsDebounce?.cancel();
     setState(() {
       socialOnlyApps
         ..clear()
@@ -14238,26 +14600,41 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         ..clear()
         ..addAll(windowsSites);
     });
-    _schedulePrefsSave();
 
-    if (!socialOnlyEnabled) return;
+    if (!socialOnlyEnabled) {
+      _schedulePrefsSave();
+      return;
+    }
     if (mounted) {
       setState(() {
-        vpnBusy = vpnEnabled;
-        _vpnBusyStage = vpnEnabled ? 'Применяем выбранный список...' : null;
-        _vpnBusyHint = vpnEnabled
+        vpnBusy = true;
+        _vpnBusyStage = 'Применяем выбранный список...';
+        _vpnBusyHint = wasConnected
             ? 'Переподключаем VPN с новым набором сервисов и программ.'
-            : null;
+            : 'Сохраняем набор сервисов и программ.';
       });
     }
     try {
-      await _applyCurrentConfigMode(
+      final applied = await _applyCurrentConfigMode(
         reconnectIfNeeded: true,
         showToastOnSuccess: true,
       );
+      if (!applied) {
+        throw StateError('Новый список не был подтверждён системой.');
+      }
+      _schedulePrefsSave();
     } catch (e) {
+      final restored = await _restoreRoutingPreferenceAfterFailure(
+        snapshot: previous,
+        wasConnected: wasConnected,
+      );
       if (context.mounted) {
-        _toast(context, e.toString().replaceFirst('Bad state: ', ''));
+        _toast(
+          context,
+          restored
+              ? '${e.toString().replaceFirst('Bad state: ', '')} Предыдущий список восстановлен.'
+              : '${e.toString().replaceFirst('Bad state: ', '')} Не удалось восстановить список; фактическое состояние показано на главном экране.',
+        );
       }
     } finally {
       if (mounted) {
@@ -15233,6 +15610,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
   Future<void> _toggleSocialOnlyMode(bool enabled) async {
     if (_vpnInteractionLocked) return;
+    if (enabled == socialOnlyEnabled) return;
     if (!_hasPaidSubscriptionEntitlement) {
       _openTariff();
       _toast(context, 'Режим «Только выбранное» доступен по подписке.');
@@ -15254,6 +15632,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       if (!mounted || _selectedTrafficTitles().isEmpty) return;
     }
 
+    final previous = _captureRoutingPreference();
+    final wasConnected = vpnEnabled;
+    _prefsDebounce?.cancel();
     setState(() {
       vpnBusy = true;
       _vpnBusyStage = 'Обновляем режим...';
@@ -15262,21 +15643,28 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       socialOnlyEnabled = enabled;
       _socialOnlyPreferenceRequested = enabled;
     });
-    _schedulePrefsSave();
 
     try {
-      await _applyCurrentConfigMode(
+      final applied = await _applyCurrentConfigMode(
         reconnectIfNeeded: true,
         showToastOnSuccess: true,
       );
+      if (!applied) {
+        throw StateError('Новый режим не был подтверждён системой.');
+      }
+      _schedulePrefsSave();
     } catch (e) {
+      final restored = await _restoreRoutingPreferenceAfterFailure(
+        snapshot: previous,
+        wasConnected: wasConnected,
+      );
       if (mounted) {
-        setState(() {
-          socialOnlyEnabled = !enabled;
-          _socialOnlyPreferenceRequested = !enabled;
-        });
-        _schedulePrefsSave();
-        _toast(context, e.toString().replaceFirst('Bad state: ', ''));
+        _toast(
+          context,
+          restored
+              ? '${e.toString().replaceFirst('Bad state: ', '')} Предыдущий режим восстановлен.'
+              : '${e.toString().replaceFirst('Bad state: ', '')} Не удалось восстановить режим; фактическое состояние показано на главном экране.',
+        );
       }
     } finally {
       if (mounted) {
@@ -15428,7 +15816,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         isGuest: widget.session.isGuest,
         onRestoreAccess: () => unawaited(_openRestoreAccess()),
         vpnEnabled: vpnEnabled,
-        androidExternalVpnActive: _androidExternalVpnActive,
+        windowsProtectionConfirmed:
+            kIsWeb || !Platform.isWindows || _windowsProtectionConfirmed,
+        externalVpnActive: _externalVpnActive,
         vpnBusy: vpnBusy,
         vpnInteractionLocked: _vpnInteractionLocked,
         vpnBusyStage: _vpnBusyStage,
@@ -15866,7 +16256,8 @@ class VpnPage extends StatelessWidget {
   final bool isGuest;
   final VoidCallback? onRestoreAccess;
   final bool vpnEnabled;
-  final bool androidExternalVpnActive;
+  final bool windowsProtectionConfirmed;
+  final bool externalVpnActive;
   final bool vpnBusy;
   final bool vpnInteractionLocked;
   final String? vpnBusyStage;
@@ -15909,7 +16300,8 @@ class VpnPage extends StatelessWidget {
     this.isGuest = false,
     this.onRestoreAccess,
     required this.vpnEnabled,
-    required this.androidExternalVpnActive,
+    this.windowsProtectionConfirmed = true,
+    required this.externalVpnActive,
     required this.vpnBusy,
     required this.vpnInteractionLocked,
     required this.vpnBusyStage,
@@ -15973,15 +16365,20 @@ class VpnPage extends StatelessWidget {
       if (usesWindowsApplications) ...socialOnlyWindowsSites,
     ]..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     final paused = vpnPaused && !vpnEnabled;
+    final protectionActive =
+        vpnEnabled && windowsProtectionConfirmed && !externalVpnActive;
+    final vpnConflict = vpnEnabled && externalVpnActive;
     final statusText = vpnBusy
         ? (vpnBusyStage ?? (vpnEnabled ? 'Отключаем...' : 'Подключаем...'))
         : paused
         ? 'Защита приостановлена'
-        : (vpnEnabled
-              ? 'Защита активна'
-              : (androidExternalVpnActive
-                    ? 'Активен другой VPN'
-                    : 'Готов к защите'));
+        : externalVpnActive
+        ? (vpnConflict ? 'Конфликт VPN' : 'Активен другой VPN')
+        : (protectionActive
+              ? (socialOnlyEnabled ? 'Выбранное защищено' : 'Защита активна')
+              : vpnEnabled
+              ? 'Проверяем защиту'
+              : 'Готов к защите');
     final statusDetail = vpnBusy
         ? (vpnBusyHint ?? 'Подождите, Green VPN завершает операцию.')
         : paused
@@ -15990,11 +16387,17 @@ class VpnPage extends StatelessWidget {
               : vpnPausedUntil!.isAfter(DateTime.now())
               ? 'Автоматически включится в ${_formatClock(vpnPausedUntil!)}.'
               : 'Возобновляем защищённое подключение...')
-        : (vpnEnabled
-              ? 'Интернет проходит через Green VPN.'
-              : (androidExternalVpnActive
-                    ? 'Нажмите кнопку, чтобы переключиться на Green VPN.'
-                    : 'Подключим первый доступный вариант.'));
+        : externalVpnActive
+        ? (vpnConflict
+              ? 'Green VPN и другой VPN запущены одновременно. Защита Green VPN не подтверждена.'
+              : 'Нажмите кнопку, чтобы переключиться на Green VPN.')
+        : (protectionActive
+              ? (socialOnlyEnabled
+                    ? 'Через Green VPN проходят только выбранные приложения и сайты.'
+                    : 'Весь интернет проходит через Green VPN.')
+              : vpnEnabled
+              ? 'Green VPN запущен, подтверждаем фактический режим трафика.'
+              : 'Подключим первый доступный вариант.');
     final displayedRoute = vpnEnabled && activeConnectionRoute != null
         ? activeConnectionRoute!
         : selectedServer;
@@ -16059,7 +16462,9 @@ class VpnPage extends StatelessWidget {
     Widget connectionPanel() {
       final powerColor = paused
           ? kBrandWarm
-          : vpnEnabled
+          : externalVpnActive
+          ? kBrandWarm
+          : protectionActive
           ? kBrandPrimaryDeep
           : kBrandPrimary;
       return surface(
@@ -16080,7 +16485,7 @@ class VpnPage extends StatelessWidget {
                           vertical: 5,
                         ),
                         decoration: BoxDecoration(
-                          color: vpnEnabled
+                          color: protectionActive
                               ? kBrandPrimarySoft
                               : paused
                               ? const Color(0xFFFFF4D6)
@@ -16090,13 +16495,19 @@ class VpnPage extends StatelessWidget {
                           borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
-                          vpnEnabled
-                              ? 'ЗАЩИЩЕНО'
+                          protectionActive
+                              ? (socialOnlyEnabled
+                                    ? 'ВЫБРАННОЕ ЗАЩИЩЕНО'
+                                    : 'ЗАЩИЩЕНО')
+                              : externalVpnActive
+                              ? 'ДРУГОЙ VPN'
+                              : vpnEnabled
+                              ? 'ПРОВЕРКА'
                               : paused
                               ? 'ПАУЗА'
                               : 'НЕ ЗАЩИЩЕНО',
                           style: TextStyle(
-                            color: vpnEnabled
+                            color: protectionActive
                                 ? kBrandPrimaryDeep
                                 : paused
                                 ? const Color(0xFF9A6700)
@@ -16109,7 +16520,7 @@ class VpnPage extends StatelessWidget {
                       const SizedBox(height: 14),
                       Row(
                         children: [
-                          if (vpnEnabled && !vpnBusy) ...[
+                          if (protectionActive && !vpnBusy) ...[
                             Container(
                               key: const Key('fusion_connected_check_icon'),
                               width: 30,
@@ -16131,7 +16542,7 @@ class VpnPage extends StatelessWidget {
                               statusText,
                               key: const Key('fusion_connection_status'),
                               style: TextStyle(
-                                color: vpnEnabled && !vpnBusy
+                                color: protectionActive && !vpnBusy
                                     ? kBrandPrimaryDeep
                                     : textColor,
                                 fontSize: 28,
@@ -16342,7 +16753,7 @@ class VpnPage extends StatelessWidget {
                     label: 'Диагностика',
                   ),
                 ),
-                if (vpnEnabled && connectionDetailsEnabled) ...[
+                if (protectionActive && connectionDetailsEnabled) ...[
                   const SizedBox(width: 8),
                   Expanded(
                     child: compactActionButton(
@@ -16468,18 +16879,26 @@ class VpnPage extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              socialOnlyEnabled
-                                  ? 'Только выбранное'
-                                  : 'Весь интернет защищён',
+                              protectionActive
+                                  ? (socialOnlyEnabled
+                                        ? 'Только выбранное защищено'
+                                        : 'Весь интернет защищён')
+                                  : (socialOnlyEnabled
+                                        ? 'Будут защищены выбранные'
+                                        : 'Будет защищён весь интернет'),
                               style: const TextStyle(
                                 fontWeight: FontWeight.w900,
                               ),
                             ),
                             const SizedBox(height: 2),
                             Text(
-                              socialOnlyEnabled
-                                  ? 'Через VPN направляется: $selectedCount.'
-                                  : 'Трафик всего устройства проходит через VPN.',
+                              protectionActive
+                                  ? (socialOnlyEnabled
+                                        ? 'Через VPN направляется: $selectedCount.'
+                                        : 'Трафик всего устройства проходит через VPN.')
+                                  : (socialOnlyEnabled
+                                        ? 'Выбрано: $selectedCount. Включите VPN, чтобы применить режим.'
+                                        : 'Включите VPN, чтобы защитить трафик устройства.'),
                               style: TextStyle(
                                 color: mutedColor,
                                 fontSize: 12,
@@ -16532,7 +16951,9 @@ class VpnPage extends StatelessWidget {
               child: Row(
                 children: [
                   Icon(
-                    vpnEnabled ? Icons.shield_rounded : Icons.radar_rounded,
+                    protectionActive
+                        ? Icons.shield_rounded
+                        : Icons.radar_rounded,
                     color: kBrandPrimary,
                   ),
                   const SizedBox(width: 10),
@@ -16541,15 +16962,19 @@ class VpnPage extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          vpnEnabled
+                          protectionActive
                               ? 'Подключение контролируется'
+                              : vpnEnabled
+                              ? 'Подтверждаем подключение'
                               : 'Автовыбор готов к запуску',
                           style: const TextStyle(fontWeight: FontWeight.w900),
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          vpnEnabled
+                          protectionActive
                               ? 'При сбое Green VPN выполнит безопасное переключение.'
+                              : vpnEnabled
+                              ? 'Защита появится после подтверждения фактического режима.'
                               : 'Подключится первый доступный вариант.',
                           style: TextStyle(
                             color: mutedColor,
@@ -16790,9 +17215,7 @@ class VpnPage extends StatelessWidget {
         ? (vpnBusyStage ?? (vpnEnabled ? 'Отключаем...' : 'Подключаем...'))
         : (vpnEnabled
               ? 'Включено'
-              : (androidExternalVpnActive
-                    ? 'Другой VPN активен'
-                    : 'Отключено'));
+              : (externalVpnActive ? 'Другой VPN активен' : 'Отключено'));
     final serverTitle = selectedServer.isAuto
         ? 'Самая быстрая локация'
         : greenVpnPublicServerTitle(selectedServer);
@@ -16950,7 +17373,7 @@ class VpnPage extends StatelessWidget {
                               : 'Подключаем VPN...')
                         : (vpnEnabled
                               ? 'Отключить VPN'
-                              : (androidExternalVpnActive
+                              : (externalVpnActive
                                     ? 'Переключить на Green VPN'
                                     : 'Подключить VPN')),
                   ),
@@ -16971,7 +17394,7 @@ class VpnPage extends StatelessWidget {
                   color: textColor,
                 ),
               ),
-              if (!vpnBusy && androidExternalVpnActive) ...[
+              if (!vpnBusy && externalVpnActive) ...[
                 const SizedBox(height: 8),
                 Text(
                   'Сейчас Android держит VPN вне Green VPN. Нажми кнопку выше, чтобы переключиться на Green VPN.',

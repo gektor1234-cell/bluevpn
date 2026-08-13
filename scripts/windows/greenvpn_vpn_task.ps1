@@ -9,14 +9,14 @@ $ErrorActionPreference = 'Stop'
 $TunnelName = 'BlueVPNDev1'
 $ServiceName = 'WireGuardTunnel$BlueVPNDev1'
 $ProgramDataRoot = Join-Path $env:ProgramData 'BlueVPN'
+$runtimeScope = if ($ProgramDataRoot -match '(?i)BlueVPNBeta$') { 'paid-beta' } else { 'stable' }
+$PrivilegedRuntimeRegistryPath = "HKLM:\SOFTWARE\GreenVPN\Runtime\$runtimeScope"
 $ConfigPath = Join-Path $ProgramDataRoot 'BlueVPNDev1.conf'
 $LogPath = Join-Path $ProgramDataRoot 'backend.log'
 $RoutingModePath = Join-Path $ProgramDataRoot 'routing_mode'
 $RoutingAppsPath = Join-Path $ProgramDataRoot 'routing_apps.json'
 $ProcessRouterRoot = Join-Path $PSScriptRoot 'process-router'
 $ProcessRouterExe = Join-Path $ProcessRouterRoot 'ProxyBridge_CLI.exe'
-$ProcessRouterPidPath = Join-Path $ProgramDataRoot 'process-router.pid'
-$ProcessRouterActivePath = Join-Path $ProgramDataRoot 'process-router.active'
 $ProcessRouterRulesPath = Join-Path $ProgramDataRoot 'process-router.rules.json'
 $ProcessRouterStdoutPath = Join-Path $ProgramDataRoot 'process-router.stdout.log'
 $ProcessRouterStderrPath = Join-Path $ProgramDataRoot 'process-router.stderr.log'
@@ -66,6 +66,44 @@ function Invoke-External {
     }
 }
 
+function Write-GreenPrivilegedRuntimeValue {
+    param(
+        [Parameter(Mandatory=$true)][ValidateSet('ActiveRoutingMode', 'ProcessRouterPid', 'ProcessRouterRequired')][string]$Name,
+        [Parameter(Mandatory=$true)][object]$Value,
+        [ValidateSet('String', 'DWord')][string]$PropertyType = 'String'
+    )
+
+    New-Item -Path $PrivilegedRuntimeRegistryPath -Force | Out-Null
+    New-ItemProperty `
+        -Path $PrivilegedRuntimeRegistryPath `
+        -Name $Name `
+        -PropertyType $PropertyType `
+        -Value $Value `
+        -Force |
+        Out-Null
+}
+
+function Read-GreenPrivilegedRuntimeValue {
+    param([Parameter(Mandatory=$true)][string]$Name)
+    try {
+        return (Get-ItemProperty `
+            -LiteralPath $PrivilegedRuntimeRegistryPath `
+            -Name $Name `
+            -ErrorAction Stop).$Name
+    } catch {
+        return $null
+    }
+}
+
+function Remove-GreenPrivilegedRuntimeValue {
+    param([Parameter(Mandatory=$true)][string]$Name)
+    Remove-ItemProperty `
+        -LiteralPath $PrivilegedRuntimeRegistryPath `
+        -Name $Name `
+        -Force `
+        -ErrorAction SilentlyContinue
+}
+
 function Resolve-WireGuardExe {
     $candidates = @(
         (Join-Path $env:ProgramFiles 'WireGuard\wireguard.exe'),
@@ -111,10 +149,7 @@ function Test-GreenTcpEndpoint {
 }
 
 function Test-GreenProcessRouterRunning {
-    if (-not (Test-Path -LiteralPath $ProcessRouterPidPath -PathType Leaf)) {
-        return $false
-    }
-    $pidText = ([IO.File]::ReadAllText($ProcessRouterPidPath)).Trim()
+    $pidText = [string](Read-GreenPrivilegedRuntimeValue -Name 'ProcessRouterPid')
     $routerPid = 0
     if (-not [int]::TryParse($pidText, [ref]$routerPid) -or $routerPid -le 0) {
         return $false
@@ -132,16 +167,22 @@ function Test-GreenProcessRouterRunning {
 }
 
 function Stop-GreenProcessRouter {
-    Remove-Item -LiteralPath $ProcessRouterActivePath -Force -ErrorAction SilentlyContinue
+    Write-GreenPrivilegedRuntimeValue `
+        -Name 'ProcessRouterRequired' `
+        -Value 0 `
+        -PropertyType DWord
     if (Test-GreenProcessRouterRunning) {
-        $routerPid = [int]([IO.File]::ReadAllText($ProcessRouterPidPath)).Trim()
+        $routerPid = [int](Read-GreenPrivilegedRuntimeValue -Name 'ProcessRouterPid')
         Stop-Process -Id $routerPid -Force -ErrorAction SilentlyContinue
         for ($i = 0; $i -lt 20; $i++) {
             if ($null -eq (Get-Process -Id $routerPid -ErrorAction SilentlyContinue)) { break }
             Start-Sleep -Milliseconds 100
         }
+        if ($null -ne (Get-Process -Id $routerPid -ErrorAction SilentlyContinue)) {
+            throw 'Process router did not stop completely.'
+        }
     }
-    Remove-Item -LiteralPath $ProcessRouterPidPath -Force -ErrorAction SilentlyContinue
+    Remove-GreenPrivilegedRuntimeValue -Name 'ProcessRouterPid'
 }
 
 function Assert-GreenProcessRouterPayload {
@@ -292,19 +333,17 @@ function Start-GreenProcessRouter {
     if ($process.HasExited) {
         throw "Process router exited during startup with code $($process.ExitCode)."
     }
-    [IO.File]::WriteAllText(
-        $ProcessRouterPidPath,
-        [string]$process.Id,
-        [Text.UTF8Encoding]::new($false)
-    )
+    Write-GreenPrivilegedRuntimeValue `
+        -Name 'ProcessRouterPid' `
+        -Value $process.Id `
+        -PropertyType DWord
     if (-not (Test-GreenProcessRouterRunning)) {
         throw 'Process router startup could not be verified.'
     }
-    [IO.File]::WriteAllText(
-        $ProcessRouterActivePath,
-        'applications',
-        [Text.UTF8Encoding]::new($false)
-    )
+    Write-GreenPrivilegedRuntimeValue `
+        -Name 'ProcessRouterRequired' `
+        -Value 1 `
+        -PropertyType DWord
     Write-GreenLog "process router started pid=$($process.Id) apps=$($ApplicationPaths.Count)"
 }
 
@@ -344,6 +383,16 @@ function Ensure-GreenProgramDataAcl {
             Write-GreenLog "config acl warning: $($_.Exception.Message)"
         }
     }
+}
+
+function Write-GreenActiveRoutingMode {
+    param([Parameter(Mandatory=$true)][ValidateSet('full', 'applications')][string]$Mode)
+
+    Write-GreenPrivilegedRuntimeValue `
+        -Name 'ActiveRoutingMode' `
+        -Value $Mode `
+        -PropertyType String
+    Write-GreenLog "active routing mode committed mode=$Mode"
 }
 
 function Ensure-NativeFullTunnelKillSwitch {
@@ -602,7 +651,14 @@ function Stop-CompetingVpnTunnels {
 }
 
 function Stop-GreenTunnel {
-    Stop-GreenProcessRouter
+    Remove-GreenPrivilegedRuntimeValue -Name 'ActiveRoutingMode'
+    $processRouterStopError = $null
+    try {
+        Stop-GreenProcessRouter
+    } catch {
+        $processRouterStopError = $_.Exception.Message
+        Write-GreenLog "process router stop warning: $processRouterStopError"
+    }
     $svc = Get-OwnService
     if ($null -ne $svc) {
         try {
@@ -616,6 +672,9 @@ function Stop-GreenTunnel {
     $wg = Resolve-WireGuardExe
     if ([string]::IsNullOrWhiteSpace($wg)) {
         Write-GreenLog 'WireGuard executable not found while stopping tunnel'
+        if ($null -ne $processRouterStopError) {
+            throw "Tunnel stopped without confirming process router cleanup: $processRouterStopError"
+        }
         return
     }
 
@@ -624,10 +683,17 @@ function Stop-GreenTunnel {
     } catch {
         Write-GreenLog "wireguard uninstall warning: $($_.Exception.Message)"
     }
+    if ($null -ne $processRouterStopError) {
+        throw "Tunnel stopped without confirming process router cleanup: $processRouterStopError"
+    }
 }
 
 function Start-GreenTunnel {
     Ensure-GreenProgramDataAcl
+    Write-GreenPrivilegedRuntimeValue `
+        -Name 'ProcessRouterRequired' `
+        -Value 0 `
+        -PropertyType DWord
 
     if (-not (Test-Path -LiteralPath $ConfigPath)) {
         Write-GreenLog "config missing: $ConfigPath"
@@ -694,6 +760,7 @@ function Start-GreenTunnel {
         Stop-GreenProcessRouter
         Write-GreenLog 'selective tunnel uses destination routes only; process router not required'
     }
+    Write-GreenActiveRoutingMode -Mode $routingMode
 }
 
 function Invoke-GreenGuard {
@@ -712,7 +779,7 @@ function Invoke-GreenGuard {
     if ($svc.State -ne 'Running') { return }
 
     if (
-        (Test-Path -LiteralPath $ProcessRouterActivePath -PathType Leaf) -and
+        ([int](Read-GreenPrivilegedRuntimeValue -Name 'ProcessRouterRequired') -eq 1) -and
         -not (Test-GreenProcessRouterRunning)
     ) {
         Write-GreenLog 'guard disconnecting application-only tunnel because process router stopped'

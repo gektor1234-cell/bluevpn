@@ -519,6 +519,15 @@ function Write-PrivateRuntimeFile {
     Protect-PrivateRuntimeFile -Path $Path
 }
 
+function Write-GreenActiveRoutingMode {
+    param([Parameter(Mandatory=$true)][ValidateSet('full', 'applications')][string]$Mode)
+    Write-GreenPrivilegedRuntimeValue `
+        -Name 'ActiveRoutingMode' `
+        -Value $Mode `
+        -PropertyType String
+    Write-GreenLog "active routing mode committed mode=$Mode"
+}
+
 function Protect-PrivateRuntimeFile {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -1624,8 +1633,6 @@ function Stop-CompetingVpnTunnels {
 
 function Test-AdvancedTransportStatePresent {
     foreach ($path in @(
-        $ProcessRouterActivePath,
-        $ProcessRouterPidPath,
         $HysteriaPidPath,
         $HevPidPath,
         $HysteriaWatchdogPidPath,
@@ -1651,10 +1658,17 @@ function Test-AdvancedTransportStatePresent {
 function Stop-OwnTunnel {
     param([switch]$FastNativeSwitch)
 
+    Remove-GreenPrivilegedRuntimeValue -Name 'ActiveRoutingMode'
+    $processRouterStopError = $null
+    try {
+        Stop-GreenProcessRouter
+    } catch {
+        $processRouterStopError = $_.Exception.Message
+        Write-GreenLog "process router stop warning: $processRouterStopError"
+    }
     $advancedStatePresent = Test-AdvancedTransportStatePresent
     $managedProcesses = @()
     if (-not $FastNativeSwitch -or $advancedStatePresent) {
-        Stop-GreenProcessRouter
         $managedProcesses = @(
             [pscustomobject]@{ pid = Read-ManagedPid -Path $HysteriaPidPath; path = $HysteriaExe },
             [pscustomobject]@{ pid = Read-ManagedPid -Path $HevPidPath; path = $HevExe },
@@ -1716,6 +1730,9 @@ function Stop-OwnTunnel {
                     Where-Object { $_.Status -eq 'Up' }
         })
         if ($runningServices.Count -eq 0 -and $runningProcesses.Count -eq 0 -and $activeAdapters.Count -eq 0) {
+            if ($null -ne $processRouterStopError) {
+                throw "Tunnel stopped without confirming process router cleanup: $processRouterStopError"
+            }
             return
         }
         Start-Sleep -Milliseconds 250
@@ -1725,6 +1742,10 @@ function Stop-OwnTunnel {
 
 function Start-OwnTunnel {
     if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "Config missing: $ConfigPath" }
+    Write-GreenPrivilegedRuntimeValue `
+        -Name 'ProcessRouterRequired' `
+        -Value 0 `
+        -PropertyType DWord
     $protocol = Get-ManagedProtocol
     Write-GreenLog "connect phase=preflight protocol=$protocol"
     $competitors = @(Stop-CompetingVpnTunnels -Reason 'connect')
@@ -1753,21 +1774,25 @@ function Start-OwnTunnel {
     if ($protocol -eq 'hysteria2') {
         Ensure-GreenProgramDataAcl
         Start-Hysteria2Tunnel
+        Write-GreenActiveRoutingMode -Mode 'full'
         return
     }
     if ($protocol -eq 'vless_reality') {
         Ensure-GreenProgramDataAcl
         Start-VlessRealityTunnel
+        Write-GreenActiveRoutingMode -Mode 'full'
         return
     }
     if ($protocol -eq 'naive_https') {
         Ensure-GreenProgramDataAcl
         Start-NaiveHttpsTunnel
+        Write-GreenActiveRoutingMode -Mode 'full'
         return
     }
     if ($protocol -eq 'dnstt') {
         Ensure-GreenProgramDataAcl
         Start-DnsttTunnel
+        Write-GreenActiveRoutingMode -Mode 'full'
         return
     }
     if ([string]::IsNullOrWhiteSpace($engine)) { throw "Engine unavailable for $protocol" }
@@ -1831,6 +1856,7 @@ function Start-OwnTunnel {
         Stop-GreenProcessRouter
         Write-GreenLog 'selective tunnel uses destination routes only; process router not required'
     }
+    Write-GreenActiveRoutingMode -Mode $routingMode
 }
 
 function Invoke-GreenGuard {
@@ -1845,7 +1871,7 @@ function Invoke-GreenGuard {
         (Test-ExactProcess -ProcessId (Read-ManagedPid -Path $DnsttHevPidPath) -ExpectedPath $DnsttHevExe)
     if ($ownRunning.Count -eq 0 -and -not $hysteriaRunning -and -not $vlessRunning -and -not $naiveRunning -and -not $dnsttRunning) { return }
     if (
-        (Test-Path -LiteralPath $ProcessRouterActivePath -PathType Leaf) -and
+        ([int](Read-GreenPrivilegedRuntimeValue -Name 'ProcessRouterRequired') -eq 1) -and
         -not (Test-GreenProcessRouterRunning)
     ) {
         Write-GreenLog 'guard disconnecting application-only tunnel because process router stopped'

@@ -36,7 +36,7 @@ void main() {
         isGuest: true,
         onRestoreAccess: () {},
         vpnEnabled: false,
-        androidExternalVpnActive: false,
+        externalVpnActive: false,
         vpnBusy: false,
         vpnInteractionLocked: false,
         vpnBusyStage: null,
@@ -265,7 +265,7 @@ void main() {
           },
           isGuest: true,
           vpnEnabled: true,
-          androidExternalVpnActive: false,
+          externalVpnActive: false,
           vpnBusy: false,
           vpnInteractionLocked: false,
           vpnBusyStage: null,
@@ -336,6 +336,172 @@ void main() {
       expect(find.text('WireGuard'), findsNothing);
       expect(find.text('Сменить подключение'), findsOneWidget);
       expect(find.text('Подключение контролируется'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+    skip: !fusionEnabled,
+  );
+
+  testWidgets(
+    'Fusion names selective protection without implying device-wide coverage',
+    (tester) async {
+      await pumpAt(
+        tester,
+        const Size(1100, 900),
+        VpnPage(
+          isGuest: false,
+          planName: 'Премиум',
+          trafficUsage: const <String, dynamic>{},
+          vpnEnabled: true,
+          windowsProtectionConfirmed: true,
+          externalVpnActive: false,
+          vpnBusy: false,
+          vpnInteractionLocked: false,
+          vpnBusyStage: null,
+          vpnBusyHint: null,
+          wireGuardInstalled: true,
+          wireGuardStatusText: 'Установлен',
+          wireGuardBusy: false,
+          onInstallWireGuard: () async {},
+          onRefreshWireGuard: () async {},
+          onToggleVpn: () {},
+          onOpenTariff: () {},
+          selectedServer: const ServerLocation(
+            id: 'auto',
+            title: 'Авто',
+            subtitle: 'Автовыбор',
+            isAuto: true,
+          ),
+          onOpenServerPicker: () {},
+          socialOnlyEnabled: true,
+          socialOnlyAllowed: true,
+          socialOnlyApps: const <SocialApp>{SocialApp.youtube},
+          socialOnlyCustomPackages: const <String>{},
+          socialOnlyWindowsApplications: const <String>{},
+          socialOnlyWindowsSites: const <String>{'chatgpt.com'},
+          socialOnlyCustomLabels: const <String, String>{},
+          socialOnlyWindowsApplicationLabels: const <String, String>{},
+          onToggleSocialOnly: (_) {},
+          onConfigureSocialApps: () {},
+        ),
+      );
+
+      expect(find.text('Выбранное защищено'), findsOneWidget);
+      expect(find.text('ВЫБРАННОЕ ЗАЩИЩЕНО'), findsOneWidget);
+      expect(
+        find.text('Весь интернет проходит через Green VPN.'),
+        findsNothing,
+      );
+    },
+    skip: !fusionEnabled,
+  );
+
+  testWidgets(
+    'Fusion does not claim protection until Windows confirms active mode',
+    (tester) async {
+      await pumpAt(
+        tester,
+        const Size(390, 844),
+        VpnPage(
+          planName: 'Premium',
+          vpnEnabled: true,
+          windowsProtectionConfirmed: false,
+          externalVpnActive: false,
+          vpnBusy: false,
+          vpnInteractionLocked: false,
+          vpnBusyStage: null,
+          vpnBusyHint: null,
+          wireGuardInstalled: true,
+          wireGuardStatusText: null,
+          wireGuardBusy: false,
+          onInstallWireGuard: () async {},
+          onRefreshWireGuard: () async {},
+          onToggleVpn: () {},
+          connectionDetailsEnabled: true,
+          onOpenTariff: () {},
+          onOpenDiagnostics: () {},
+          selectedServer: const ServerLocation(
+            id: 'auto',
+            title: 'Автоматически',
+            subtitle: '',
+            isAuto: true,
+          ),
+          onOpenServerPicker: () {},
+          socialOnlyEnabled: true,
+          socialOnlyAllowed: true,
+          socialOnlyApps: const <SocialApp>{SocialApp.youtube},
+          socialOnlyCustomPackages: const <String>{},
+          socialOnlyWindowsApplications: const <String>{},
+          socialOnlyWindowsSites: const <String>{},
+          socialOnlyCustomLabels: const <String, String>{},
+          socialOnlyWindowsApplicationLabels: const <String, String>{},
+          onToggleSocialOnly: (_) {},
+          onConfigureSocialApps: () {},
+        ),
+      );
+
+      expect(find.text('Проверяем защиту'), findsOneWidget);
+      expect(
+        find.byKey(const Key('fusion_connected_check_icon')),
+        findsNothing,
+      );
+      expect(find.byKey(const Key('fusion_details_button')), findsNothing);
+      expect(find.text('ЗАЩИЩЕНО'), findsNothing);
+      expect(find.text('ПРОВЕРКА'), findsOneWidget);
+    },
+    skip: !fusionEnabled,
+  );
+
+  testWidgets(
+    'Fusion prioritizes a competing VPN warning over pending Green status',
+    (tester) async {
+      await pumpAt(
+        tester,
+        const Size(390, 844),
+        VpnPage(
+          planName: 'Premium',
+          vpnEnabled: true,
+          windowsProtectionConfirmed: false,
+          externalVpnActive: true,
+          vpnBusy: false,
+          vpnInteractionLocked: false,
+          vpnBusyStage: null,
+          vpnBusyHint: null,
+          wireGuardInstalled: true,
+          wireGuardStatusText: null,
+          wireGuardBusy: false,
+          onInstallWireGuard: () async {},
+          onRefreshWireGuard: () async {},
+          onToggleVpn: () {},
+          onOpenTariff: () {},
+          onOpenDiagnostics: () {},
+          selectedServer: const ServerLocation(
+            id: 'auto',
+            title: 'Автоматически',
+            subtitle: '',
+            isAuto: true,
+          ),
+          onOpenServerPicker: () {},
+          socialOnlyEnabled: false,
+          socialOnlyAllowed: true,
+          socialOnlyApps: const <SocialApp>{SocialApp.youtube},
+          socialOnlyCustomPackages: const <String>{},
+          socialOnlyWindowsApplications: const <String>{},
+          socialOnlyWindowsSites: const <String>{},
+          socialOnlyCustomLabels: const <String, String>{},
+          socialOnlyWindowsApplicationLabels: const <String, String>{},
+          onToggleSocialOnly: (_) {},
+          onConfigureSocialApps: () {},
+        ),
+      );
+
+      expect(find.text('Конфликт VPN'), findsOneWidget);
+      expect(find.text('ДРУГОЙ VPN'), findsOneWidget);
+      expect(find.text('Проверяем защиту'), findsNothing);
+      expect(find.text('ЗАЩИЩЕНО'), findsNothing);
+      expect(
+        find.byKey(const Key('fusion_connected_check_icon')),
+        findsNothing,
+      );
       expect(tester.takeException(), isNull);
     },
     skip: !fusionEnabled,

@@ -1496,6 +1496,7 @@ Remove-Item -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninst
 
 if (-not `$KeepProgramData) {
     Write-Step "Removing machine state in ProgramData..."
+    Remove-Item -LiteralPath 'HKLM:\SOFTWARE\GreenVPN\Runtime\stable' -Recurse -Force -ErrorAction SilentlyContinue
     foreach (`$path in @(
         (Join-Path `$programData 'BlueVPN'),
         (Join-Path `$programData 'GreenVPN'),

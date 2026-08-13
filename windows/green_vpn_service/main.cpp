@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cwctype>
 #include <cstdio>
 #include <fstream>
 #include <iterator>
@@ -57,12 +58,15 @@ constexpr char kDnsttPidPath[] =
     GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\dnstt-client.pid";
 constexpr char kDnsttHevPidPath[] =
     GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\dnstt-hev.pid";
-constexpr char kRoutingModePath[] =
-    GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\routing_mode";
-constexpr char kProcessRouterPidPath[] =
-    GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_A "\\process-router.pid";
-constexpr wchar_t kProcessRouterActivePath[] =
-    GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_W L"\\process-router.active";
+constexpr wchar_t kRuntimeRegistryPath[] =
+    L"SOFTWARE\\GreenVPN\\Runtime\\" GREENVPN_RUNTIME_REGISTRY_SCOPE_W;
+constexpr wchar_t kActiveRoutingModeValue[] = L"ActiveRoutingMode";
+constexpr wchar_t kProcessRouterPidValue[] = L"ProcessRouterPid";
+constexpr wchar_t kProcessRouterRequiredValue[] = L"ProcessRouterRequired";
+constexpr wchar_t kStandbyProbeWireGuardServiceName[] =
+    L"WireGuardTunnel$" GREENVPN_RUNTIME_TUNNEL_NAME_W L"StandbyProbe";
+constexpr wchar_t kStandbyProbeAmneziaServiceName[] =
+    L"AmneziaWGTunnel$" GREENVPN_RUNTIME_TUNNEL_NAME_W L"StandbyProbe";
 
 SERVICE_STATUS_HANDLE g_status_handle = nullptr;
 SERVICE_STATUS g_status = {};
@@ -542,6 +546,115 @@ std::string QueryServiceState(const wchar_t* service_name) {
   return state;
 }
 
+bool StartsWithInsensitive(const wchar_t* value, const wchar_t* prefix) {
+  if (value == nullptr || prefix == nullptr) {
+    return false;
+  }
+  while (*prefix != L'\0') {
+    if (*value == L'\0' || towlower(*value) != towlower(*prefix)) {
+      return false;
+    }
+    ++value;
+    ++prefix;
+  }
+  return true;
+}
+
+std::string QueryRunningCompetingVpnState() {
+  SC_HANDLE scm =
+      OpenSCManagerW(nullptr, nullptr, SC_MANAGER_ENUMERATE_SERVICE);
+  if (scm == nullptr) {
+    return "unknown";
+  }
+
+  DWORD bytes_needed = 0;
+  DWORD service_count = 0;
+  DWORD resume_handle = 0;
+  EnumServicesStatusExW(scm, SC_ENUM_PROCESS_INFO, SERVICE_WIN32,
+                        SERVICE_ACTIVE, nullptr, 0, &bytes_needed,
+                        &service_count, &resume_handle, nullptr);
+  if (GetLastError() != ERROR_MORE_DATA || bytes_needed == 0) {
+    CloseServiceHandle(scm);
+    return "unknown";
+  }
+
+  std::vector<BYTE> buffer(bytes_needed);
+  resume_handle = 0;
+  const BOOL enumerated = EnumServicesStatusExW(
+      scm, SC_ENUM_PROCESS_INFO, SERVICE_WIN32, SERVICE_ACTIVE, buffer.data(),
+      static_cast<DWORD>(buffer.size()), &bytes_needed, &service_count,
+      &resume_handle, nullptr);
+  if (!enumerated) {
+    CloseServiceHandle(scm);
+    return "unknown";
+  }
+
+  const auto* services =
+      reinterpret_cast<const ENUM_SERVICE_STATUS_PROCESSW*>(buffer.data());
+  bool found = false;
+  for (DWORD i = 0; i < service_count; ++i) {
+    const wchar_t* name = services[i].lpServiceName;
+    if (name == nullptr) {
+      continue;
+    }
+    if (_wcsicmp(name, kTunnelServiceName) == 0 ||
+        _wcsicmp(name, kAmneziaWgTunnelServiceName) == 0 ||
+        _wcsicmp(name, kStandbyProbeWireGuardServiceName) == 0 ||
+        _wcsicmp(name, kStandbyProbeAmneziaServiceName) == 0) {
+      continue;
+    }
+    if (StartsWithInsensitive(name, L"WireGuardTunnel$") ||
+        StartsWithInsensitive(name, L"AmneziaWGTunnel$") ||
+        _wcsicmp(name, L"CloudflareWARP") == 0) {
+      found = true;
+      break;
+    }
+  }
+  CloseServiceHandle(scm);
+  return found ? "active" : "inactive";
+}
+
+bool ReadRuntimeRegistryString(const wchar_t* value_name,
+                               std::wstring* value) {
+  if (value == nullptr) {
+    return false;
+  }
+  DWORD type = 0;
+  DWORD bytes = 0;
+  LONG result = RegGetValueW(HKEY_LOCAL_MACHINE, kRuntimeRegistryPath,
+                             value_name, RRF_RT_REG_SZ, &type, nullptr, &bytes);
+  if (result != ERROR_SUCCESS || bytes < sizeof(wchar_t)) {
+    return false;
+  }
+  std::vector<wchar_t> buffer(bytes / sizeof(wchar_t));
+  result = RegGetValueW(HKEY_LOCAL_MACHINE, kRuntimeRegistryPath, value_name,
+                        RRF_RT_REG_SZ, &type, buffer.data(), &bytes);
+  if (result != ERROR_SUCCESS) {
+    return false;
+  }
+  *value = std::wstring(buffer.data());
+  return true;
+}
+
+bool ReadRuntimeRegistryDword(const wchar_t* value_name, DWORD* value) {
+  if (value == nullptr) {
+    return false;
+  }
+  DWORD type = 0;
+  DWORD bytes = sizeof(*value);
+  return RegGetValueW(HKEY_LOCAL_MACHINE, kRuntimeRegistryPath, value_name,
+                      RRF_RT_REG_DWORD, &type, value, &bytes) == ERROR_SUCCESS;
+}
+
+std::string LowerAsciiFromWide(const std::wstring& value) {
+  std::string utf8 = WideToUtf8(value);
+  std::transform(utf8.begin(), utf8.end(), utf8.begin(),
+                 [](unsigned char ch) {
+                   return static_cast<char>(std::tolower(ch));
+                 });
+  return utf8;
+}
+
 std::string ReadTrimmedAsciiFile(const char* path) {
   std::ifstream input(path, std::ios::binary);
   if (!input) {
@@ -564,6 +677,30 @@ std::string ReadTrimmedAsciiFile(const char* path) {
   return value;
 }
 
+std::string QueryPidProcessState(DWORD process_id,
+                                 const std::wstring& expected_path) {
+  if (process_id == 0) {
+    return "missing";
+  }
+  HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
+                               FALSE, process_id);
+  if (process == nullptr) {
+    return "stopped";
+  }
+  DWORD exit_code = 0;
+  const bool running = GetExitCodeProcess(process, &exit_code) != FALSE &&
+                       exit_code == STILL_ACTIVE;
+  std::vector<wchar_t> image_path(32768);
+  DWORD image_size = static_cast<DWORD>(image_path.size());
+  const bool path_matches =
+      QueryFullProcessImageNameW(process, 0, image_path.data(), &image_size) !=
+          FALSE &&
+      _wcsicmp(std::wstring(image_path.data(), image_size).c_str(),
+               expected_path.c_str()) == 0;
+  CloseHandle(process);
+  return running && path_matches ? "running" : "stopped";
+}
+
 std::string QueryPidFileProcessState(const char* pid_path,
                                      const std::wstring& expected_path) {
   const std::string pid_text = ReadTrimmedAsciiFile(pid_path);
@@ -581,23 +718,7 @@ std::string QueryPidFileProcessState(const char* pid_path,
   if (parsed == 0 || parsed > MAXDWORD) {
     return "invalid";
   }
-  HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
-                               FALSE, static_cast<DWORD>(parsed));
-  if (process == nullptr) {
-    return "stopped";
-  }
-  DWORD exit_code = 0;
-  const bool running = GetExitCodeProcess(process, &exit_code) != FALSE &&
-                       exit_code == STILL_ACTIVE;
-  std::vector<wchar_t> image_path(32768);
-  DWORD image_size = static_cast<DWORD>(image_path.size());
-  const bool path_matches =
-      QueryFullProcessImageNameW(process, 0, image_path.data(), &image_size) !=
-          FALSE &&
-      _wcsicmp(std::wstring(image_path.data(), image_size).c_str(),
-               expected_path.c_str()) == 0;
-  CloseHandle(process);
-  return running && path_matches ? "running" : "stopped";
+  return QueryPidProcessState(static_cast<DWORD>(parsed), expected_path);
 }
 
 std::string QueryTunnelStatusJson() {
@@ -629,15 +750,41 @@ std::string QueryTunnelStatusJson() {
   const std::string dnstt_hev_state = QueryPidFileProcessState(
       kDnsttHevPidPath,
       module_dir + L"\\tools\\dnstt\\hev-socks5-tunnel.exe");
-  const std::string requested_routing_mode =
-      ReadTrimmedAsciiFile(kRoutingModePath) == "applications" ? "applications"
-                                                               : "full";
-  const bool process_router_active = FileExists(kProcessRouterActivePath);
+  const bool managed_tunnel_running =
+      wireguard_state == "running" || amneziawg_state == "running" ||
+      (hysteria_state == "running" && hev_state == "running") ||
+      (vless_xray_state == "running" && vless_hev_state == "running") ||
+      (naive_state == "running" && naive_hev_state == "running") ||
+      (dnstt_state == "running" && dnstt_hev_state == "running");
+  std::wstring active_routing_mode_value;
+  const bool active_routing_mode_known = ReadRuntimeRegistryString(
+      kActiveRoutingModeValue, &active_routing_mode_value);
+  const std::string active_routing_mode =
+      active_routing_mode_known
+          ? LowerAsciiFromWide(active_routing_mode_value)
+          : "";
   const std::string routing_mode =
-      process_router_active ? "applications" : requested_routing_mode;
-  const std::string process_router_state = QueryPidFileProcessState(
-      kProcessRouterPidPath,
-      module_dir + L"\\tools\\process-router\\ProxyBridge_CLI.exe");
+      managed_tunnel_running && active_routing_mode == "applications"
+          ? "applications"
+          : managed_tunnel_running && active_routing_mode == "full" ? "full"
+                                                                     : "unknown";
+  DWORD process_router_pid = 0;
+  const bool process_router_pid_known =
+      ReadRuntimeRegistryDword(kProcessRouterPidValue, &process_router_pid);
+  const std::string process_router_state =
+      process_router_pid_known
+          ? QueryPidProcessState(
+                process_router_pid,
+                module_dir + L"\\tools\\process-router\\ProxyBridge_CLI.exe")
+          : "missing";
+  DWORD process_router_required_value = 0;
+  const bool process_router_requirement_known = ReadRuntimeRegistryDword(
+      kProcessRouterRequiredValue, &process_router_required_value);
+  const bool process_router_required =
+      process_router_requirement_known && process_router_required_value == 1;
+  const std::string external_vpn_state = QueryRunningCompetingVpnState();
+  const bool external_vpn_active = external_vpn_state == "active";
+  const bool external_vpn_state_known = external_vpn_state != "unknown";
 
   std::string selected_service = kTunnelServiceNameUtf8;
   std::string selected_state = wireguard_state;
@@ -693,7 +840,15 @@ std::string QueryTunnelStatusJson() {
          "\"dnsttClientState\":\"" + dnstt_state + "\"," +
          "\"dnsttTunState\":\"" + dnstt_hev_state + "\"," +
          "\"routingMode\":\"" + routing_mode + "\"," +
-         "\"processRouterState\":\"" + process_router_state + "\"}";
+         "\"processRouterState\":\"" + process_router_state + "\"," +
+         "\"processRouterRequired\":" +
+         (process_router_required ? "true" : "false") + "," +
+         "\"processRouterRequirementKnown\":" +
+         (process_router_requirement_known ? "true" : "false") + "," +
+         "\"externalVpnActive\":" +
+         (external_vpn_active ? "true" : "false") + "," +
+         "\"externalVpnStateKnown\":" +
+         (external_vpn_state_known ? "true" : "false") + "}";
 }
 
 std::string TaskResultJson(bool ok, int exit_code, const std::string& message) {
@@ -960,17 +1115,28 @@ DWORD WINAPI HttpWorkerThread(LPVOID) {
 DWORD WINAPI ProcessRouterGuardThread(LPVOID) {
   bool disconnect_attempted = false;
   while (WaitForSingleObject(g_stop_event, 500) == WAIT_TIMEOUT) {
-    if (!FileExists(kProcessRouterActivePath)) {
+    DWORD process_router_required = 0;
+    if (!ReadRuntimeRegistryDword(kProcessRouterRequiredValue,
+                                  &process_router_required) ||
+        process_router_required != 1) {
       disconnect_attempted = false;
       continue;
     }
 
-    const std::string tunnel_state = QueryServiceState(kTunnelServiceName);
-    const std::string router_state = QueryPidFileProcessState(
-        kProcessRouterPidPath,
-        GetModuleDirectory() +
-            L"\\tools\\process-router\\ProxyBridge_CLI.exe");
-    if (tunnel_state != "running" || router_state == "running") {
+    const std::string wireguard_state = QueryServiceState(kTunnelServiceName);
+    const std::string amneziawg_state =
+        QueryServiceState(kAmneziaWgTunnelServiceName);
+    DWORD process_router_pid = 0;
+    const std::string router_state =
+        ReadRuntimeRegistryDword(kProcessRouterPidValue, &process_router_pid)
+            ? QueryPidProcessState(
+                  process_router_pid,
+                  GetModuleDirectory() +
+                      L"\\tools\\process-router\\ProxyBridge_CLI.exe")
+            : "missing";
+    const bool native_tunnel_running = wireguard_state == "running" ||
+                                       amneziawg_state == "running";
+    if (!native_tunnel_running || router_state == "running") {
       disconnect_attempted = false;
       continue;
     }

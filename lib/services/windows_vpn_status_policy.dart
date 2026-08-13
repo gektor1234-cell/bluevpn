@@ -1,5 +1,7 @@
 enum GreenVpnWindowsManagedTunnelState { connected, disconnected, unknown }
 
+enum GreenVpnWindowsRoutingMode { full, applications, unknown }
+
 const List<String> _greenVpnWindowsSingleProcessStateKeys = <String>[
   'wireGuardState',
   'amneziaWgState',
@@ -62,4 +64,113 @@ GreenVpnWindowsManagedTunnelState greenVpnClassifyWindowsManagedTunnelStatus({
     return GreenVpnWindowsManagedTunnelState.disconnected;
   }
   return GreenVpnWindowsManagedTunnelState.unknown;
+}
+
+GreenVpnWindowsRoutingMode greenVpnClassifyWindowsRoutingMode({
+  required bool requestOk,
+  required Map<String, dynamic> data,
+}) {
+  if (!requestOk || data['ok'] != true) {
+    return GreenVpnWindowsRoutingMode.unknown;
+  }
+  return switch (_greenVpnWindowsStatusValue(data['routingMode'])) {
+    'full' => GreenVpnWindowsRoutingMode.full,
+    'applications' => GreenVpnWindowsRoutingMode.applications,
+    _ => GreenVpnWindowsRoutingMode.unknown,
+  };
+}
+
+bool greenVpnWindowsRoutingModeIsConfirmed({
+  required bool requestOk,
+  required Map<String, dynamic> data,
+  required bool applicationsOnly,
+  required bool processRouterRequired,
+}) {
+  if (data['externalVpnStateKnown'] != true ||
+      data['externalVpnActive'] == true ||
+      data['processRouterRequirementKnown'] != true) {
+    return false;
+  }
+  final privilegedProcessRouterRequired = data['processRouterRequired'] == true;
+  if (privilegedProcessRouterRequired != processRouterRequired) {
+    return false;
+  }
+  final processRouterRunning =
+      _greenVpnWindowsStatusValue(data['processRouterState']) == 'running';
+  if (processRouterRunning != processRouterRequired) {
+    return false;
+  }
+  if (greenVpnClassifyWindowsManagedTunnelStatus(
+        requestOk: requestOk,
+        data: data,
+      ) !=
+      GreenVpnWindowsManagedTunnelState.connected) {
+    return false;
+  }
+
+  final routingMode = greenVpnClassifyWindowsRoutingMode(
+    requestOk: requestOk,
+    data: data,
+  );
+  if (!applicationsOnly) {
+    return routingMode == GreenVpnWindowsRoutingMode.full &&
+        !processRouterRequired;
+  }
+  if (routingMode != GreenVpnWindowsRoutingMode.applications) {
+    return false;
+  }
+  return !processRouterRequired ||
+      _greenVpnWindowsStatusValue(data['processRouterState']) == 'running';
+}
+
+GreenVpnWindowsRoutingMode? greenVpnAuthoritativeActiveRoutingMode({
+  required bool requestOk,
+  required Map<String, dynamic> data,
+  required bool processRouterRequired,
+}) {
+  if (data['externalVpnStateKnown'] != true ||
+      data['externalVpnActive'] == true ||
+      data['processRouterRequirementKnown'] != true) {
+    return null;
+  }
+  if (greenVpnClassifyWindowsManagedTunnelStatus(
+        requestOk: requestOk,
+        data: data,
+      ) !=
+      GreenVpnWindowsManagedTunnelState.connected) {
+    return null;
+  }
+  final routingMode = greenVpnClassifyWindowsRoutingMode(
+    requestOk: requestOk,
+    data: data,
+  );
+  final privilegedProcessRouterRequired = data['processRouterRequired'] == true;
+  if (privilegedProcessRouterRequired != processRouterRequired) return null;
+  final processRouterRunning =
+      _greenVpnWindowsStatusValue(data['processRouterState']) == 'running';
+  if (processRouterRunning != privilegedProcessRouterRequired) return null;
+  if (routingMode == GreenVpnWindowsRoutingMode.full &&
+      !privilegedProcessRouterRequired) {
+    return routingMode;
+  }
+  if (routingMode == GreenVpnWindowsRoutingMode.applications &&
+      (!privilegedProcessRouterRequired ||
+          _greenVpnWindowsStatusValue(data['processRouterState']) ==
+              'running')) {
+    return routingMode;
+  }
+  return null;
+}
+
+bool greenVpnWindowsUiProtectionIsConfirmed({
+  required bool systemStateConfirmed,
+  required GreenVpnWindowsRoutingMode routingMode,
+  required bool fullTunnelDataPlaneConfirmed,
+}) {
+  if (!systemStateConfirmed) return false;
+  return switch (routingMode) {
+    GreenVpnWindowsRoutingMode.full => fullTunnelDataPlaneConfirmed,
+    GreenVpnWindowsRoutingMode.applications => true,
+    GreenVpnWindowsRoutingMode.unknown => false,
+  };
 }

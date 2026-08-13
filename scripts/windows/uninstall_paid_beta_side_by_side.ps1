@@ -130,6 +130,7 @@ Remove-PathSafe -Path (Join-Path $localAppData 'GreenVPNBeta') -AllowedRoots @($
 Remove-PathSafe -Path (Join-Path $appData 'GreenVPNBeta') -AllowedRoots @($appData)
 if (-not $KeepProgramData) {
     Remove-PathSafe -Path (Join-Path $programData 'BlueVPNBeta') -AllowedRoots @($programData)
+    Remove-Item -LiteralPath 'HKLM:\SOFTWARE\GreenVPN\Runtime\paid-beta' -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host 'Green VPN Beta removed. Stable Green VPN was not modified.'
