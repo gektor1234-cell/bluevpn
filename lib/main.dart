@@ -12368,78 +12368,99 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         candidates.isEmpty) {
       return null;
     }
+    final now = DateTime.now().toUtc();
+    final preferredCandidate = candidates
+        .where(
+          (candidate) => greenVpnIsFreshPreferredRoute(
+            candidateId: candidate.id,
+            candidateProtocol: candidate.protocolCode,
+            preferredId: _lastSuccessfulRouteId,
+            preferredProtocol: _lastSuccessfulRouteProtocol,
+            preferredAt: _lastSuccessfulRouteAt,
+            now: now,
+          ),
+        )
+        .firstOrNull;
+    if (preferredCandidate == null) {
+      await appendBlueVpnClientLog(
+        'immediate cached connect unavailable reason=no_fresh_preferred_route preferredRoute=$_lastSuccessfulRouteId preferredProtocol=$_lastSuccessfulRouteProtocol',
+      );
+      return null;
+    }
     final managedMetadata = await Future.wait<String>([
       _cfg.readManagedRouteId(),
       _cfg.readManagedProtocol(),
     ]);
     final managedRouteId = managedMetadata[0];
     final managedProtocol = managedMetadata[1];
-    final now = DateTime.now().toUtc();
     final hasManagedConfig = await _cfg.hasManagedConfig();
-    for (final candidate in candidates) {
-      final serverBase = await _cfg.readBaseConfigForServer(candidate.id);
-      final hasCandidateCache =
-          hasManagedConfig || (serverBase ?? '').trim().isNotEmpty;
-      if (greenVpnCanUseImmediateCachedRoute(
-        isWindows: true,
-        socialOnlyEnabled: false,
-        hasManagedConfig: hasCandidateCache,
-        candidateId: candidate.id,
-        candidateProtocol: candidate.protocolCode,
-        managedRouteId: managedRouteId,
-        managedProtocol: managedProtocol,
-        preferredId: _lastSuccessfulRouteId,
-        preferredProtocol: _lastSuccessfulRouteProtocol,
-        preferredAt: _lastSuccessfulRouteAt,
-        now: now,
-      )) {
-        try {
-          var cachedConfig = hasManagedConfig
-              ? await _cfg.readManagedConfig()
-              : null;
-          final managedMatchesCandidate =
-              cachedConfig != null &&
-              cachedConfig.trim().isNotEmpty &&
-              _configMatchesServer(candidate, cachedConfig);
-          if (!managedMatchesCandidate) {
-            if (serverBase == null ||
-                serverBase.trim().isEmpty ||
-                !_configMatchesServer(candidate, serverBase)) {
-              await appendBlueVpnClientLog(
-                'immediate cached connect rejected server=${candidate.id} reason=route_config_mismatch',
-              );
-              return null;
-            }
-            await _writeProvisionedConfig(serverBase, server: candidate);
-            cachedConfig = await _cfg.readManagedConfig();
+    final serverBase = await _cfg.readBaseConfigForServer(
+      preferredCandidate.id,
+    );
+    final hasCandidateCache =
+        hasManagedConfig || (serverBase ?? '').trim().isNotEmpty;
+    if (greenVpnCanUseImmediateCachedRoute(
+      isWindows: true,
+      socialOnlyEnabled: false,
+      hasManagedConfig: hasCandidateCache,
+      candidateId: preferredCandidate.id,
+      candidateProtocol: preferredCandidate.protocolCode,
+      managedRouteId: managedRouteId,
+      managedProtocol: managedProtocol,
+      preferredId: _lastSuccessfulRouteId,
+      preferredProtocol: _lastSuccessfulRouteProtocol,
+      preferredAt: _lastSuccessfulRouteAt,
+      now: now,
+    )) {
+      try {
+        var cachedConfig = hasManagedConfig
+            ? await _cfg.readManagedConfig()
+            : null;
+        final managedMatchesCandidate =
+            cachedConfig != null &&
+            cachedConfig.trim().isNotEmpty &&
+            _configMatchesServer(preferredCandidate, cachedConfig);
+        if (!managedMatchesCandidate) {
+          if (serverBase == null ||
+              serverBase.trim().isEmpty ||
+              !_configMatchesServer(preferredCandidate, serverBase)) {
             await appendBlueVpnClientLog(
-              'immediate cached connect restored exact server cache server=${candidate.id}',
+              'immediate cached connect rejected server=${preferredCandidate.id} reason=route_config_mismatch',
             );
-          }
-          if (cachedConfig == null || cachedConfig.trim().isEmpty) {
             return null;
           }
-          final preparedConfig = await _prepareProvisionedConfigForPlatform(
-            cachedConfig,
-            server: candidate,
-          );
-          if (preparedConfig != cachedConfig) {
-            await _writeProvisionedConfig(preparedConfig, server: candidate);
-            await appendBlueVpnClientLog(
-              'immediate cached connect normalized endpoint server=${candidate.id}',
-            );
-          }
-        } catch (error) {
+          await _writeProvisionedConfig(serverBase, server: preferredCandidate);
+          cachedConfig = await _cfg.readManagedConfig();
           await appendBlueVpnClientLog(
-            'immediate cached connect rejected server=${candidate.id} error=$error',
+            'immediate cached connect restored exact server cache server=${preferredCandidate.id}',
           );
+        }
+        if (cachedConfig == null || cachedConfig.trim().isEmpty) {
           return null;
         }
-        await appendBlueVpnClientLog(
-          'immediate cached connect ready server=${candidate.id} protocol=${candidate.protocolCode}',
+        final preparedConfig = await _prepareProvisionedConfigForPlatform(
+          cachedConfig,
+          server: preferredCandidate,
         );
-        return candidate;
+        if (preparedConfig != cachedConfig) {
+          await _writeProvisionedConfig(
+            preparedConfig,
+            server: preferredCandidate,
+          );
+          await appendBlueVpnClientLog(
+            'immediate cached connect normalized endpoint server=${preferredCandidate.id}',
+          );
+        }
+      } catch (error) {
+        await appendBlueVpnClientLog(
+          'immediate cached connect rejected server=${preferredCandidate.id} error=$error',
+        );
+        return null;
       }
+      await appendBlueVpnClientLog(
+        'immediate cached connect ready server=${preferredCandidate.id} protocol=${preferredCandidate.protocolCode}',
+      );
+      return preferredCandidate;
     }
     await appendBlueVpnClientLog(
       'immediate cached connect unavailable managedRoute=$managedRouteId managedProtocol=$managedProtocol preferredRoute=$_lastSuccessfulRouteId preferredProtocol=$_lastSuccessfulRouteProtocol',
