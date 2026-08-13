@@ -543,8 +543,8 @@ if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
     $generatedProcessRouterDir = Join-Path $generatedToolsDir 'process-router'
     New-Item -ItemType Directory -Force -Path $generatedProcessRouterDir | Out-Null
     $processRouterHashes = [ordered]@{
-        'ProxyBridge_CLI.exe' = '71AE1A872B49F795BB9E341FF910C5B303AFCE0BAB1E54CFC5436032EB7E08C9'
-        'ProxyBridgeCore.dll' = '736B75A06AD748254D711446E0D4239189A991C7AABCE739EF7DD7B9CA7EBF7E'
+        'ProxyBridge_CLI.exe' = '806B3F6326F3D90C3029D179F458F6BF41970D21107A6729A44D7693C580523B'
+        'ProxyBridgeCore.dll' = '30E3D20DFD44A06CE52F5F3566863A54D5832C4490FB210704B976D7ED5A2D2F'
         'WinDivert.dll' = 'C1E060EE19444A259B2162F8AF0F3FE8C4428A1C6F694DCE20DE194AC8D7D9A2'
         'WinDivert64.sys' = '8DA085332782708D8767BCACE5327A6EC7283C17CFB85E40B03CD2323A90DDC2'
     }
@@ -583,7 +583,7 @@ if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
     @'
 Green VPN Windows application routing uses:
 
-- ProxyBridge v3.2.0 (MIT License)
+- Green VPN ProxyBridge fork based on v4.0.0 (MIT License)
 - WinDivert v2.2.2-A (see WINDIVERT_LICENSE.txt)
 
 The corresponding license texts are distributed in this directory.

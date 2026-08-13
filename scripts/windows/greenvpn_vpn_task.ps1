@@ -19,15 +19,15 @@ $RoutingModePath = Join-Path $ProgramDataRoot 'routing_mode'
 $RoutingAppsPath = Join-Path $ProgramDataRoot 'routing_apps.json'
 $ProcessRouterRoot = Join-Path $PSScriptRoot 'process-router'
 $ProcessRouterExe = Join-Path $ProcessRouterRoot 'ProxyBridge_CLI.exe'
-$ProcessRouterRulesPath = Join-Path $ProgramDataRoot 'process-router.rules.json'
+$ProcessRouterProfilePath = Join-Path $ProgramDataRoot 'process-router.pbprofile'
 $ProcessRouterStdoutPath = Join-Path $ProgramDataRoot 'process-router.stdout.log'
 $ProcessRouterStderrPath = Join-Path $ProgramDataRoot 'process-router.stderr.log'
 $CompetingVpnStatePath = Join-Path $ProgramDataRoot 'state\competing-vpn-services.json'
 $ApplicationProxyHost = '10.10.0.1'
 $ApplicationProxyPort = 1080
 $ProcessRouterHashes = @{
-    'ProxyBridge_CLI.exe' = '71AE1A872B49F795BB9E341FF910C5B303AFCE0BAB1E54CFC5436032EB7E08C9'
-    'ProxyBridgeCore.dll' = '736B75A06AD748254D711446E0D4239189A991C7AABCE739EF7DD7B9CA7EBF7E'
+    'ProxyBridge_CLI.exe' = '806B3F6326F3D90C3029D179F458F6BF41970D21107A6729A44D7693C580523B'
+    'ProxyBridgeCore.dll' = '30E3D20DFD44A06CE52F5F3566863A54D5832C4490FB210704B976D7ED5A2D2F'
     'WinDivert.dll' = 'C1E060EE19444A259B2162F8AF0F3FE8C4428A1C6F694DCE20DE194AC8D7D9A2'
     'WinDivert64.sys' = '8DA085332782708D8767BCACE5327A6EC7283C17CFB85E40B03CD2323A90DDC2'
 }
@@ -596,29 +596,48 @@ function Start-GreenProcessRouter {
     $rules = [Collections.Generic.List[object]]::new()
     foreach ($path in $ApplicationPaths) {
         $rules.Add([ordered]@{
-            processNames = $path
-            targetHosts = '*'
-            targetPorts = '*'
-            protocol = 'BOTH'
-            action = 'PROXY'
-            enabled = $true
+            ProcessName = $path
+            TargetHosts = '*'
+            TargetPorts = '*'
+            Protocol = 'BOTH'
+            Action = 'PROXY'
+            IsEnabled = $true
+            ProxyConfigId = 1
         })
     }
-    # Windows DNS Client performs lookups for applications through svchost.
-    # Only DNS is added here; other svchost traffic stays direct.
-    $rules.Add([ordered]@{
-        processNames = 'svchost.exe'
-        targetHosts = '*'
-        targetPorts = '53'
-        protocol = 'BOTH'
-        action = 'PROXY'
-        enabled = $true
-    })
-    $rules | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $ProcessRouterRulesPath -Encoding UTF8
+    $profile = [ordered]@{
+        Version = '1.0'
+        LocalhostViaProxy = $false
+        IsTrafficLoggingEnabled = $false
+        ProxyConfigs = @([ordered]@{
+            Id = 1
+            Type = 'socks5'
+            Host = $ApplicationProxyHost
+            Port = [string]$ApplicationProxyPort
+            Username = ''
+            Password = ''
+        })
+        ProxyRules = @($rules)
+    }
+    $profileJson = $profile | ConvertTo-Json -Depth 8
+    $profileTempPath = $ProcessRouterProfilePath + '.tmp'
+    try {
+        [IO.File]::WriteAllText(
+            $profileTempPath,
+            $profileJson,
+            [Text.UTF8Encoding]::new($false)
+        )
+        Move-Item -LiteralPath $profileTempPath `
+            -Destination $ProcessRouterProfilePath -Force
+    }
+    finally {
+        Remove-Item -LiteralPath $profileTempPath -Force `
+            -ErrorAction SilentlyContinue
+    }
 
     $arguments = @(
-        '--proxy', "socks5://${ApplicationProxyHost}:$ApplicationProxyPort",
-        '--rule-file', $ProcessRouterRulesPath
+        '--profile', $ProcessRouterProfilePath,
+        '--verbose', '1'
     )
     $process = Start-Process -FilePath $ProcessRouterExe -ArgumentList $arguments `
         -WorkingDirectory $ProcessRouterRoot -WindowStyle Hidden -PassThru `

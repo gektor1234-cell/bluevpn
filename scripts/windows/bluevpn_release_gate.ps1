@@ -1523,6 +1523,8 @@ $processRouterInstallerFragments = @(
     'WinDivert64.sys',
     'THIRD_PARTY_NOTICES.txt',
     'Get-AuthenticodeSignature'
+    '806B3F6326F3D90C3029D179F458F6BF41970D21107A6729A44D7693C580523B'
+    '30E3D20DFD44A06CE52F5F3566863A54D5832C4490FB210704B976D7ED5A2D2F'
 )
 foreach ($fragment in $processRouterInstallerFragments) {
     if ($installer.Contains($fragment)) {
@@ -1530,6 +1532,46 @@ foreach ($fragment in $processRouterInstallerFragments) {
     }
     else {
         Add-Error "Installer process-router marker missing: $fragment"
+    }
+}
+
+$processRouterSource = Get-Content -LiteralPath (
+    Join-Path $ProjectRoot 'third_party\windows\process_router\source\ProxyBridge.c'
+) -Raw
+$processRouterSourceFragments = @(
+    'WINDIVERT_LAYER_FLOW'
+    'addr.Flow.ProcessId'
+    'ProxyBridge_SetFailClosed'
+    'socks5_read_reply'
+    'WCHAR full_path_w[32768]'
+)
+foreach ($fragment in $processRouterSourceFragments) {
+    if ($processRouterSource.Contains($fragment)) {
+        Add-Pass "Process router hardened source marker present: $fragment"
+    } else {
+        Add-Error "Process router hardened source marker missing: $fragment"
+    }
+}
+if ($processRouterSource.Contains('Fall back to first available config')) {
+    Add-Error 'Process router still contains a proxy-config fallback path'
+} else {
+    Add-Pass 'Process router requires the exact configured proxy route'
+}
+
+$processRouterCliSource = Get-Content -LiteralPath (
+    Join-Path $ProjectRoot 'third_party\windows\process_router\source\main.c'
+) -Raw
+$processRouterCliSourceFragments = @(
+    'g_SetFailClosed(1)'
+    'Refusing to start with incomplete rule configuration.'
+    'references unknown proxy config id'
+    'if (g_Stop) g_Stop();'
+)
+foreach ($fragment in $processRouterCliSourceFragments) {
+    if ($processRouterCliSource.Contains($fragment)) {
+        Add-Pass "Process router hardened CLI source marker present: $fragment"
+    } else {
+        Add-Error "Process router hardened CLI source marker missing: $fragment"
     }
 }
 
@@ -1871,6 +1913,11 @@ $vpnTaskApplicationRoutingFragments = @(
     'ApplicationProxyPort = 1080',
     'Test-GreenTcpEndpoint -HostName $ApplicationProxyHost -Port $ApplicationProxyPort -TimeoutMs 250',
     'for ($i = 0; $i -lt 20; $i++)'
+    'process-router.pbprofile'
+    "'--profile', `$ProcessRouterProfilePath"
+    'ProxyConfigs'
+    'ProxyRules'
+    'ProxyConfigId = 1'
 )
 foreach ($fragment in $vpnTaskApplicationRoutingFragments) {
     if ($vpnTaskScript.Contains($fragment)) {
@@ -2386,6 +2433,9 @@ $windowsRuntimeFailoverChecks = [ordered]@{
         $windowsModeReconcileReleaseSmokeScript,
         "ExpectedApplicationModeEgress = '5.129.216.42'",
         'selectedMatchesDedicatedVpn',
+        'selectedYouTube204',
+        'selectedIpv6BlockedWhenDirectIpv6Available',
+        'curl-unselected-control.exe',
         'Returned full mode did not restore the confirmed VPN egress.'
     )
     'Windows fast-cache latency proof uses private state and stop-before-disconnect cleanup' = @(

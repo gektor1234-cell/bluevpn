@@ -238,6 +238,62 @@ try {
         throw 'Selective routing accepted a private destination CIDR.'
     }
 
+    $syntheticRouterRoot = Join-Path $resolvedTestRoot 'router'
+    New-Item -ItemType Directory -Force -Path $syntheticRouterRoot | Out-Null
+    $syntheticRouterExe = Join-Path $syntheticRouterRoot 'ProxyBridge_CLI.exe'
+    [IO.File]::WriteAllText($syntheticRouterExe, 'synthetic')
+    $selectedApp = Join-Path $resolvedTestRoot 'selected.exe'
+    [IO.File]::WriteAllText($selectedApp, 'synthetic')
+    $ProcessRouterRoot = $syntheticRouterRoot
+    $ProcessRouterExe = $syntheticRouterExe
+    $ProcessRouterProfilePath = Join-Path $resolvedTestRoot 'process-router.pbprofile'
+    function Stop-GreenProcessRouter {}
+    function Assert-GreenProcessRouterPayload {}
+    function Test-GreenProcessRouterRunning { return $true }
+    function Start-Process {
+        param(
+            [string]$FilePath,
+            [object[]]$ArgumentList,
+            [string]$WorkingDirectory,
+            [string]$WindowStyle,
+            [switch]$PassThru,
+            [string]$RedirectStandardOutput,
+            [string]$RedirectStandardError
+        )
+        $script:capturedRouterArguments = @($ArgumentList)
+        return [pscustomobject]@{ Id = 4242; HasExited = $false }
+    }
+    Start-GreenProcessRouter -ApplicationPaths @($selectedApp)
+    $profile = [IO.File]::ReadAllText($ProcessRouterProfilePath) |
+        ConvertFrom-Json
+    $selectedRule = @($profile.ProxyRules | Where-Object {
+        [string]$_.ProcessName -eq $selectedApp
+    })
+    if (
+        [string]$profile.Version -ne '1.0' -or
+        [bool]$profile.LocalhostViaProxy -or
+        [bool]$profile.IsTrafficLoggingEnabled -or
+        @($profile.ProxyConfigs).Count -ne 1 -or
+        [string]$profile.ProxyConfigs[0].Type -ne 'socks5' -or
+        [string]$profile.ProxyConfigs[0].Host -ne '10.10.0.1' -or
+        [string]$profile.ProxyConfigs[0].Port -ne '1080' -or
+        $selectedRule.Count -ne 1 -or
+        [string]$selectedRule[0].TargetHosts -ne '*' -or
+        [string]$selectedRule[0].TargetPorts -ne '*' -or
+        [string]$selectedRule[0].Protocol -ne 'BOTH' -or
+        [string]$selectedRule[0].Action -ne 'PROXY' -or
+        -not [bool]$selectedRule[0].IsEnabled -or
+        [int]$selectedRule[0].ProxyConfigId -ne 1 -or
+        @($profile.ProxyRules).Count -ne 1 -or
+        @($script:capturedRouterArguments).Count -ne 4 -or
+        [string]$script:capturedRouterArguments[0] -ne '--profile' -or
+        [string]$script:capturedRouterArguments[1] -ne $ProcessRouterProfilePath -or
+        [string]$script:capturedRouterArguments[2] -ne '--verbose' -or
+        [string]$script:capturedRouterArguments[3] -ne '1'
+    ) {
+        throw 'ProxyBridge v4 profile contract was not preserved.'
+    }
+
     [pscustomobject]@{
         success = $true
         routingMode = Get-GreenRoutingMode
@@ -249,6 +305,7 @@ try {
         nestedTransitionStartRejected = $nestedStartRejected
         nestedCleanupGenerationReused = $true
         abandonedGenerationAdopted = $true
+        proxyBridgeV4ProfilePassed = $true
     } | ConvertTo-Json
 }
 finally {

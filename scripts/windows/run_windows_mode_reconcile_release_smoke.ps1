@@ -68,6 +68,11 @@ $privateScratchRoot = Join-Path $env:TEMP (
 $isolatedAppDataRoot = Join-Path $privateScratchRoot 'AppData'
 $isolatedUserStateRoot = Join-Path $isolatedAppDataRoot 'GreenVPN\state'
 $selectedExecutable = Join-Path $env:SystemRoot 'System32\curl.exe'
+$directControlExecutable = Join-Path $privateScratchRoot 'probe-lanes\curl-unselected-control.exe'
+$applicationProxyHost = '10.10.0.1'
+$applicationProxyPort = 1080
+$probeRecoveryReserveSeconds = 180
+$selectedModeProbeMinimumSeconds = 120
 $failsafeTaskNames = @(
     'GreenVPNConnectLatencySmokeFailsafe',
     'GreenVPNPublicRuntimeFailoverSmokeFailsafe',
@@ -86,6 +91,7 @@ $expectedServiceHash = $ExpectedServiceSha256.ToUpperInvariant()
 $mutex = [Threading.Mutex]::new($false, 'Local\GreenVPNModeReconcileReleaseSmoke')
 $mutexAcquired = $false
 $deadman = $null
+$deadmanDeadlineUtc = $null
 $runtimeEvidenceHistory = [Collections.Generic.List[object]]::new()
 
 New-Item -ItemType Directory -Force -Path $resolvedArtifactRoot | Out-Null
@@ -594,17 +600,43 @@ function Get-WindowScreenshot {
 }
 
 function Get-EgressFingerprint {
-    param([switch]$UseSelectedExecutable)
+    param(
+        [switch]$UseSelectedExecutable,
+        [string]$ExecutablePath = '',
+        [ValidateSet('Any', 'IPv4', 'IPv6')][string]$AddressFamily = 'Any'
+    )
+    $familyArgument = switch ($AddressFamily) {
+        'IPv4' { '-4' }
+        'IPv6' { '-6' }
+        default { '' }
+    }
     foreach ($url in @('https://api.ipify.org', 'https://ifconfig.me/ip')) {
         $value = ''
         try {
-            if ($UseSelectedExecutable) {
-                $value = (& $selectedExecutable '--silent' '--show-error' `
-                    '--max-time' '15' $url 2>$null | Select-Object -First 1).Trim()
+            if ($UseSelectedExecutable -or -not [string]::IsNullOrWhiteSpace($ExecutablePath)) {
+                $curlPath = if ($ExecutablePath) { $ExecutablePath } else { $selectedExecutable }
+                $arguments = @(
+                    '--silent', '--show-error', '--fail', '--http1.1',
+                    '--connect-timeout', '8', '--max-time', '15'
+                )
+                if ($familyArgument) { $arguments += $familyArgument }
+                $arguments += $url
+                $rawValue = & $curlPath @arguments 2>$null |
+                    Select-Object -First 1
+                if ($LASTEXITCODE -ne 0 -or $null -eq $rawValue) { continue }
+                $value = ([string]$rawValue).Trim()
             } else {
                 $value = (Invoke-RestMethod -Uri $url -TimeoutSec 15).ToString().Trim()
             }
             if (-not $value) { continue }
+            $address = $null
+            if (-not [Net.IPAddress]::TryParse($value, [ref]$address)) { continue }
+            if (
+                ($AddressFamily -eq 'IPv4' -and
+                    $address.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) -or
+                ($AddressFamily -eq 'IPv6' -and
+                    $address.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetworkV6)
+            ) { continue }
             $bytes = [Text.Encoding]::UTF8.GetBytes($value)
             $sha = [Security.Cryptography.SHA256]::Create()
             try {
@@ -617,6 +649,40 @@ function Get-EgressFingerprint {
         } catch { $value = $null }
     }
     return ''
+}
+
+function Get-StringSha256 {
+    param([Parameter(Mandatory = $true)][string]$Value)
+
+    $bytes = [Text.Encoding]::UTF8.GetBytes($Value)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '')
+    } finally {
+        $sha.Dispose()
+        [Array]::Clear($bytes, 0, $bytes.Length)
+    }
+}
+
+function Get-SelectedYouTubeProbe {
+    try {
+        $status = & $selectedExecutable @(
+            '--silent', '--show-error', '--output', 'NUL',
+            '--write-out', '%{http_code}', '--http1.1',
+            '--connect-timeout', '8', '--max-time', '20',
+            'https://www.youtube.com/generate_204'
+        ) 2>$null
+        return $LASTEXITCODE -eq 0 -and ([string]$status).Trim() -eq '204'
+    } catch {
+        return $false
+    }
+}
+
+function Test-DirectIpv6Available {
+    param([Parameter(Mandatory = $true)][string]$ExecutablePath)
+
+    return [bool](Get-EgressFingerprint `
+        -ExecutablePath $ExecutablePath -AddressFamily IPv6)
 }
 
 function Get-RuntimeRegistryEvidence {
@@ -1127,8 +1193,18 @@ try {
         -Mode applications
     $summary.selectedMode['screenshot'] = Get-WindowScreenshot -Process $process `
         -Path $selectedScreenshotPath
-    $directFingerprint = Get-EgressFingerprint
-    $selectedFingerprint = Get-EgressFingerprint -UseSelectedExecutable
+    Copy-Item -LiteralPath $selectedExecutable `
+        -Destination $directControlExecutable -Force
+    if (
+        (Get-FileHash -LiteralPath $selectedExecutable -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath $directControlExecutable -Algorithm SHA256).Hash
+    ) {
+        throw 'Direct-control executable did not preserve the selected executable identity.'
+    }
+    $directFingerprint = Get-EgressFingerprint `
+        -ExecutablePath $directControlExecutable -AddressFamily IPv4
+    $selectedFingerprint = Get-EgressFingerprint -UseSelectedExecutable `
+        -AddressFamily IPv4
     if (-not $directFingerprint -or -not $selectedFingerprint) {
         throw 'Selected-mode egress fingerprints were unavailable.'
     }
@@ -1140,11 +1216,28 @@ try {
     if ($selectedFingerprint -ne $expectedApplicationFingerprint) {
         throw 'Selected executable did not use the dedicated application-routing egress.'
     }
+    $selectedYouTube204 = Get-SelectedYouTubeProbe
+    if (-not $selectedYouTube204) {
+        throw 'Selected executable did not reach YouTube through application routing.'
+    }
+    $directIpv6Available = Test-DirectIpv6Available `
+        -ExecutablePath $directControlExecutable
+    $selectedIpv6Fingerprint = Get-EgressFingerprint -UseSelectedExecutable `
+        -AddressFamily IPv6
+    if ($directIpv6Available -and $selectedIpv6Fingerprint) {
+        throw 'Selected executable IPv6 traffic escaped the IPv4-only application route.'
+    }
     $summary.selectedMode['egress'] = [ordered]@{
         selectedExecutableFingerprintCaptured = $true
         directFingerprintCaptured = $true
         selectedDiffersFromDirect = $true
         selectedMatchesDedicatedVpn = $true
+        selectedYouTube204 = $selectedYouTube204
+        directIpv6Available = $directIpv6Available
+        selectedIpv6BlockedWhenDirectIpv6Available = (
+            -not $directIpv6Available -or -not [bool]$selectedIpv6Fingerprint
+        )
+        ipv6DirectLeakDetected = $false
         rawAddressesStored = $false
     }
 
