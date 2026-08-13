@@ -1064,17 +1064,17 @@ function Start-GreenTunnel {
 
     if ($routingMode -eq 'applications' -and $applicationPaths.Count -gt 0) {
         $tunnelReady = $false
-        for ($i = 0; $i -lt 40; $i++) {
+        for ($i = 0; $i -lt 20; $i++) {
             $svc = Get-OwnService
             if (
                 $null -ne $svc -and
                 $svc.State -eq 'Running' -and
-                (Test-GreenTcpEndpoint -HostName $ApplicationProxyHost -Port $ApplicationProxyPort)
+                (Test-GreenTcpEndpoint -HostName $ApplicationProxyHost -Port $ApplicationProxyPort -TimeoutMs 250)
             ) {
                 $tunnelReady = $true
                 break
             }
-            Start-Sleep -Milliseconds 500
+            Start-Sleep -Milliseconds 250
         }
         if (-not $tunnelReady) {
             Stop-GreenTunnel

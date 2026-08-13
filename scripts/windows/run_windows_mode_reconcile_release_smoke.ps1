@@ -29,7 +29,8 @@ param(
     [ValidateRange(90, 600)][int]$InitialDelaySeconds = 90,
     [ValidateRange(600, 1800)][int]$DeadmanDelaySeconds = 900,
     [ValidateRange(10, 120)][int]$MaxConnectSeconds = 30,
-    [ValidateRange(15, 120)][int]$MaxModeSwitchSeconds = 60
+    [ValidateRange(15, 120)][int]$MaxModeSwitchSeconds = 60,
+    [string]$ExpectedApplicationModeEgress = '5.129.216.42'
 )
 
 Set-StrictMode -Version Latest
@@ -1134,14 +1135,16 @@ try {
     if ($directFingerprint -eq $selectedFingerprint) {
         throw 'Selected executable did not prove a separate VPN egress.'
     }
-    if ($fullFingerprint -ne $selectedFingerprint) {
-        throw 'Selected executable egress does not match confirmed full VPN egress.'
+    $expectedApplicationFingerprint = Get-StringSha256 `
+        -Value $ExpectedApplicationModeEgress
+    if ($selectedFingerprint -ne $expectedApplicationFingerprint) {
+        throw 'Selected executable did not use the dedicated application-routing egress.'
     }
     $summary.selectedMode['egress'] = [ordered]@{
         selectedExecutableFingerprintCaptured = $true
         directFingerprintCaptured = $true
         selectedDiffersFromDirect = $true
-        selectedMatchesFullVpn = $true
+        selectedMatchesDedicatedVpn = $true
         rawAddressesStored = $false
     }
 

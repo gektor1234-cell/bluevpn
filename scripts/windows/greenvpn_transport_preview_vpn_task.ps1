@@ -1874,17 +1874,17 @@ function Start-OwnTunnel {
     Write-GreenLog "connect phase=tunnel-service-running service=$serviceName"
     if ($routingMode -eq 'applications' -and $applicationPaths.Count -gt 0) {
         $tunnelReady = $false
-        for ($i = 0; $i -lt 40; $i++) {
+        for ($i = 0; $i -lt 20; $i++) {
             $service = Get-CimInstance Win32_Service -Filter "Name='$serviceName'" -ErrorAction SilentlyContinue
             if (
                 $null -ne $service -and
                 $service.State -eq 'Running' -and
-                (Test-GreenTcpEndpoint -HostName $ApplicationProxyHost -Port $ApplicationProxyPort)
+                (Test-GreenTcpEndpoint -HostName $ApplicationProxyHost -Port $ApplicationProxyPort -TimeoutMs 250)
             ) {
                 $tunnelReady = $true
                 break
             }
-            Start-Sleep -Milliseconds 500
+            Start-Sleep -Milliseconds 250
         }
         if (-not $tunnelReady) {
             Stop-OwnTunnel

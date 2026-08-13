@@ -62,6 +62,7 @@ $finalCandidateBuildPath = Join-Path $ProjectRoot "scripts\windows\build_final_r
 $publicProductBuildPath = Join-Path $ProjectRoot "scripts\windows\build_public_product.ps1"
 $paidBetaBuildPath = Join-Path $ProjectRoot "scripts\windows\build_paid_beta.ps1"
 $windowsSelectiveRoutingPath = Join-Path $ProjectRoot "lib\services\windows_selective_routing_service.dart"
+$serverLocationPolicyPath = Join-Path $ProjectRoot "lib\services\server_location_policy.dart"
 $windowsVpnStatusPolicyPath = Join-Path $ProjectRoot "lib\services\windows_vpn_status_policy.dart"
 $fusionConnectionStatusPolicyPath = Join-Path $ProjectRoot "lib\services\fusion_connection_status_policy.dart"
 $runtimeConfigPath = Join-Path $ProjectRoot "lib\runtime_config.dart"
@@ -228,6 +229,7 @@ $androidRuntimeFailoverService = Read-Text $androidRuntimeFailoverServicePath
 $androidRuntimeFailoverPolicy = Read-Text $androidRuntimeFailoverPolicyPath
 $androidMainActivity = Read-Text $androidMainActivityPath
 $windowsSelectiveRouting = Read-Text $windowsSelectiveRoutingPath
+$serverLocationPolicy = Read-Text $serverLocationPolicyPath
 $windowsVpnStatusPolicy = Read-Text $windowsVpnStatusPolicyPath
 $fusionConnectionStatusPolicy = Read-Text $fusionConnectionStatusPolicyPath
 $runtimeConfig = Read-Text $runtimeConfigPath
@@ -1866,7 +1868,9 @@ $vpnTaskApplicationRoutingFragments = @(
     'ProcessRouterRequired',
     'Confirm-GreenProcessRouterRuntimeContract',
     'Get-GreenProcessRouterProcesses',
-    'ApplicationProxyPort = 1080'
+    'ApplicationProxyPort = 1080',
+    'Test-GreenTcpEndpoint -HostName $ApplicationProxyHost -Port $ApplicationProxyPort -TimeoutMs 250',
+    'for ($i = 0; $i -lt 20; $i++)'
 )
 foreach ($fragment in $vpnTaskApplicationRoutingFragments) {
     if ($vpnTaskScript.Contains($fragment)) {
@@ -1874,6 +1878,24 @@ foreach ($fragment in $vpnTaskApplicationRoutingFragments) {
     }
     else {
         Add-Error "Windows VPN task application-routing marker missing: $fragment"
+    }
+}
+
+$windowsApplicationProxyRouteFragments = @(
+    'greenVpnWindowsApplicationProxyServerId',
+    'greenVpnWindowsApplicationProxyRoutes',
+    'greenVpnPreferredFullModeRoute',
+    'requireExactServer: true',
+    '_prepareWindowsRoutingModeRoute',
+    '_activateCachedWindowsRoute'
+)
+$windowsApplicationProxyRouteSource = $main + "`n" + $serverLocationPolicy
+foreach ($fragment in $windowsApplicationProxyRouteFragments) {
+    if ($windowsApplicationProxyRouteSource.Contains($fragment)) {
+        Add-Pass "Windows application-proxy route marker present: $fragment"
+    }
+    else {
+        Add-Error "Windows application-proxy route marker missing: $fragment"
     }
 }
 
@@ -2359,6 +2381,12 @@ $windowsRuntimeFailoverChecks = [ordered]@{
         'Wait-StandbyCleanupEvidence -TimeoutSeconds 30',
         'originalEgressRestored',
         'finally'
+    )
+    'Windows mode reconciliation proves dedicated application egress' = @(
+        $windowsModeReconcileReleaseSmokeScript,
+        "ExpectedApplicationModeEgress = '5.129.216.42'",
+        'selectedMatchesDedicatedVpn',
+        'Returned full mode did not restore the confirmed VPN egress.'
     )
     'Windows fast-cache latency proof uses private state and stop-before-disconnect cleanup' = @(
         $windowsConnectLatencyPhysicalTestScript,

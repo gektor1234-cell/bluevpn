@@ -10267,7 +10267,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       windowsDestinationCidrs: List<String>.from(
         _windowsSelectiveDestinationCidrs,
       ),
-      runtimeRoute: _activeWindowsRuntimeRoute,
+      runtimeRoute: _activeWindowsRuntimeRoute ?? _activeConnectionRoute,
     );
   }
 
@@ -10298,6 +10298,108 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     if (base != null && base.trim().isNotEmpty) {
       await _cfg.writeManagedConfig(_buildManagedConfigFromBase(base));
     }
+  }
+
+  ServerLocation? _windowsApplicationProxyRoute() {
+    return greenVpnWindowsApplicationProxyRoutes<ServerLocation>(
+          candidates: servers.where(
+            (server) =>
+                !server.isAuto &&
+                server.isCurrentClientReady &&
+                (_hasPaidSubscriptionEntitlement ||
+                    !server.requiresPaidSubscription),
+          ),
+          serverIdOf: (server) => server.id,
+          protocolOf: (server) => server.protocolCode,
+        ).firstOrNull ??
+        greenVpnWindowsApplicationProxyRoutes<ServerLocation>(
+          candidates: _fallbackServerCatalogForCurrentChannel(),
+          serverIdOf: (server) => server.id,
+          protocolOf: (server) => server.protocolCode,
+        ).firstOrNull;
+  }
+
+  Future<bool> _activateCachedWindowsRoute(ServerLocation route) async {
+    final cached = await _cfg.readBaseConfigForServer(route.id);
+    if (cached == null ||
+        cached.trim().isEmpty ||
+        !_configMatchesServer(route, cached)) {
+      await appendBlueVpnClientLog(
+        'routing mode cached route unavailable server=${route.id} protocol=${route.protocolCode}',
+      );
+      return false;
+    }
+    await _cfg.writeBaseConfig(cached);
+    await _cfg.writeManagedConfig(
+      greenVpnTransportRequiresFullTunnel(route.protocolCode)
+          ? cached
+          : _buildManagedConfigFromBase(cached),
+    );
+    await _cfg.writeManagedProtocol(route.protocolCode);
+    await _cfg.writeManagedRouteId(route.id);
+    return true;
+  }
+
+  Future<ServerLocation?> _prepareWindowsRoutingModeRoute() async {
+    if (kIsWeb || !Platform.isWindows) return null;
+    if (_windowsProcessRouterRequired) {
+      final route = _windowsApplicationProxyRoute();
+      if (route == null) {
+        throw StateError(
+          'Режим для выбранных программ сейчас недоступен. Текущее подключение сохранено.',
+        );
+      }
+      final provisioned = await _ensureProvisionedConfigInteractive(
+        serverOverride: route,
+        requireExactServer: true,
+      );
+      if (!provisioned.ok || provisioned.server == null) {
+        throw StateError(
+          provisioned.message ??
+              'Не удалось подготовить режим для выбранных программ.',
+        );
+      }
+      return provisioned.server;
+    }
+
+    final route = _fullModeRouteForCurrentSelection();
+    if (route == null) {
+      throw StateError('Не удалось подобрать рабочую локацию для VPN.');
+    }
+    if (await _activateCachedWindowsRoute(route)) return route;
+    final provisioned = await _ensureProvisionedConfigInteractive(
+      serverOverride: route,
+      requireExactServer: !route.isAuto,
+    );
+    if (!provisioned.ok || provisioned.server == null) {
+      throw StateError(
+        provisioned.message ?? 'Не удалось подготовить обычный режим VPN.',
+      );
+    }
+    return provisioned.server;
+  }
+
+  ServerLocation? _fullModeRouteForCurrentSelection() {
+    final usable =
+        servers
+            .where(
+              (server) =>
+                  !server.isAuto &&
+                  server.isCurrentClientReady &&
+                  (_hasPaidSubscriptionEntitlement ||
+                      !server.requiresPaidSubscription),
+            )
+            .toList()
+          ..sort(_compareServerConnectionCandidates);
+    return greenVpnPreferredFullModeRoute<ServerLocation>(
+      candidates: usable,
+      automatic: selectedServer.isAuto,
+      selectedLocationId: selectedServer.publicLocationId,
+      selectedRouteId: selectedServer.id,
+      activeRoute: _activeConnectionRoute,
+      locationIdOf: (server) => server.publicLocationId,
+      routeIdOf: (server) => server.id,
+    );
   }
 
   Future<_GreenVpnWindowsRuntimeSnapshot> _readWindowsRuntimeSnapshot() async {
@@ -10385,7 +10487,19 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _disarmWindowsRuntimeFailover(reason: 'routing_mode_rollback');
     setState(() => _restoreRoutingPreferenceInMemory(snapshot));
     try {
-      await _writeCurrentRoutingConfig();
+      if (!kIsWeb && Platform.isWindows && snapshot.runtimeRoute != null) {
+        if (!await _activateCachedWindowsRoute(snapshot.runtimeRoute!)) {
+          final restoredConfig = await _ensureProvisionedConfigInteractive(
+            serverOverride: snapshot.runtimeRoute,
+            requireExactServer: true,
+          );
+          if (!restoredConfig.ok) {
+            throw StateError('Не удалось подготовить предыдущий маршрут.');
+          }
+        }
+      } else {
+        await _writeCurrentRoutingConfig();
+      }
       if (wasConnected) {
         final alreadyRestored = !kIsWeb && Platform.isWindows
             ? await _windowsRequestedRoutingModeIsConfirmed()
@@ -10445,6 +10559,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     await _syncWindowsRoutingPolicy();
     await _cfg.ensureBaseSeededFromManagedIfMissing();
 
+    ServerLocation? preparedWindowsRoute;
+    if (!kIsWeb && Platform.isWindows && reconnectIfNeeded && vpnEnabled) {
+      preparedWindowsRoute = await _prepareWindowsRoutingModeRoute();
+      if (!mounted) return false;
+    }
+
     final base = await _cfg.readBaseConfig();
     if (!mounted) return false;
     if (base == null || base.trim().isEmpty) {
@@ -10483,7 +10603,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           return false;
         }
       } else {
-        final runtimeRoute = _activeWindowsRuntimeRoute;
+        final runtimeRoute =
+            preparedWindowsRoute ??
+            _activeWindowsRuntimeRoute ??
+            _activeConnectionRoute;
         _disarmWindowsRuntimeFailover(reason: 'routing_mode_reconnect');
         final off = await _vpnBackend.disconnect();
         if (!mounted) return false;
@@ -10504,6 +10627,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         }
         if (!socialOnlyEnabled && runtimeRoute != null) {
           await _armRuntimeFailover(runtimeRoute);
+        }
+        if (runtimeRoute != null) {
+          _trackConnectionState(true, route: runtimeRoute);
         }
       }
 
@@ -11513,6 +11639,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
   Future<ProvisionedConfigResult> _ensureProvisionedConfigInteractive({
     ServerLocation? serverOverride,
+    bool requireExactServer = false,
   }) async {
     if (kIsWeb) return const ProvisionedConfigResult.err('web_unavailable');
     final effectiveServer = serverOverride ?? selectedServer;
@@ -11530,7 +11657,20 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       if (!mounted) {
         return const ProvisionedConfigResult.err('screen_closed');
       }
-      if (ok) return ProvisionedConfigResult.ok(effectiveServer);
+      if (ok && !requireExactServer) {
+        return ProvisionedConfigResult.ok(effectiveServer);
+      }
+      if (ok && requireExactServer) {
+        final base = await _cfg.readBaseConfigForServer(effectiveServer.id);
+        if (!mounted) {
+          return const ProvisionedConfigResult.err('screen_closed');
+        }
+        if (base != null &&
+            base.trim().isNotEmpty &&
+            _configMatchesServer(effectiveServer, base)) {
+          return ProvisionedConfigResult.ok(effectiveServer);
+        }
+      }
       _toast(
         context,
         'Тестовый локальный режим недоступен. Войди в аккаунт, чтобы получить VPN-конфигурацию с сервера.',
@@ -11559,7 +11699,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         showToast: true,
         serverOverride: effectiveServer,
       );
-      if (reused) return ProvisionedConfigResult.ok(effectiveServer);
+      if (reused && !requireExactServer) {
+        return ProvisionedConfigResult.ok(effectiveServer);
+      }
       if (!mounted) {
         return const ProvisionedConfigResult.err('screen_closed');
       }
@@ -11689,7 +11831,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         showToast: true,
         serverOverride: effectiveServer,
       );
-      if (reused) return ProvisionedConfigResult.ok(effectiveServer);
+      if (reused && !requireExactServer) {
+        return ProvisionedConfigResult.ok(effectiveServer);
+      }
       if (!mounted) {
         return const ProvisionedConfigResult.err('screen_closed');
       }
@@ -11709,6 +11853,17 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       );
       return const ProvisionedConfigResult.err(
         'Выбранная локация сейчас недоступна.',
+      );
+    }
+    if (requireExactServer &&
+        (provisionedServer.id != effectiveServer.id ||
+            provisionedServer.protocolCode.trim().toLowerCase() !=
+                effectiveServer.protocolCode.trim().toLowerCase())) {
+      await appendBlueVpnClientLog(
+        'exact route reassignment rejected requested=${effectiveServer.id}/${effectiveServer.protocolCode} actual=${provisionedServer.id}/${provisionedServer.protocolCode}',
+      );
+      return const ProvisionedConfigResult.err(
+        'Нужный маршрут сейчас недоступен. Текущее подключение сохранено.',
       );
     }
     _scheduleFreeAdSessionFromAdGate(
@@ -12739,6 +12894,14 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             )
             .toList()
           ..sort(_compareServerConnectionCandidates);
+
+    if (!kIsWeb && Platform.isWindows && _windowsProcessRouterRequired) {
+      return greenVpnWindowsApplicationProxyRoutes<ServerLocation>(
+        candidates: usable,
+        serverIdOf: (server) => server.id,
+        protocolOf: (server) => server.protocolCode,
+      );
+    }
 
     if (windowsRecoveryRequiresProof) {
       final now = DateTime.now().toUtc();

@@ -2,6 +2,66 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:greenvpn/services/server_location_policy.dart';
 
 void main() {
+  test('Windows application routing selects only the proxy-capable route', () {
+    const routes = <({String id, String protocol})>[
+      (id: 'current_wg0', protocol: 'wireguard_udp'),
+      (id: 'tw-7879598-nl1', protocol: 'amneziawg'),
+      (id: 'tw-7879598-nl1', protocol: 'wireguard_udp'),
+    ];
+
+    final selected = greenVpnWindowsApplicationProxyRoutes(
+      candidates: routes,
+      serverIdOf: (route) => route.id,
+      protocolOf: (route) => route.protocol,
+    );
+
+    expect(selected, <({String id, String protocol})>[routes.last]);
+    expect(
+      greenVpnWindowsApplicationProxyRouteEligible(
+        serverId: 'tw-7879598-nl1',
+        protocol: 'WIREGUARD_UDP',
+      ),
+      isTrue,
+    );
+    expect(
+      greenVpnWindowsApplicationProxyRouteEligible(
+        serverId: 'current_wg0',
+        protocol: 'wireguard_udp',
+      ),
+      isFalse,
+    );
+  });
+
+  test('full mode restores the selected location instead of proxy route', () {
+    const routes = <({String id, String location})>[
+      (id: 'nl-proxy', location: 'country:NL'),
+      (id: 'gb-primary', location: 'country:GB'),
+      (id: 'gb-reserve', location: 'country:GB'),
+    ];
+
+    final manual = greenVpnPreferredFullModeRoute(
+      candidates: routes,
+      automatic: false,
+      selectedLocationId: 'country:GB',
+      selectedRouteId: 'gb-primary',
+      activeRoute: routes.first,
+      locationIdOf: (route) => route.location,
+      routeIdOf: (route) => route.id,
+    );
+    expect(manual, routes[1]);
+
+    final automatic = greenVpnPreferredFullModeRoute(
+      candidates: routes,
+      automatic: true,
+      selectedLocationId: 'auto',
+      selectedRouteId: 'auto',
+      activeRoute: routes[2],
+      locationIdOf: (route) => route.location,
+      routeIdOf: (route) => route.id,
+    );
+    expect(automatic, routes[2]);
+  });
+
   test('all physical routes in one country share one public location', () {
     final stable = greenVpnServerLocationId(
       serverId: 'tw-7879598-nl1',

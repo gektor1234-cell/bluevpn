@@ -1,3 +1,59 @@
+const String greenVpnWindowsApplicationProxyServerId = 'tw-7879598-nl1';
+const String greenVpnWindowsApplicationProxyProtocol = 'wireguard_udp';
+
+bool greenVpnWindowsApplicationProxyRouteEligible({
+  required String serverId,
+  required String protocol,
+}) {
+  return serverId.trim() == greenVpnWindowsApplicationProxyServerId &&
+      protocol.trim().toLowerCase() == greenVpnWindowsApplicationProxyProtocol;
+}
+
+List<T> greenVpnWindowsApplicationProxyRoutes<T>({
+  required Iterable<T> candidates,
+  required String Function(T candidate) serverIdOf,
+  required String Function(T candidate) protocolOf,
+}) {
+  return candidates
+      .where(
+        (candidate) => greenVpnWindowsApplicationProxyRouteEligible(
+          serverId: serverIdOf(candidate),
+          protocol: protocolOf(candidate),
+        ),
+      )
+      .toList(growable: false);
+}
+
+T? greenVpnPreferredFullModeRoute<T>({
+  required Iterable<T> candidates,
+  required bool automatic,
+  required String selectedLocationId,
+  required String selectedRouteId,
+  required T? activeRoute,
+  required String Function(T candidate) locationIdOf,
+  required String Function(T candidate) routeIdOf,
+}) {
+  final ordered = candidates.toList(growable: false);
+  if (automatic) {
+    if (activeRoute != null) {
+      final activeId = routeIdOf(activeRoute);
+      for (final candidate in ordered) {
+        if (routeIdOf(candidate) == activeId) return candidate;
+      }
+    }
+    return ordered.isEmpty ? null : ordered.first;
+  }
+  final selected = greenVpnInternalCandidatesForLocation(
+    candidates: ordered,
+    automatic: false,
+    selectedLocationId: selectedLocationId,
+    selectedRouteId: selectedRouteId,
+    locationIdOf: locationIdOf,
+    routeIdOf: routeIdOf,
+  );
+  return selected.isEmpty ? null : selected.first;
+}
+
 String greenVpnServerLocationId({
   required String serverId,
   required String country,
