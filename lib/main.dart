@@ -12,6 +12,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'runtime_config.dart';
+import 'services/fusion_connection_status_policy.dart';
 import 'services/product_display_policy.dart';
 import 'services/route_failure_cooldown.dart';
 import 'services/server_location_policy.dart';
@@ -7598,6 +7599,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   int _index = 0;
+  Future<void> _fusionUiDiagnosticWriteTail = Future<void>.value();
+  bool _fusionUiDiagnosticScheduled = false;
+  int _fusionUiDiagnosticSequence = 0;
 
   // VPN state
   bool vpnEnabled = false;
@@ -7736,6 +7740,90 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       'greenvpn.free_ad_session.expires_at';
 
   void goToTab(int i) => setState(() => _index = i);
+
+  void _scheduleFusionUiDiagnostic() {
+    if (kIsWeb ||
+        !Platform.isWindows ||
+        !kFusionUiEnabled ||
+        greenVpnFusionUiDiagnosticPathSync() == null ||
+        _fusionUiDiagnosticScheduled) {
+      return;
+    }
+    _fusionUiDiagnosticScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _fusionUiDiagnosticScheduled = false;
+      if (mounted) unawaited(_writeFusionUiDiagnostic());
+    });
+  }
+
+  Future<void> _writeFusionUiDiagnostic() async {
+    final path = greenVpnFusionUiDiagnosticPathSync();
+    if (path == null || !mounted) return;
+    final paused = _vpnPausePending;
+    final presentation = greenVpnFusionConnectionPresentation(
+      vpnEnabled: vpnEnabled,
+      windowsProtectionConfirmed: _windowsProtectionConfirmed,
+      externalVpnActive: _externalVpnActive,
+      socialOnlyEnabled: socialOnlyEnabled,
+      vpnBusy: vpnBusy,
+      vpnBusyStage: _vpnBusyStage,
+      vpnBusyHint: _vpnBusyHint,
+      paused: paused,
+      pausedUntil: _vpnPausedUntil,
+    );
+    final sequence = ++_fusionUiDiagnosticSequence;
+    final snapshot = <String, dynamic>{
+      'schemaVersion': 1,
+      'sequence': sequence,
+      'updatedAtUtc': DateTime.now().toUtc().toIso8601String(),
+      'appVersion': kAppVersion,
+      'runtimeScope': greenVpnWindowsRuntimeScope,
+      'publicProductBuild': kPublicProductBuild,
+      'paidBetaBuild': kPaidBetaBuild,
+      'fusionProductionCandidate': kFusionProductionPromotionCandidate,
+      'currentPage': switch (_index) {
+        0 => 'vpn',
+        1 => 'mode',
+        _ => 'settings',
+      },
+      'vpnEnabled': vpnEnabled,
+      'vpnBusy': vpnBusy,
+      'windowsProtectionConfirmed': _windowsProtectionConfirmed,
+      'windowsFullTunnelDataPlaneConfirmed':
+          _windowsFullTunnelDataPlaneConfirmed,
+      'processRouterRequired': _windowsProcessRouterRequired,
+      'externalVpnActive': _externalVpnActive,
+      'socialOnlyEnabled': socialOnlyEnabled,
+      'selectedTrafficCount': _selectedTrafficTitles().length,
+      'paidEntitlement': _hasPaidSubscriptionEntitlement,
+      'protectionActive': presentation.protectionActive,
+      'connectedCheckVisible': presentation.connectedCheckVisible,
+      'statusKey': presentation.statusKey,
+      'statusText': presentation.statusText,
+      'statusDetail': presentation.statusDetail,
+      'badgeText': presentation.badgeText,
+    };
+    final previous = _fusionUiDiagnosticWriteTail;
+    final next = () async {
+      try {
+        await previous;
+      } catch (_) {}
+      try {
+        final target = File(path);
+        await target.parent.create(recursive: true);
+        final temporary = File('$path.$sequence.tmp');
+        await temporary.writeAsString(jsonEncode(snapshot), flush: true);
+        if (await target.exists()) await target.delete();
+        await temporary.rename(path);
+      } catch (error) {
+        await appendBlueVpnClientLog(
+          'fusion ui diagnostic write failed type=${error.runtimeType}',
+        );
+      }
+    }();
+    _fusionUiDiagnosticWriteTail = next;
+    await next;
+  }
 
   bool get _vpnInteractionLocked => vpnBusy || _vpnTapCooldown;
 
@@ -15634,6 +15722,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
     final previous = _captureRoutingPreference();
     final wasConnected = vpnEnabled;
+    await appendBlueVpnClientLog(
+      'routing preference requested from=${previous.socialOnlyEnabled ? "applications" : "full"} to=${enabled ? "applications" : "full"} connected=$wasConnected',
+    );
     _prefsDebounce?.cancel();
     setState(() {
       vpnBusy = true;
@@ -15653,7 +15744,13 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         throw StateError('Новый режим не был подтверждён системой.');
       }
       _schedulePrefsSave();
+      await appendBlueVpnClientLog(
+        'routing preference confirmed mode=${enabled ? "applications" : "full"} connected=$vpnEnabled protected=$_windowsProtectionConfirmed',
+      );
     } catch (e) {
+      await appendBlueVpnClientLog(
+        'routing preference apply failed requested=${enabled ? "applications" : "full"} type=${e.runtimeType}',
+      );
       final restored = await _restoreRoutingPreferenceAfterFailure(
         snapshot: previous,
         wasConnected: wasConnected,
@@ -15807,6 +15904,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    _scheduleFusionUiDiagnostic();
     final wireGuardState = _wireGuardState;
     final pages = <Widget>[
       VpnPage(
@@ -16365,39 +16463,20 @@ class VpnPage extends StatelessWidget {
       if (usesWindowsApplications) ...socialOnlyWindowsSites,
     ]..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     final paused = vpnPaused && !vpnEnabled;
-    final protectionActive =
-        vpnEnabled && windowsProtectionConfirmed && !externalVpnActive;
-    final vpnConflict = vpnEnabled && externalVpnActive;
-    final statusText = vpnBusy
-        ? (vpnBusyStage ?? (vpnEnabled ? 'Отключаем...' : 'Подключаем...'))
-        : paused
-        ? 'Защита приостановлена'
-        : externalVpnActive
-        ? (vpnConflict ? 'Конфликт VPN' : 'Активен другой VPN')
-        : (protectionActive
-              ? (socialOnlyEnabled ? 'Выбранное защищено' : 'Защита активна')
-              : vpnEnabled
-              ? 'Проверяем защиту'
-              : 'Готов к защите');
-    final statusDetail = vpnBusy
-        ? (vpnBusyHint ?? 'Подождите, Green VPN завершает операцию.')
-        : paused
-        ? (vpnPausedUntil == null
-              ? 'Нажмите кнопку, чтобы возобновить VPN.'
-              : vpnPausedUntil!.isAfter(DateTime.now())
-              ? 'Автоматически включится в ${_formatClock(vpnPausedUntil!)}.'
-              : 'Возобновляем защищённое подключение...')
-        : externalVpnActive
-        ? (vpnConflict
-              ? 'Green VPN и другой VPN запущены одновременно. Защита Green VPN не подтверждена.'
-              : 'Нажмите кнопку, чтобы переключиться на Green VPN.')
-        : (protectionActive
-              ? (socialOnlyEnabled
-                    ? 'Через Green VPN проходят только выбранные приложения и сайты.'
-                    : 'Весь интернет проходит через Green VPN.')
-              : vpnEnabled
-              ? 'Green VPN запущен, подтверждаем фактический режим трафика.'
-              : 'Подключим первый доступный вариант.');
+    final connectionPresentation = greenVpnFusionConnectionPresentation(
+      vpnEnabled: vpnEnabled,
+      windowsProtectionConfirmed: windowsProtectionConfirmed,
+      externalVpnActive: externalVpnActive,
+      socialOnlyEnabled: socialOnlyEnabled,
+      vpnBusy: vpnBusy,
+      vpnBusyStage: vpnBusyStage,
+      vpnBusyHint: vpnBusyHint,
+      paused: paused,
+      pausedUntil: vpnPausedUntil,
+    );
+    final protectionActive = connectionPresentation.protectionActive;
+    final statusText = connectionPresentation.statusText;
+    final statusDetail = connectionPresentation.statusDetail;
     final displayedRoute = vpnEnabled && activeConnectionRoute != null
         ? activeConnectionRoute!
         : selectedServer;
@@ -16495,17 +16574,7 @@ class VpnPage extends StatelessWidget {
                           borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
-                          protectionActive
-                              ? (socialOnlyEnabled
-                                    ? 'ВЫБРАННОЕ ЗАЩИЩЕНО'
-                                    : 'ЗАЩИЩЕНО')
-                              : externalVpnActive
-                              ? 'ДРУГОЙ VPN'
-                              : vpnEnabled
-                              ? 'ПРОВЕРКА'
-                              : paused
-                              ? 'ПАУЗА'
-                              : 'НЕ ЗАЩИЩЕНО',
+                          connectionPresentation.badgeText,
                           style: TextStyle(
                             color: protectionActive
                                 ? kBrandPrimaryDeep
@@ -16520,7 +16589,7 @@ class VpnPage extends StatelessWidget {
                       const SizedBox(height: 14),
                       Row(
                         children: [
-                          if (protectionActive && !vpnBusy) ...[
+                          if (connectionPresentation.connectedCheckVisible) ...[
                             Container(
                               key: const Key('fusion_connected_check_icon'),
                               width: 30,
@@ -17132,13 +17201,6 @@ class VpnPage extends StatelessWidget {
         );
       },
     );
-  }
-
-  static String _formatClock(DateTime value) {
-    final local = value.toLocal();
-    final hours = local.hour.toString().padLeft(2, '0');
-    final minutes = local.minute.toString().padLeft(2, '0');
-    return '$hours:$minutes';
   }
 
   static String _formatConnectionDuration(DateTime? connectedAt) {

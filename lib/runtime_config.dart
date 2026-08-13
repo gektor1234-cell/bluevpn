@@ -81,3 +81,9 @@ String greenVpnStandbyProbeResultPathSync() =>
 
 String greenVpnAuthLogPathSync() =>
     '${greenVpnProgramDataRootSync()}\\auth.log';
+
+String? greenVpnFusionUiDiagnosticPathSync() {
+  final value =
+      Platform.environment['GREENVPN_FUSION_UI_DIAGNOSTIC_PATH']?.trim() ?? '';
+  return value.isEmpty ? null : value;
+}

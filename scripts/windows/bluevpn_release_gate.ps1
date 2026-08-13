@@ -63,6 +63,7 @@ $publicProductBuildPath = Join-Path $ProjectRoot "scripts\windows\build_public_p
 $paidBetaBuildPath = Join-Path $ProjectRoot "scripts\windows\build_paid_beta.ps1"
 $windowsSelectiveRoutingPath = Join-Path $ProjectRoot "lib\services\windows_selective_routing_service.dart"
 $windowsVpnStatusPolicyPath = Join-Path $ProjectRoot "lib\services\windows_vpn_status_policy.dart"
+$fusionConnectionStatusPolicyPath = Join-Path $ProjectRoot "lib\services\fusion_connection_status_policy.dart"
 $runtimeConfigPath = Join-Path $ProjectRoot "lib\runtime_config.dart"
 $backendPath = Join-Path $ProjectRoot "backend_live\app\main.py"
 $installerPath = Join-Path $ProjectRoot "scripts\windows\build_installer.ps1"
@@ -93,6 +94,8 @@ $windowsStandbyTrayReleaseLauncherPath = Join-Path $ProjectRoot "scripts\windows
 $windowsSmokeNetworkRestorePath = Join-Path $ProjectRoot "scripts\windows\restore_windows_smoke_network.ps1"
 $windowsFusionPaidBetaAcceptanceSmokePath = Join-Path $ProjectRoot "scripts\windows\run_windows_fusion_paid_beta_acceptance_smoke.ps1"
 $windowsFusionPaidBetaAcceptanceLauncherPath = Join-Path $ProjectRoot "scripts\windows\launch_windows_fusion_paid_beta_acceptance_smoke.ps1"
+$windowsModeReconcileReleaseSmokePath = Join-Path $ProjectRoot "scripts\windows\run_windows_mode_reconcile_release_smoke.ps1"
+$windowsModeReconcileReleaseLauncherPath = Join-Path $ProjectRoot "scripts\windows\launch_windows_mode_reconcile_release_smoke.ps1"
 $fusionProductionPromotionPath = Join-Path $ProjectRoot "scripts\windows\prepare_fusion_production_promotion.ps1"
 $publicProductBackendBundlePath = Join-Path $ProjectRoot "scripts\windows\prepare_public_product_backend_bundle.ps1"
 $transportCascadeStagePath = Join-Path $ProjectRoot "scripts\windows\stage_windows_transport_cascade.ps1"
@@ -226,6 +229,7 @@ $androidRuntimeFailoverPolicy = Read-Text $androidRuntimeFailoverPolicyPath
 $androidMainActivity = Read-Text $androidMainActivityPath
 $windowsSelectiveRouting = Read-Text $windowsSelectiveRoutingPath
 $windowsVpnStatusPolicy = Read-Text $windowsVpnStatusPolicyPath
+$fusionConnectionStatusPolicy = Read-Text $fusionConnectionStatusPolicyPath
 $runtimeConfig = Read-Text $runtimeConfigPath
 $backend = Read-Text $backendPath
 $installer = Read-Text $installerPath
@@ -252,6 +256,8 @@ $windowsStandbyTrayReleaseLauncherScript = Read-Text $windowsStandbyTrayReleaseL
 $windowsSmokeNetworkRestoreScript = Read-Text $windowsSmokeNetworkRestorePath
 $windowsFusionPaidBetaAcceptanceSmokeScript = Read-Text $windowsFusionPaidBetaAcceptanceSmokePath
 $windowsFusionPaidBetaAcceptanceLauncherScript = Read-Text $windowsFusionPaidBetaAcceptanceLauncherPath
+$windowsModeReconcileReleaseSmokeScript = Read-Text $windowsModeReconcileReleaseSmokePath
+$windowsModeReconcileReleaseLauncherScript = Read-Text $windowsModeReconcileReleaseLauncherPath
 $fusionProductionPromotionScript = Read-Text $fusionProductionPromotionPath
 $publicProductBackendBundleScript = Read-Text $publicProductBackendBundlePath
 $transportCascadeStageScript = Read-Text $transportCascadeStagePath
@@ -632,6 +638,29 @@ foreach ($check in $fusionIsolationChecks.GetEnumerator()) {
     }
     else {
         Add-Error "$($check.Key) marker missing: $($check.Value[1])"
+    }
+}
+
+$fusionAuthoritativeStatusSource =
+    $main + "`n" + $runtimeConfig + "`n" + $fusionConnectionStatusPolicy
+$fusionAuthoritativeStatusFragments = @(
+    'greenVpnFusionConnectionPresentation',
+    'GREENVPN_FUSION_UI_DIAGNOSTIC_PATH',
+    '_writeFusionUiDiagnostic',
+    'windowsProtectionConfirmed',
+    'windowsFullTunnelDataPlaneConfirmed',
+    'processRouterRequired',
+    'connectedCheckVisible',
+    "statusKey = socialOnlyEnabled ? 'protected_selected' : 'protected_full'",
+    "statusKey = vpnConflict ? 'vpn_conflict' : 'external_vpn'",
+    'routing preference confirmed mode='
+)
+foreach ($fragment in $fusionAuthoritativeStatusFragments) {
+    if ($fusionAuthoritativeStatusSource.Contains($fragment)) {
+        Add-Pass "Fusion authoritative connection status marker present: $fragment"
+    }
+    else {
+        Add-Error "Fusion authoritative connection status marker missing: $fragment"
     }
 }
 
@@ -2437,6 +2466,45 @@ $windowsRuntimeFailoverChecks = [ordered]@{
         "Write-Status -Phase 'runner_started'",
         'A Fusion paid-beta acceptance runner is already active.'
     )
+    'Windows Fusion mode reconciliation is exact, isolated, delayed, and reversible' = @(
+        $windowsModeReconcileReleaseSmokeScript,
+        '$ExpectedInstallerSha256',
+        '$ExpectedInstallerSize',
+        '$ExpectedAppSha256',
+        '$ExpectedAppSoSha256',
+        '$ExpectedServiceSha256',
+        '$CandidateSourceCommit',
+        '$InitialDelaySeconds = 90',
+        'Assert-ReadOnlySafeBaseline',
+        'waiting $InitialDelaySeconds seconds before installation or network transitions',
+        'Start-DeadmanRecovery',
+        'Initialize-IsolatedUserState',
+        '$env:GREENVPN_FUSION_UI_DIAGNOSTIC_PATH',
+        "[string]`$state.statusKey -eq 'external_vpn'",
+        "[string]`$state.statusKey -eq 'protected_full'",
+        "'protected_selected'",
+        'processRouterRequired',
+        'Assert-RuntimeMode',
+        'Get-EgressFingerprint',
+        'originalStateUnmodified',
+        'exactInstallRetained',
+        'Invoke-FinalRecovery',
+        'deadmanStopped',
+        'windows-mode-reconcile-autonomous-summary.json'
+    )
+    'Windows Fusion mode reconciliation launcher requests one exact elevated runner' = @(
+        $windowsModeReconcileReleaseLauncherScript,
+        'run_windows_mode_reconcile_release_smoke.ps1',
+        '$ExpectedInstallerSha256',
+        '$ExpectedAppSoSha256',
+        '$ExpectedServiceSha256',
+        '$InitialDelaySeconds = 90',
+        'windows-mode-reconcile-launcher-status.json',
+        "Write-LauncherStatus -Phase 'uac_requested'",
+        '-Verb RunAs',
+        "Write-LauncherStatus -Phase 'runner_started'",
+        'The exact mode runner is already active'
+    )
     'Windows dnstt service status' = @(
         $serviceSource,
         'kDnsttPidPath',
@@ -2528,6 +2596,34 @@ if ($windowsFusionPaidBetaAcceptanceSmokeScript.Contains('-FailsafeProcessId')) 
     Add-Pass 'Windows Fusion paid-beta smoke keeps its independent deadman outside child physical tests'
 }
 
+$modeReconcileInitialReadOnlyIndex =
+    $windowsModeReconcileReleaseSmokeScript.LastIndexOf(
+        'Assert-ReadOnlySafeBaseline `'
+    )
+$modeReconcileInitialDelayIndex =
+    $windowsModeReconcileReleaseSmokeScript.LastIndexOf(
+        'Start-Sleep -Seconds $InitialDelaySeconds'
+    )
+$modeReconcileDeadmanStartIndex =
+    $windowsModeReconcileReleaseSmokeScript.LastIndexOf(
+        '$deadman = Start-DeadmanRecovery'
+    )
+$modeReconcileFirstMutableIndex =
+    $windowsModeReconcileReleaseSmokeScript.LastIndexOf(
+        "Assert-MutableSafeBaseline -Label 'Delayed mutable baseline'"
+    )
+if (
+    $modeReconcileInitialReadOnlyIndex -lt 0 -or
+    $modeReconcileInitialDelayIndex -le $modeReconcileInitialReadOnlyIndex -or
+    $modeReconcileDeadmanStartIndex -le $modeReconcileInitialDelayIndex -or
+    $modeReconcileFirstMutableIndex -le $modeReconcileDeadmanStartIndex
+) {
+    Add-Error 'Windows Fusion mode reconciliation must delay before mutation and start deadman before its first mutable baseline.'
+}
+else {
+    Add-Pass 'Windows Fusion mode reconciliation delays before mutation and starts deadman before its first mutable baseline'
+}
+
 foreach ($parserCheck in @(
     [pscustomobject]@{
         Label = 'Windows runtime failover physical test'
@@ -2560,6 +2656,14 @@ foreach ($parserCheck in @(
     [pscustomobject]@{
         Label = 'Windows Fusion paid-beta acceptance launcher'
         Path = $windowsFusionPaidBetaAcceptanceLauncherPath
+    },
+    [pscustomobject]@{
+        Label = 'Windows Fusion mode reconciliation smoke'
+        Path = $windowsModeReconcileReleaseSmokePath
+    },
+    [pscustomobject]@{
+        Label = 'Windows Fusion mode reconciliation launcher'
+        Path = $windowsModeReconcileReleaseLauncherPath
     },
     [pscustomobject]@{
         Label = 'Fusion production promotion preparer'
