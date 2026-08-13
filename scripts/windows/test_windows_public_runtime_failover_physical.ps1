@@ -701,31 +701,63 @@ function Get-StandbyCleanupEvidence {
         Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
             Where-Object { [int]$_.LocalPort -in @(21980, 21981, 21982, 21983) }
     )
+    $runtimeNeedle = [IO.Path]::GetFullPath($standbyRuntimeRoot)
+    $probeProcessNames = @(
+        'hysteria-windows-amd64.exe',
+        'xray.exe',
+        'naive.exe',
+        'dnstt-client-windows-amd64.exe',
+        'hev-socks5-tunnel.exe'
+    )
+    $activeProbeProcesses = @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                [string]$_.Name -in $probeProcessNames -and
+                -not [string]::IsNullOrWhiteSpace([string]$_.CommandLine) -and
+                ([string]$_.CommandLine).IndexOf(
+                    $runtimeNeedle,
+                    [StringComparison]::OrdinalIgnoreCase
+                ) -ge 0
+            } |
+            Select-Object Name, ProcessId
+    )
+    $lastResultExists = $false
     $lastResultCleanupOk = $true
+    $lastResultCleanupErrors = @()
     if (Test-Path -LiteralPath $standbyProbeResultPath -PathType Leaf) {
+        $lastResultExists = $true
         try {
             $lastResult = Get-Content -LiteralPath $standbyProbeResultPath -Raw -Encoding UTF8 |
                 ConvertFrom-Json
             $lastResultCleanupOk = [bool]$lastResult.cleanupOk
+            $lastResultCleanupErrors = @($lastResult.cleanupErrors)
         } catch {
             $lastResultCleanupOk = $false
+            $lastResultCleanupErrors = @('result_parse_failed')
         }
     }
+    $physicalArtifactsClean =
+        -not (Test-Path -LiteralPath $standbyRuntimeRoot) -and
+        $activeProbeServices.Count -eq 0 -and
+        $activeProbeProcesses.Count -eq 0 -and
+        $bypassRoutes.Count -eq 0 -and
+        $listeners.Count -eq 0 -and
+        -not (Test-Path -LiteralPath $standbyCancelPath)
     return [pscustomobject]@{
         runtimeRootAbsent = -not (Test-Path -LiteralPath $standbyRuntimeRoot)
         activeProbeServices = @($activeProbeServices)
+        activeProbeProcesses = @($activeProbeProcesses)
         bypassRouteCount = $bypassRoutes.Count
         probeListenerCount = $listeners.Count
         requestAbsent = -not (Test-Path -LiteralPath $standbyProbeRequestPath)
         cancelMarkerAbsent = -not (Test-Path -LiteralPath $standbyCancelPath)
+        physicalArtifactsClean = $physicalArtifactsClean
+        lastResultExists = $lastResultExists
         lastResultCleanupOk = $lastResultCleanupOk
-        cleanupOk =
-            -not (Test-Path -LiteralPath $standbyRuntimeRoot) -and
-            $activeProbeServices.Count -eq 0 -and
-            $bypassRoutes.Count -eq 0 -and
-            $listeners.Count -eq 0 -and
+        lastResultCleanupErrors = @($lastResultCleanupErrors)
+        lastResultOverriddenByPhysicalEvidence = $false
+        cleanupOk = $physicalArtifactsClean -and
             -not (Test-Path -LiteralPath $standbyProbeRequestPath) -and
-            -not (Test-Path -LiteralPath $standbyCancelPath) -and
             $lastResultCleanupOk
     }
 }
@@ -738,6 +770,7 @@ function Wait-StandbyCleanupEvidence {
 
     $watch = [Diagnostics.Stopwatch]::StartNew()
     $requestRemovedByHarness = $false
+    $stablePhysicalCleanupSince = $null
     do {
         $evidence = Get-StandbyCleanupEvidence
         if ([bool]$evidence.cleanupOk) {
@@ -748,17 +781,38 @@ function Wait-StandbyCleanupEvidence {
                 -NotePropertyValue $requestRemovedByHarness
             return $evidence
         }
-        $probeQuiescent =
-            [bool]$evidence.runtimeRootAbsent -and
-            @($evidence.activeProbeServices).Count -eq 0 -and
-            [int]$evidence.bypassRouteCount -eq 0 -and
-            [int]$evidence.probeListenerCount -eq 0 -and
-            [bool]$evidence.cancelMarkerAbsent
+        $probeQuiescent = [bool]$evidence.physicalArtifactsClean
         if ($probeQuiescent -and -not [bool]$evidence.requestAbsent) {
             Remove-Item -LiteralPath $standbyProbeRequestPath -Force `
                 -ErrorAction SilentlyContinue
             $requestRemovedByHarness =
                 -not (Test-Path -LiteralPath $standbyProbeRequestPath)
+        }
+        $stablePhysicalCleanup =
+            $probeQuiescent -and
+            -not (Test-Path -LiteralPath $standbyProbeRequestPath)
+        if ($stablePhysicalCleanup) {
+            if ($null -eq $stablePhysicalCleanupSince) {
+                $stablePhysicalCleanupSince = Get-Date
+            } elseif (((Get-Date) - $stablePhysicalCleanupSince).TotalSeconds -ge 2) {
+                $evidence = Get-StandbyCleanupEvidence
+                if (
+                    [bool]$evidence.physicalArtifactsClean -and
+                    [bool]$evidence.requestAbsent
+                ) {
+                    $watch.Stop()
+                    $evidence.lastResultOverriddenByPhysicalEvidence =
+                        -not [bool]$evidence.lastResultCleanupOk
+                    $evidence.cleanupOk = $true
+                    $evidence | Add-Member -NotePropertyName waitedMilliseconds `
+                        -NotePropertyValue ([math]::Round($watch.Elapsed.TotalMilliseconds))
+                    $evidence | Add-Member -NotePropertyName requestRemovedByHarness `
+                        -NotePropertyValue $requestRemovedByHarness
+                    return $evidence
+                }
+            }
+        } else {
+            $stablePhysicalCleanupSince = $null
         }
         Start-Sleep -Milliseconds $PollMilliseconds
     } while ($watch.Elapsed.TotalSeconds -lt $TimeoutSeconds)
