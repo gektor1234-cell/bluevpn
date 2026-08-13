@@ -7632,6 +7632,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   ServerLocation? _activeConnectionRoute;
   int _windowsRuntimeFailoverEpoch = 0;
   int _windowsRuntimeFailureCount = 0;
+  DateTime? _windowsRuntimeLastHealthyAt;
+  DateTime? _windowsRuntimeRecoveryProofCutoff;
   bool _windowsRuntimeProbeRunning = false;
   bool _windowsRuntimeRecoveryRunning = false;
   bool _windowsRuntimeRestoreRunning = false;
@@ -11456,6 +11458,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   bool _hasFreshWindowsStandbyProof(
     ServerLocation candidate, {
     required DateTime now,
+    DateTime? verifiedNotAfter,
   }) {
     final key = greenVpnStandbyRouteKey(candidate.id, candidate.protocolCode);
     if (key.isEmpty) return false;
@@ -11463,6 +11466,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     return proof?.isFreshForPreparedConfig(
           now,
           _cfg.baseConfigModifiedAtForServerSync(candidate.id),
+          verifiedNotAfter: verifiedNotAfter,
         ) ??
         false;
   }
@@ -11869,6 +11873,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _windowsRouteMaintenanceTimer = null;
     _activeWindowsRuntimeRoute = null;
     _windowsRuntimeFailureCount = 0;
+    _windowsRuntimeLastHealthyAt = null;
+    _windowsRuntimeRecoveryProofCutoff = null;
     _windowsRuntimeFailoverEpoch += 1;
     _cancelWindowsStandbyProbe(reason: reason);
     if (hadMonitor) {
@@ -12075,6 +12081,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       routeHealthy: routeHealthy,
     );
     if (routeHealthy) {
+      _windowsRuntimeLastHealthyAt = DateTime.now().toUtc();
       await _recordRouteSuccess(server);
       unawaited(_runWindowsStandbyCycle(server, epoch));
       if (previousFailureCount > 0) {
@@ -12117,9 +12124,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       return;
     }
 
+    await _loadWindowsStandbyProofs();
+    final recoveryProofCutoff = _windowsRuntimeLastHealthyAt;
     _recordRouteFailure(server, 'runtime_probe');
     _windowsRuntimeRecoveryRunning = true;
     _disarmWindowsRuntimeFailover(reason: 'failure_threshold');
+    _windowsRuntimeRecoveryProofCutoff = recoveryProofCutoff;
     var handedOffToConnect = false;
     try {
       _setVpnBusyUi(
@@ -12165,6 +12175,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       }
     } finally {
       _windowsRuntimeRecoveryRunning = false;
+      _windowsRuntimeRecoveryProofCutoff = null;
       if (!handedOffToConnect) {
         _clearVpnBusyUi();
       }
@@ -12268,7 +12279,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   List<ServerLocation> _connectCandidatesForCurrentSelection() {
-    final usable =
+    final windowsRecoveryRequiresProof =
+        !kIsWeb && Platform.isWindows && _windowsRuntimeRecoveryRunning;
+    var usable =
         servers
             .where(
               (server) =>
@@ -12282,8 +12295,27 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             .toList()
           ..sort(_compareServerConnectionCandidates);
 
+    if (windowsRecoveryRequiresProof) {
+      final now = DateTime.now().toUtc();
+      final proofCutoff = _windowsRuntimeRecoveryProofCutoff;
+      usable = greenVpnWindowsRecoveryCandidates<ServerLocation>(
+        candidates: usable,
+        recoveryRunning: true,
+        hasFreshStandbyProof: (candidate) =>
+            proofCutoff != null &&
+            _hasFreshWindowsStandbyProof(
+              candidate,
+              now: now,
+              verifiedNotAfter: proofCutoff,
+            ),
+      );
+    }
+
     if (selectedServer.isAuto) {
-      return usable.isNotEmpty ? usable : [_backendAutoCandidate()];
+      if (usable.isNotEmpty) return usable;
+      return windowsRecoveryRequiresProof
+          ? const <ServerLocation>[]
+          : <ServerLocation>[_backendAutoCandidate()];
     }
 
     final selectedLocationCandidates = greenVpnInternalCandidatesForLocation(
@@ -12297,6 +12329,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     if (selectedLocationCandidates.isNotEmpty) {
       return selectedLocationCandidates;
     }
+    if (windowsRecoveryRequiresProof) return const <ServerLocation>[];
     return selectedServer.isCurrentClientReady &&
             (_hasPaidSubscriptionEntitlement ||
                 !selectedServer.requiresPaidSubscription)

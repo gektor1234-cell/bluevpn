@@ -2097,8 +2097,12 @@ $windowsRuntimeFailoverChecks = [ordered]@{
         ($transportPreviewPolicy + "`n" + $transportPreviewPolicyTest),
         'greenVpnStandbyConfigTtl = Duration(hours: 6)',
         'greenVpnStandbyProbeTtl = Duration(minutes: 10)',
+        'greenVpnStandbyConfigTimestampTolerance = Duration(seconds: 1)',
         'GreenVpnStandbyRouteProof',
         'isFreshForPreparedConfig',
+        'greenVpnWindowsRecoveryCandidates',
+        'verifiedNotAfter:',
+        'Windows recovery uses only candidates proven before the cutoff',
         'fresh standby proof leads only when caller opts into recovery order',
         'standby config refresh is bounded by a six hour TTL'
     )

@@ -209,6 +209,33 @@ void main() {
     );
   });
 
+  test('Windows recovery uses only candidates proven before the cutoff', () {
+    final candidates = <String>['primary', 'prevalidated', 'late'];
+    final recovered = greenVpnWindowsRecoveryCandidates<String>(
+      candidates: candidates,
+      recoveryRunning: true,
+      hasFreshStandbyProof: (candidate) => candidate == 'prevalidated',
+    );
+
+    expect(recovered, <String>['prevalidated']);
+    expect(
+      greenVpnWindowsRecoveryCandidates<String>(
+        candidates: candidates,
+        recoveryRunning: true,
+        hasFreshStandbyProof: (_) => false,
+      ),
+      isEmpty,
+    );
+    expect(
+      greenVpnWindowsRecoveryCandidates<String>(
+        candidates: candidates,
+        recoveryRunning: false,
+        hasFreshStandbyProof: (_) => false,
+      ),
+      same(candidates),
+    );
+  });
+
   test('Windows never blocks the connect button on an Internet probe', () {
     expect(
       greenVpnShouldBlockForegroundForPostConnectProbe(
@@ -610,7 +637,24 @@ void main() {
     expect(
       restored.isFreshForPreparedConfig(
         now,
-        proof.preparedAt.add(const Duration(milliseconds: 1)),
+        proof.preparedAt.add(const Duration(milliseconds: 362)),
+      ),
+      isTrue,
+    );
+    expect(
+      restored.isFreshForPreparedConfig(
+        now,
+        proof.preparedAt.add(const Duration(milliseconds: 1001)),
+      ),
+      isFalse,
+    );
+    expect(
+      restored.isFreshForPreparedConfig(
+        now,
+        proof.preparedAt,
+        verifiedNotAfter: proof.verifiedAt.subtract(
+          const Duration(milliseconds: 1),
+        ),
       ),
       isFalse,
     );

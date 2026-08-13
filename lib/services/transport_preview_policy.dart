@@ -31,6 +31,7 @@ const Duration greenVpnPreferredRouteTtl = Duration(hours: 24);
 const Duration greenVpnStandbyConfigTtl = Duration(hours: 6);
 const Duration greenVpnStandbyProbeTtl = Duration(minutes: 10);
 const Duration greenVpnStandbyFailureRetryDelay = Duration(minutes: 3);
+const Duration greenVpnStandbyConfigTimestampTolerance = Duration(seconds: 1);
 
 const int greenVpnRuntimeFailoverFailureThreshold = 2;
 const int greenVpnManagedRouteIdMaxLength = 160;
@@ -303,10 +304,21 @@ class GreenVpnStandbyRouteProof {
     return !age.isNegative && age <= greenVpnStandbyProbeTtl;
   }
 
-  bool isFreshForPreparedConfig(DateTime now, DateTime? configModifiedAt) {
+  bool isFreshForPreparedConfig(
+    DateTime now,
+    DateTime? configModifiedAt, {
+    DateTime? verifiedNotAfter,
+  }) {
     if (configModifiedAt == null || !isFresh(now)) return false;
-    return preparedAt.toUtc().millisecondsSinceEpoch ==
-        configModifiedAt.toUtc().millisecondsSinceEpoch;
+    if (verifiedNotAfter != null &&
+        verifiedAt.toUtc().isAfter(verifiedNotAfter.toUtc())) {
+      return false;
+    }
+    final timestampDelta = preparedAt
+        .toUtc()
+        .difference(configModifiedAt.toUtc())
+        .abs();
+    return timestampDelta <= greenVpnStandbyConfigTimestampTolerance;
   }
 
   Map<String, dynamic> toJson() => <String, dynamic>{
@@ -377,6 +389,15 @@ bool greenVpnHasFreshStandbyProof({
   final key = greenVpnStandbyRouteKey(routeId, protocol);
   if (key.isEmpty) return false;
   return proofs[key]?.isFresh(now) ?? false;
+}
+
+List<T> greenVpnWindowsRecoveryCandidates<T>({
+  required List<T> candidates,
+  required bool recoveryRunning,
+  required bool Function(T candidate) hasFreshStandbyProof,
+}) {
+  if (!recoveryRunning) return candidates;
+  return candidates.where(hasFreshStandbyProof).toList(growable: false);
 }
 
 bool greenVpnShouldRefreshStandbyConfig({
