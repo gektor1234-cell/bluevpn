@@ -2122,6 +2122,16 @@ $windowsRuntimeFailoverChecks = [ordered]@{
         'cancelStandbyProbe()',
         'standby-probe-request.json'
     )
+    'Windows local service stays responsive during long privileged actions' = @(
+        $serviceSource,
+        'DWORD WINAPI HttpClientThread',
+        'DispatchClientRequest(client)',
+        'CreateThread(nullptr, 0, HttpClientThread',
+        'InterlockedIncrement(&g_active_client_workers)',
+        'kMaxConcurrentLocalClients = 32',
+        'SO_RCVTIMEO',
+        'SO_SNDTIMEO'
+    )
     'Windows standby probe is route-isolated and fully reversible' = @(
         $windowsStandbyProbeScript,
         '$ProbeEndpointRouteMetric = 42739',

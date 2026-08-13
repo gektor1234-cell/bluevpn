@@ -11,6 +11,7 @@
 #include <fstream>
 #include <iterator>
 #include <mutex>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -71,6 +72,9 @@ HANDLE g_guard_thread = nullptr;
 SOCKET g_listen_socket = INVALID_SOCKET;
 std::wstring g_task_script_path;
 std::mutex g_task_action_mutex;
+volatile LONG g_active_client_workers = 0;
+HANDLE g_clients_drained_event = nullptr;
+constexpr LONG kMaxConcurrentLocalClients = 32;
 constexpr const wchar_t kStandbyProbeCancelPath[] =
     GREENVPN_RUNTIME_PROGRAM_DATA_ROOT_W L"\\standby-probe.cancel";
 
@@ -815,6 +819,78 @@ void HandleRequest(SOCKET client, const std::string& request) {
            "{\"ok\":false,\"message\":\"not found\"}");
 }
 
+struct ClientRequestContext {
+  SOCKET socket;
+};
+
+void MarkClientWorkerFinished() {
+  if (InterlockedDecrement(&g_active_client_workers) == 0 &&
+      g_clients_drained_event != nullptr) {
+    SetEvent(g_clients_drained_event);
+  }
+}
+
+DWORD WINAPI HttpClientThread(LPVOID parameter) {
+  ClientRequestContext* context =
+      static_cast<ClientRequestContext*>(parameter);
+  const SOCKET client = context == nullptr ? INVALID_SOCKET : context->socket;
+  delete context;
+
+  if (client != INVALID_SOCKET) {
+    char buffer[4096] = {};
+    const int received = recv(client, buffer, sizeof(buffer), 0);
+    if (received > 0) {
+      HandleRequest(client, std::string(buffer, static_cast<size_t>(received)));
+    }
+    shutdown(client, SD_BOTH);
+    closesocket(client);
+  }
+
+  MarkClientWorkerFinished();
+  return 0;
+}
+
+bool DispatchClientRequest(SOCKET client) {
+  const DWORD socket_timeout_ms = 5000;
+  setsockopt(client, SOL_SOCKET, SO_RCVTIMEO,
+             reinterpret_cast<const char*>(&socket_timeout_ms),
+             sizeof(socket_timeout_ms));
+  setsockopt(client, SOL_SOCKET, SO_SNDTIMEO,
+             reinterpret_cast<const char*>(&socket_timeout_ms),
+             sizeof(socket_timeout_ms));
+
+  if (g_clients_drained_event != nullptr) {
+    ResetEvent(g_clients_drained_event);
+  }
+  const LONG active = InterlockedIncrement(&g_active_client_workers);
+  if (active > kMaxConcurrentLocalClients) {
+    MarkClientWorkerFinished();
+    SendHttp(client, 503, "Service Unavailable",
+             "{\"ok\":false,\"message\":\"too many local requests\"}");
+    shutdown(client, SD_BOTH);
+    closesocket(client);
+    return false;
+  }
+  ClientRequestContext* context =
+      new (std::nothrow) ClientRequestContext{client};
+  if (context == nullptr) {
+    MarkClientWorkerFinished();
+    closesocket(client);
+    return false;
+  }
+
+  HANDLE thread =
+      CreateThread(nullptr, 0, HttpClientThread, context, 0, nullptr);
+  if (thread == nullptr) {
+    delete context;
+    MarkClientWorkerFinished();
+    closesocket(client);
+    return false;
+  }
+  CloseHandle(thread);
+  return true;
+}
+
 DWORD WINAPI HttpWorkerThread(LPVOID) {
   WSADATA wsa = {};
   if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
@@ -867,17 +943,15 @@ DWORD WINAPI HttpWorkerThread(LPVOID) {
       continue;
     }
 
-    char buffer[4096] = {};
-    const int received = recv(client, buffer, sizeof(buffer), 0);
-    if (received > 0) {
-      HandleRequest(client, std::string(buffer, static_cast<size_t>(received)));
-    }
-    shutdown(client, SD_BOTH);
-    closesocket(client);
+    DispatchClientRequest(client);
   }
 
   g_listen_socket = INVALID_SOCKET;
   closesocket(listen_socket);
+  if (g_clients_drained_event != nullptr &&
+      WaitForSingleObject(g_clients_drained_event, 5000) != WAIT_OBJECT_0) {
+    AppendLog(L"local client workers still active during service shutdown");
+  }
   WSACleanup();
   AppendLog(L"http worker stopped");
   return 0;
@@ -940,11 +1014,21 @@ void WINAPI ServiceMain(DWORD, LPWSTR*) {
     ReportServiceStatus(SERVICE_STOPPED, GetLastError(), 0);
     return;
   }
+  g_clients_drained_event = CreateEventW(nullptr, TRUE, TRUE, nullptr);
+  if (g_clients_drained_event == nullptr) {
+    const DWORD clients_event_error = GetLastError();
+    CloseHandle(g_stop_event);
+    g_stop_event = nullptr;
+    ReportServiceStatus(SERVICE_STOPPED, clients_event_error, 0);
+    return;
+  }
 
   g_worker_thread =
       CreateThread(nullptr, 0, HttpWorkerThread, nullptr, 0, nullptr);
   if (g_worker_thread == nullptr) {
+    CloseHandle(g_clients_drained_event);
     CloseHandle(g_stop_event);
+    g_clients_drained_event = nullptr;
     g_stop_event = nullptr;
     ReportServiceStatus(SERVICE_STOPPED, GetLastError(), 0);
     return;
@@ -960,8 +1044,10 @@ void WINAPI ServiceMain(DWORD, LPWSTR*) {
     }
     WaitForSingleObject(g_worker_thread, 5000);
     CloseHandle(g_worker_thread);
+    CloseHandle(g_clients_drained_event);
     CloseHandle(g_stop_event);
     g_worker_thread = nullptr;
+    g_clients_drained_event = nullptr;
     g_stop_event = nullptr;
     ReportServiceStatus(SERVICE_STOPPED, guard_error, 0);
     return;
@@ -977,9 +1063,11 @@ void WINAPI ServiceMain(DWORD, LPWSTR*) {
   WaitForSingleObject(g_guard_thread, 5000);
   CloseHandle(g_worker_thread);
   CloseHandle(g_guard_thread);
+  CloseHandle(g_clients_drained_event);
   CloseHandle(g_stop_event);
   g_worker_thread = nullptr;
   g_guard_thread = nullptr;
+  g_clients_drained_event = nullptr;
   g_stop_event = nullptr;
   ReportServiceStatus(SERVICE_STOPPED, NO_ERROR, 0);
 }
