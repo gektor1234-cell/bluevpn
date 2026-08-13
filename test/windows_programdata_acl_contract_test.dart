@@ -52,4 +52,15 @@ void main() {
     expect(main, contains('await _appendGreenVpnAuthLogLineNow(line);'));
     expect(main, contains('await appendGreenVpnAuthLogLine(text);'));
   });
+
+  test('installer package audit rejects the old recursive ACL contract', () {
+    final audit = _read('scripts/windows/test_public_installer_package.ps1');
+
+    expect(audit, contains("(Join-Path `\$root '*') /reset /T /C"));
+    expect(audit, contains("(Join-Path `\$programDataRoot '*') /reset /T /C"));
+    expect(
+      audit,
+      contains("/remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' /T /C"),
+    );
+  });
 }

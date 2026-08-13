@@ -109,7 +109,8 @@ try {
                 'Resolve-InstallingUserSid',
                 '[string]$OwnerSid = ""',
                 '-OwnerSid',
-                "/remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' /T /C",
+                "/remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545'",
+                "(Join-Path `$root '*') /reset /T /C",
                 "Ensure-GreenVpnProgramDataAcl -UserSid `$installingUserSid",
                 "Ensure-GreenVpnServiceToken -UserSid `$installingUserSid"
             )) {
@@ -149,7 +150,8 @@ try {
                 'Resolve-InstallingUserSid',
                 '[string]$OwnerSid = ""',
                 '-OwnerSid',
-                "/remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' /T /C",
+                "/remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545'",
+                "(Join-Path `$programDataRoot '*') /reset /T /C",
                 "Ensure-BetaProgramData -UserSid `$installingUserSid"
             )) {
                 if (-not $install.Contains($fragment)) {
@@ -159,7 +161,8 @@ try {
         }
         foreach ($forbiddenFragment in @(
             "'*S-1-5-11:(OI)(CI)M'",
-            "'*S-1-5-11:R'"
+            "'*S-1-5-11:R'",
+            "/remove:g '*S-1-1-0' '*S-1-5-11' '*S-1-5-32-545' /T /C"
         )) {
             if ($install.Contains($forbiddenFragment)) {
                 $errors.Add("Installer grants broad machine-state access: $forbiddenFragment") | Out-Null
