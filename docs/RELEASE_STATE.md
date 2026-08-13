@@ -1,5 +1,39 @@
 # Green VPN Release State
 
+## Fusion Windows Production Candidate (2026-08-13 MSK)
+
+| Layer | Current state |
+|---|---|
+| Stable production | unchanged: backend `0.9.153-update-channel-alias.4`, Android `0.3.19+2026072914`, Windows `0.3.26+3105` |
+| Accepted paid-beta | unchanged: Android `0.4.6-paid-beta.1+2026081106`, Windows `0.4.6-paid-beta.2+4602` |
+| Windows production candidate | `0.4.6+4608`, exact physical smoke passed, `NotSigned`, not published |
+| Android/backend candidate | not promoted; Android rebuild was not produced after a host-memory failure |
+| Money and advertising | disabled, unchanged |
+
+Exact candidate installer SHA-256 is
+`DFB7C644F9F500D7680D956F189564C0D4B052605E5159566CABD6D624C89B9B`;
+size is `55508992` bytes; source anchor is
+`d318cfed7cf289eabebea0e1ff451be6ee5f4cad`. Package audit passed with `66`
+payload entries.
+
+The exact detached physical smoke passed with one foreground candidate in
+`18.766` client-log seconds, confirmed data-plane probe and privileged takeover.
+All `15` standby routes were accounted for. A fresh config-bound AmneziaWG
+proof recovered an injected WireGuard failure in `16.344` seconds, used the
+prevalidated standby, and never overlapped transport groups. Standby cleanup is
+`cleanupOk=true`; final recovery restored Amnezia, API `200` and YouTube `204`
+and left no Green transports, metric-`42739` routes or failsafes.
+
+Five tray cycles and forced-predecessor recovery confirmed a single process and
+correct icon lifecycle. Builds `4603`-`4607` are rejected and forbidden from
+publication. Exact evidence and the failure history are in
+`FUSION_PRODUCTION_CANDIDATE_2026_08_13_RU.md`.
+
+This is a technically accepted candidate, not a release. No deployment was
+attempted and `productionPublished=false`. Publication requires three separate
+owner decisions: Fusion UI acceptance, Authenticode or explicit unsigned
+SmartScreen acceptance, and explicit stable-production promotion approval.
+
 ## Fusion Paid-Beta Closure (2026-08-13 MSK)
 
 | Layer | Current state |
@@ -35,23 +69,10 @@ Amnezia recovery, API `200`, YouTube `204` and failsafe removal were confirmed.
 Both paid-beta nodes now serve this exact `0.4.6-paid-beta.2+4602`; strict public
 verification passed `12/12` while stable production remained unchanged.
 
-Fusion remains paid-beta. The production build is separately gated by two
-compile-time flags and a local-only promotion preparer. A new production build
-must receive its own exact physical smoke because stable-runtime bytes differ
-from the beta installer. Publication additionally requires owner UI acceptance,
-a Windows signing/SmartScreen decision and explicit stable-promotion approval.
-
-Production candidate `0.4.6+4603` was rejected by that exact physical smoke.
-Installation, tray lifecycle and foreground takeover passed, but the runtime
-monitor accepted a YouTube `204` that had fallen through to the physical route
-after the managed WireGuard service was stopped. Recovery restored Amnezia,
-API and YouTube and removed every temporary route and failsafe. The corrected
-policy requires both a live managed transport and a successful data-plane
-probe. Replacement build `4604` then proved the failover trigger itself but
-exposed a second fail-closed race: a standby probe completing after the first
-active-route failure could enter the recovery order. Build `4604` is rejected;
-standby proof acceptance now freezes on the first unhealthy sample and build
-`4605` must pass a fresh detached physical smoke.
+Fusion remains paid-beta in public contours. A separate production-runtime
+candidate advanced through rejected builds `4603`-`4607`; exact Windows build
+`4608` passed the required physical smoke. It remains unpublished behind the
+three owner gates listed above.
 
 ## Post-Release Repository Safety Closure (2026-08-02 MSK)
 

@@ -6,6 +6,36 @@ This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
 `PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md`. Dated reports are evidence only.
 
+## Fusion Windows Production Candidate, 2026-08-13
+
+- Exact Windows candidate `0.4.6+4608` is technically accepted but not
+  published. Installer size is `55508992`; SHA-256 is
+  `DFB7C644F9F500D7680D956F189564C0D4B052605E5159566CABD6D624C89B9B`;
+  Authenticode is `NotSigned`. Source anchor is
+  `d318cfed7cf289eabebea0e1ff451be6ee5f4cad`.
+- Package audit passed with `66` payload entries. The exact installed app is
+  `0.4.6+4608`; app, AOT and service hashes are recorded in
+  `docs/FUSION_PRODUCTION_CANDIDATE_2026_08_13_RU.md`.
+- The exact delayed physical smoke passed. Foreground used one candidate in
+  `18.766` client-log seconds with probe and privileged takeover confirmed.
+  All `15` standby routes were accounted for; a fresh config-bound AmneziaWG
+  proof recovered an injected WireGuard failure in `16.344` seconds with no
+  transport overlap and `cleanupOk=true`.
+- Five tray lifecycle cycles, eight duplicate launches per cycle, forced
+  predecessor recovery, final icon/process cleanup, external Amnezia recovery,
+  API `200`, YouTube `204`, absence of metric-`42739` routes and removal of all
+  failsafes were confirmed.
+- Builds `4603` through `4607` are rejected and must never be published. Their
+  false-health, standby-race, localhost-serialization, latency and cleanup
+  evidence defects are closed in `4608`.
+- Stable production, backend, Android and public manifests remain unchanged.
+  `productionPublished=false`; no production deployment was attempted.
+- Publication remains blocked on three separate owner decisions: Fusion UI
+  acceptance, Authenticode or explicit unsigned SmartScreen acceptance, and
+  explicit stable-production promotion approval.
+- Full evidence and remaining gates:
+  `docs/FUSION_PRODUCTION_CANDIDATE_2026_08_13_RU.md`.
+
 ## Fusion Paid-Beta Closure, 2026-08-13
 
 - Paid-beta backend `0.9.154-fusion-actions.1`, Android
@@ -31,24 +61,10 @@ This is the current operational entry point. Read it together with
 - Strict public release verification after the Windows update is `12/12` (`8`
   artifacts and `4` backends). Production Android, Windows and backend remained
   byte/version unchanged.
-- Windows paid-beta remains `NotSigned`. A production promotion candidate must
-  use a new build number because its stable-runtime bytes differ from the
-  accepted beta installer. It still requires an exact production-candidate
-  smoke plus separate UI, SmartScreen/signing and stable-promotion decisions.
-- Production candidate `0.4.6+4603` is rejected and must never be published.
-  Its exact physical smoke passed installation, five tray lifecycles and the
-  one-candidate foreground takeover, but an injected WireGuard service failure
-  still reached YouTube through the restored physical route and was therefore
-  misclassified as a healthy VPN route. Final recovery was complete: Green
-  transports and UI stopped, Amnezia restored, API `200`, YouTube `204`, and no
-  failsafe or metric-`42739` route remained. Runtime health now requires both a
-  live managed transport and a successful routed probe. Replacement production
-  candidate build `4604` then exposed a second fail-closed race: a standby
-  proof whose probe completed after the active-route failure could enter the
-  recovery order. That candidate is also rejected and must never be published.
-  Standby proof acceptance now freezes on the first unhealthy runtime sample;
-  replacement production candidate build `4605` requires a new exact delayed
-  physical smoke.
+- Windows paid-beta remains `NotSigned`. The separate stable-runtime candidate
+  advanced through rejected builds `4603`-`4607`; exact build `4608` passed its
+  production-candidate physical smoke. It remains unpublished and still needs
+  separate UI, SmartScreen/signing and stable-promotion owner decisions.
 - Full evidence and rollback paths:
   `docs/FUSION_PAID_BETA_2026_08_11_RU.md`.
 
