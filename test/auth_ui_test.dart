@@ -113,6 +113,24 @@ class _FakeAuthApi extends BlueVpnApi {
   }
 }
 
+class _ExpiredGuestAuthApi extends _FakeAuthApi {
+  final List<String> accessTokens = <String>[];
+
+  @override
+  Future<ApiResult<Map<String, dynamic>>> startAccessEmail({
+    required String accessToken,
+    required String email,
+  }) async {
+    accessTokens.add(accessToken);
+    if (accessTokens.length == 1) {
+      return const ApiResult<Map<String, dynamic>>.err(
+        '401 Unauthorized: invalid token',
+      );
+    }
+    return super.startAccessEmail(accessToken: accessToken, email: email);
+  }
+}
+
 Widget _authApp({
   required BlueVpnApi api,
   required Future<void> Function(Session session) onAuthSuccess,
@@ -329,4 +347,61 @@ void main() {
     expect(completed!.accessToken, _fixtureAccessToken('restore'));
     expect(api.checkoutEmail, isNull);
   });
+
+  testWidgets(
+    'expired guest access refreshes inside the visible login dialog',
+    (tester) async {
+      final api = _ExpiredGuestAuthApi();
+      var renewCalls = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: ElevatedButton(
+                onPressed: () => showDialog<Session>(
+                  context: context,
+                  builder: (_) => RestoreAccessDialog(
+                    api: api,
+                    session: const Session(
+                      accessToken: 'expired-guest-token',
+                      email: '',
+                      isGuest: true,
+                    ),
+                    renewGuestSession: () async {
+                      renewCalls += 1;
+                      return const Session(
+                        accessToken: 'renewed-guest-token',
+                        email: '',
+                        isGuest: true,
+                      );
+                    },
+                  ),
+                ),
+                child: const Text('Войти'),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('Войти'));
+      await tester.pumpAndSettle();
+      expect(find.text('Войти в аккаунт'), findsOneWidget);
+
+      await tester.enterText(
+        find.byKey(const Key('restore_access_email')),
+        'subscriber@example.test',
+      );
+      await tester.tap(find.text('Получить код'));
+      await tester.pumpAndSettle();
+
+      expect(renewCalls, 1);
+      expect(api.accessTokens, <String>[
+        'expired-guest-token',
+        'renewed-guest-token',
+      ]);
+      expect(find.byKey(const Key('restore_access_code')), findsOneWidget);
+      expect(find.text('Код отправлен на email.'), findsOneWidget);
+    },
+  );
 }

@@ -4699,21 +4699,6 @@ while True:
     }
   }
 
-  Future<ApiResult<Map<String, dynamic>>> fetchNetworkInfo({
-    required String accessToken,
-  }) async {
-    final result = await _jsonRequest(
-      method: 'GET',
-      path: '/api/v1/client/network-info',
-      bearerToken: accessToken,
-    );
-    if (!result.ok) return ApiResult.err(result.message);
-    if (result.data is! Map) {
-      return const ApiResult.err('Некорректный ответ network-info.');
-    }
-    return ApiResult.ok(Map<String, dynamic>.from(result.data as Map));
-  }
-
   Future<ApiResult<WireGuardConfigResponse>> fetchWireGuardConfig({
     required String accessToken,
     String? deviceId,
@@ -4941,7 +4926,8 @@ while True:
 
     if (path.endsWith('/auth/challenge/verify') ||
         path.endsWith('/auth/email/code/verify') ||
-        path.endsWith('/auth/checkout/email/verify')) {
+        path.endsWith('/auth/checkout/email/verify') ||
+        path.endsWith('/auth/access/email/verify')) {
       if (statusCode == 401 ||
           lower.contains('invalid_code') ||
           lower.contains('invalid code') ||
@@ -6650,6 +6636,7 @@ class RestoreAccessDialog extends StatefulWidget {
   final Session session;
   final String? initialEmail;
   final String? deviceUidOverride;
+  final Future<Session?> Function()? renewGuestSession;
 
   const RestoreAccessDialog({
     super.key,
@@ -6657,6 +6644,7 @@ class RestoreAccessDialog extends StatefulWidget {
     required this.session,
     this.initialEmail,
     this.deviceUidOverride,
+    this.renewGuestSession,
   });
 
   @override
@@ -6670,10 +6658,12 @@ class _RestoreAccessDialogState extends State<RestoreAccessDialog> {
   bool _busy = false;
   bool _codeRequested = false;
   String? _status;
+  late Session _session;
 
   @override
   void initState() {
     super.initState();
+    _session = widget.session;
     _email.text = widget.initialEmail?.trim() ?? '';
   }
 
@@ -6695,10 +6685,25 @@ class _RestoreAccessDialogState extends State<RestoreAccessDialog> {
       _status = 'Отправляем код...';
     });
     try {
-      final res = await widget.api.startAccessEmail(
-        accessToken: widget.session.accessToken,
+      var res = await widget.api.startAccessEmail(
+        accessToken: _session.accessToken,
         email: email,
       );
+      if (!res.ok &&
+          greenVpnIsInvalidSessionMessage(res.message) &&
+          widget.renewGuestSession != null) {
+        if (mounted) {
+          setState(() => _status = 'Обновляем бесплатный профиль...');
+        }
+        final renewed = await widget.renewGuestSession!();
+        if (renewed != null) {
+          _session = renewed;
+          res = await widget.api.startAccessEmail(
+            accessToken: _session.accessToken,
+            email: email,
+          );
+        }
+      }
       if (!mounted) return;
       if (!res.ok || res.data == null) {
         setState(
@@ -6738,7 +6743,7 @@ class _RestoreAccessDialogState extends State<RestoreAccessDialog> {
       final deviceUid =
           widget.deviceUidOverride ?? await _deviceStore.getOrCreate();
       final res = await widget.api.verifyAccessEmail(
-        accessToken: widget.session.accessToken,
+        accessToken: _session.accessToken,
         email: email,
         code: code,
         deviceUid: deviceUid,
@@ -7243,18 +7248,6 @@ String greenVpnConnectionRouteKey(ServerLocation? route) {
   return '${greenVpnNormalizeManagedRouteId(route.id)}|${route.protocolCode.trim().toLowerCase()}';
 }
 
-bool greenVpnShouldApplyConnectionNetworkInfo({
-  required bool vpnEnabled,
-  required int requestEpoch,
-  required int currentEpoch,
-  required String requestRouteKey,
-  required String currentRouteKey,
-}) {
-  return vpnEnabled &&
-      requestEpoch == currentEpoch &&
-      requestRouteKey == currentRouteKey;
-}
-
 String greenVpnPublicServerSubtitle(
   ServerLocation server, {
   bool includeUnavailable = false,
@@ -7680,8 +7673,6 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   DateTime? _vpnPausedUntil;
   DateTime? _connectionStartedAt;
   int? _activeConnectionLatencyMs;
-  String? _connectionPublicIp;
-  int _connectionNetworkInfoEpoch = 0;
   final Set<String> _favoriteLocationIds = <String>{};
   final List<String> _recentLocationIds = <String>[];
   WindowsCloseBehavior _windowsCloseBehavior =
@@ -7803,17 +7794,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           previousRouteKey.isNotEmpty &&
           effectiveRouteKey.isNotEmpty &&
           previousRouteKey != effectiveRouteKey;
-      final newConnection = _connectionStartedAt == null;
-      final refreshNetworkInfo =
-          _connectionPublicIp == null || routeChanged || newConnection;
       setState(() {
-        if (routeChanged || newConnection) {
-          _connectionNetworkInfoEpoch += 1;
-        }
         _connectionStartedAt ??= DateTime.now();
         if (effectiveRoute != null) _activeConnectionRoute = effectiveRoute;
         if (routeChanged) {
-          _connectionPublicIp = null;
           _activeConnectionLatencyMs = latencyMs != null && latencyMs >= 0
               ? latencyMs
               : effectiveRoute?.pingMs;
@@ -7825,17 +7809,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       });
       _startConnectionUiTimer();
       _rememberLocation(effectiveRoute);
-      if (refreshNetworkInfo) {
-        unawaited(_refreshConnectionNetworkInfo());
-      }
       return;
     }
 
-    _connectionNetworkInfoEpoch += 1;
     if (_connectionStartedAt == null &&
         _activeConnectionRoute == null &&
-        _activeConnectionLatencyMs == null &&
-        _connectionPublicIp == null) {
+        _activeConnectionLatencyMs == null) {
       return;
     }
     _stopConnectionUiTimer();
@@ -7843,7 +7822,6 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       _connectionStartedAt = null;
       _activeConnectionRoute = null;
       _activeConnectionLatencyMs = null;
-      _connectionPublicIp = null;
     });
   }
 
@@ -7883,32 +7861,6 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       );
     }
     return route;
-  }
-
-  Future<void> _refreshConnectionNetworkInfo() async {
-    if (kIsWeb || !vpnEnabled || widget.session.accessToken == 'dev-token') {
-      return;
-    }
-    final requestEpoch = _connectionNetworkInfoEpoch;
-    final requestRouteKey = _connectionRouteKey(_activeConnectionRoute);
-    final response = await _api.fetchNetworkInfo(
-      accessToken: widget.session.accessToken,
-    );
-    if (!mounted ||
-        !greenVpnShouldApplyConnectionNetworkInfo(
-          vpnEnabled: vpnEnabled,
-          requestEpoch: requestEpoch,
-          currentEpoch: _connectionNetworkInfoEpoch,
-          requestRouteKey: requestRouteKey,
-          currentRouteKey: _connectionRouteKey(_activeConnectionRoute),
-        ) ||
-        !response.ok ||
-        response.data == null) {
-      return;
-    }
-    final publicIp = (response.data!['publicIp'] ?? '').toString().trim();
-    if (publicIp.isEmpty) return;
-    setState(() => _connectionPublicIp = publicIp);
   }
 
   Future<bool> _cancelAndroidPauseResume() async {
@@ -9428,24 +9380,18 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       return;
     }
 
-    final guestSession = await _renewGuestSession(
-      source: 'access_restore_open',
-      showToast: false,
-    );
-    if (guestSession == null || !mounted) {
-      if (mounted) {
-        _toast(context, 'Не удалось подготовить вход. Повторите попытку.');
-      }
-      return;
-    }
-
+    unawaited(appendBlueVpnClientLog('access restore dialog requested'));
     final session = await showDialog<Session>(
       context: context,
       barrierDismissible: false,
       builder: (_) => RestoreAccessDialog(
         api: _api,
-        session: guestSession,
-        initialEmail: guestSession.email,
+        session: widget.session,
+        initialEmail: widget.session.email,
+        renewGuestSession: () => _renewGuestSession(
+          source: 'access_restore_retry',
+          showToast: false,
+        ),
       ),
     );
     if (session == null || !mounted) return;
@@ -15486,7 +15432,6 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         activeConnectionRoute: _activeConnectionRoute,
         connectionStartedAt: _connectionStartedAt,
         connectionLatencyMs: _activeConnectionLatencyMs,
-        connectionPublicIp: _connectionPublicIp,
 
         // Сервер
         selectedServer: selectedServer,
@@ -15908,7 +15853,6 @@ class VpnPage extends StatelessWidget {
   final ServerLocation? activeConnectionRoute;
   final DateTime? connectionStartedAt;
   final int? connectionLatencyMs;
-  final String? connectionPublicIp;
   final VoidCallback onOpenTariff;
   final VoidCallback? onOpenDiagnostics;
   final ServerLocation selectedServer;
@@ -15952,7 +15896,6 @@ class VpnPage extends StatelessWidget {
     this.activeConnectionRoute,
     this.connectionStartedAt,
     this.connectionLatencyMs,
-    this.connectionPublicIp,
     required this.onOpenTariff,
     this.onOpenDiagnostics,
     required this.selectedServer,
@@ -16018,7 +15961,7 @@ class VpnPage extends StatelessWidget {
               ? 'Интернет проходит через Green VPN.'
               : (androidExternalVpnActive
                     ? 'Нажмите кнопку, чтобы переключиться на Green VPN.'
-                    : 'Подключим первый доступный маршрут.'));
+                    : 'Подключим первый доступный вариант.'));
     final displayedRoute = vpnEnabled && activeConnectionRoute != null
         ? activeConnectionRoute!
         : selectedServer;
@@ -16131,14 +16074,39 @@ class VpnPage extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 14),
-                      Text(
-                        statusText,
-                        key: const Key('fusion_connection_status'),
-                        style: TextStyle(
-                          color: textColor,
-                          fontSize: 28,
-                          fontWeight: FontWeight.w900,
-                        ),
+                      Row(
+                        children: [
+                          if (vpnEnabled && !vpnBusy) ...[
+                            Container(
+                              key: const Key('fusion_connected_check_icon'),
+                              width: 30,
+                              height: 30,
+                              decoration: const BoxDecoration(
+                                color: kBrandPrimary,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.check_rounded,
+                                color: Colors.white,
+                                size: 22,
+                              ),
+                            ),
+                            const SizedBox(width: 9),
+                          ],
+                          Expanded(
+                            child: Text(
+                              statusText,
+                              key: const Key('fusion_connection_status'),
+                              style: TextStyle(
+                                color: vpnEnabled && !vpnBusy
+                                    ? kBrandPrimaryDeep
+                                    : textColor,
+                                fontSize: 28,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                       const SizedBox(height: 6),
                       Text(
@@ -16324,7 +16292,7 @@ class VpnPage extends StatelessWidget {
                       buttonKey: const Key('fusion_change_route_button'),
                       onPressed: vpnInteractionLocked ? null : onChangeRoute,
                       icon: Icons.sync_alt_rounded,
-                      label: 'Сменить маршрут',
+                      label: 'Сменить подключение',
                     ),
                   ),
                 ],
@@ -16352,10 +16320,8 @@ class VpnPage extends StatelessWidget {
                         modeTitle: socialOnlyEnabled
                             ? 'Только выбранное'
                             : 'Весь интернет',
-                        route: activeConnectionRoute ?? displayedRoute,
                         connectedAt: connectionStartedAt,
                         latencyMs: connectionLatencyMs,
-                        publicIp: connectionPublicIp,
                         trafficUsage: trafficUsage,
                       ),
                       icon: Icons.info_outline_rounded,
@@ -16543,7 +16509,7 @@ class VpnPage extends StatelessWidget {
                       children: [
                         Text(
                           vpnEnabled
-                              ? 'Маршрут контролируется'
+                              ? 'Подключение контролируется'
                               : 'Автовыбор готов к запуску',
                           style: const TextStyle(fontWeight: FontWeight.w900),
                         ),
@@ -16551,7 +16517,7 @@ class VpnPage extends StatelessWidget {
                         Text(
                           vpnEnabled
                               ? 'При сбое Green VPN выполнит безопасное переключение.'
-                              : 'Подключится первый доступный маршрут.',
+                              : 'Подключится первый доступный вариант.',
                           style: TextStyle(
                             color: mutedColor,
                             fontSize: 11,
@@ -16737,10 +16703,8 @@ class VpnPage extends StatelessWidget {
     BuildContext context, {
     required String serverTitle,
     required String modeTitle,
-    required ServerLocation route,
     required DateTime? connectedAt,
     required int? latencyMs,
-    required String? publicIp,
     required Map<String, dynamic> trafficUsage,
   }) async {
     final trafficSummary = greenVpnTrafficUsageSummary(trafficUsage);
@@ -16761,7 +16725,7 @@ class VpnPage extends StatelessWidget {
               const SizedBox(height: 16),
               const _FusionDetailRow(
                 label: 'Состояние',
-                value: 'Защита активна',
+                value: '✓ Защита активна',
               ),
               _FusionDetailRow(label: 'Локация', value: serverTitle),
               _FusionDetailRow(label: 'Режим', value: modeTitle),
@@ -16773,20 +16737,7 @@ class VpnPage extends StatelessWidget {
                 label: 'Задержка',
                 value: latencyMs == null ? 'Определяется...' : '$latencyMs мс',
               ),
-              _FusionDetailRow(
-                label: 'Публичный IP',
-                value: (publicIp ?? '').trim().isEmpty
-                    ? 'Определяется...'
-                    : publicIp!.trim(),
-              ),
               _FusionDetailRow(label: 'Трафик за месяц', value: trafficSummary),
-              if (!route.isAuto)
-                _FusionDetailRow(
-                  label: 'Маршрут',
-                  value: route.protocolLabel.trim().isEmpty
-                      ? 'Автоматический'
-                      : route.protocolLabel.trim(),
-                ),
             ],
           ),
         ),
@@ -18342,7 +18293,7 @@ class TariffPage extends StatelessWidget {
                   ),
                   _IncludedBadge(
                     icon: Icons.alt_route_rounded,
-                    text: 'Умный маршрут',
+                    text: 'Умное подключение',
                   ),
                   _IncludedBadge(
                     icon: Icons.event_repeat_rounded,

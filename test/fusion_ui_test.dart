@@ -285,7 +285,6 @@ void main() {
             const Duration(minutes: 2),
           ),
           connectionLatencyMs: 42,
-          connectionPublicIp: '203.0.113.7',
           onOpenTariff: () {},
           onOpenDiagnostics: () {},
           selectedServer: const ServerLocation(
@@ -309,6 +308,10 @@ void main() {
       );
 
       expect(find.text('Защита активна'), findsOneWidget);
+      expect(
+        find.byKey(const Key('fusion_connected_check_icon')),
+        findsOneWidget,
+      );
       final diagnosticsLabel = tester.widget<Text>(find.text('Диагностика'));
       expect(diagnosticsLabel.maxLines, 1);
       expect(diagnosticsLabel.softWrap, isFalse);
@@ -327,8 +330,12 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Детали соединения'), findsOneWidget);
       expect(find.text('42 мс'), findsOneWidget);
-      expect(find.text('203.0.113.7'), findsOneWidget);
-      expect(find.text('WireGuard'), findsOneWidget);
+      expect(find.text('Публичный IP'), findsNothing);
+      expect(find.text('203.0.113.7'), findsNothing);
+      expect(find.text('Маршрут'), findsNothing);
+      expect(find.text('WireGuard'), findsNothing);
+      expect(find.text('Сменить подключение'), findsOneWidget);
+      expect(find.text('Подключение контролируется'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
     skip: !fusionEnabled,
@@ -405,48 +412,5 @@ void main() {
 
     expect(restored?.id, london.id);
     expect(stale, isNull);
-  });
-
-  test('network details reject stale route responses', () {
-    expect(
-      greenVpnShouldApplyConnectionNetworkInfo(
-        vpnEnabled: true,
-        requestEpoch: 7,
-        currentEpoch: 7,
-        requestRouteKey: 'london|wireguard_udp',
-        currentRouteKey: 'london|wireguard_udp',
-      ),
-      isTrue,
-    );
-    expect(
-      greenVpnShouldApplyConnectionNetworkInfo(
-        vpnEnabled: true,
-        requestEpoch: 7,
-        currentEpoch: 8,
-        requestRouteKey: 'london|wireguard_udp',
-        currentRouteKey: 'london|wireguard_udp',
-      ),
-      isFalse,
-    );
-    expect(
-      greenVpnShouldApplyConnectionNetworkInfo(
-        vpnEnabled: true,
-        requestEpoch: 7,
-        currentEpoch: 7,
-        requestRouteKey: 'netherlands|wireguard_udp',
-        currentRouteKey: 'london|wireguard_udp',
-      ),
-      isFalse,
-    );
-    expect(
-      greenVpnShouldApplyConnectionNetworkInfo(
-        vpnEnabled: false,
-        requestEpoch: 7,
-        currentEpoch: 7,
-        requestRouteKey: 'london|wireguard_udp',
-        currentRouteKey: 'london|wireguard_udp',
-      ),
-      isFalse,
-    );
   });
 }
