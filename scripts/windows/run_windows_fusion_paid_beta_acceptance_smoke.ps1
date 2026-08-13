@@ -1,13 +1,16 @@
 [CmdletBinding()]
 param(
-    [string]$InstallerPath = 'C:\BlueVPN_Builds\paid_beta_20260811_fusion_actions_v7_0.4.6\GreenVPN_Beta_Setup_0.4.6-paid-beta.1.exe',
+    [string]$InstallerPath = 'C:\BlueVPN_Builds\paid_beta_20260813_fusion_acl_fix_v1_0.4.6\GreenVPN_Beta_Setup_0.4.6-paid-beta.2.exe',
     [ValidatePattern('^[0-9A-Fa-f]{64}$')]
-    [string]$ExpectedInstallerSha256 = '1D752ADFFFB33D60B2693E6AE888EA62AA82EFA1EF0A7462513C35CF2FBCCC89',
-    [long]$ExpectedInstallerSize = 55497216,
-    [string]$ExpectedFileVersion = '0.4.6+4601',
+    [string]$ExpectedInstallerSha256 = 'B882DB6EEF672C21786608888431126FAFC997EC6D7C5CEADB6CA16DD0AEC4B3',
+    [long]$ExpectedInstallerSize = 55497728,
+    [string]$ExpectedFileVersion = '0.4.6+4602',
     [ValidatePattern('^[0-9A-Fa-f]{64}$')]
-    [string]$ExpectedAppSha256 = '25D5CE9FF288426E9BD16CFEA79531FA9B91DE1F3233D6355206C1EC29575633',
-    [string]$ArtifactRoot = 'C:\BlueVPN_Builds\fusion_windows_acceptance_20260813_v1',
+    [string]$ExpectedAppSha256 = '200838477BCBA22C7AB2CC29A716B56D927249197754C0DC3035E61CC2549F80',
+    [long]$ExpectedAppSize = 149504,
+    [ValidatePattern('^[0-9A-Fa-f]{40}$')]
+    [string]$CandidateSourceCommit = '62f9db7c8d639fed62205d0e82c016609cfe2d45',
+    [string]$ArtifactRoot = 'C:\BlueVPN_Builds\fusion_windows_acceptance_20260813_physical_v4_b4602',
     [string]$InstallRoot = 'C:\Program Files\Green VPN Beta',
     [string]$ProgramDataRoot = 'C:\ProgramData\BlueVPNBeta',
     [int]$LocalServicePort = 48738,
@@ -206,7 +209,7 @@ function Assert-ReadOnlyBaseline {
 
 function Start-DeadmanRecovery {
     $arguments = @(
-        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'RemoteSigned',
         '-File', "`"$restoreScript`"",
         '-InstallRoot', "`"$resolvedInstallRoot`"",
         '-AppPath', "`"$appPath`"",
@@ -225,7 +228,7 @@ function Start-DeadmanRecovery {
 
 function Invoke-FinalRecovery {
     try {
-        & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+        & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy RemoteSigned `
             -File $restoreScript `
             -InstallRoot $resolvedInstallRoot `
             -AppPath $appPath `
@@ -276,6 +279,9 @@ function Install-ExactCandidate {
     }
     if ($appHash -ne $expectedAppHash) {
         throw 'Installed application SHA-256 does not match the exact payload.'
+    }
+    if ([long]$app.Length -ne $ExpectedAppSize) {
+        throw "Installed application size mismatch: $($app.Length)."
     }
     if ((Get-ServiceState -Name $localServiceName) -ne 'Running') {
         throw 'Green VPN Beta local service is not running after installation.'
@@ -461,7 +467,7 @@ function Invoke-PhysicalConnect {
         [switch]$RequireCachedRoute
     )
     $arguments = @(
-        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'RemoteSigned',
         '-File', "`"$physicalScript`"",
         '-InstallRoot', "`"$resolvedInstallRoot`"",
         '-AppPath', "`"$appPath`"",
@@ -528,6 +534,7 @@ $summary = [ordered]@{
     failure = $null
     initialDelaySeconds = $InitialDelaySeconds
     deadmanDelaySeconds = $DeadmanDelaySeconds
+    candidateSourceCommit = $CandidateSourceCommit.ToLowerInvariant()
     initialBaseline = $null
     installer = $null
     fusionUi = $null
@@ -649,6 +656,7 @@ try {
         $installed = Get-Item -LiteralPath $appPath
         $summary.cleanup.exactInstallRetained =
             [string]$installed.VersionInfo.FileVersion -eq $ExpectedFileVersion -and
+            [long]$installed.Length -eq $ExpectedAppSize -and
             (Get-FileHash -LiteralPath $appPath -Algorithm SHA256).Hash -eq
                 $expectedAppHash
     }

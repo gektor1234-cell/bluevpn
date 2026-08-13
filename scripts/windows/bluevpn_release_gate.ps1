@@ -2327,7 +2327,10 @@ $windowsRuntimeFailoverChecks = [ordered]@{
         '$ExpectedInstallerSha256',
         '$ExpectedInstallerSize',
         '$ExpectedAppSha256',
+        '$ExpectedAppSize',
+        '$CandidateSourceCommit',
         '$InitialDelaySeconds = 90',
+        "'-ExecutionPolicy', 'RemoteSigned'",
         "'C:\Program Files\Green VPN Beta'",
         "'C:\ProgramData\BlueVPNBeta'",
         '$LocalServicePort = 48738',
@@ -2358,6 +2361,7 @@ $windowsRuntimeFailoverChecks = [ordered]@{
         'windows-fusion-paid-beta-launcher-status.json',
         "Write-Status -Phase 'uac_requested'",
         '-Verb RunAs',
+        "'-ExecutionPolicy', 'RemoteSigned'",
         "Write-Status -Phase 'runner_started'",
         'A Fusion paid-beta acceptance runner is already active.'
     )

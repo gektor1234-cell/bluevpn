@@ -1,9 +1,9 @@
 [CmdletBinding()]
 param(
     [string]$RunnerPath = '',
-    [string]$InstallerPath = 'C:\BlueVPN_Builds\paid_beta_20260811_fusion_actions_v7_0.4.6\GreenVPN_Beta_Setup_0.4.6-paid-beta.1.exe',
-    [string]$ArtifactRoot = 'C:\BlueVPN_Builds\fusion_windows_acceptance_20260813_v1',
-    [string]$LauncherStatusPath = 'C:\BlueVPN_Builds\fusion_windows_acceptance_20260813_v1\windows-fusion-paid-beta-launcher-status.json',
+    [string]$InstallerPath = 'C:\BlueVPN_Builds\paid_beta_20260813_fusion_acl_fix_v1_0.4.6\GreenVPN_Beta_Setup_0.4.6-paid-beta.2.exe',
+    [string]$ArtifactRoot = 'C:\BlueVPN_Builds\fusion_windows_acceptance_20260813_physical_v4_b4602',
+    [string]$LauncherStatusPath = 'C:\BlueVPN_Builds\fusion_windows_acceptance_20260813_physical_v4_b4602\windows-fusion-paid-beta-launcher-status.json',
     [ValidateRange(90, 600)]
     [int]$InitialDelaySeconds = 90
 )
@@ -61,7 +61,7 @@ try {
     }
     Write-Status -Phase 'uac_requested'
     $arguments = @(
-        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'RemoteSigned',
         '-File', "`"$resolvedRunner`"",
         '-InstallerPath', "`"$resolvedInstaller`"",
         '-ArtifactRoot', "`"$resolvedArtifactRoot`"",
