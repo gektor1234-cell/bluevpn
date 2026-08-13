@@ -8,31 +8,33 @@ This is the current operational entry point. Read it together with
 
 ## Fusion Windows Production Candidate, 2026-08-13
 
-- Exact Windows candidate `0.4.6+4608` is technically accepted but not
-  published. Installer size is `55508992`; SHA-256 is
-  `DFB7C644F9F500D7680D956F189564C0D4B052605E5159566CABD6D624C89B9B`;
+- Exact Windows candidate `0.4.6+4610` is technically accepted but not
+  published. Installer size is `55506944`; SHA-256 is
+  `FCBA053F674FDFEAA1BA48604BDA455DB39C372490F2E9A6EBD20699E1EEB8CF`;
   Authenticode is `NotSigned`. Source anchor is
-  `d318cfed7cf289eabebea0e1ff451be6ee5f4cad`.
+  `333a876f59fd1804c2793369578cfb347bf8aec4`.
 - Package audit passed with `66` payload entries. The exact installed app is
-  `0.4.6+4608`; app, AOT and service hashes are recorded in
+  `0.4.6+4610`; app, AOT and service hashes are recorded in
   `docs/FUSION_PRODUCTION_CANDIDATE_2026_08_13_RU.md`.
 - The exact delayed physical smoke passed. Foreground used one candidate in
-  `18.766` client-log seconds with probe and privileged takeover confirmed.
+  `18.284` client-log seconds with probe and privileged takeover confirmed.
   All `15` standby routes were accounted for; a fresh config-bound AmneziaWG
-  proof recovered an injected WireGuard failure in `16.344` seconds with no
+  proof recovered an injected active-route failure in `17.17` seconds with no
   transport overlap and `cleanupOk=true`.
 - Five tray lifecycle cycles, eight duplicate launches per cycle, forced
   predecessor recovery, final icon/process cleanup, external Amnezia recovery,
   API `200`, YouTube `204`, absence of metric-`42739` routes and removal of all
   failsafes were confirmed.
-- Builds `4603` through `4607` are rejected and must never be published. Their
-  false-health, standby-race, localhost-serialization, latency and cleanup
-  evidence defects are closed in `4608`.
+- Builds `4603` through `4607` and `4609` are rejected and must never be
+  published; accepted build `4608` is superseded and must not be published.
+  Build `4610` adds privacy-safe details, an explicit connected indicator,
+  corrected email recovery and fail-closed recovery restricted to standby
+  proofs completed before the active route failed.
 - Stable production, backend, Android and public manifests remain unchanged.
   `productionPublished=false`; no production deployment was attempted.
 - Publication remains blocked on three separate owner decisions: Fusion UI
-  acceptance, Authenticode or explicit unsigned SmartScreen acceptance, and
-  explicit stable-production promotion approval.
+  and email acceptance, Authenticode or explicit unsigned SmartScreen
+  acceptance, and explicit stable-production promotion approval.
 - Full evidence and remaining gates:
   `docs/FUSION_PRODUCTION_CANDIDATE_2026_08_13_RU.md`.
 
@@ -62,9 +64,10 @@ This is the current operational entry point. Read it together with
   artifacts and `4` backends). Production Android, Windows and backend remained
   byte/version unchanged.
 - Windows paid-beta remains `NotSigned`. The separate stable-runtime candidate
-  advanced through rejected builds `4603`-`4607`; exact build `4608` passed its
-  production-candidate physical smoke. It remains unpublished and still needs
-  separate UI, SmartScreen/signing and stable-promotion owner decisions.
+  advanced through rejected or superseded builds `4603`-`4609`; exact build
+  `4610` passed its production-candidate physical smoke. It remains unpublished
+  and still needs separate UI/email, SmartScreen/signing and stable-promotion
+  owner decisions.
 - Full evidence and rollback paths:
   `docs/FUSION_PAID_BETA_2026_08_11_RU.md`.
 

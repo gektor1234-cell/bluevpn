@@ -6,32 +6,35 @@
 |---|---|
 | Stable production | unchanged: backend `0.9.153-update-channel-alias.4`, Android `0.3.19+2026072914`, Windows `0.3.26+3105` |
 | Accepted paid-beta | unchanged: Android `0.4.6-paid-beta.1+2026081106`, Windows `0.4.6-paid-beta.2+4602` |
-| Windows production candidate | `0.4.6+4608`, exact physical smoke passed, `NotSigned`, not published |
-| Android/backend candidate | not promoted; Android rebuild was not produced after a host-memory failure |
+| Windows production candidate | `0.4.6+4610`, exact physical smoke passed, `NotSigned`, not published |
+| Android/backend candidate | not promoted and unchanged |
 | Money and advertising | disabled, unchanged |
 
 Exact candidate installer SHA-256 is
-`DFB7C644F9F500D7680D956F189564C0D4B052605E5159566CABD6D624C89B9B`;
-size is `55508992` bytes; source anchor is
-`d318cfed7cf289eabebea0e1ff451be6ee5f4cad`. Package audit passed with `66`
+`FCBA053F674FDFEAA1BA48604BDA455DB39C372490F2E9A6EBD20699E1EEB8CF`;
+size is `55506944` bytes; source anchor is
+`333a876f59fd1804c2793369578cfb347bf8aec4`. Package audit passed with `66`
 payload entries.
 
 The exact detached physical smoke passed with one foreground candidate in
-`18.766` client-log seconds, confirmed data-plane probe and privileged takeover.
+`18.284` client-log seconds, confirmed data-plane probe and privileged takeover.
 All `15` standby routes were accounted for. A fresh config-bound AmneziaWG
-proof recovered an injected WireGuard failure in `16.344` seconds, used the
+proof recovered an injected active-route failure in `17.17` seconds, used the
 prevalidated standby, and never overlapped transport groups. Standby cleanup is
 `cleanupOk=true`; final recovery restored Amnezia, API `200` and YouTube `204`
 and left no Green transports, metric-`42739` routes or failsafes.
 
 Five tray cycles and forced-predecessor recovery confirmed a single process and
-correct icon lifecycle. Builds `4603`-`4607` are rejected and forbidden from
-publication. Exact evidence and the failure history are in
+correct icon lifecycle. Builds `4603`-`4607` and `4609` are rejected; `4608` is
+superseded. None may be published. Build `4610` also removes public-IP and
+route/protocol disclosure, adds an explicit connected check, corrects email
+recovery UX and limits failover to standby proofs completed before the active
+failure. Exact evidence and the failure history are in
 `FUSION_PRODUCTION_CANDIDATE_2026_08_13_RU.md`.
 
 This is a technically accepted candidate, not a release. No deployment was
 attempted and `productionPublished=false`. Publication requires three separate
-owner decisions: Fusion UI acceptance, Authenticode or explicit unsigned
+owner decisions: Fusion UI/email acceptance, Authenticode or explicit unsigned
 SmartScreen acceptance, and explicit stable-production promotion approval.
 
 ## Fusion Paid-Beta Closure (2026-08-13 MSK)
@@ -70,9 +73,9 @@ Both paid-beta nodes now serve this exact `0.4.6-paid-beta.2+4602`; strict publi
 verification passed `12/12` while stable production remained unchanged.
 
 Fusion remains paid-beta in public contours. A separate production-runtime
-candidate advanced through rejected builds `4603`-`4607`; exact Windows build
-`4608` passed the required physical smoke. It remains unpublished behind the
-three owner gates listed above.
+candidate advanced through rejected or superseded builds `4603`-`4609`; exact
+Windows build `4610` passed the required physical smoke. It remains unpublished
+behind the three owner gates listed above.
 
 ## Post-Release Repository Safety Closure (2026-08-02 MSK)
 

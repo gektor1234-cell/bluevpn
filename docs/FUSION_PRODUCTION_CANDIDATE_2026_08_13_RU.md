@@ -2,13 +2,13 @@
 
 ## Статус
 
-Windows-кандидат `0.4.6+4608` технически принят как точный кандидат для
+Windows-кандидат `0.4.6+4610` технически принят как точный кандидат для
 будущего production-продвижения. Он не опубликован, production backend и
 публичные manifests не менялись. Android также не менялся.
 
 Публикация остаётся закрыта тремя отдельными решениями владельца:
 
-1. принять интерфейс Fusion;
+1. принять исправленный интерфейс Fusion и вход по email;
 2. принять риск `NotSigned`/SmartScreen либо предоставить Authenticode;
 3. отдельно разрешить stable production promotion.
 
@@ -17,27 +17,43 @@ Windows-кандидат `0.4.6+4608` технически принят как �
 
 ## Точный Windows-артефакт
 
-- версия: `0.4.6+4608`;
+- версия: `0.4.6+4610`;
 - файл:
-  `C:\BlueVPN_Builds\fusion_production_promotion_20260813_b4608_windows_v3\clients\GreenVPN_Setup_0.4.6.exe`;
-- размер: `55508992` байт;
+  `C:\BlueVPN_Builds\fusion_production_promotion_20260813_b4610_privacy_auth_failover_v1\clients\GreenVPN_Setup_0.4.6.exe`;
+- размер: `55506944` байт;
 - SHA-256:
-  `DFB7C644F9F500D7680D956F189564C0D4B052605E5159566CABD6D624C89B9B`;
+  `FCBA053F674FDFEAA1BA48604BDA455DB39C372490F2E9A6EBD20699E1EEB8CF`;
 - Authenticode: `NotSigned`;
 - package audit: `success=true`, `payloadEntryCount=66`;
 - source commit:
-  `d318cfed7cf289eabebea0e1ff451be6ee5f4cad`.
+  `333a876f59fd1804c2793369578cfb347bf8aec4`.
 
 Установленный payload:
 
 | Файл | Размер | SHA-256 |
 |---|---:|---|
-| `greenvpn.exe` | `149504` | `C61D7F340FC1EA93C59179C4B22976583BC2FF349CB3BA1EBB343A8C0A290AB6` |
-| `data/app.so` | `7013296` | `11D73B327D2862FABEF78719B3CFD436C6BB4463FE58608CE1A2E1404CEB3F6B` |
-| `greenvpn_service.exe` | `110592` | `71497BC559F49CB18A9920CC7D8CDA948AD854DF6E2DFA838D6B30227C2CDADF` |
+| `greenvpn.exe` | `149504` | `FA76BF89A39476FF0DFAB9FC3B5D8E598D4D852B4D8CF2ECC0FC97D0CB528979` |
+| `data/app.so` | `7013296` | `0050E2FA26D6D4D65824FA584FF14B1DB6D8BADB01F3F40A353CC0E2210D382D` |
+| `greenvpn_service.exe` | `110592` | `05BDC48E7F86D9D9F517910EC43E58DA0CDE34DF5C024843F8D9458C63BB9658` |
 
 Машинный package audit:
-`C:\BlueVPN_Builds\fusion_production_promotion_20260813_b4608_windows_v3\clients\windows-package-audit.json`.
+`C:\BlueVPN_Builds\fusion_production_promotion_20260813_b4610_privacy_auth_failover_v1\clients\windows-package-audit.json`.
+
+## Privacy, UI и вход
+
+В exact payload входят исправления commit
+`37a823f14e53db8ec3336e7aabe468909a2fde9f`:
+
+- публичный IP больше не запрашивается и не показывается в деталях;
+- пользователю не раскрываются маршрут, транспорт и название протокола;
+- активное VPN-соединение обозначено отдельной зелёной галочкой;
+- окно входа по email открывается сразу, а восстановление истёкшей гостевой
+  сессии выполняется внутри уже видимого окна без исчезновения действия;
+- widget-тесты закрепляют отсутствие сетевых деталей, connected-индикатор и
+  сценарии входа/восстановления.
+
+Реальный ввод email и одноразового кода остаётся частью владельческой
+приёмки интерфейса; технические тесты не отправляли OTP и не создавали покупку.
 
 ## Физическая приёмка
 
@@ -46,13 +62,16 @@ Windows-кандидат `0.4.6+4608` технически принят как �
 активного Codex-запроса.
 
 Итоговый отчёт:
-`C:\BlueVPN_Builds\fusion_production_windows_smoke_20260813_b4608_v1\windows-standby-tray-autonomous-summary.json`.
+`C:\BlueVPN_Builds\fusion_production_windows_smoke_20260813_b4610_privacy_auth_failover_v1\windows-standby-tray-autonomous-summary.json`.
 
 Результат `success=true`:
 
-- foreground использовал ровно один кандидат `current_wg0/wireguard_udp`;
-- время по клиентскому журналу `18.766` секунды, меньше лимита `30` секунд;
+- foreground использовал ровно один кандидат;
+- время подключения по клиентскому журналу `18.284` секунды, меньше лимита
+  `30` секунд; полное wall-clock время runner `36.904` секунды включает запуск
+  приложения и UI automation;
 - `probeConfirmed=true`, `privilegedTakeoverConfirmed=true`;
+- UI automation использовала единственный допустимый coordinate-click fallback;
 - пять tray lifecycle-циклов сохранили один экземпляр приложения при восьми
   повторных запусках в каждом цикле;
 - в каждом цикле подтверждены один успешный `NIM_ADD`, один `NIM_SETVERSION`,
@@ -60,10 +79,10 @@ Windows-кандидат `0.4.6+4608` технически принят как �
 - forced predecessor recovery, финальное отсутствие иконки и нулевое число
   процессов подтверждены;
 - все `15` eligible standby-маршрутов получили конечный результат;
-- свежий config-bound native-handshake proof подтверждён для
-  `gb1-awg2-canary/amneziawg`;
-- после искусственного отказа WireGuard приложение использовало заранее
-  проверенный AmneziaWG за `16.344` секунды;
+- свежий config-bound native-handshake proof подтверждён для заранее
+  подготовленного резервного маршрута;
+- после искусственного отказа активного маршрута приложение использовало
+  заранее проверенный резерв за `17.17` секунды;
 - транспортные группы не пересекались: `overlapObserved=false`;
 - recovered route подтвердил egress, DNS resolution, отсутствие прямой DNS
   утечки и защищённые IPv4/IPv6 routes;
@@ -79,13 +98,15 @@ Windows-кандидат `0.4.6+4608` технически принят как �
 - production API возвращает `200`, YouTube probe возвращает `204`;
 - routes с metric `42739` отсутствуют;
 - failsafe/deadman задачи отсутствуют;
-- standby runtime и standby bypass routes отсутствуют.
+- standby runtime и standby bypass routes отсутствуют;
+- установленный `greenvpn.exe`, `app.so` и `greenvpn_service.exe` побайтно
+  соответствуют exact promotion-пакету.
 
 Постоянные `GreenVPNService` и `GreenVPNBetaService` являются установленными
 локальными контроллерами. Их наличие не означает активный Green-туннель;
 фактические управляемые transport services после cleanup отсутствуют.
 
-## Исправленные отказы кандидатов
+## История отклонённых и заменённых кандидатов
 
 - `4603`: прямой YouTube `204` ошибочно считался здоровьем VPN после остановки
   managed WireGuard;
@@ -93,23 +114,30 @@ Windows-кандидат `0.4.6+4608` технически принят как �
 - `4605`: localhost HTTP обрабатывался последовательно и блокировал runtime;
 - `4606`: foreground занял `30.184` секунды;
 - `4607`: продуктовые проверки прошли, но harness сохранял устаревший
-  отрицательный cleanup result и затем встретил временную гонку очистки AWG.
+  отрицательный cleanup result и затем встретил временную гонку очистки;
+- `4608`: прошёл прежнюю техническую приёмку, но заменён после privacy,
+  connected-state и email UX исправлений;
+- `4609`: первый исправленный UX-кандидат отклонён, потому что расхождение NTFS
+  timestamps на `362.1291` мс аннулировало заранее проверенный резерв, а поздний
+  proof другого маршрута мог попасть в recovery после первого сбоя.
 
-Кандидаты `4603`-`4607` отклонены и не должны публиковаться. В `4608` cleanup
-имеет ограниченные повторные попытки и после них проверяет отсутствие native
-services, процессов, routes и runtime. Fail-closed поведение при постоянной
-ошибке закреплено контрактным тестом.
+В `4610` config timestamp получает ограниченный допуск `1000` мс, recovery
+фиксирует cutoff на последнем здоровом sample и рассматривает только маршруты,
+проверенные до сбоя. Если такого резерва нет, восстановление закрывается
+fail-closed. `flutter analyze`, `103` Flutter-теста, `21` targeted-тест и
+release gate прошли; warnings/errors release gate равны `0/0`.
+
+Кандидаты `4603`-`4609` не должны публиковаться.
 
 ## Границы пакета
 
-Полная promotion-сборка сначала попыталась пересобрать Android, но Gradle JVM
-завершилась из-за нехватки памяти на рабочем компьютере. Android-исходники,
-артефакты и production при этом не изменились. Текущий каталог `b4608_windows_v3`
-является намеренно Windows-only пакетом приёмки.
+Каталог `b4610_privacy_auth_failover_v1` является намеренно Windows-only
+пакетом приёмки. Android-исходники, Android-артефакты, backend production,
+stable manifests и публичные файлы не изменялись.
 
-После получения owner gates финальный promotion-пакет должен быть собран без
-изменения принятого Windows-артефакта либо с обязательным повторным exact smoke,
-если байты Windows изменятся. Публикация выполняется fallback-first, затем
-primary, только с атомарными backup/rollback и последующей проверкой четырёх
-публичных тел, обоих backend и полного public-surface probe. Friendly Linnet
-`5.129.237.163` исключён из rollout.
+После получения owner gates production promotion должен использовать точный
+принятый Windows-артефакт. Любое изменение его байтов требует нового exact
+physical smoke. Публикация выполняется fallback-first, затем primary, только с
+атомарными backup/rollback и последующей проверкой четырёх публичных тел, обоих
+backend и полного public-surface probe. Friendly Linnet `5.129.237.163`
+исключён из rollout.
