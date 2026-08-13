@@ -379,17 +379,17 @@ function Invoke-FusionUiAudit {
     # Keep the script ASCII so Windows PowerShell 5.1 parses it consistently.
     $requirements = [ordered]@{
         connect = @(
-            [string](ConvertFrom-Json '"\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c VPN'),
-            [string](ConvertFrom-Json '"\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c VPN')
+            '\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c VPN',
+            '\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c VPN'
         )
         diagnostics = @(
-            [string](ConvertFrom-Json '"\u0414\u0438\u0430\u0433\u043d\u043e\u0441\u0442\u0438\u043a\u0430')
+            '\u0414\u0438\u0430\u0433\u043d\u043e\u0441\u0442\u0438\u043a\u0430'
         )
         tariff = @(
-            [string](ConvertFrom-Json '"\u0422\u0430\u0440\u0438\u0444')
+            '\u0422\u0430\u0440\u0438\u0444'
         )
         settings = @(
-            [string](ConvertFrom-Json '"\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438')
+            '\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438'
         )
     }
     $matches = [ordered]@{}
@@ -398,7 +398,11 @@ function Invoke-FusionUiAudit {
             $names | Where-Object {
                 $candidate = $_
                 @($requirement.Value | Where-Object {
-                    $candidate.IndexOf($_, [StringComparison]::OrdinalIgnoreCase) -ge 0
+                    [Text.RegularExpressions.Regex]::IsMatch(
+                        $candidate,
+                        $_,
+                        [Text.RegularExpressions.RegexOptions]::IgnoreCase
+                    )
                 }).Count -gt 0
             }
         ) | Select-Object -First 1
