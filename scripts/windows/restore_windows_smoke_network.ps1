@@ -1,8 +1,12 @@
 [CmdletBinding()]
 param(
     [string]$InstallRoot = 'C:\Program Files\Green VPN',
+    [string]$AppPath = '',
+    [string]$ProcessName = '',
     [string]$ProgramDataRoot = 'C:\ProgramData\BlueVPN',
     [int]$LocalServicePort = 48737,
+    [string]$ManagedTunnelName = 'BlueVPNDev1',
+    [string]$StandbyProbeTunnelName = 'GreenVPNTransportPreviewStandbyProbe',
     [string]$ExternalVpnServiceName = 'AmneziaWGTunnel$device20_full',
     [switch]$StopGreenUi,
     [ValidateRange(0, 900)]
@@ -13,8 +17,28 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$taskScriptPath = Join-Path $InstallRoot 'tools\greenvpn_vpn_task.ps1'
-$tokenPath = Join-Path $ProgramDataRoot 'service_token'
+$resolvedInstallRoot = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+$resolvedProgramDataRoot = [IO.Path]::GetFullPath($ProgramDataRoot).TrimEnd('\')
+$resolvedAppPath = if ([string]::IsNullOrWhiteSpace($AppPath)) {
+    Join-Path $resolvedInstallRoot 'greenvpn.exe'
+} else {
+    [IO.Path]::GetFullPath($AppPath)
+}
+$resolvedProcessName = if ([string]::IsNullOrWhiteSpace($ProcessName)) {
+    [IO.Path]::GetFileNameWithoutExtension($resolvedAppPath)
+} else {
+    [IO.Path]::GetFileNameWithoutExtension($ProcessName.Trim())
+}
+if ($resolvedProcessName -notmatch '^[A-Za-z0-9_.-]+$') {
+    throw 'ProcessName contains unsupported characters.'
+}
+foreach ($name in @($ManagedTunnelName, $StandbyProbeTunnelName)) {
+    if ($name -notmatch '^[A-Za-z0-9_.-]+$') {
+        throw 'Tunnel names contain unsupported characters.'
+    }
+}
+$taskScriptPath = Join-Path $resolvedInstallRoot 'tools\greenvpn_vpn_task.ps1'
+$tokenPath = Join-Path $resolvedProgramDataRoot 'service_token'
 $reportDirectory = Split-Path -Parent $ReportPath
 if ($reportDirectory) {
     New-Item -ItemType Directory -Force -Path $reportDirectory | Out-Null
@@ -36,6 +60,15 @@ $report = [ordered]@{
     youtube = $false
     stopGreenUiRequested = [bool]$StopGreenUi
     greenUiStopped = -not [bool]$StopGreenUi
+    runtime = [ordered]@{
+        installRoot = $resolvedInstallRoot
+        appPath = $resolvedAppPath
+        processName = $resolvedProcessName
+        programDataRoot = $resolvedProgramDataRoot
+        localServicePort = $LocalServicePort
+        managedTunnelName = $ManagedTunnelName
+        standbyProbeTunnelName = $StandbyProbeTunnelName
+    }
     failure = $null
 }
 
@@ -60,7 +93,18 @@ function Get-GreenStatus {
 }
 
 function Test-GreenComponentsStopped {
-    $status = Get-GreenStatus
+    try {
+        $status = Get-GreenStatus
+    } catch {
+        foreach ($prefix in @('WireGuardTunnel$', 'AmneziaWGTunnel$')) {
+            $service = Get-Service -Name ($prefix + $ManagedTunnelName) `
+                -ErrorAction SilentlyContinue
+            if ($null -ne $service -and [string]$service.Status -ne 'Stopped') {
+                return $false
+            }
+        }
+        return $true
+    }
     foreach ($key in @(
         'wireGuardState',
         'amneziaWgState',
@@ -86,14 +130,12 @@ function Stop-GreenVpnUi {
         return
     }
 
-    $expectedPath = [IO.Path]::GetFullPath(
-        (Join-Path $InstallRoot 'greenvpn.exe')
-    )
+    $expectedPath = $resolvedAppPath
     if (Test-Path -LiteralPath $expectedPath -PathType Leaf) {
         try {
             $shutdown = Start-Process -FilePath $expectedPath `
                 -ArgumentList @('--shutdown-existing', '--background') `
-                -WorkingDirectory $InstallRoot `
+                -WorkingDirectory $resolvedInstallRoot `
                 -WindowStyle Hidden `
                 -PassThru
             $shutdown.WaitForExit(15000) | Out-Null
@@ -102,7 +144,7 @@ function Stop-GreenVpnUi {
     $deadline = (Get-Date).AddSeconds(12)
     do {
         $stillRunning = @(
-            Get-Process -Name 'greenvpn' -ErrorAction SilentlyContinue |
+            Get-Process -Name $resolvedProcessName -ErrorAction SilentlyContinue |
                 Where-Object {
                     try {
                         [IO.Path]::GetFullPath([string]$_.Path) -ieq $expectedPath
@@ -121,7 +163,9 @@ function Stop-GreenVpnUi {
     foreach ($process in $stillRunning) {
         Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
     }
-    foreach ($process in @(Get-Process -Name 'greenvpn' -ErrorAction SilentlyContinue)) {
+    foreach ($process in @(
+        Get-Process -Name $resolvedProcessName -ErrorAction SilentlyContinue
+    )) {
         try {
             $actualPath = [IO.Path]::GetFullPath([string]$process.Path)
             if ($actualPath -ieq $expectedPath) {
@@ -135,7 +179,7 @@ function Stop-GreenVpnUi {
     $deadline = (Get-Date).AddSeconds(15)
     do {
         $stillRunning = @(
-            Get-Process -Name 'greenvpn' -ErrorAction SilentlyContinue |
+            Get-Process -Name $resolvedProcessName -ErrorAction SilentlyContinue |
                 Where-Object {
                     try {
                         [IO.Path]::GetFullPath([string]$_.Path) -ieq $expectedPath
@@ -204,8 +248,8 @@ try {
     } while ((Get-Date) -lt $deadline)
 
     $probeServices = @(
-        'WireGuardTunnel$GreenVPNTransportPreviewStandbyProbe',
-        'AmneziaWGTunnel$GreenVPNTransportPreviewStandbyProbe'
+        ('WireGuardTunnel$' + $StandbyProbeTunnelName),
+        ('AmneziaWGTunnel$' + $StandbyProbeTunnelName)
     )
     foreach ($name in $probeServices) {
         $probeService = Get-Service -Name $name -ErrorAction SilentlyContinue
@@ -243,15 +287,17 @@ try {
     ).Count -eq 0
 
     foreach ($path in @(
-        (Join-Path $ProgramDataRoot 'standby-probe-runtime'),
-        (Join-Path $ProgramDataRoot 'standby-probe-request.json'),
-        (Join-Path $ProgramDataRoot 'standby-probe-result.json'),
-        (Join-Path $ProgramDataRoot 'standby-probe.cancel')
+        (Join-Path $resolvedProgramDataRoot 'standby-probe-runtime'),
+        (Join-Path $resolvedProgramDataRoot 'standby-probe-request.json'),
+        (Join-Path $resolvedProgramDataRoot 'standby-probe-result.json'),
+        (Join-Path $resolvedProgramDataRoot 'standby-probe.cancel')
     )) {
         Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
     }
     $report.standbyRuntimeAbsent =
-        -not (Test-Path -LiteralPath (Join-Path $ProgramDataRoot 'standby-probe-runtime'))
+        -not (Test-Path -LiteralPath (
+            Join-Path $resolvedProgramDataRoot 'standby-probe-runtime'
+        ))
 
     $service = Get-Service -Name $ExternalVpnServiceName -ErrorAction Stop
     if ([string]$service.Status -ne 'Running') {

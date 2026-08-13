@@ -2,6 +2,7 @@
 param(
     [string]$InstallRoot = 'C:\Program Files\Green VPN',
     [string]$AppPath = '',
+    [string]$ProcessName = '',
     [string]$ProgramDataRoot = 'C:\ProgramData\BlueVPN',
     [string]$UserStateRoot = '',
     [int]$LocalServicePort = 48737,
@@ -22,6 +23,8 @@ param(
     [ValidateRange(3, 30)]
     [int]$FailsafeDelayMinutes = 5,
     [int]$FailsafeProcessId = 0,
+    [ValidatePattern('^[A-Za-z0-9_.-]+$')]
+    [string]$FailsafeTaskName = 'GreenVPNConnectLatencySmokeFailsafe',
     [string]$ReportPath = 'C:\BlueVPN_Builds\windows_connect_latency_physical.json'
 )
 
@@ -51,6 +54,8 @@ if (
         "`"$InstallRoot`"",
         '-AppPath',
         "`"$AppPath`"",
+        '-ProcessName',
+        "`"$ProcessName`"",
         '-ProgramDataRoot',
         "`"$ProgramDataRoot`"",
         '-UserStateRoot',
@@ -71,6 +76,8 @@ if (
         [string]$FailsafeDelayMinutes,
         '-FailsafeProcessId',
         [string]$FailsafeProcessId,
+        '-FailsafeTaskName',
+        "`"$FailsafeTaskName`"",
         '-ReportPath',
         "`"$ReportPath`""
     )
@@ -102,13 +109,20 @@ $resolvedAppPath = if ([string]::IsNullOrWhiteSpace($AppPath)) {
 } else {
     [IO.Path]::GetFullPath($AppPath)
 }
+$resolvedProcessName = if ([string]::IsNullOrWhiteSpace($ProcessName)) {
+    [IO.Path]::GetFileNameWithoutExtension($resolvedAppPath)
+} else {
+    [IO.Path]::GetFileNameWithoutExtension($ProcessName.Trim())
+}
+if ($resolvedProcessName -notmatch '^[A-Za-z0-9_.-]+$') {
+    throw 'ProcessName contains unsupported characters.'
+}
 $tokenPath = Join-Path $resolvedProgramDataRoot 'service_token'
 $authLogPath = Join-Path $resolvedProgramDataRoot 'auth.log'
 $stateRoot = Join-Path $resolvedProgramDataRoot 'state'
 $prefsPath = Join-Path $resolvedUserStateRoot 'prefs.json'
 $pendingActionPath = Join-Path $stateRoot 'pending_vpn_action.txt'
 $taskScriptPath = Join-Path $resolvedInstallRoot 'tools\greenvpn_vpn_task.ps1'
-$failsafeTaskName = 'GreenVPNConnectLatencySmokeFailsafe'
 
 function Get-ServiceState {
     param([Parameter(Mandatory = $true)][string]$Name)
@@ -167,7 +181,7 @@ function Get-EgressFingerprint {
 
 function Register-RestoreFailsafe {
     $command = (
-        "Get-Process -Name 'greenvpn' -ErrorAction SilentlyContinue | " +
+        "Get-Process -Name '$resolvedProcessName' -ErrorAction SilentlyContinue | " +
         "Stop-Process -Force -ErrorAction SilentlyContinue; " +
         "& '$taskScriptPath' -Action Disconnect -ErrorAction SilentlyContinue; " +
         "Start-Service -Name '$ExternalVpnServiceName' -ErrorAction SilentlyContinue"
@@ -283,7 +297,7 @@ function Stop-GreenApp {
     $deadline = (Get-Date).AddSeconds(8)
     do {
         $running = @(
-            Get-Process -Name 'greenvpn' -ErrorAction SilentlyContinue |
+            Get-Process -Name $resolvedProcessName -ErrorAction SilentlyContinue |
                 Where-Object {
                     try {
                         $_.Path -and
@@ -304,7 +318,7 @@ function Stop-GreenApp {
     }
     Start-Sleep -Milliseconds 500
     $remaining = @(
-        Get-Process -Name 'greenvpn' -ErrorAction SilentlyContinue |
+        Get-Process -Name $resolvedProcessName -ErrorAction SilentlyContinue |
             Where-Object {
                 try {
                     $_.Path -and
@@ -935,6 +949,11 @@ $report = [ordered]@{
     success = $false
     failure = $null
     baseline = [ordered]@{
+        appPath = $resolvedAppPath
+        processName = $resolvedProcessName
+        programDataRoot = $resolvedProgramDataRoot
+        localServicePort = $LocalServicePort
+        failsafeTaskName = $FailsafeTaskName
         publicHealth = $false
         allManagedComponentsStopped = $false
         preferredRouteInitiallyPresent = $false

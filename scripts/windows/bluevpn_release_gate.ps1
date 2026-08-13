@@ -90,6 +90,8 @@ $windowsFastCacheReleaseSmokePath = Join-Path $ProjectRoot "scripts\windows\run_
 $windowsStandbyTrayReleaseSmokePath = Join-Path $ProjectRoot "scripts\windows\run_windows_standby_tray_release_smoke.ps1"
 $windowsStandbyTrayReleaseLauncherPath = Join-Path $ProjectRoot "scripts\windows\launch_windows_standby_tray_release_smoke.ps1"
 $windowsSmokeNetworkRestorePath = Join-Path $ProjectRoot "scripts\windows\restore_windows_smoke_network.ps1"
+$windowsFusionPaidBetaAcceptanceSmokePath = Join-Path $ProjectRoot "scripts\windows\run_windows_fusion_paid_beta_acceptance_smoke.ps1"
+$windowsFusionPaidBetaAcceptanceLauncherPath = Join-Path $ProjectRoot "scripts\windows\launch_windows_fusion_paid_beta_acceptance_smoke.ps1"
 $transportCascadeStagePath = Join-Path $ProjectRoot "scripts\windows\stage_windows_transport_cascade.ps1"
 $publicInstallerAuditPath = Join-Path $ProjectRoot "scripts\windows\test_public_installer_package.ps1"
 $transportPreviewInstallPath = Join-Path $ProjectRoot "scripts\windows\install_windows_transport_preview.ps1"
@@ -244,6 +246,8 @@ $windowsFastCacheReleaseSmokeScript = Read-Text $windowsFastCacheReleaseSmokePat
 $windowsStandbyTrayReleaseSmokeScript = Read-Text $windowsStandbyTrayReleaseSmokePath
 $windowsStandbyTrayReleaseLauncherScript = Read-Text $windowsStandbyTrayReleaseLauncherPath
 $windowsSmokeNetworkRestoreScript = Read-Text $windowsSmokeNetworkRestorePath
+$windowsFusionPaidBetaAcceptanceSmokeScript = Read-Text $windowsFusionPaidBetaAcceptanceSmokePath
+$windowsFusionPaidBetaAcceptanceLauncherScript = Read-Text $windowsFusionPaidBetaAcceptanceLauncherPath
 $transportCascadeStageScript = Read-Text $transportCascadeStagePath
 $publicInstallerAuditScript = Read-Text $publicInstallerAuditPath
 $transportPreviewInstallScript = Read-Text $transportPreviewInstallPath
@@ -2218,6 +2222,9 @@ $windowsRuntimeFailoverChecks = [ordered]@{
     'Windows fast-cache latency proof uses private state and stop-before-disconnect cleanup' = @(
         $windowsConnectLatencyPhysicalTestScript,
         '$UserStateRoot',
+        '$ProcessName',
+        '$FailsafeTaskName',
+        '$resolvedProcessName',
         "Join-Path `$env:APPDATA 'GreenVPN\state'",
         'lastSuccessfulRouteProtocol',
         'lastSuccessfulRouteAt',
@@ -2282,6 +2289,11 @@ $windowsRuntimeFailoverChecks = [ordered]@{
     'Windows emergency smoke recovery stops UI before disconnect' = @(
         $windowsSmokeNetworkRestoreScript,
         '[switch]$StopGreenUi',
+        '$AppPath',
+        '$ProcessName',
+        '$ProgramDataRoot',
+        '$LocalServicePort',
+        '$ManagedTunnelName',
         'Stop-GreenVpnUi',
         'greenUiStopped',
         'greenComponentsStopped',
@@ -2289,6 +2301,40 @@ $windowsRuntimeFailoverChecks = [ordered]@{
         'standbyBypassRoutesAbsent',
         'externalVpnRunning',
         'youtube'
+    )
+    'Windows Fusion paid-beta acceptance is exact, isolated, delayed, and reversible' = @(
+        $windowsFusionPaidBetaAcceptanceSmokeScript,
+        '$ExpectedInstallerSha256',
+        '$ExpectedInstallerSize',
+        '$ExpectedAppSha256',
+        '$InitialDelaySeconds = 90',
+        "'C:\Program Files\Green VPN Beta'",
+        "'C:\ProgramData\BlueVPNBeta'",
+        '$LocalServicePort = 48738',
+        "'greenvpn_beta'",
+        "'GreenVPNBetaConnectLatencySmokeFailsafe'",
+        'Assert-ReadOnlyBaseline',
+        'waiting $InitialDelaySeconds seconds before installation or network transitions',
+        'Start-DeadmanRecovery',
+        'Invoke-FusionUiAudit',
+        'windows-fusion-paid-beta-main.png',
+        'ArtifactRoot contains stale acceptance evidence; use a new unique path.',
+        'Invoke-PhysicalConnect -ReportPath $freshReportPath',
+        '-RequireCachedRoute',
+        'privilegedTakeoverConfirmed',
+        'exactInstallRetained',
+        'Invoke-FinalRecovery',
+        'deadmanStopped'
+    )
+    'Windows Fusion paid-beta launcher requests one elevated delayed runner' = @(
+        $windowsFusionPaidBetaAcceptanceLauncherScript,
+        'run_windows_fusion_paid_beta_acceptance_smoke.ps1',
+        '$InitialDelaySeconds = 90',
+        'windows-fusion-paid-beta-launcher-status.json',
+        "Write-Status -Phase 'uac_requested'",
+        '-Verb RunAs',
+        "Write-Status -Phase 'runner_started'",
+        'A Fusion paid-beta acceptance runner is already active.'
     )
     'Windows dnstt service status' = @(
         $serviceSource,
@@ -2349,6 +2395,38 @@ if ($windowsStandbyTrayReleaseSmokeScript -match '(?<!@)\(Get-ExactAppProcesses\
     Add-Pass 'Windows standby/tray release smoke array-wraps process enumeration before reading Count'
 }
 
+$fusionPaidBetaInitialReadOnlyIndex =
+    $windowsFusionPaidBetaAcceptanceSmokeScript.LastIndexOf(
+        "-Label 'Initial read-only baseline'"
+    )
+$fusionPaidBetaInitialDelayIndex =
+    $windowsFusionPaidBetaAcceptanceSmokeScript.LastIndexOf(
+        'Start-Sleep -Seconds $InitialDelaySeconds'
+    )
+$fusionPaidBetaDeadmanStartIndex =
+    $windowsFusionPaidBetaAcceptanceSmokeScript.LastIndexOf(
+        '$deadman = Start-DeadmanRecovery'
+    )
+$fusionPaidBetaInstallIndex =
+    $windowsFusionPaidBetaAcceptanceSmokeScript.LastIndexOf(
+        '$summary.installer = Install-ExactCandidate'
+    )
+if (
+    $fusionPaidBetaInitialReadOnlyIndex -lt 0 -or
+    $fusionPaidBetaInitialDelayIndex -le $fusionPaidBetaInitialReadOnlyIndex -or
+    $fusionPaidBetaDeadmanStartIndex -le $fusionPaidBetaInitialDelayIndex -or
+    $fusionPaidBetaInstallIndex -le $fusionPaidBetaDeadmanStartIndex
+) {
+    Add-Error 'Windows Fusion paid-beta smoke must delay before mutation and start deadman before installation.'
+} else {
+    Add-Pass 'Windows Fusion paid-beta smoke delays before mutation and starts deadman before installation'
+}
+if ($windowsFusionPaidBetaAcceptanceSmokeScript.Contains('-FailsafeProcessId')) {
+    Add-Error 'Windows Fusion paid-beta smoke must keep its independent deadman alive through child physical tests.'
+} else {
+    Add-Pass 'Windows Fusion paid-beta smoke keeps its independent deadman outside child physical tests'
+}
+
 foreach ($parserCheck in @(
     [pscustomobject]@{
         Label = 'Windows runtime failover physical test'
@@ -2373,6 +2451,14 @@ foreach ($parserCheck in @(
     [pscustomobject]@{
         Label = 'Windows emergency smoke recovery'
         Path = $windowsSmokeNetworkRestorePath
+    },
+    [pscustomobject]@{
+        Label = 'Windows Fusion paid-beta acceptance smoke'
+        Path = $windowsFusionPaidBetaAcceptanceSmokePath
+    },
+    [pscustomobject]@{
+        Label = 'Windows Fusion paid-beta acceptance launcher'
+        Path = $windowsFusionPaidBetaAcceptanceLauncherPath
     }
 )) {
     if (Test-Path -LiteralPath $parserCheck.Path) {
