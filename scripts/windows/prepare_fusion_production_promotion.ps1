@@ -1,10 +1,10 @@
 [CmdletBinding()]
 param(
-    [string]$OutDir = 'C:\BlueVPN_Builds\fusion_production_promotion_20260813_b4604',
+    [string]$OutDir = 'C:\BlueVPN_Builds\fusion_production_promotion_20260813_b4605',
     [string]$AppVersion = '0.4.6',
     [string]$AndroidBuildNumber = '2026081301',
     [ValidateRange(0, 65535)]
-    [int]$WindowsBuildNumber = 4604,
+    [int]$WindowsBuildNumber = 4605,
     [string]$BackendVersion = '0.9.155-fusion-production-candidate.1',
     [string]$BackendReleaseId = 'public-product-backend-fusion-production-20260813-r1',
     [string]$PaidBetaInstallerPath = 'C:\BlueVPN_Builds\paid_beta_20260813_fusion_acl_fix_v1_0.4.6\GreenVPN_Beta_Setup_0.4.6-paid-beta.2.exe',

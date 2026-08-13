@@ -116,6 +116,13 @@ bool greenVpnRuntimeRouteHealthy({
   return backendConnected && dataPlaneProbeOk;
 }
 
+bool greenVpnCanAcceptWindowsStandbyProof({
+  required int runtimeFailureCount,
+  required bool recoveryRunning,
+}) {
+  return runtimeFailureCount == 0 && !recoveryRunning;
+}
+
 bool greenVpnShouldBlockForegroundForPostConnectProbe({
   required bool probeRequested,
   required bool isWindows,

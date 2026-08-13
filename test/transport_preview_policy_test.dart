@@ -185,6 +185,30 @@ void main() {
     );
   });
 
+  test('Windows standby proof freezes on the first runtime failure', () {
+    expect(
+      greenVpnCanAcceptWindowsStandbyProof(
+        runtimeFailureCount: 0,
+        recoveryRunning: false,
+      ),
+      isTrue,
+    );
+    expect(
+      greenVpnCanAcceptWindowsStandbyProof(
+        runtimeFailureCount: 1,
+        recoveryRunning: false,
+      ),
+      isFalse,
+    );
+    expect(
+      greenVpnCanAcceptWindowsStandbyProof(
+        runtimeFailureCount: 0,
+        recoveryRunning: true,
+      ),
+      isFalse,
+    );
+  });
+
   test('Windows never blocks the connect button on an Internet probe', () {
     expect(
       greenVpnShouldBlockForegroundForPostConnectProbe(

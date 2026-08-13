@@ -47,7 +47,11 @@ monitor accepted a YouTube `204` that had fallen through to the physical route
 after the managed WireGuard service was stopped. Recovery restored Amnezia,
 API and YouTube and removed every temporary route and failsafe. The corrected
 policy requires both a live managed transport and a successful data-plane
-probe; replacement build `4604` must pass a fresh detached physical smoke.
+probe. Replacement build `4604` then proved the failover trigger itself but
+exposed a second fail-closed race: a standby probe completing after the first
+active-route failure could enter the recovery order. Build `4604` is rejected;
+standby proof acceptance now freezes on the first unhealthy sample and build
+`4605` must pass a fresh detached physical smoke.
 
 ## Post-Release Repository Safety Closure (2026-08-02 MSK)
 

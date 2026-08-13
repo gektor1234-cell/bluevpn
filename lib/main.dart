@@ -11670,7 +11670,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       if (!mounted ||
           epoch != _windowsRuntimeFailoverEpoch ||
           !vpnEnabled ||
-          _windowsRuntimeRecoveryRunning) {
+          !greenVpnCanAcceptWindowsStandbyProof(
+            runtimeFailureCount: _windowsRuntimeFailureCount,
+            recoveryRunning: _windowsRuntimeRecoveryRunning,
+          )) {
         return false;
       }
       if (!resultFile.existsSync()) {
@@ -11745,6 +11748,15 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         verifiedAt: verifiedAt.toUtc(),
         latencyMs: latencyMs,
       );
+      if (!greenVpnCanAcceptWindowsStandbyProof(
+        runtimeFailureCount: _windowsRuntimeFailureCount,
+        recoveryRunning: _windowsRuntimeRecoveryRunning,
+      )) {
+        await appendBlueVpnClientLog(
+          'windows standby proof discarded server=${candidate.id} reason=active_route_unhealthy',
+        );
+        return false;
+      }
       _windowsStandbyProofs[proof.key] = proof;
       _windowsStandbyRetryAfter.remove(proof.key);
       await _windowsStandbyProofStore.write(_windowsStandbyProofs);
@@ -11793,6 +11805,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         vpnBusy ||
         _windowsRuntimeRecoveryRunning ||
         _windowsStandbyCycleRunning ||
+        !greenVpnCanAcceptWindowsStandbyProof(
+          runtimeFailureCount: _windowsRuntimeFailureCount,
+          recoveryRunning: _windowsRuntimeRecoveryRunning,
+        ) ||
         epoch != _windowsRuntimeFailoverEpoch ||
         socialOnlyEnabled ||
         _socialOnlyPreferenceRequested) {
@@ -11837,6 +11853,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             !vpnEnabled ||
             vpnBusy ||
             _windowsRuntimeRecoveryRunning ||
+            !greenVpnCanAcceptWindowsStandbyProof(
+              runtimeFailureCount: _windowsRuntimeFailureCount,
+              recoveryRunning: _windowsRuntimeRecoveryRunning,
+            ) ||
             epoch != _windowsRuntimeFailoverEpoch) {
           return;
         }
@@ -12117,6 +12137,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         );
       }
       return;
+    }
+
+    if (previousFailureCount == 0) {
+      _cancelWindowsStandbyProbe(reason: 'runtime_probe_unhealthy');
     }
 
     final errorCode = probe.statusCode == null

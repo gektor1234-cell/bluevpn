@@ -42,8 +42,13 @@ This is the current operational entry point. Read it together with
   misclassified as a healthy VPN route. Final recovery was complete: Green
   transports and UI stopped, Amnezia restored, API `200`, YouTube `204`, and no
   failsafe or metric-`42739` route remained. Runtime health now requires both a
-  live managed transport and a successful routed probe; replacement production
-  candidate build `4604` requires a new exact delayed physical smoke.
+  live managed transport and a successful routed probe. Replacement production
+  candidate build `4604` then exposed a second fail-closed race: a standby
+  proof whose probe completed after the active-route failure could enter the
+  recovery order. That candidate is also rejected and must never be published.
+  Standby proof acceptance now freezes on the first unhealthy runtime sample;
+  replacement production candidate build `4605` requires a new exact delayed
+  physical smoke.
 - Full evidence and rollback paths:
   `docs/FUSION_PAID_BETA_2026_08_11_RU.md`.
 
