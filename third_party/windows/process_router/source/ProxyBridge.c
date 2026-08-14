@@ -287,6 +287,10 @@ static volatile LONG deferred_packet_enqueued_count = 0;
 static volatile LONG deferred_packet_resolved_count = 0;
 static volatile LONG deferred_packet_timeout_count = 0;
 static volatile LONG deferred_packet_overflow_count = 0;
+static volatile LONG proxy_attribution_log_count = 0;
+static volatile LONG redirect_schedule_log_count = 0;
+static volatile LONG deferred_redirect_send_log_count = 0;
+static UINT32 attribution_diagnostic_salt = 0;
 static volatile LONG relay_accept_log_count = 0;
 static volatile LONG relay_upstream_log_count = 0;
 
@@ -557,6 +561,47 @@ static void clear_pid_cache(void);
 static void update_has_active_rules(void);
 static void base64_encode(const char* input, char* output, size_t output_size);
 
+static UINT32 attribution_tag_bytes(const void *data, size_t length,
+                                    UINT32 seed)
+{
+    const UINT8 *bytes = (const UINT8 *)data;
+    UINT32 hash = 2166136261u ^ attribution_diagnostic_salt ^ seed;
+    for (size_t i = 0; i < length; i++)
+    {
+        hash ^= bytes[i];
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+static UINT32 attribution_port_tag(UINT16 local_port)
+{
+    return attribution_tag_bytes(&local_port, sizeof(local_port), 0x504F5254u);
+}
+
+static UINT32 attribution_tuple_tag(BOOL is_ipv6, BOOL is_udp,
+                                    UINT16 local_port,
+                                    const void *remote_addr,
+                                    UINT16 remote_port)
+{
+    UINT32 hash = attribution_tag_bytes(&is_ipv6, sizeof(is_ipv6),
+                                        0x5455504Cu);
+    hash = attribution_tag_bytes(&is_udp, sizeof(is_udp), hash);
+    hash = attribution_tag_bytes(&local_port, sizeof(local_port), hash);
+    hash = attribution_tag_bytes(remote_addr, is_ipv6 ? 16 : sizeof(UINT32),
+                                 hash);
+    return attribution_tag_bytes(&remote_port, sizeof(remote_port), hash);
+}
+
+static void log_redirect_schedule(const char *path, const char *family,
+                                  BOOL is_udp)
+{
+    LONG sample = InterlockedIncrement(&redirect_schedule_log_count);
+    if (sample <= 16)
+        log_message("[PACKET] Redirect scheduled; path=%s family=%s protocol=%s sample=%ld",
+                    path, family, is_udp ? "UDP" : "TCP", sample);
+}
+
 static void send_deferred_packet(DEFERRED_PACKET_ENTRY *entry, BOOL modified)
 {
     if (!running || windivert_handle == INVALID_HANDLE_VALUE)
@@ -568,6 +613,13 @@ static void send_deferred_packet(DEFERRED_PACKET_ENTRY *entry, BOOL modified)
                        NULL, &entry->addr))
         log_message("[ATTR] Failed to send deferred packet (%lu)",
                     GetLastError());
+    else if (modified)
+    {
+        LONG sample = InterlockedIncrement(&deferred_redirect_send_log_count);
+        if (sample <= 16)
+            log_message("[PACKET] Deferred redirect injected; sample=%ld",
+                        sample);
+    }
 }
 
 static void process_deferred_packet(DEFERRED_PACKET_ENTRY *entry)
@@ -628,6 +680,7 @@ static void process_deferred_packet(DEFERRED_PACKET_ENTRY *entry)
                 port_set_decided(src_port);
                 return;
             }
+            log_redirect_schedule("deferred", "IPv4", FALSE);
             add_connection(src_port, src_ip, dest_ip, dest_port,
                            proxy_config_id);
             port_set_decided(src_port);
@@ -680,6 +733,7 @@ static void process_deferred_packet(DEFERRED_PACKET_ENTRY *entry)
             }
             if (action == RULE_ACTION_BLOCK)
                 return;
+            log_redirect_schedule("deferred", "IPv4", TRUE);
             add_connection(src_port, src_ip, dest_ip, dest_port,
                            proxy_config_id);
         }
@@ -747,6 +801,7 @@ static void process_deferred_packet(DEFERRED_PACKET_ENTRY *entry)
                 port_set_decided(src_port);
                 return;
             }
+            log_redirect_schedule("deferred", "IPv6", FALSE);
             add_connection_v6(src_port,
                 (const UINT8 *)ipv6_header->SrcAddr,
                 (const UINT8 *)ipv6_header->DstAddr, dest_port,
@@ -811,6 +866,7 @@ static void process_deferred_packet(DEFERRED_PACKET_ENTRY *entry)
             }
             if (action == RULE_ACTION_BLOCK)
                 return;
+            log_redirect_schedule("deferred", "IPv6", TRUE);
             add_connection_v6(src_port,
                 (const UINT8 *)ipv6_header->SrcAddr,
                 (const UINT8 *)ipv6_header->DstAddr, dest_port,
@@ -1664,6 +1720,7 @@ static DWORD WINAPI packet_processor(LPVOID arg)
                 }
                 else if (action == RULE_ACTION_PROXY)
             {
+                log_redirect_schedule("immediate", "IPv4", FALSE);
                 add_connection(src_port, src_ip, orig_dest_ip, orig_dest_port, proxy_config_id);
                 // Mark this port as decided (not direct) so subsequent packets from
                 // the same source port skip the rule check.  The is_connection_tracked
@@ -1987,9 +2044,10 @@ static void store_selected_bind_event(BOOL is_ipv6, BOOL is_udp,
     {
         LONG sample = InterlockedIncrement(&selected_bind_event_count);
         if (sample <= 16)
-            log_message("[ATTR] Selected BIND cached; family=%s protocol=%s local_addr_known=%d sample=%ld",
+            log_message("[ATTR] Selected BIND cached; family=%s protocol=%s local_addr_known=%d port_tag=%08lX sample=%ld",
                 is_ipv6 ? "IPv6" : "IPv4", is_udp ? "UDP" : "TCP",
-                local_addr_known ? 1 : 0, sample);
+                local_addr_known ? 1 : 0,
+                (unsigned long)attribution_port_tag(local_port), sample);
     }
 }
 
@@ -2263,10 +2321,14 @@ static void store_selected_socket_event(BOOL is_ipv6, BOOL is_udp,
     if (local_port == 0)
         InterlockedIncrement(&selected_socket_zero_port_count);
     if (sample <= 16)
-        log_message("[ATTR] Selected CONNECT cached; family=%s protocol=%s local_port_known=%d local_addr_known=%d sample=%ld",
+        log_message("[ATTR] Selected CONNECT cached; family=%s protocol=%s local_port_known=%d local_addr_known=%d port_tag=%08lX tuple_tag=%08lX sample=%ld",
             is_ipv6 ? "IPv6" : "IPv4", is_udp ? "UDP" : "TCP",
             local_port != 0 ? 1 : 0,
-            local_addr_known ? 1 : 0, sample);
+            local_addr_known ? 1 : 0,
+            (unsigned long)attribution_port_tag(local_port),
+            (unsigned long)attribution_tuple_tag(
+                is_ipv6, is_udp, local_port, remote_addr, remote_port),
+            sample);
 }
 
 static BOOL selected_event_matches_v4(
@@ -2823,12 +2885,27 @@ static void log_resolved_attribution(const char *family, BOOL is_udp,
             attribution_source_name(source), rule_action_name(action), sample);
 }
 
-static void log_unresolved_attribution(const char *family, BOOL is_udp)
+static void log_proxy_attribution(const char *family, BOOL is_udp,
+                                  ATTRIBUTION_SOURCE source,
+                                  UINT32 port_tag, UINT32 tuple_tag)
+{
+    LONG sample = InterlockedIncrement(&proxy_attribution_log_count);
+    if (sample <= 16)
+        log_message("[ATTR] Proxy attribution; family=%s protocol=%s source=%s port_tag=%08lX tuple_tag=%08lX sample=%ld",
+                    family, is_udp ? "UDP" : "TCP",
+                    attribution_source_name(source),
+                    (unsigned long)port_tag, (unsigned long)tuple_tag,
+                    sample);
+}
+
+static void log_unresolved_attribution(const char *family, BOOL is_udp,
+                                       UINT32 port_tag, UINT32 tuple_tag)
 {
     LONG sample = InterlockedIncrement(&unresolved_attribution_count);
     if (sample <= 8)
-        log_message("[ATTR] Process attribution unavailable; family=%s protocol=%s fail_closed=%d sample=%ld socket_connects=%ld socket_binds=%ld socket_ports=%ld selected_binds=%ld selected_bind_zero_ports=%ld selected_bind_fallbacks=%ld selected_connects=%ld selected_zero_ports=%ld selected_fallbacks=%ld deferred_enqueued=%ld deferred_resolved=%ld deferred_timeouts=%ld deferred_overflow=%ld",
-            family, is_udp ? "UDP" : "TCP", g_fail_closed ? 1 : 0, sample,
+        log_message("[ATTR] Process attribution unavailable; family=%s protocol=%s fail_closed=%d port_tag=%08lX tuple_tag=%08lX sample=%ld socket_connects=%ld socket_binds=%ld socket_ports=%ld selected_binds=%ld selected_bind_zero_ports=%ld selected_bind_fallbacks=%ld selected_connects=%ld selected_zero_ports=%ld selected_fallbacks=%ld deferred_enqueued=%ld deferred_resolved=%ld deferred_timeouts=%ld deferred_overflow=%ld",
+            family, is_udp ? "UDP" : "TCP", g_fail_closed ? 1 : 0,
+            (unsigned long)port_tag, (unsigned long)tuple_tag, sample,
             InterlockedCompareExchange(&socket_connect_event_count, 0, 0),
             InterlockedCompareExchange(&socket_bind_event_count, 0, 0),
             InterlockedCompareExchange(&socket_nonzero_port_event_count, 0, 0),
@@ -2905,7 +2982,10 @@ static RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port
     if (out_pid) *out_pid = pid;
     if (pid == 0) {
         if (wait_for_attribution)
-            log_unresolved_attribution("IPv6", is_udp);
+            log_unresolved_attribution("IPv6", is_udp,
+                attribution_port_tag(src_port),
+                attribution_tuple_tag(TRUE, is_udp, src_port, dest_ip6,
+                                      dest_port));
         return g_fail_closed ? RULE_ACTION_BLOCK : RULE_ACTION_DIRECT;
     }
     if (pid == g_current_process_id) return RULE_ACTION_DIRECT;
@@ -2924,6 +3004,11 @@ static RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port
             return RULE_ACTION_BLOCK;
     }
     if (out_proxy_config_id) *out_proxy_config_id = proxy_config_id;
+    if (action == RULE_ACTION_PROXY)
+        log_proxy_attribution("IPv6", is_udp, source,
+            attribution_port_tag(src_port),
+            attribution_tuple_tag(TRUE, is_udp, src_port, dest_ip6,
+                                  dest_port));
     log_resolved_attribution("IPv6", is_udp, source, action);
     return action;
 }
@@ -3533,7 +3618,10 @@ static RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest
     if (pid == 0)
     {
         if (wait_for_attribution)
-            log_unresolved_attribution("IPv4", is_udp);
+            log_unresolved_attribution("IPv4", is_udp,
+                attribution_port_tag(src_port),
+                attribution_tuple_tag(FALSE, is_udp, src_port, &dest_ip,
+                                      dest_port));
         return g_fail_closed ? RULE_ACTION_BLOCK : RULE_ACTION_DIRECT;
     }
 
@@ -3563,6 +3651,11 @@ static RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest
     if (out_proxy_config_id != NULL)
         *out_proxy_config_id = proxy_config_id;
 
+    if (action == RULE_ACTION_PROXY)
+        log_proxy_attribution("IPv4", is_udp, source,
+            attribution_port_tag(src_port),
+            attribution_tuple_tag(FALSE, is_udp, src_port, &dest_ip,
+                                  dest_port));
     log_resolved_attribution("IPv4", is_udp, source, action);
     return action;
 }
@@ -6274,6 +6367,11 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
     InterlockedExchange(&deferred_packet_resolved_count, 0);
     InterlockedExchange(&deferred_packet_timeout_count, 0);
     InterlockedExchange(&deferred_packet_overflow_count, 0);
+    InterlockedExchange(&proxy_attribution_log_count, 0);
+    InterlockedExchange(&redirect_schedule_log_count, 0);
+    InterlockedExchange(&deferred_redirect_send_log_count, 0);
+    attribution_diagnostic_salt =
+        (UINT32)GetTickCount() ^ GetCurrentProcessId() ^ 0x4756504Eu;
     InterlockedExchange(&relay_accept_log_count, 0);
     InterlockedExchange(&relay_upstream_log_count, 0);
     InterlockedExchange(&proxy_start_result, 0);
