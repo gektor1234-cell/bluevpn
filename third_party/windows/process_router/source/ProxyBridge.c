@@ -20,9 +20,9 @@
 #define VERSION "4.0.0"
 #define PID_CACHE_SIZE 1024
 #define PID_CACHE_TTL_MS 2000
-#define PROCESS_ATTRIBUTION_WAIT_MS 500
+#define PROCESS_ATTRIBUTION_WAIT_MS 1500
 #define SOCKET_PORT_PID_TTL_MS 5000
-#define SELECTED_SOCKET_EVENT_TTL_MS 2000
+#define SELECTED_SOCKET_EVENT_TTL_MS 30000
 #define SELECTED_SOCKET_EVENT_CAPACITY 256
 #define PROXY_START_TIMEOUT_MS 5000
 // Single packet-processor thread eliminates TCP packet reordering.
@@ -1477,6 +1477,11 @@ static BOOL socket_port_matches(UINT16 stored_port, UINT16 expected_port)
     return stored_port == expected_port || ntohs(stored_port) == expected_port;
 }
 
+static BOOL ipv4_address_matches(UINT32 stored_ip, UINT32 expected_ip)
+{
+    return stored_ip == expected_ip || htonl(stored_ip) == expected_ip;
+}
+
 static BOOL socket_entry_matches_v4(const SOCKET_PORT_PID_ENTRY *entry,
                                     BOOL entry_is_ipv6, UINT32 remote_ip,
                                     UINT16 remote_port, ULONGLONG now)
@@ -1498,7 +1503,7 @@ static BOOL socket_entry_matches_v4(const SOCKET_PORT_PID_ENTRY *entry,
     {
         memcpy(&stored_ip, entry->remote_addr, sizeof(stored_ip));
     }
-    return stored_ip == remote_ip;
+    return ipv4_address_matches(stored_ip, remote_ip);
 }
 
 static BOOL socket_entry_matches_v6(const SOCKET_PORT_PID_ENTRY *entry,
@@ -1707,13 +1712,12 @@ static BOOL selected_event_matches_v4(
     UINT32 local_ip, UINT16 local_port, UINT32 remote_ip,
     UINT16 remote_port, ULONGLONG now)
 {
-    UINT32 stored_local = 0;
     UINT32 stored_remote = 0;
     if (entry->pid == 0 || entry->is_udp != is_udp ||
         now - entry->updated_at > SELECTED_SOCKET_EVENT_TTL_MS ||
         !socket_port_matches(entry->remote_port, remote_port) ||
-        (entry->local_port != 0 &&
-         !socket_port_matches(entry->local_port, local_port)))
+        entry->local_port == 0 ||
+        !socket_port_matches(entry->local_port, local_port))
         return FALSE;
     if (entry->is_ipv6)
     {
@@ -1723,24 +1727,16 @@ static BOOL selected_event_matches_v4(
         memcpy(&stored_remote,
                entry->remote_addr + sizeof(ipv4_mapped_prefix),
                sizeof(stored_remote));
-        if (entry->local_addr_known)
-        {
-            if (memcmp(entry->local_addr, ipv4_mapped_prefix,
-                       sizeof(ipv4_mapped_prefix)) != 0)
-                return FALSE;
-            memcpy(&stored_local,
-                   entry->local_addr + sizeof(ipv4_mapped_prefix),
-                   sizeof(stored_local));
-        }
     }
     else
     {
         memcpy(&stored_remote, entry->remote_addr, sizeof(stored_remote));
-        if (entry->local_addr_known)
-            memcpy(&stored_local, entry->local_addr, sizeof(stored_local));
     }
-    return stored_remote == remote_ip &&
-        (!entry->local_addr_known || stored_local == local_ip);
+    // ALE CONNECT can report a pre-route local address that differs from the
+    // source address finally chosen for the packet. The selected PID, source
+    // port and complete remote endpoint remain authoritative and unique.
+    (void)local_ip;
+    return ipv4_address_matches(stored_remote, remote_ip);
 }
 
 static BOOL selected_event_matches_v6(
@@ -1751,14 +1747,13 @@ static BOOL selected_event_matches_v6(
     if (entry->pid == 0 || entry->is_udp != is_udp ||
         now - entry->updated_at > SELECTED_SOCKET_EVENT_TTL_MS ||
         !socket_port_matches(entry->remote_port, remote_port) ||
-        (entry->local_port != 0 &&
-         !socket_port_matches(entry->local_port, local_port)))
+        entry->local_port == 0 ||
+        !socket_port_matches(entry->local_port, local_port))
         return FALSE;
     if (entry->is_ipv6)
     {
-        return memcmp(entry->remote_addr, remote_ip6, 16) == 0 &&
-            (!entry->local_addr_known ||
-             memcmp(entry->local_addr, local_ip6, 16) == 0);
+        (void)local_ip6;
+        return memcmp(entry->remote_addr, remote_ip6, 16) == 0;
     }
     if (memcmp(remote_ip6, ipv4_mapped_prefix,
                sizeof(ipv4_mapped_prefix)) != 0)
@@ -1767,13 +1762,8 @@ static BOOL selected_event_matches_v6(
                remote_ip6 + sizeof(ipv4_mapped_prefix),
                sizeof(UINT32)) != 0)
         return FALSE;
-    if (!entry->local_addr_known)
-        return TRUE;
-    return memcmp(local_ip6, ipv4_mapped_prefix,
-                  sizeof(ipv4_mapped_prefix)) == 0 &&
-        memcmp(entry->local_addr,
-               local_ip6 + sizeof(ipv4_mapped_prefix),
-               sizeof(UINT32)) == 0;
+    (void)local_ip6;
+    return TRUE;
 }
 
 static DWORD get_selected_socket_pid_v4(BOOL is_udp, UINT32 local_ip,
