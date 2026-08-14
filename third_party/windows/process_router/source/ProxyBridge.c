@@ -20,6 +20,8 @@
 #define VERSION "4.0.0"
 #define PID_CACHE_SIZE 1024
 #define PID_CACHE_TTL_MS 2000
+#define PROCESS_ATTRIBUTION_WAIT_MS 100
+#define SOCKET_PORT_PID_TTL_MS 5000
 // Single packet-processor thread eliminates TCP packet reordering.
 // With multiple threads each racing to WinDivertRecv+WinDivertSend, thread N+1
 // can re-inject its segment before thread N injects segment N, causing the
@@ -169,15 +171,18 @@ static HANDLE udp_relay_thread = NULL;
 static HANDLE cleanup_thread = NULL;
 static HANDLE flow_handle = INVALID_HANDLE_VALUE;
 static HANDLE flow_thread = NULL;
+static HANDLE socket_handle = INVALID_HANDLE_VALUE;
+static HANDLE socket_thread = NULL;
 static PID_CACHE_ENTRY *pid_cache[PID_CACHE_SIZE] = {NULL};
 static volatile BOOL g_has_active_rules = FALSE;
 static SOCKET udp_relay_socket = INVALID_SOCKET;
 static SOCKET udp_relay_socket6 = INVALID_SOCKET;
 static volatile BOOL running = FALSE;
 static DWORD g_current_process_id = 0;
-// Green VPN selected-app mode is privacy fail-closed. If Windows cannot
-// attribute an intercepted packet to a process, the packet must not escape
-// directly while application rules are active.
+// Green VPN selected-app mode is privacy fail-closed. Socket CONNECT events
+// provide attribution before the first packet, while FLOW events and socket
+// tables provide bounded fallback coverage. If every source is unavailable,
+// the packet must not escape directly while application rules are active.
 static volatile BOOL g_fail_closed = FALSE;
 
 typedef struct FLOW_PID_ENTRY {
@@ -198,6 +203,14 @@ typedef struct FLOW_PID_ENTRY {
 #define FLOW_PID_TTL_MS 120000
 static FLOW_PID_ENTRY *flow_pid_table[FLOW_PID_BUCKETS] = {NULL};
 static SRWLOCK flow_pid_lock;
+
+typedef struct SOCKET_PORT_PID_ENTRY {
+    DWORD pid;
+    ULONGLONG updated_at;
+} SOCKET_PORT_PID_ENTRY;
+
+static SOCKET_PORT_PID_ENTRY socket_port_pid_table[4][65536] = {0};
+static SRWLOCK socket_port_pid_lock;
 
 static BOOL g_traffic_logging_enabled = TRUE;
 
@@ -420,11 +433,11 @@ static DWORD get_process_id_from_connection_v6(const UINT8 src_ip6[16], UINT16 s
 static DWORD get_process_id_from_udp_connection(UINT32 src_ip, UINT16 src_port);
 static DWORD get_process_id_from_udp_connection_v6(const UINT8 src_ip6[16], UINT16 src_port);
 static DWORD WINAPI flow_tracker(LPVOID arg);
+static DWORD WINAPI socket_tracker(LPVOID arg);
 static DWORD get_flow_pid_v4(UINT32 local_ip, UINT16 local_port, UINT32 remote_ip, UINT16 remote_port, BOOL is_udp);
 static DWORD get_flow_pid_v6(const UINT8 local_ip6[16], UINT16 local_port, const UINT8 remote_ip6[16], UINT16 remote_port, BOOL is_udp);
+static DWORD get_socket_port_pid(BOOL is_ipv6, BOOL is_udp, UINT16 local_port);
 static void clear_flow_pid_cache(void);
-static BOOL has_selected_process_rule(const char *process_name, BOOL is_udp);
-static BOOL is_ipv4_mapped_flow_address(const UINT32 address[4]);
 static BOOL get_process_name_from_pid(DWORD pid, char *name, DWORD name_size);
 static RuleAction match_rule(const char *process_name, UINT32 dest_ip, UINT16 dest_port, BOOL is_udp, UINT32 *out_proxy_config_id);
 static RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest_ip, UINT16 dest_port, BOOL is_udp, DWORD *out_pid, UINT32 *out_proxy_config_id);
@@ -1285,15 +1298,6 @@ static UINT32 flow_pid_hash(BOOL is_ipv6, BOOL is_udp, UINT16 local_port,
     return hash % FLOW_PID_BUCKETS;
 }
 
-static BOOL is_ipv4_mapped_flow_address(const UINT32 address[4])
-{
-    const UINT8 *bytes = (const UINT8 *)address;
-    static const UINT8 prefix[12] = {
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF
-    };
-    return memcmp(bytes, prefix, sizeof(prefix)) == 0;
-}
-
 static BOOL flow_pid_matches(const FLOW_PID_ENTRY *entry, BOOL is_ipv6,
                              BOOL is_udp, UINT16 local_port,
                              UINT16 remote_port, const void *local_addr,
@@ -1314,11 +1318,7 @@ static void store_flow_pid(BOOL is_ipv6, BOOL is_udp, UINT16 local_port,
                            UINT16 remote_port, const void *local_addr,
                            const void *remote_addr, DWORD pid)
 {
-    if (pid == 0 || pid == g_current_process_id) return;
-    char process_name[MAX_PROCESS_NAME];
-    if (!get_process_name_from_pid(pid, process_name, sizeof(process_name)) ||
-        !has_selected_process_rule(process_name, is_udp))
-        return;
+    if (pid == 0) return;
     UINT32 bucket = flow_pid_hash(is_ipv6, is_udp, local_port, remote_port,
                                   local_addr, remote_addr);
     AcquireSRWLockExclusive(&flow_pid_lock);
@@ -1392,6 +1392,37 @@ static DWORD get_flow_pid_v6(const UINT8 local_ip6[16], UINT16 local_port,
                            local_ip6, remote_ip6);
 }
 
+static int socket_port_pid_index(BOOL is_ipv6, BOOL is_udp)
+{
+    return (is_ipv6 ? 2 : 0) + (is_udp ? 1 : 0);
+}
+
+static void store_socket_port_pid(BOOL is_ipv6, BOOL is_udp,
+                                  UINT16 local_port, DWORD pid)
+{
+    if (local_port == 0 || pid == 0) return;
+    int index = socket_port_pid_index(is_ipv6, is_udp);
+    AcquireSRWLockExclusive(&socket_port_pid_lock);
+    socket_port_pid_table[index][local_port].pid = pid;
+    socket_port_pid_table[index][local_port].updated_at = GetTickCount64();
+    ReleaseSRWLockExclusive(&socket_port_pid_lock);
+}
+
+static DWORD get_socket_port_pid(BOOL is_ipv6, BOOL is_udp,
+                                 UINT16 local_port)
+{
+    if (local_port == 0) return 0;
+    DWORD pid = 0;
+    int index = socket_port_pid_index(is_ipv6, is_udp);
+    ULONGLONG now = GetTickCount64();
+    AcquireSRWLockShared(&socket_port_pid_lock);
+    SOCKET_PORT_PID_ENTRY entry = socket_port_pid_table[index][local_port];
+    if (entry.pid != 0 && now - entry.updated_at <= SOCKET_PORT_PID_TTL_MS)
+        pid = entry.pid;
+    ReleaseSRWLockShared(&socket_port_pid_lock);
+    return pid;
+}
+
 static void clear_flow_pid_cache(void)
 {
     AcquireSRWLockExclusive(&flow_pid_lock);
@@ -1403,6 +1434,9 @@ static void clear_flow_pid_cache(void)
         }
     }
     ReleaseSRWLockExclusive(&flow_pid_lock);
+    AcquireSRWLockExclusive(&socket_port_pid_lock);
+    memset(socket_port_pid_table, 0, sizeof(socket_port_pid_table));
+    ReleaseSRWLockExclusive(&socket_port_pid_lock);
 }
 
 static DWORD WINAPI flow_tracker(LPVOID arg)
@@ -1420,25 +1454,89 @@ static DWORD WINAPI flow_tracker(LPVOID arg)
 
         BOOL is_udp = addr.Flow.Protocol == IPPROTO_UDP;
         if (addr.IPv6) {
+            UINT32 local_host[4], remote_host[4];
             UINT8 local[16], remote[16];
-            memcpy(local, addr.Flow.LocalAddr, 16);
-            memcpy(remote, addr.Flow.RemoteAddr, 16);
+            WinDivertHelperHtonIPv6Address(addr.Flow.LocalAddr, local_host);
+            WinDivertHelperHtonIPv6Address(addr.Flow.RemoteAddr, remote_host);
+            memcpy(local, local_host, sizeof(local));
+            memcpy(remote, remote_host, sizeof(remote));
             store_flow_pid(TRUE, is_udp, addr.Flow.LocalPort,
                            addr.Flow.RemotePort, local, remote,
                            addr.Flow.ProcessId);
         } else {
-            if (!is_ipv4_mapped_flow_address(addr.Flow.LocalAddr) ||
-                !is_ipv4_mapped_flow_address(addr.Flow.RemoteAddr))
-                continue;
-            UINT32 local = 0, remote = 0;
-            memcpy(&local, ((const UINT8 *)addr.Flow.LocalAddr) + 12, 4);
-            memcpy(&remote, ((const UINT8 *)addr.Flow.RemoteAddr) + 12, 4);
+            UINT32 local = htonl(addr.Flow.LocalAddr[0]);
+            UINT32 remote = htonl(addr.Flow.RemoteAddr[0]);
             store_flow_pid(FALSE, is_udp, addr.Flow.LocalPort,
                            addr.Flow.RemotePort, &local, &remote,
                            addr.Flow.ProcessId);
         }
     }
     return 0;
+}
+
+static DWORD WINAPI socket_tracker(LPVOID arg)
+{
+    (void)arg;
+    while (running) {
+        WINDIVERT_ADDRESS addr;
+        UINT recv_len = 0;
+        if (!WinDivertRecv(socket_handle, NULL, 0, &recv_len, &addr)) {
+            if (!running || GetLastError() == ERROR_INVALID_HANDLE) break;
+            Sleep(10);
+            continue;
+        }
+        if ((addr.Event != WINDIVERT_EVENT_SOCKET_CONNECT &&
+             addr.Event != WINDIVERT_EVENT_SOCKET_BIND) || !addr.Outbound)
+            continue;
+
+        BOOL is_udp = addr.Socket.Protocol == IPPROTO_UDP;
+        store_socket_port_pid(addr.IPv6, is_udp, addr.Socket.LocalPort,
+                              addr.Socket.ProcessId);
+        if (addr.Event != WINDIVERT_EVENT_SOCKET_CONNECT)
+            continue;
+        if (addr.IPv6) {
+            UINT32 local_host[4], remote_host[4];
+            UINT8 local[16], remote[16];
+            WinDivertHelperHtonIPv6Address(addr.Socket.LocalAddr, local_host);
+            WinDivertHelperHtonIPv6Address(addr.Socket.RemoteAddr, remote_host);
+            memcpy(local, local_host, sizeof(local));
+            memcpy(remote, remote_host, sizeof(remote));
+            store_flow_pid(TRUE, is_udp, addr.Socket.LocalPort,
+                           addr.Socket.RemotePort, local, remote,
+                           addr.Socket.ProcessId);
+        } else {
+            UINT32 local = htonl(addr.Socket.LocalAddr[0]);
+            UINT32 remote = htonl(addr.Socket.RemoteAddr[0]);
+            store_flow_pid(FALSE, is_udp, addr.Socket.LocalPort,
+                           addr.Socket.RemotePort, &local, &remote,
+                           addr.Socket.ProcessId);
+        }
+    }
+    return 0;
+}
+
+static void stop_attribution_trackers(void)
+{
+    if (socket_handle != INVALID_HANDLE_VALUE) {
+        WinDivertShutdown(socket_handle, WINDIVERT_SHUTDOWN_BOTH);
+        WinDivertClose(socket_handle);
+        socket_handle = INVALID_HANDLE_VALUE;
+    }
+    if (flow_handle != INVALID_HANDLE_VALUE) {
+        WinDivertShutdown(flow_handle, WINDIVERT_SHUTDOWN_BOTH);
+        WinDivertClose(flow_handle);
+        flow_handle = INVALID_HANDLE_VALUE;
+    }
+    if (socket_thread != NULL) {
+        WaitForSingleObject(socket_thread, 5000);
+        CloseHandle(socket_thread);
+        socket_thread = NULL;
+    }
+    if (flow_thread != NULL) {
+        WaitForSingleObject(flow_thread, 5000);
+        CloseHandle(flow_thread);
+        flow_thread = NULL;
+    }
 }
 
 static DWORD get_process_id_from_connection(UINT32 src_ip, UINT16 src_port)
@@ -1631,16 +1729,25 @@ static BOOL is_ipv6_multicast_or_linklocal(const UINT8 ip6[16])
 
 static RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port, const UINT8 dest_ip6[16], UINT16 dest_port, BOOL is_udp, DWORD *out_pid, UINT32 *out_proxy_config_id)
 {
-    DWORD pid;
+    DWORD pid = 0;
     char process_name[MAX_PROCESS_NAME];
 
-    pid = get_flow_pid_v6(src_ip6, src_port, dest_ip6, dest_port, is_udp);
-    if (pid == 0) {
-        pid = is_udp ? get_process_id_from_udp_connection_v6(src_ip6, src_port)
-                     : get_process_id_from_connection_v6(src_ip6, src_port);
-    }
+    ULONGLONG deadline = GetTickCount64() + PROCESS_ATTRIBUTION_WAIT_MS;
+    do {
+        pid = get_flow_pid_v6(src_ip6, src_port, dest_ip6, dest_port, is_udp);
+        if (pid == 0)
+            pid = get_socket_port_pid(TRUE, is_udp, src_port);
+        if (pid == 0) {
+            pid = is_udp ? get_process_id_from_udp_connection_v6(src_ip6, src_port)
+                         : get_process_id_from_connection_v6(src_ip6, src_port);
+        }
+        if (pid != 0 || GetTickCount64() >= deadline) break;
+        Sleep(1);
+    } while (running);
     if (out_pid) *out_pid = pid;
-    if (pid == 0) return g_fail_closed ? RULE_ACTION_BLOCK : RULE_ACTION_DIRECT;
+    if (pid == 0) {
+        return g_fail_closed ? RULE_ACTION_BLOCK : RULE_ACTION_DIRECT;
+    }
     if (pid == g_current_process_id) return RULE_ACTION_DIRECT;
     if (!get_process_name_from_pid(pid, process_name, sizeof(process_name)))
         return g_fail_closed ? RULE_ACTION_BLOCK : RULE_ACTION_DIRECT;
@@ -2212,16 +2319,24 @@ static RuleAction match_rule_v6(const char *process_name, const UINT8 dest_ip6[1
 
 static RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest_ip, UINT16 dest_port, BOOL is_udp, DWORD *out_pid, UINT32 *out_proxy_config_id)
 {
-    DWORD pid;
+    DWORD pid = 0;
     char process_name[MAX_PROCESS_NAME];
 
-    pid = get_flow_pid_v4(src_ip, src_port, dest_ip, dest_port, is_udp);
-    if (pid == 0)
-        pid = is_udp ? get_process_id_from_udp_connection(src_ip, src_port) : get_process_id_from_connection(src_ip, src_port);
-    if (pid == 0 && is_udp)
-        pid = get_process_id_from_connection(src_ip, src_port);
+    ULONGLONG deadline = GetTickCount64() + PROCESS_ATTRIBUTION_WAIT_MS;
+    do {
+        pid = get_flow_pid_v4(src_ip, src_port, dest_ip, dest_port, is_udp);
+        if (pid == 0)
+            pid = get_socket_port_pid(FALSE, is_udp, src_port);
+        if (pid == 0) {
+            pid = is_udp ? get_process_id_from_udp_connection(src_ip, src_port)
+                         : get_process_id_from_connection(src_ip, src_port);
+        }
+        if (pid == 0 && is_udp)
+            pid = get_process_id_from_connection(src_ip, src_port);
+        if (pid != 0 || GetTickCount64() >= deadline) break;
+        Sleep(1);
+    } while (running);
 
-        // this may cause issues - need to find alternative
     if (out_pid != NULL)
         *out_pid = pid;
 
@@ -4630,24 +4745,6 @@ PROXYBRIDGE_API int ProxyBridge_TestProxyConfig(UINT32 config_id, const char* ta
     }
 }
 
-static BOOL has_selected_process_rule(const char *process_name, BOOL is_udp)
-{
-    BOOL selected = FALSE;
-    AcquireSRWLockShared(&lock);
-    PROCESS_RULE *rule = rules_list;
-    while (rule != NULL) {
-        if (rule->enabled && rule->action == RULE_ACTION_PROXY &&
-            !((rule->protocol == RULE_PROTOCOL_TCP && is_udp) ||
-              (rule->protocol == RULE_PROTOCOL_UDP && !is_udp)) &&
-            match_process_list(rule->process_name, process_name)) {
-            selected = TRUE;
-            break;
-        }
-        rule = rule->next;
-    }
-    ReleaseSRWLockShared(&lock);
-    return selected;
-}
 PROXYBRIDGE_API void ProxyBridge_SetLocalhostViaProxy(BOOL enable)
 {
     if (running)
@@ -4923,7 +5020,12 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
 
     InitializeSRWLock(&lock);
     InitializeSRWLock(&flow_pid_lock);
+    InitializeSRWLock(&socket_port_pid_lock);
     dns_cache_init();
+    clear_pid_cache();
+    clear_flow_pid_cache();
+    memset((void*)port_decided_bitmap, 0, sizeof(port_decided_bitmap));
+    memset((void*)port_direct_bitmap, 0, sizeof(port_direct_bitmap));
 
     running = TRUE;
 
@@ -4940,8 +5042,26 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
     if (flow_thread == NULL)
     {
         running = FALSE;
-        WinDivertClose(flow_handle);
-        flow_handle = INVALID_HANDLE_VALUE;
+        stop_attribution_trackers();
+        return FALSE;
+    }
+
+    socket_handle = WinDivertOpen(
+        "outbound and (event == CONNECT or event == BIND)",
+        WINDIVERT_LAYER_SOCKET, 125,
+        WINDIVERT_FLAG_SNIFF | WINDIVERT_FLAG_RECV_ONLY);
+    if (socket_handle == INVALID_HANDLE_VALUE)
+    {
+        log_message("Failed to open WinDivert socket tracker (%lu)", GetLastError());
+        running = FALSE;
+        stop_attribution_trackers();
+        return FALSE;
+    }
+    socket_thread = CreateThread(NULL, 0, socket_tracker, NULL, 0, NULL);
+    if (socket_thread == NULL)
+    {
+        running = FALSE;
+        stop_attribution_trackers();
         return FALSE;
     }
 
@@ -4949,12 +5069,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
     if (proxy_thread == NULL)
     {
         running = FALSE;
-        WinDivertShutdown(flow_handle, WINDIVERT_SHUTDOWN_BOTH);
-        WinDivertClose(flow_handle);
-        flow_handle = INVALID_HANDLE_VALUE;
-        WaitForSingleObject(flow_thread, 5000);
-        CloseHandle(flow_thread);
-        flow_thread = NULL;
+        stop_attribution_trackers();
         return FALSE;
     }
 
@@ -4963,12 +5078,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
     if (cleanup_thread == NULL)
     {
         running = FALSE;
-        WinDivertShutdown(flow_handle, WINDIVERT_SHUTDOWN_BOTH);
-        WinDivertClose(flow_handle);
-        flow_handle = INVALID_HANDLE_VALUE;
-        WaitForSingleObject(flow_thread, 5000);
-        CloseHandle(flow_thread);
-        flow_thread = NULL;
+        stop_attribution_trackers();
         WaitForSingleObject(proxy_thread, INFINITE);
         CloseHandle(proxy_thread);
         proxy_thread = NULL;
@@ -4981,12 +5091,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
         if (udp_relay_thread == NULL)
         {
             running = FALSE;
-            WinDivertShutdown(flow_handle, WINDIVERT_SHUTDOWN_BOTH);
-            WinDivertClose(flow_handle);
-            flow_handle = INVALID_HANDLE_VALUE;
-            WaitForSingleObject(flow_thread, 5000);
-            CloseHandle(flow_thread);
-            flow_thread = NULL;
+            stop_attribution_trackers();
             WaitForSingleObject(cleanup_thread, INFINITE);
             CloseHandle(cleanup_thread);
             cleanup_thread = NULL;
@@ -5043,12 +5148,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
                 break;
         }
         running = FALSE;
-        WinDivertShutdown(flow_handle, WINDIVERT_SHUTDOWN_BOTH);
-        WinDivertClose(flow_handle);
-        flow_handle = INVALID_HANDLE_VALUE;
-        WaitForSingleObject(flow_thread, 5000);
-        CloseHandle(flow_thread);
-        flow_thread = NULL;
+        stop_attribution_trackers();
         WaitForSingleObject(proxy_thread, INFINITE);
         CloseHandle(proxy_thread);
         proxy_thread = NULL;
@@ -5075,12 +5175,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
         if (packet_thread[i] == NULL)
         {
             running = FALSE;
-            WinDivertShutdown(flow_handle, WINDIVERT_SHUTDOWN_BOTH);
-            WinDivertClose(flow_handle);
-            flow_handle = INVALID_HANDLE_VALUE;
-            WaitForSingleObject(flow_thread, 5000);
-            CloseHandle(flow_thread);
-            flow_thread = NULL;
+            stop_attribution_trackers();
             for (int j = 0; j < i; j++)
             {
                 if (packet_thread[j] != NULL)
@@ -5143,19 +5238,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_Stop(void)
         WinDivertClose(windivert_handle);
         windivert_handle = INVALID_HANDLE_VALUE;
     }
-    if (flow_handle != INVALID_HANDLE_VALUE)
-    {
-        WinDivertShutdown(flow_handle, WINDIVERT_SHUTDOWN_BOTH);
-        WinDivertClose(flow_handle);
-        flow_handle = INVALID_HANDLE_VALUE;
-    }
-
-    if (flow_thread != NULL)
-    {
-        WaitForSingleObject(flow_thread, 5000);
-        CloseHandle(flow_thread);
-        flow_thread = NULL;
-    }
+    stop_attribution_trackers();
 
     // process alll packets before we stop, make sure packets are not dropped
     for (int i = 0; i < NUM_PACKET_THREADS; i++)

@@ -10,10 +10,16 @@ process router packaged by Green VPN.
 
 Green VPN carries a narrow production hardening patch:
 
-- use WinDivert flow events and the complete local/remote tuple for PID
-  attribution before falling back to short-lived Windows socket tables;
+- capture WinDivert socket bind/connect events before the first packet, then
+  retain flow events and short-lived Windows socket tables as fallbacks;
+- normalize WinDivert host-order IPv4/IPv6 event addresses before matching the
+  complete packet tuple, and keep a five-second source-port bridge for sockets
+  whose local address is not assigned yet;
+- cache attribution for selected and unselected processes so fail-closed mode
+  does not block unrelated applications;
 - fail closed when an intercepted connection cannot be attributed, its
-  process path cannot be read, or its exact proxy configuration is unusable;
+  process path cannot be read, or its exact proxy configuration is unusable,
+  after a bounded 100 ms pre-connect attribution wait;
 - parse SOCKS5 responses with exact-length reads and handle every address type;
 - preserve long executable paths and keep IPv4/IPv6 on one routing policy;
 - make rule/proxy configuration immutable while the router is active and wait

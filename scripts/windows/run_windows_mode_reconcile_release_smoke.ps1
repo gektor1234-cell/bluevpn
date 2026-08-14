@@ -1207,8 +1207,16 @@ try {
         -ExecutablePath $directControlExecutable -AddressFamily IPv4
     $selectedFingerprint = Get-EgressFingerprint -UseSelectedExecutable `
         -AddressFamily IPv4
-    if (-not $directFingerprint -or -not $selectedFingerprint) {
-        throw 'Selected-mode egress fingerprints were unavailable.'
+    $summary.selectedMode['egressProbeAttempt'] = [ordered]@{
+        directFingerprintCaptured = [bool]$directFingerprint
+        selectedExecutableFingerprintCaptured = [bool]$selectedFingerprint
+        rawAddressesStored = $false
+    }
+    if (-not $directFingerprint) {
+        throw 'Unselected direct-control egress fingerprint was unavailable.'
+    }
+    if (-not $selectedFingerprint) {
+        throw 'Selected executable egress fingerprint was unavailable.'
     }
     if ($directFingerprint -eq $selectedFingerprint) {
         throw 'Selected executable did not prove a separate VPN egress.'

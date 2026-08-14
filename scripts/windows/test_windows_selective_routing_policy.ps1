@@ -24,6 +24,28 @@ try {
 
     . (Join-Path $PSScriptRoot 'greenvpn_selective_routing.ps1')
 
+    $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
+    $processRouterSourcePath = Join-Path $projectRoot `
+        'third_party\windows\process_router\source\ProxyBridge.c'
+    $processRouterSource = [IO.File]::ReadAllText($processRouterSourcePath)
+    foreach ($marker in @(
+        'WINDIVERT_LAYER_SOCKET',
+        'WINDIVERT_EVENT_SOCKET_CONNECT',
+        'addr.Socket.ProcessId',
+        'store_socket_port_pid',
+        'PROCESS_ATTRIBUTION_WAIT_MS',
+        'WinDivertHelperHtonIPv6Address'
+    )) {
+        if (-not $processRouterSource.Contains($marker)) {
+            throw "Process-router pre-connect attribution marker is missing: $marker"
+        }
+    }
+    if ($processRouterSource.Contains(
+            '((const UINT8 *)addr.Flow.LocalAddr) + 12'
+        )) {
+        throw 'Process-router retained the invalid IPv4 FLOW address layout.'
+    }
+
     $RuntimeMutationMutexName =
         "Global\GreenVPN.RuntimeMutation.Test.$registryTestId"
     $runtimeMutationMutex = Enter-GreenRuntimeMutationLock
@@ -306,6 +328,7 @@ try {
         nestedCleanupGenerationReused = $true
         abandonedGenerationAdopted = $true
         proxyBridgeV4ProfilePassed = $true
+        preConnectAttributionContractPassed = $true
     } | ConvertTo-Json
 }
 finally {

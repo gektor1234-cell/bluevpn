@@ -1524,7 +1524,7 @@ $processRouterInstallerFragments = @(
     'THIRD_PARTY_NOTICES.txt',
     'Get-AuthenticodeSignature'
     '806B3F6326F3D90C3029D179F458F6BF41970D21107A6729A44D7693C580523B'
-    '30E3D20DFD44A06CE52F5F3566863A54D5832C4490FB210704B976D7ED5A2D2F'
+    '00A2EB9DCFFBDA71C1859DA40E32DFAF8E93856DE3C4A3ADB1853395AB43C192'
 )
 foreach ($fragment in $processRouterInstallerFragments) {
     if ($installer.Contains($fragment)) {
@@ -1541,6 +1541,12 @@ $processRouterSource = Get-Content -LiteralPath (
 $processRouterSourceFragments = @(
     'WINDIVERT_LAYER_FLOW'
     'addr.Flow.ProcessId'
+    'WINDIVERT_LAYER_SOCKET'
+    'WINDIVERT_EVENT_SOCKET_CONNECT'
+    'addr.Socket.ProcessId'
+    'WinDivertHelperHtonIPv6Address'
+    'get_socket_port_pid'
+    'PROCESS_ATTRIBUTION_WAIT_MS'
     'ProxyBridge_SetFailClosed'
     'socks5_read_reply'
     'WCHAR full_path_w[32768]'
