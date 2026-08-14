@@ -686,6 +686,8 @@ $sessionPersistenceFragments = @(
     'session read failed type=',
     'A best-effort storage migration must not invalidate a session',
     'preparePrivateFileForWrite',
+    'WindowsDpapi.protectString',
+    'WindowsDpapi.unprotectString',
     'Add-Type -AssemblyName System.Security',
     'DataProtectionScope]::LocalMachine',
     "'-h'",
@@ -698,6 +700,28 @@ foreach ($fragment in $sessionPersistenceFragments) {
     }
     else {
         Add-Error "Session persistence guard missing: $fragment"
+    }
+}
+
+$windowsDpapiPath = Join-Path $ProjectRoot 'lib\services\windows_dpapi.dart'
+if (-not (Test-Path -LiteralPath $windowsDpapiPath -PathType Leaf)) {
+    Add-Error 'Native Windows DPAPI helper is missing'
+}
+else {
+    $windowsDpapi = Get-Content -LiteralPath $windowsDpapiPath -Raw -Encoding UTF8
+    foreach ($fragment in @(
+        'CryptProtectData(',
+        'CryptUnprotectData(',
+        '_cryptProtectLocalMachine',
+        '_cryptProtectUiForbidden',
+        'LocalFree('
+    )) {
+        if ($windowsDpapi.Contains($fragment)) {
+            Add-Pass "Native Windows DPAPI guard present: $fragment"
+        }
+        else {
+            Add-Error "Native Windows DPAPI guard missing: $fragment"
+        }
     }
 }
 

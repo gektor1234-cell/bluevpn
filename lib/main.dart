@@ -17,6 +17,7 @@ import 'services/product_display_policy.dart';
 import 'services/route_failure_cooldown.dart';
 import 'services/server_location_policy.dart';
 import 'services/transport_preview_policy.dart';
+import 'services/windows_dpapi.dart';
 import 'services/windows_selective_routing_service.dart';
 import 'services/windows_vpn_status_policy.dart';
 
@@ -1391,6 +1392,10 @@ class WindowsLocalSecurity {
 
   static Future<String?> protectString(String plain) async {
     if (kIsWeb || !Platform.isWindows) return null;
+    final nativeProtected = WindowsDpapi.protectString(plain);
+    if (nativeProtected != null && nativeProtected.trim().isNotEmpty) {
+      return nativeProtected;
+    }
     try {
       const script = r'''
 Add-Type -AssemblyName System.Security
@@ -1413,23 +1418,10 @@ $protected = [System.Security.Cryptography.ProtectedData]::Protect(
 
   static Future<String?> unprotectString(String encrypted) async {
     if (kIsWeb || !Platform.isWindows) return null;
+    final nativePlain = WindowsDpapi.unprotectString(encrypted);
+    if (nativePlain != null) return nativePlain;
     try {
-      const script = r'''
-Add-Type -AssemblyName System.Security
-$encrypted = [Console]::In.ReadToEnd().Trim()
-$bytes = [Convert]::FromBase64String($encrypted)
-$entropy = [System.Text.Encoding]::UTF8.GetBytes('BlueVPN-Machine-v1')
-$plain = [System.Security.Cryptography.ProtectedData]::Unprotect(
-  $bytes,
-  $entropy,
-  [System.Security.Cryptography.DataProtectionScope]::LocalMachine
-)
-[System.Text.Encoding]::UTF8.GetString($plain)
-''';
-      return await _runPowerShellWithStdin(script, encrypted);
-    } catch (_) {
-      try {
-        const legacyScript = r'''
+      const legacyScript = r'''
 $encrypted = [Console]::In.ReadToEnd().Trim()
 $secure = ConvertTo-SecureString -String $encrypted
 $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
@@ -1439,10 +1431,9 @@ try {
   [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
 }
 ''';
-        return await _runPowerShellWithStdin(legacyScript, encrypted);
-      } catch (_) {
-        return null;
-      }
+      return await _runPowerShellWithStdin(legacyScript, encrypted);
+    } catch (_) {
+      return null;
     }
   }
 
