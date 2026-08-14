@@ -26,6 +26,7 @@
 #define SELECTED_BIND_EVENT_TTL_MS 30000
 #define SELECTED_SOCKET_EVENT_TTL_MS 30000
 #define SELECTED_SOCKET_EVENT_CAPACITY 256
+#define DEFERRED_PACKET_CAPACITY 256
 #define PROXY_START_TIMEOUT_MS 5000
 // Single packet-processor thread eliminates TCP packet reordering.
 // With multiple threads each racing to WinDivertRecv+WinDivertSend, thread N+1
@@ -144,6 +145,21 @@ typedef struct PID_CACHE_ENTRY {
     struct PID_CACHE_ENTRY *next;
 } PID_CACHE_ENTRY;
 
+typedef enum DEFERRED_PACKET_KIND {
+    DEFERRED_PACKET_IPV4_TCP = 1,
+    DEFERRED_PACKET_IPV4_UDP,
+    DEFERRED_PACKET_IPV6_TCP,
+    DEFERRED_PACKET_IPV6_UDP
+} DEFERRED_PACKET_KIND;
+
+typedef struct DEFERRED_PACKET_ENTRY {
+    struct DEFERRED_PACKET_ENTRY *next;
+    DEFERRED_PACKET_KIND kind;
+    UINT packet_len;
+    WINDIVERT_ADDRESS addr;
+    unsigned char packet[1];
+} DEFERRED_PACKET_ENTRY;
+
 // Internal proxy configuration with per-config UDP SOCKS5 state
 typedef struct {
     UINT32 config_id;           // Unique ID (1-based), 0 = unused slot
@@ -179,6 +195,12 @@ static HANDLE flow_thread = NULL;
 static HANDLE socket_handle = INVALID_HANDLE_VALUE;
 static HANDLE socket_thread = NULL;
 static HANDLE attribution_update_event = NULL;
+static HANDLE deferred_packet_semaphore = NULL;
+static HANDLE deferred_packet_thread = NULL;
+static DEFERRED_PACKET_ENTRY *deferred_packet_head = NULL;
+static DEFERRED_PACKET_ENTRY *deferred_packet_tail = NULL;
+static SRWLOCK deferred_packet_lock;
+static LONG deferred_packet_count = 0;
 static HANDLE proxy_start_event = NULL;
 static volatile LONG proxy_start_result = 0;
 static PID_CACHE_ENTRY *pid_cache[PID_CACHE_SIZE] = {NULL};
@@ -261,6 +283,10 @@ static volatile LONG selected_bind_fallback_count = 0;
 static volatile LONG selected_socket_event_count = 0;
 static volatile LONG selected_socket_zero_port_count = 0;
 static volatile LONG selected_socket_fallback_count = 0;
+static volatile LONG deferred_packet_enqueued_count = 0;
+static volatile LONG deferred_packet_resolved_count = 0;
+static volatile LONG deferred_packet_timeout_count = 0;
+static volatile LONG deferred_packet_overflow_count = 0;
 static volatile LONG relay_accept_log_count = 0;
 static volatile LONG relay_upstream_log_count = 0;
 
@@ -478,6 +504,11 @@ static DWORD WINAPI local_proxy_server(LPVOID arg);
 static DWORD WINAPI connection_handler(LPVOID arg);
 static DWORD WINAPI transfer_handler(LPVOID arg);
 static DWORD WINAPI packet_processor(LPVOID arg);
+static DWORD WINAPI deferred_packet_worker(LPVOID arg);
+static BOOL enqueue_deferred_packet(const unsigned char *packet,
+    UINT packet_len, const WINDIVERT_ADDRESS *addr,
+    DEFERRED_PACKET_KIND kind);
+static void stop_deferred_packet_worker(void);
 static DWORD get_process_id_from_connection(UINT32 src_ip, UINT16 src_port);
 static DWORD get_process_id_from_connection_v6(const UINT8 src_ip6[16], UINT16 src_port);
 static DWORD get_process_id_from_udp_connection(UINT32 src_ip, UINT16 src_port);
@@ -502,8 +533,8 @@ static BOOL address_is_zero(const UINT8 *address, size_t length);
 static void clear_flow_pid_cache(void);
 static BOOL get_process_name_from_pid(DWORD pid, char *name, DWORD name_size);
 static RuleAction match_rule(const char *process_name, UINT32 dest_ip, UINT16 dest_port, BOOL is_udp, UINT32 *out_proxy_config_id);
-static RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest_ip, UINT16 dest_port, BOOL is_udp, DWORD *out_pid, UINT32 *out_proxy_config_id);
-static RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port, const UINT8 dest_ip6[16], UINT16 dest_port, BOOL is_udp, DWORD *out_pid, UINT32 *out_proxy_config_id);
+static RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest_ip, UINT16 dest_port, BOOL is_udp, BOOL wait_for_attribution, DWORD *out_pid, UINT32 *out_proxy_config_id);
+static RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port, const UINT8 dest_ip6[16], UINT16 dest_port, BOOL is_udp, BOOL wait_for_attribution, DWORD *out_pid, UINT32 *out_proxy_config_id);
 static RuleAction match_rule_v6(const char *process_name, const UINT8 dest_ip6[16], UINT16 dest_port, BOOL is_udp, UINT32 *out_proxy_config_id);
 static void add_connection(UINT16 src_port, UINT32 src_ip, UINT32 dest_ip, UINT16 dest_port, UINT32 proxy_config_id);
 static void add_connection_v6(UINT16 src_port, const UINT8 src_ip6[16], const UINT8 dest_ip6[16], UINT16 dest_port, UINT32 proxy_config_id);
@@ -525,6 +556,377 @@ static void cache_pid(UINT32 src_ip, UINT16 src_port, DWORD pid, BOOL is_udp);
 static void clear_pid_cache(void);
 static void update_has_active_rules(void);
 static void base64_encode(const char* input, char* output, size_t output_size);
+
+static void send_deferred_packet(DEFERRED_PACKET_ENTRY *entry, BOOL modified)
+{
+    if (!running || windivert_handle == INVALID_HANDLE_VALUE)
+        return;
+    if (modified)
+        WinDivertHelperCalcChecksums(
+            entry->packet, entry->packet_len, &entry->addr, 0);
+    if (!WinDivertSend(windivert_handle, entry->packet, entry->packet_len,
+                       NULL, &entry->addr))
+        log_message("[ATTR] Failed to send deferred packet (%lu)",
+                    GetLastError());
+}
+
+static void process_deferred_packet(DEFERRED_PACKET_ENTRY *entry)
+{
+    PWINDIVERT_IPHDR ip_header = NULL;
+    PWINDIVERT_IPV6HDR ipv6_header = NULL;
+    PWINDIVERT_TCPHDR tcp_header = NULL;
+    PWINDIVERT_UDPHDR udp_header = NULL;
+    WinDivertHelperParsePacket(entry->packet, entry->packet_len, &ip_header,
+        &ipv6_header, NULL, NULL, NULL, &tcp_header, &udp_header, NULL,
+        NULL, NULL, NULL);
+    if (!entry->addr.Outbound)
+        return;
+
+    if (entry->kind == DEFERRED_PACKET_IPV4_TCP)
+    {
+        if (ip_header == NULL || tcp_header == NULL)
+            return;
+        UINT16 src_port = ntohs(tcp_header->SrcPort);
+        UINT16 dest_port = ntohs(tcp_header->DstPort);
+        UINT32 src_ip = ip_header->SrcAddr;
+        UINT32 dest_ip = ip_header->DstAddr;
+        if (port_is_decided(src_port))
+        {
+            if (port_is_direct(src_port))
+            {
+                send_deferred_packet(entry, FALSE);
+                return;
+            }
+            if (!is_connection_tracked(src_port))
+                return;
+        }
+        else
+        {
+            DWORD pid = 0;
+            UINT32 proxy_config_id = 0;
+            RuleAction action = check_process_rule(src_ip, src_port, dest_ip,
+                dest_port, FALSE, TRUE, &pid, &proxy_config_id);
+            BYTE dest_first_octet = (dest_ip >> 0) & 0xFF;
+            if (action == RULE_ACTION_PROXY && !g_localhost_via_proxy &&
+                dest_first_octet == 127)
+                action = RULE_ACTION_DIRECT;
+            if (action == RULE_ACTION_PROXY &&
+                is_broadcast_or_multicast(dest_ip))
+                action = RULE_ACTION_DIRECT;
+            if (pid == 0)
+                InterlockedIncrement(&deferred_packet_timeout_count);
+            else
+                InterlockedIncrement(&deferred_packet_resolved_count);
+            if (action == RULE_ACTION_DIRECT)
+            {
+                port_set_direct(src_port);
+                send_deferred_packet(entry, FALSE);
+                return;
+            }
+            if (action == RULE_ACTION_BLOCK)
+            {
+                port_set_decided(src_port);
+                return;
+            }
+            add_connection(src_port, src_ip, dest_ip, dest_port,
+                           proxy_config_id);
+            port_set_decided(src_port);
+        }
+
+        tcp_header->DstPort = htons(g_local_relay_port);
+        BYTE src_first = (ntohl(ip_header->SrcAddr) >> 24) & 0xFF;
+        BYTE dst_first = (ntohl(ip_header->DstAddr) >> 24) & 0xFF;
+        if (!(src_first == 127 && dst_first == 127))
+        {
+            UINT32 temp_addr = ip_header->DstAddr;
+            ip_header->DstAddr = ip_header->SrcAddr;
+            ip_header->SrcAddr = temp_addr;
+            entry->addr.Outbound = FALSE;
+        }
+        send_deferred_packet(entry, TRUE);
+        return;
+    }
+
+    if (entry->kind == DEFERRED_PACKET_IPV4_UDP)
+    {
+        if (ip_header == NULL || udp_header == NULL)
+            return;
+        UINT16 src_port = ntohs(udp_header->SrcPort);
+        UINT16 dest_port = ntohs(udp_header->DstPort);
+        UINT32 src_ip = ip_header->SrcAddr;
+        UINT32 dest_ip = ip_header->DstAddr;
+        if (!is_connection_tracked(src_port))
+        {
+            DWORD pid = 0;
+            UINT32 proxy_config_id = 0;
+            RuleAction action = check_process_rule(src_ip, src_port, dest_ip,
+                dest_port, TRUE, TRUE, &pid, &proxy_config_id);
+            BYTE dest_first_octet = (dest_ip >> 0) & 0xFF;
+            if (action == RULE_ACTION_PROXY && !g_localhost_via_proxy &&
+                dest_first_octet == 127)
+                action = RULE_ACTION_DIRECT;
+            if (action == RULE_ACTION_PROXY &&
+                (is_broadcast_or_multicast(dest_ip) ||
+                 dest_port == 67 || dest_port == 68))
+                action = RULE_ACTION_DIRECT;
+            if (pid == 0)
+                InterlockedIncrement(&deferred_packet_timeout_count);
+            else
+                InterlockedIncrement(&deferred_packet_resolved_count);
+            if (action == RULE_ACTION_DIRECT)
+            {
+                send_deferred_packet(entry, FALSE);
+                return;
+            }
+            if (action == RULE_ACTION_BLOCK)
+                return;
+            add_connection(src_port, src_ip, dest_ip, dest_port,
+                           proxy_config_id);
+        }
+        udp_header->DstPort = htons(LOCAL_UDP_RELAY_PORT);
+        BYTE src_first = (ntohl(ip_header->SrcAddr) >> 24) & 0xFF;
+        if (src_first == 127)
+            ip_header->DstAddr = htonl(INADDR_LOOPBACK);
+        else
+        {
+            UINT32 temp_addr = ip_header->DstAddr;
+            ip_header->DstAddr = ip_header->SrcAddr;
+            ip_header->SrcAddr = temp_addr;
+            entry->addr.Outbound = FALSE;
+        }
+        send_deferred_packet(entry, TRUE);
+        return;
+    }
+
+    if (entry->kind == DEFERRED_PACKET_IPV6_TCP)
+    {
+        if (ipv6_header == NULL || tcp_header == NULL)
+            return;
+        UINT16 src_port = ntohs(tcp_header->SrcPort);
+        UINT16 dest_port = ntohs(tcp_header->DstPort);
+        if (port_is_decided(src_port))
+        {
+            if (port_is_direct(src_port))
+            {
+                send_deferred_packet(entry, FALSE);
+                return;
+            }
+            if (!is_connection_tracked(src_port))
+                return;
+        }
+        else
+        {
+            DWORD pid = 0;
+            UINT32 proxy_config_id = 0;
+            RuleAction action = check_process_rule_v6(
+                (const UINT8 *)ipv6_header->SrcAddr, src_port,
+                (const UINT8 *)ipv6_header->DstAddr, dest_port, FALSE, TRUE,
+                &pid, &proxy_config_id);
+            static const UINT8 loopback6[16] = {
+                0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
+            static const UINT8 mapped6[12] = {
+                0,0,0,0,0,0,0,0,0,0,0xff,0xff};
+            const UINT8 *dest6 = (const UINT8 *)ipv6_header->DstAddr;
+            BOOL loopback = memcmp(dest6, loopback6, 16) == 0 ||
+                (memcmp(dest6, mapped6, 12) == 0 && dest6[12] == 127);
+            if (action == RULE_ACTION_PROXY && !g_localhost_via_proxy &&
+                loopback)
+                action = RULE_ACTION_DIRECT;
+            if (pid == 0)
+                InterlockedIncrement(&deferred_packet_timeout_count);
+            else
+                InterlockedIncrement(&deferred_packet_resolved_count);
+            if (action == RULE_ACTION_DIRECT)
+            {
+                port_set_direct(src_port);
+                send_deferred_packet(entry, FALSE);
+                return;
+            }
+            if (action == RULE_ACTION_BLOCK)
+            {
+                port_set_decided(src_port);
+                return;
+            }
+            add_connection_v6(src_port,
+                (const UINT8 *)ipv6_header->SrcAddr,
+                (const UINT8 *)ipv6_header->DstAddr, dest_port,
+                proxy_config_id);
+            port_set_decided(src_port);
+        }
+
+        tcp_header->DstPort = htons(g_local_relay_port);
+        static const UINT8 loopback6[16] = {
+            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
+        BOOL both_loopback =
+            memcmp(ipv6_header->SrcAddr, loopback6, 16) == 0 &&
+            memcmp(ipv6_header->DstAddr, loopback6, 16) == 0;
+        if (!both_loopback)
+        {
+            UINT32 temp_addr[4];
+            memcpy(temp_addr, ipv6_header->DstAddr, 16);
+            memcpy(ipv6_header->DstAddr, ipv6_header->SrcAddr, 16);
+            memcpy(ipv6_header->SrcAddr, temp_addr, 16);
+            entry->addr.Outbound = FALSE;
+        }
+        send_deferred_packet(entry, TRUE);
+        return;
+    }
+
+    if (entry->kind == DEFERRED_PACKET_IPV6_UDP)
+    {
+        if (ipv6_header == NULL || udp_header == NULL)
+            return;
+        UINT16 src_port = ntohs(udp_header->SrcPort);
+        UINT16 dest_port = ntohs(udp_header->DstPort);
+        if (!is_connection_tracked(src_port))
+        {
+            DWORD pid = 0;
+            UINT32 proxy_config_id = 0;
+            RuleAction action = check_process_rule_v6(
+                (const UINT8 *)ipv6_header->SrcAddr, src_port,
+                (const UINT8 *)ipv6_header->DstAddr, dest_port, TRUE, TRUE,
+                &pid, &proxy_config_id);
+            static const UINT8 loopback6[16] = {
+                0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
+            static const UINT8 mapped6[12] = {
+                0,0,0,0,0,0,0,0,0,0,0xff,0xff};
+            const UINT8 *dest6 = (const UINT8 *)ipv6_header->DstAddr;
+            BOOL loopback = memcmp(dest6, loopback6, 16) == 0 ||
+                (memcmp(dest6, mapped6, 12) == 0 && dest6[12] == 127);
+            if (action == RULE_ACTION_PROXY && !g_localhost_via_proxy &&
+                loopback)
+                action = RULE_ACTION_DIRECT;
+            if (action == RULE_ACTION_PROXY &&
+                (is_ipv6_multicast_or_linklocal(dest6) ||
+                 dest_port == 546 || dest_port == 547))
+                action = RULE_ACTION_DIRECT;
+            if (pid == 0)
+                InterlockedIncrement(&deferred_packet_timeout_count);
+            else
+                InterlockedIncrement(&deferred_packet_resolved_count);
+            if (action == RULE_ACTION_DIRECT)
+            {
+                send_deferred_packet(entry, FALSE);
+                return;
+            }
+            if (action == RULE_ACTION_BLOCK)
+                return;
+            add_connection_v6(src_port,
+                (const UINT8 *)ipv6_header->SrcAddr,
+                (const UINT8 *)ipv6_header->DstAddr, dest_port,
+                proxy_config_id);
+        }
+        udp_header->DstPort = htons(LOCAL_UDP_RELAY_PORT);
+        static const UINT8 loopback6[16] = {
+            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
+        BOOL both_loopback =
+            memcmp(ipv6_header->SrcAddr, loopback6, 16) == 0 &&
+            memcmp(ipv6_header->DstAddr, loopback6, 16) == 0;
+        if (!both_loopback)
+        {
+            UINT32 temp_addr[4];
+            memcpy(temp_addr, ipv6_header->DstAddr, 16);
+            memcpy(ipv6_header->DstAddr, ipv6_header->SrcAddr, 16);
+            memcpy(ipv6_header->SrcAddr, temp_addr, 16);
+            entry->addr.Outbound = FALSE;
+        }
+        send_deferred_packet(entry, TRUE);
+    }
+}
+
+static BOOL enqueue_deferred_packet(const unsigned char *packet,
+                                    UINT packet_len,
+                                    const WINDIVERT_ADDRESS *addr,
+                                    DEFERRED_PACKET_KIND kind)
+{
+    if (!running || deferred_packet_semaphore == NULL || packet_len == 0)
+        return FALSE;
+    SIZE_T allocation_size = sizeof(DEFERRED_PACKET_ENTRY) + packet_len - 1;
+    DEFERRED_PACKET_ENTRY *entry =
+        (DEFERRED_PACKET_ENTRY *)malloc(allocation_size);
+    if (entry == NULL)
+        return FALSE;
+    entry->next = NULL;
+    entry->kind = kind;
+    entry->packet_len = packet_len;
+    entry->addr = *addr;
+    memcpy(entry->packet, packet, packet_len);
+
+    AcquireSRWLockExclusive(&deferred_packet_lock);
+    if (deferred_packet_count >= DEFERRED_PACKET_CAPACITY)
+    {
+        ReleaseSRWLockExclusive(&deferred_packet_lock);
+        free(entry);
+        InterlockedIncrement(&deferred_packet_overflow_count);
+        return FALSE;
+    }
+    if (deferred_packet_tail == NULL)
+        deferred_packet_head = entry;
+    else
+        deferred_packet_tail->next = entry;
+    deferred_packet_tail = entry;
+    deferred_packet_count++;
+    ReleaseSRWLockExclusive(&deferred_packet_lock);
+    InterlockedIncrement(&deferred_packet_enqueued_count);
+    ReleaseSemaphore(deferred_packet_semaphore, 1, NULL);
+    return TRUE;
+}
+
+static DEFERRED_PACKET_ENTRY *dequeue_deferred_packet(void)
+{
+    DEFERRED_PACKET_ENTRY *entry = NULL;
+    AcquireSRWLockExclusive(&deferred_packet_lock);
+    if (deferred_packet_head != NULL)
+    {
+        entry = deferred_packet_head;
+        deferred_packet_head = entry->next;
+        if (deferred_packet_head == NULL)
+            deferred_packet_tail = NULL;
+        deferred_packet_count--;
+    }
+    ReleaseSRWLockExclusive(&deferred_packet_lock);
+    return entry;
+}
+
+static DWORD WINAPI deferred_packet_worker(LPVOID arg)
+{
+    (void)arg;
+    while (running)
+    {
+        DWORD wait_result = WaitForSingleObject(
+            deferred_packet_semaphore, PROCESS_ATTRIBUTION_RETRY_SLICE_MS);
+        if (!running)
+            break;
+        if (wait_result != WAIT_OBJECT_0)
+            continue;
+        DEFERRED_PACKET_ENTRY *entry = dequeue_deferred_packet();
+        if (entry == NULL)
+            continue;
+        process_deferred_packet(entry);
+        free(entry);
+    }
+    return 0;
+}
+
+static void stop_deferred_packet_worker(void)
+{
+    if (deferred_packet_semaphore != NULL)
+        ReleaseSemaphore(deferred_packet_semaphore, 1, NULL);
+    if (deferred_packet_thread != NULL)
+    {
+        WaitForSingleObject(deferred_packet_thread, 10000);
+        CloseHandle(deferred_packet_thread);
+        deferred_packet_thread = NULL;
+    }
+    DEFERRED_PACKET_ENTRY *entry;
+    while ((entry = dequeue_deferred_packet()) != NULL)
+        free(entry);
+    if (deferred_packet_semaphore != NULL)
+    {
+        CloseHandle(deferred_packet_semaphore);
+        deferred_packet_semaphore = NULL;
+    }
+}
 
 
 static DWORD WINAPI packet_processor(LPVOID arg)
@@ -612,7 +1014,13 @@ static DWORD WINAPI packet_processor(LPVOID arg)
                     RuleAction action6u;
                     DWORD pid6u = 0;
                     UINT32 pcid6u = 0;
-                    action6u = check_process_rule_v6((const UINT8*)ipv6_header->SrcAddr, sp, (const UINT8*)ipv6_header->DstAddr, dp, TRUE, &pid6u, &pcid6u);
+                    action6u = check_process_rule_v6((const UINT8*)ipv6_header->SrcAddr, sp, (const UINT8*)ipv6_header->DstAddr, dp, TRUE, FALSE, &pid6u, &pcid6u);
+                    if (pid6u == 0 && g_fail_closed)
+                    {
+                        enqueue_deferred_packet(packet, packet_len, &addr,
+                            DEFERRED_PACKET_IPV6_UDP);
+                        continue;
+                    }
 
                     if (action6u == RULE_ACTION_PROXY && !g_localhost_via_proxy)
                     {
@@ -782,7 +1190,13 @@ static DWORD WINAPI packet_processor(LPVOID arg)
                 RuleAction action6;
                 DWORD pid6 = 0;
                 UINT32 proxy_config_id6 = 0;
-                action6 = check_process_rule_v6((const UINT8*)ipv6_header->SrcAddr, sp, (const UINT8*)ipv6_header->DstAddr, dp, FALSE, &pid6, &proxy_config_id6);
+                action6 = check_process_rule_v6((const UINT8*)ipv6_header->SrcAddr, sp, (const UINT8*)ipv6_header->DstAddr, dp, FALSE, FALSE, &pid6, &proxy_config_id6);
+                if (pid6 == 0 && g_fail_closed)
+                {
+                    enqueue_deferred_packet(packet, packet_len, &addr,
+                        DEFERRED_PACKET_IPV6_TCP);
+                    continue;
+                }
 
                 // ::1 IPv6 loopback — use  same "Localhost via Proxy" toggle as IPv4 127.
                 if (action6 == RULE_ACTION_PROXY && !g_localhost_via_proxy)
@@ -953,7 +1367,13 @@ static DWORD WINAPI packet_processor(LPVOID arg)
                     DWORD pid = 0;
                     UINT32 proxy_config_id = 0;
 
-                    action = check_process_rule(src_ip, src_port, dest_ip, dest_port, TRUE, &pid, &proxy_config_id);
+                    action = check_process_rule(src_ip, src_port, dest_ip, dest_port, TRUE, FALSE, &pid, &proxy_config_id);
+                    if (pid == 0 && g_fail_closed)
+                    {
+                        enqueue_deferred_packet(packet, packet_len, &addr,
+                            DEFERRED_PACKET_IPV4_UDP);
+                        continue;
+                    }
 
                     // override PROXY to DIRECT if localhost proxy is disabled and destination is localhost
                     BYTE dest_first_octet = (dest_ip >> 0) & 0xFF;
@@ -1167,7 +1587,13 @@ static DWORD WINAPI packet_processor(LPVOID arg)
                 DWORD pid = 0;
                 UINT32 proxy_config_id = 0;
 
-                action = check_process_rule(src_ip, src_port, orig_dest_ip, orig_dest_port, FALSE, &pid, &proxy_config_id);
+                action = check_process_rule(src_ip, src_port, orig_dest_ip, orig_dest_port, FALSE, FALSE, &pid, &proxy_config_id);
+                if (pid == 0 && g_fail_closed)
+                {
+                    enqueue_deferred_packet(packet, packet_len, &addr,
+                        DEFERRED_PACKET_IPV4_TCP);
+                    continue;
+                }
 
                 BYTE orig_dest_first_octet = (orig_dest_ip >> 0) & 0xFF;
                 if (action == RULE_ACTION_PROXY && !g_localhost_via_proxy && orig_dest_first_octet == 127)
@@ -1551,6 +1977,9 @@ static void store_selected_bind_event(BOOL is_ipv6, BOOL is_udp,
     ReleaseSRWLockExclusive(&socket_port_pid_lock);
 
     port_clear(local_port);
+    UINT16 swapped_local_port = ntohs(local_port);
+    if (swapped_local_port != local_port)
+        port_clear(swapped_local_port);
     if (attribution_update_event != NULL)
         SetEvent(attribution_update_event);
 
@@ -1572,13 +2001,26 @@ static DWORD get_selected_bind_pid(BOOL is_ipv6, BOOL is_udp,
     DWORD pid = 0;
     ULONGLONG now = GetTickCount64();
     int index = socket_port_pid_index(is_ipv6, is_udp);
+    UINT16 swapped_local_port = ntohs(local_port);
     AcquireSRWLockShared(&socket_port_pid_lock);
     const SELECTED_BIND_EVENT_ENTRY entry =
         selected_bind_events[index][local_port];
+    const SELECTED_BIND_EVENT_ENTRY swapped_entry =
+        selected_bind_events[index][swapped_local_port];
     ReleaseSRWLockShared(&socket_port_pid_lock);
     if (entry.owner_pid != 0 && entry.owner_selected && !entry.ambiguous &&
         now - entry.updated_at <= SELECTED_BIND_EVENT_TTL_MS)
         pid = entry.owner_pid;
+    if (swapped_local_port != local_port &&
+        swapped_entry.owner_pid != 0 && swapped_entry.owner_selected &&
+        !swapped_entry.ambiguous &&
+        now - swapped_entry.updated_at <= SELECTED_BIND_EVENT_TTL_MS)
+    {
+        if (pid == 0)
+            pid = swapped_entry.owner_pid;
+        else if (pid != swapped_entry.owner_pid)
+            pid = 0;
+    }
     if (pid != 0)
         InterlockedIncrement(&selected_bind_fallback_count);
     return pid;
@@ -2385,7 +2827,7 @@ static void log_unresolved_attribution(const char *family, BOOL is_udp)
 {
     LONG sample = InterlockedIncrement(&unresolved_attribution_count);
     if (sample <= 8)
-        log_message("[ATTR] Process attribution unavailable; family=%s protocol=%s fail_closed=%d sample=%ld socket_connects=%ld socket_binds=%ld socket_ports=%ld selected_binds=%ld selected_bind_zero_ports=%ld selected_bind_fallbacks=%ld selected_connects=%ld selected_zero_ports=%ld selected_fallbacks=%ld",
+        log_message("[ATTR] Process attribution unavailable; family=%s protocol=%s fail_closed=%d sample=%ld socket_connects=%ld socket_binds=%ld socket_ports=%ld selected_binds=%ld selected_bind_zero_ports=%ld selected_bind_fallbacks=%ld selected_connects=%ld selected_zero_ports=%ld selected_fallbacks=%ld deferred_enqueued=%ld deferred_resolved=%ld deferred_timeouts=%ld deferred_overflow=%ld",
             family, is_udp ? "UDP" : "TCP", g_fail_closed ? 1 : 0, sample,
             InterlockedCompareExchange(&socket_connect_event_count, 0, 0),
             InterlockedCompareExchange(&socket_bind_event_count, 0, 0),
@@ -2395,7 +2837,11 @@ static void log_unresolved_attribution(const char *family, BOOL is_udp)
             InterlockedCompareExchange(&selected_bind_fallback_count, 0, 0),
             InterlockedCompareExchange(&selected_socket_event_count, 0, 0),
             InterlockedCompareExchange(&selected_socket_zero_port_count, 0, 0),
-            InterlockedCompareExchange(&selected_socket_fallback_count, 0, 0));
+            InterlockedCompareExchange(&selected_socket_fallback_count, 0, 0),
+            InterlockedCompareExchange(&deferred_packet_enqueued_count, 0, 0),
+            InterlockedCompareExchange(&deferred_packet_resolved_count, 0, 0),
+            InterlockedCompareExchange(&deferred_packet_timeout_count, 0, 0),
+            InterlockedCompareExchange(&deferred_packet_overflow_count, 0, 0));
 }
 
 static void wait_for_attribution_update(ULONGLONG deadline)
@@ -2413,13 +2859,14 @@ static void wait_for_attribution_update(ULONGLONG deadline)
         Sleep(wait_ms);
 }
 
-static RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port, const UINT8 dest_ip6[16], UINT16 dest_port, BOOL is_udp, DWORD *out_pid, UINT32 *out_proxy_config_id)
+static RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port, const UINT8 dest_ip6[16], UINT16 dest_port, BOOL is_udp, BOOL wait_for_attribution, DWORD *out_pid, UINT32 *out_proxy_config_id)
 {
     DWORD pid = 0;
     char process_name[MAX_PROCESS_NAME];
     ATTRIBUTION_SOURCE source = ATTRIBUTION_SOURCE_NONE;
 
-    ULONGLONG deadline = GetTickCount64() + PROCESS_ATTRIBUTION_WAIT_MS;
+    ULONGLONG deadline = GetTickCount64() +
+        (wait_for_attribution ? PROCESS_ATTRIBUTION_WAIT_MS : 0);
     do {
         pid = get_flow_pid_v6(src_ip6, src_port, dest_ip6, dest_port, is_udp);
         if (pid != 0) source = ATTRIBUTION_SOURCE_FLOW;
@@ -2451,12 +2898,14 @@ static RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port
                          : get_process_id_from_connection_v6(src_ip6, src_port);
             if (pid != 0) source = ATTRIBUTION_SOURCE_IP_HELPER;
         }
-        if (pid != 0 || GetTickCount64() >= deadline) break;
+        if (pid != 0 || !wait_for_attribution ||
+            GetTickCount64() >= deadline) break;
         wait_for_attribution_update(deadline);
     } while (running);
     if (out_pid) *out_pid = pid;
     if (pid == 0) {
-        log_unresolved_attribution("IPv6", is_udp);
+        if (wait_for_attribution)
+            log_unresolved_attribution("IPv6", is_udp);
         return g_fail_closed ? RULE_ACTION_BLOCK : RULE_ACTION_DIRECT;
     }
     if (pid == g_current_process_id) return RULE_ACTION_DIRECT;
@@ -3029,13 +3478,14 @@ static RuleAction match_rule_v6(const char *process_name, const UINT8 dest_ip6[1
     return RULE_ACTION_DIRECT;
 }
 
-static RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest_ip, UINT16 dest_port, BOOL is_udp, DWORD *out_pid, UINT32 *out_proxy_config_id)
+static RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest_ip, UINT16 dest_port, BOOL is_udp, BOOL wait_for_attribution, DWORD *out_pid, UINT32 *out_proxy_config_id)
 {
     DWORD pid = 0;
     char process_name[MAX_PROCESS_NAME];
     ATTRIBUTION_SOURCE source = ATTRIBUTION_SOURCE_NONE;
 
-    ULONGLONG deadline = GetTickCount64() + PROCESS_ATTRIBUTION_WAIT_MS;
+    ULONGLONG deadline = GetTickCount64() +
+        (wait_for_attribution ? PROCESS_ATTRIBUTION_WAIT_MS : 0);
     do {
         pid = get_flow_pid_v4(src_ip, src_port, dest_ip, dest_port, is_udp);
         if (pid != 0) source = ATTRIBUTION_SOURCE_FLOW;
@@ -3072,7 +3522,8 @@ static RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest
             pid = get_process_id_from_connection(src_ip, src_port);
             if (pid != 0) source = ATTRIBUTION_SOURCE_IP_HELPER;
         }
-        if (pid != 0 || GetTickCount64() >= deadline) break;
+        if (pid != 0 || !wait_for_attribution ||
+            GetTickCount64() >= deadline) break;
         wait_for_attribution_update(deadline);
     } while (running);
 
@@ -3081,7 +3532,8 @@ static RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest
 
     if (pid == 0)
     {
-        log_unresolved_attribution("IPv4", is_udp);
+        if (wait_for_attribution)
+            log_unresolved_attribution("IPv4", is_udp);
         return g_fail_closed ? RULE_ACTION_BLOCK : RULE_ACTION_DIRECT;
     }
 
@@ -5798,6 +6250,10 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
     InitializeSRWLock(&lock);
     InitializeSRWLock(&flow_pid_lock);
     InitializeSRWLock(&socket_port_pid_lock);
+    InitializeSRWLock(&deferred_packet_lock);
+    deferred_packet_head = NULL;
+    deferred_packet_tail = NULL;
+    deferred_packet_count = 0;
     dns_cache_init();
     clear_pid_cache();
     clear_flow_pid_cache();
@@ -5814,6 +6270,10 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
     InterlockedExchange(&selected_socket_event_count, 0);
     InterlockedExchange(&selected_socket_zero_port_count, 0);
     InterlockedExchange(&selected_socket_fallback_count, 0);
+    InterlockedExchange(&deferred_packet_enqueued_count, 0);
+    InterlockedExchange(&deferred_packet_resolved_count, 0);
+    InterlockedExchange(&deferred_packet_timeout_count, 0);
+    InterlockedExchange(&deferred_packet_overflow_count, 0);
     InterlockedExchange(&relay_accept_log_count, 0);
     InterlockedExchange(&relay_upstream_log_count, 0);
     InterlockedExchange(&proxy_start_result, 0);
@@ -5995,12 +6455,43 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
     // Raise to the maximum so a burst of large packets never hits a byte cap.
     WinDivertSetParam(windivert_handle, WINDIVERT_PARAM_QUEUE_SIZE, 33553920);
 
+    deferred_packet_semaphore = CreateSemaphoreW(
+        NULL, 0, DEFERRED_PACKET_CAPACITY, NULL);
+    if (deferred_packet_semaphore == NULL)
+    {
+        running = FALSE;
+        WinDivertClose(windivert_handle);
+        windivert_handle = INVALID_HANDLE_VALUE;
+        stop_attribution_trackers();
+        WaitForSingleObject(proxy_thread, INFINITE);
+        CloseHandle(proxy_thread);
+        proxy_thread = NULL;
+        return FALSE;
+    }
+    deferred_packet_thread = CreateThread(
+        NULL, 0, deferred_packet_worker, NULL, 0, NULL);
+    if (deferred_packet_thread == NULL)
+    {
+        running = FALSE;
+        stop_deferred_packet_worker();
+        WinDivertClose(windivert_handle);
+        windivert_handle = INVALID_HANDLE_VALUE;
+        stop_attribution_trackers();
+        WaitForSingleObject(proxy_thread, INFINITE);
+        CloseHandle(proxy_thread);
+        proxy_thread = NULL;
+        return FALSE;
+    }
+
     for (int i = 0; i < NUM_PACKET_THREADS; i++)
     {
         packet_thread[i] = CreateThread(NULL, 0, packet_processor, NULL, 0, NULL);
         if (packet_thread[i] == NULL)
         {
             running = FALSE;
+            if (attribution_update_event != NULL)
+                SetEvent(attribution_update_event);
+            stop_deferred_packet_worker();
             stop_attribution_trackers();
             for (int j = 0; j < i; j++)
             {
@@ -6078,6 +6569,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_Stop(void)
             packet_thread[i] = NULL;
         }
     }
+    stop_deferred_packet_worker();
 
     if (proxy_thread != NULL)
     {

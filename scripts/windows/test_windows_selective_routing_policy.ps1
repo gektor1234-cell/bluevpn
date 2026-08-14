@@ -65,6 +65,24 @@ try {
         '"event == CONNECT or event == BIND"',
         '#define PROCESS_ATTRIBUTION_WAIT_MS 8000',
         '#define PROCESS_ATTRIBUTION_RETRY_SLICE_MS 25',
+        '#define DEFERRED_PACKET_CAPACITY 256',
+        'DEFERRED_PACKET_ENTRY',
+        'DEFERRED_PACKET_IPV4_TCP',
+        'DEFERRED_PACKET_IPV4_UDP',
+        'DEFERRED_PACKET_IPV6_TCP',
+        'DEFERRED_PACKET_IPV6_UDP',
+        'enqueue_deferred_packet',
+        'deferred_packet_worker',
+        'process_deferred_packet',
+        'deferred_packet_semaphore = CreateSemaphoreW',
+        'deferred_packet_thread = CreateThread',
+        'stop_deferred_packet_worker',
+        'deferred_enqueued=%ld',
+        'deferred_resolved=%ld',
+        'deferred_timeouts=%ld',
+        'deferred_overflow=%ld',
+        '(wait_for_attribution ? PROCESS_ATTRIBUTION_WAIT_MS : 0)',
+        '!wait_for_attribution ||',
         'static BOOL ipv4_address_matches',
         'entry->local_port == 0',
         '(void)local_ip',
@@ -85,6 +103,24 @@ try {
         if (-not $processRouterSource.Contains($marker)) {
             throw "Process-router pre-connect attribution marker is missing: $marker"
         }
+    }
+    $deferredThreadStart = $processRouterSource.IndexOf(
+        'deferred_packet_thread = CreateThread',
+        [StringComparison]::Ordinal
+    )
+    $packetThreadStart = $processRouterSource.IndexOf(
+        'packet_thread[i] = CreateThread',
+        [StringComparison]::Ordinal
+    )
+    if ($deferredThreadStart -lt 0 -or $packetThreadStart -lt 0 -or
+            $deferredThreadStart -ge $packetThreadStart) {
+        throw 'Deferred attribution worker must start before packet capture workers.'
+    }
+    if (($processRouterSource.Split(
+                @('enqueue_deferred_packet'),
+                [StringSplitOptions]::None
+            ).Count - 1) -lt 5) {
+        throw 'All unresolved packet families must use deferred attribution.'
     }
     $processRouterCliSourcePath = Join-Path $projectRoot `
         'third_party\windows\process_router\source\main.c'
