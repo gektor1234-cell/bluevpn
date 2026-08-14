@@ -210,6 +210,9 @@ static SRWLOCK flow_pid_lock;
 typedef struct SOCKET_PORT_PID_ENTRY {
     DWORD pid;
     ULONGLONG updated_at;
+    UINT16 remote_port;
+    UINT8 remote_addr[16];
+    BOOL has_remote;
 } SOCKET_PORT_PID_ENTRY;
 
 static SOCKET_PORT_PID_ENTRY socket_port_pid_table[4][65536] = {0};
@@ -217,6 +220,12 @@ static SRWLOCK socket_port_pid_lock;
 
 static BOOL g_traffic_logging_enabled = TRUE;
 static volatile LONG unresolved_attribution_count = 0;
+static volatile LONG resolved_attribution_count = 0;
+static volatile LONG socket_connect_event_count = 0;
+static volatile LONG socket_bind_event_count = 0;
+static volatile LONG socket_nonzero_port_event_count = 0;
+static volatile LONG relay_accept_log_count = 0;
+static volatile LONG relay_upstream_log_count = 0;
 
 static DNS_CACHE_ENTRY    *g_dns_cache[DNS_CACHE_BUCKETS];
 static DNS_CACHE_ENTRY_V6 *g_dns_cache_v6[DNS_CACHE_BUCKETS];
@@ -440,7 +449,11 @@ static DWORD WINAPI flow_tracker(LPVOID arg);
 static DWORD WINAPI socket_tracker(LPVOID arg);
 static DWORD get_flow_pid_v4(UINT32 local_ip, UINT16 local_port, UINT32 remote_ip, UINT16 remote_port, BOOL is_udp);
 static DWORD get_flow_pid_v6(const UINT8 local_ip6[16], UINT16 local_port, const UINT8 remote_ip6[16], UINT16 remote_port, BOOL is_udp);
-static DWORD get_socket_port_pid(BOOL is_ipv6, BOOL is_udp, UINT16 local_port);
+static DWORD get_socket_port_pid_v4(BOOL is_udp, UINT16 local_port,
+    UINT32 remote_ip, UINT16 remote_port, BOOL *used_cross_family);
+static DWORD get_socket_port_pid_v6(BOOL is_udp, UINT16 local_port,
+    const UINT8 remote_ip6[16], UINT16 remote_port,
+    BOOL *used_cross_family);
 static void clear_flow_pid_cache(void);
 static BOOL get_process_name_from_pid(DWORD pid, char *name, DWORD name_size);
 static RuleAction match_rule(const char *process_name, UINT32 dest_ip, UINT16 dest_port, BOOL is_udp, UINT32 *out_proxy_config_id);
@@ -1402,29 +1415,144 @@ static int socket_port_pid_index(BOOL is_ipv6, BOOL is_udp)
 }
 
 static void store_socket_port_pid(BOOL is_ipv6, BOOL is_udp,
-                                  UINT16 local_port, DWORD pid)
+                                  UINT16 local_port, DWORD pid,
+                                  const void *remote_addr,
+                                  UINT16 remote_port)
 {
     if (local_port == 0 || pid == 0) return;
     int index = socket_port_pid_index(is_ipv6, is_udp);
     AcquireSRWLockExclusive(&socket_port_pid_lock);
     socket_port_pid_table[index][local_port].pid = pid;
     socket_port_pid_table[index][local_port].updated_at = GetTickCount64();
+    socket_port_pid_table[index][local_port].remote_port = remote_port;
+    socket_port_pid_table[index][local_port].has_remote =
+        remote_addr != NULL && remote_port != 0;
+    memset(socket_port_pid_table[index][local_port].remote_addr, 0,
+           sizeof(socket_port_pid_table[index][local_port].remote_addr));
+    if (socket_port_pid_table[index][local_port].has_remote)
+    {
+        memcpy(socket_port_pid_table[index][local_port].remote_addr,
+               remote_addr, is_ipv6 ? 16 : sizeof(UINT32));
+    }
     ReleaseSRWLockExclusive(&socket_port_pid_lock);
 }
 
-static DWORD get_socket_port_pid(BOOL is_ipv6, BOOL is_udp,
-                                 UINT16 local_port)
+static BOOL socket_entry_is_fresh(const SOCKET_PORT_PID_ENTRY *entry,
+                                  ULONGLONG now)
 {
-    if (local_port == 0) return 0;
-    DWORD pid = 0;
-    int index = socket_port_pid_index(is_ipv6, is_udp);
+    return entry->pid != 0 && entry->has_remote &&
+           now - entry->updated_at <= SOCKET_PORT_PID_TTL_MS;
+}
+
+static BOOL socket_entry_matches_v4(const SOCKET_PORT_PID_ENTRY *entry,
+                                    BOOL entry_is_ipv6, UINT32 remote_ip,
+                                    UINT16 remote_port, ULONGLONG now)
+{
+    UINT32 stored_ip = 0;
+    static const UINT8 mapped_prefix[12] = {
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff
+    };
+    if (!socket_entry_is_fresh(entry, now) ||
+        entry->remote_port != remote_port)
+        return FALSE;
+    if (entry_is_ipv6)
+    {
+        if (memcmp(entry->remote_addr, mapped_prefix,
+                   sizeof(mapped_prefix)) != 0)
+            return FALSE;
+        memcpy(&stored_ip, entry->remote_addr + sizeof(mapped_prefix),
+               sizeof(stored_ip));
+    }
+    else
+    {
+        memcpy(&stored_ip, entry->remote_addr, sizeof(stored_ip));
+    }
+    return stored_ip == remote_ip;
+}
+
+static BOOL socket_entry_matches_v6(const SOCKET_PORT_PID_ENTRY *entry,
+                                    BOOL entry_is_ipv6,
+                                    const UINT8 remote_ip6[16],
+                                    UINT16 remote_port, ULONGLONG now)
+{
+    static const UINT8 mapped_prefix[12] = {
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff
+    };
+    if (!socket_entry_is_fresh(entry, now) ||
+        entry->remote_port != remote_port)
+        return FALSE;
+    if (entry_is_ipv6)
+        return memcmp(entry->remote_addr, remote_ip6, 16) == 0;
+    if (memcmp(remote_ip6, mapped_prefix, sizeof(mapped_prefix)) != 0)
+        return FALSE;
+    return memcmp(entry->remote_addr,
+                  remote_ip6 + sizeof(mapped_prefix), sizeof(UINT32)) == 0;
+}
+
+static DWORD select_socket_entry_pid(const SOCKET_PORT_PID_ENTRY *same,
+                                     BOOL same_matches,
+                                     const SOCKET_PORT_PID_ENTRY *cross,
+                                     BOOL cross_matches,
+                                     BOOL *used_cross_family)
+{
+    if (used_cross_family != NULL) *used_cross_family = FALSE;
+    if (same_matches && cross_matches && same->pid != cross->pid)
+        return 0;
+    if (same_matches)
+        return same->pid;
+    if (cross_matches)
+    {
+        if (used_cross_family != NULL) *used_cross_family = TRUE;
+        return cross->pid;
+    }
+    return 0;
+}
+
+static DWORD get_socket_port_pid_v4(BOOL is_udp, UINT16 local_port,
+                                    UINT32 remote_ip, UINT16 remote_port,
+                                    BOOL *used_cross_family)
+{
+    if (used_cross_family != NULL) *used_cross_family = FALSE;
+    if (local_port == 0 || remote_port == 0) return 0;
+    int same_index = socket_port_pid_index(FALSE, is_udp);
+    int cross_index = socket_port_pid_index(TRUE, is_udp);
     ULONGLONG now = GetTickCount64();
     AcquireSRWLockShared(&socket_port_pid_lock);
-    SOCKET_PORT_PID_ENTRY entry = socket_port_pid_table[index][local_port];
-    if (entry.pid != 0 && now - entry.updated_at <= SOCKET_PORT_PID_TTL_MS)
-        pid = entry.pid;
+    SOCKET_PORT_PID_ENTRY same =
+        socket_port_pid_table[same_index][local_port];
+    SOCKET_PORT_PID_ENTRY cross =
+        socket_port_pid_table[cross_index][local_port];
     ReleaseSRWLockShared(&socket_port_pid_lock);
-    return pid;
+    return select_socket_entry_pid(
+        &same, socket_entry_matches_v4(&same, FALSE, remote_ip,
+                                       remote_port, now),
+        &cross, socket_entry_matches_v4(&cross, TRUE, remote_ip,
+                                        remote_port, now),
+        used_cross_family);
+}
+
+static DWORD get_socket_port_pid_v6(BOOL is_udp, UINT16 local_port,
+                                    const UINT8 remote_ip6[16],
+                                    UINT16 remote_port,
+                                    BOOL *used_cross_family)
+{
+    if (used_cross_family != NULL) *used_cross_family = FALSE;
+    if (local_port == 0 || remote_port == 0) return 0;
+    int same_index = socket_port_pid_index(TRUE, is_udp);
+    int cross_index = socket_port_pid_index(FALSE, is_udp);
+    ULONGLONG now = GetTickCount64();
+    AcquireSRWLockShared(&socket_port_pid_lock);
+    SOCKET_PORT_PID_ENTRY same =
+        socket_port_pid_table[same_index][local_port];
+    SOCKET_PORT_PID_ENTRY cross =
+        socket_port_pid_table[cross_index][local_port];
+    ReleaseSRWLockShared(&socket_port_pid_lock);
+    return select_socket_entry_pid(
+        &same, socket_entry_matches_v6(&same, TRUE, remote_ip6,
+                                       remote_port, now),
+        &cross, socket_entry_matches_v6(&cross, FALSE, remote_ip6,
+                                        remote_port, now),
+        used_cross_family);
 }
 
 static void clear_flow_pid_cache(void)
@@ -1500,9 +1628,14 @@ static DWORD WINAPI socket_tracker(LPVOID arg)
             addr.Event != WINDIVERT_EVENT_SOCKET_BIND)
             continue;
 
+        if (addr.Event == WINDIVERT_EVENT_SOCKET_CONNECT)
+            InterlockedIncrement(&socket_connect_event_count);
+        else
+            InterlockedIncrement(&socket_bind_event_count);
+        if (addr.Socket.LocalPort != 0)
+            InterlockedIncrement(&socket_nonzero_port_event_count);
+
         BOOL is_udp = addr.Socket.Protocol == IPPROTO_UDP;
-        store_socket_port_pid(addr.IPv6, is_udp, addr.Socket.LocalPort,
-                              addr.Socket.ProcessId);
         if (addr.Event != WINDIVERT_EVENT_SOCKET_CONNECT)
             continue;
         if (addr.IPv6) {
@@ -1512,12 +1645,18 @@ static DWORD WINAPI socket_tracker(LPVOID arg)
             WinDivertHelperHtonIPv6Address(addr.Socket.RemoteAddr, remote_host);
             memcpy(local, local_host, sizeof(local));
             memcpy(remote, remote_host, sizeof(remote));
+            store_socket_port_pid(TRUE, is_udp, addr.Socket.LocalPort,
+                                  addr.Socket.ProcessId, remote,
+                                  addr.Socket.RemotePort);
             store_flow_pid(TRUE, is_udp, addr.Socket.LocalPort,
                            addr.Socket.RemotePort, local, remote,
                            addr.Socket.ProcessId);
         } else {
             UINT32 local = htonl(addr.Socket.LocalAddr[0]);
             UINT32 remote = htonl(addr.Socket.RemoteAddr[0]);
+            store_socket_port_pid(FALSE, is_udp, addr.Socket.LocalPort,
+                                  addr.Socket.ProcessId, &remote,
+                                  addr.Socket.RemotePort);
             store_flow_pid(FALSE, is_udp, addr.Socket.LocalPort,
                            addr.Socket.RemotePort, &local, &remote,
                            addr.Socket.ProcessId);
@@ -1774,29 +1913,90 @@ static BOOL is_ipv6_multicast_or_linklocal(const UINT8 ip6[16])
     return FALSE;
 }
 
+typedef enum ATTRIBUTION_SOURCE {
+    ATTRIBUTION_SOURCE_NONE = 0,
+    ATTRIBUTION_SOURCE_FLOW,
+    ATTRIBUTION_SOURCE_SOCKET,
+    ATTRIBUTION_SOURCE_SOCKET_CROSS_FAMILY,
+    ATTRIBUTION_SOURCE_IP_HELPER
+} ATTRIBUTION_SOURCE;
+
+static const char *attribution_source_name(ATTRIBUTION_SOURCE source)
+{
+    switch (source)
+    {
+        case ATTRIBUTION_SOURCE_FLOW: return "flow";
+        case ATTRIBUTION_SOURCE_SOCKET: return "socket";
+        case ATTRIBUTION_SOURCE_SOCKET_CROSS_FAMILY:
+            return "socket_cross_family";
+        case ATTRIBUTION_SOURCE_IP_HELPER: return "ip_helper";
+        default: return "none";
+    }
+}
+
+static const char *rule_action_name(RuleAction action)
+{
+    switch (action)
+    {
+        case RULE_ACTION_PROXY: return "proxy";
+        case RULE_ACTION_BLOCK: return "block";
+        default: return "direct";
+    }
+}
+
+static void log_resolved_attribution(const char *family, BOOL is_udp,
+                                     ATTRIBUTION_SOURCE source,
+                                     RuleAction action)
+{
+    LONG sample = InterlockedIncrement(&resolved_attribution_count);
+    if (sample <= 32)
+        log_message("[ATTR] Resolved; family=%s protocol=%s source=%s action=%s sample=%ld",
+            family, is_udp ? "UDP" : "TCP",
+            attribution_source_name(source), rule_action_name(action), sample);
+}
+
+static void log_unresolved_attribution(const char *family, BOOL is_udp)
+{
+    LONG sample = InterlockedIncrement(&unresolved_attribution_count);
+    if (sample <= 8)
+        log_message("[ATTR] Process attribution unavailable; family=%s protocol=%s fail_closed=%d sample=%ld socket_connects=%ld socket_binds=%ld socket_ports=%ld",
+            family, is_udp ? "UDP" : "TCP", g_fail_closed ? 1 : 0, sample,
+            InterlockedCompareExchange(&socket_connect_event_count, 0, 0),
+            InterlockedCompareExchange(&socket_bind_event_count, 0, 0),
+            InterlockedCompareExchange(&socket_nonzero_port_event_count, 0, 0));
+}
+
 static RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port, const UINT8 dest_ip6[16], UINT16 dest_port, BOOL is_udp, DWORD *out_pid, UINT32 *out_proxy_config_id)
 {
     DWORD pid = 0;
     char process_name[MAX_PROCESS_NAME];
+    ATTRIBUTION_SOURCE source = ATTRIBUTION_SOURCE_NONE;
 
     ULONGLONG deadline = GetTickCount64() + PROCESS_ATTRIBUTION_WAIT_MS;
     do {
         pid = get_flow_pid_v6(src_ip6, src_port, dest_ip6, dest_port, is_udp);
+        if (pid != 0) source = ATTRIBUTION_SOURCE_FLOW;
         if (pid == 0)
-            pid = get_socket_port_pid(TRUE, is_udp, src_port);
+        {
+            BOOL cross_family = FALSE;
+            pid = get_socket_port_pid_v6(is_udp, src_port, dest_ip6,
+                                         dest_port, &cross_family);
+            if (pid != 0)
+                source = cross_family ?
+                    ATTRIBUTION_SOURCE_SOCKET_CROSS_FAMILY :
+                    ATTRIBUTION_SOURCE_SOCKET;
+        }
         if (pid == 0) {
             pid = is_udp ? get_process_id_from_udp_connection_v6(src_ip6, src_port)
                          : get_process_id_from_connection_v6(src_ip6, src_port);
+            if (pid != 0) source = ATTRIBUTION_SOURCE_IP_HELPER;
         }
         if (pid != 0 || GetTickCount64() >= deadline) break;
         Sleep(1);
     } while (running);
     if (out_pid) *out_pid = pid;
     if (pid == 0) {
-        LONG count = InterlockedIncrement(&unresolved_attribution_count);
-        if (count <= 8)
-            log_message("[ATTR] Process attribution unavailable; family=IPv6 protocol=%s fail_closed=%d sample=%ld",
-                is_udp ? "UDP" : "TCP", g_fail_closed ? 1 : 0, count);
+        log_unresolved_attribution("IPv6", is_udp);
         return g_fail_closed ? RULE_ACTION_BLOCK : RULE_ACTION_DIRECT;
     }
     if (pid == g_current_process_id) return RULE_ACTION_DIRECT;
@@ -1815,6 +2015,7 @@ static RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port
             return RULE_ACTION_BLOCK;
     }
     if (out_proxy_config_id) *out_proxy_config_id = proxy_config_id;
+    log_resolved_attribution("IPv6", is_udp, source, action);
     return action;
 }
 
@@ -2372,18 +2573,32 @@ static RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest
 {
     DWORD pid = 0;
     char process_name[MAX_PROCESS_NAME];
+    ATTRIBUTION_SOURCE source = ATTRIBUTION_SOURCE_NONE;
 
     ULONGLONG deadline = GetTickCount64() + PROCESS_ATTRIBUTION_WAIT_MS;
     do {
         pid = get_flow_pid_v4(src_ip, src_port, dest_ip, dest_port, is_udp);
+        if (pid != 0) source = ATTRIBUTION_SOURCE_FLOW;
         if (pid == 0)
-            pid = get_socket_port_pid(FALSE, is_udp, src_port);
+        {
+            BOOL cross_family = FALSE;
+            pid = get_socket_port_pid_v4(is_udp, src_port, dest_ip,
+                                         dest_port, &cross_family);
+            if (pid != 0)
+                source = cross_family ?
+                    ATTRIBUTION_SOURCE_SOCKET_CROSS_FAMILY :
+                    ATTRIBUTION_SOURCE_SOCKET;
+        }
         if (pid == 0) {
             pid = is_udp ? get_process_id_from_udp_connection(src_ip, src_port)
                          : get_process_id_from_connection(src_ip, src_port);
+            if (pid != 0) source = ATTRIBUTION_SOURCE_IP_HELPER;
         }
         if (pid == 0 && is_udp)
+        {
             pid = get_process_id_from_connection(src_ip, src_port);
+            if (pid != 0) source = ATTRIBUTION_SOURCE_IP_HELPER;
+        }
         if (pid != 0 || GetTickCount64() >= deadline) break;
         Sleep(1);
     } while (running);
@@ -2393,10 +2608,7 @@ static RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest
 
     if (pid == 0)
     {
-        LONG count = InterlockedIncrement(&unresolved_attribution_count);
-        if (count <= 8)
-            log_message("[ATTR] Process attribution unavailable; family=IPv4 protocol=%s fail_closed=%d sample=%ld",
-                is_udp ? "UDP" : "TCP", g_fail_closed ? 1 : 0, count);
+        log_unresolved_attribution("IPv4", is_udp);
         return g_fail_closed ? RULE_ACTION_BLOCK : RULE_ACTION_DIRECT;
     }
 
@@ -2426,6 +2638,7 @@ static RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest
     if (out_proxy_config_id != NULL)
         *out_proxy_config_id = proxy_config_id;
 
+    log_resolved_attribution("IPv4", is_udp, source, action);
     return action;
 }
 
@@ -3728,11 +3941,17 @@ static DWORD WINAPI local_proxy_server(LPVOID arg)
                     UINT16 client_port = ntohs(client_addr.sin_port);
                     if (get_connection_full(client_port, &conn_config->orig_dest_ip, &conn_config->orig_dest_port, &conn_config->proxy_config_id))
                     {
+                        LONG sample = InterlockedIncrement(&relay_accept_log_count);
+                        if (sample <= 16)
+                            log_message("[RELAY] Redirect accepted; family=IPv4 sample=%ld", sample);
                         HANDLE conn_thread = CreateThread(NULL, 0, connection_handler, (LPVOID)conn_config, 0, NULL);
                         if (conn_thread != NULL) { CloseHandle(conn_thread); }
                         else { closesocket(client_sock); free(conn_config); }
                     }
-                    else { closesocket(client_sock); free(conn_config); }
+                    else {
+                        log_message("[RELAY] Redirect mapping unavailable; family=IPv4");
+                        closesocket(client_sock); free(conn_config);
+                    }
                 }
                 else { closesocket(client_sock); }
             }
@@ -3755,11 +3974,17 @@ static DWORD WINAPI local_proxy_server(LPVOID arg)
                     UINT16 client_port = ntohs(client_addr6.sin6_port);
                     if (get_connection_full_v6(client_port, conn_config->orig_dest_ip6, &conn_config->orig_dest_port, &conn_config->proxy_config_id))
                     {
+                        LONG sample = InterlockedIncrement(&relay_accept_log_count);
+                        if (sample <= 16)
+                            log_message("[RELAY] Redirect accepted; family=IPv6 sample=%ld", sample);
                         HANDLE conn_thread = CreateThread(NULL, 0, connection_handler, (LPVOID)conn_config, 0, NULL);
                         if (conn_thread != NULL) { CloseHandle(conn_thread); }
                         else { closesocket(client_sock6); free(conn_config); }
                     }
-                    else { closesocket(client_sock6); free(conn_config); }
+                    else {
+                        log_message("[RELAY] Redirect mapping unavailable; family=IPv6");
+                        closesocket(client_sock6); free(conn_config);
+                    }
                 }
                 else { closesocket(client_sock6); }
             }
@@ -3857,6 +4082,8 @@ static DWORD WINAPI connection_handler(LPVOID arg)
         }
         if (rc != 0)
         {
+            log_message("[RELAY] SOCKS5 handshake failed; family=%s code=%d",
+                is_ipv6 ? "IPv6" : "IPv4", rc);
             closesocket(client_sock);
             closesocket(socks_sock);
             return 0;
@@ -3873,6 +4100,15 @@ static DWORD WINAPI connection_handler(LPVOID arg)
             closesocket(socks_sock);
             return 0;
         }
+    }
+
+    {
+        LONG sample = InterlockedIncrement(&relay_upstream_log_count);
+        if (sample <= 16)
+            log_message("[RELAY] Upstream ready; family=%s type=%s sample=%ld",
+                is_ipv6 ? "IPv6" : "IPv4",
+                proxy->type == PROXY_TYPE_SOCKS5 ? "SOCKS5" : "HTTP",
+                sample);
     }
 
     // Disable timeout for data transfer phase
@@ -5095,6 +5331,12 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
     memset((void*)port_decided_bitmap, 0, sizeof(port_decided_bitmap));
     memset((void*)port_direct_bitmap, 0, sizeof(port_direct_bitmap));
     InterlockedExchange(&unresolved_attribution_count, 0);
+    InterlockedExchange(&resolved_attribution_count, 0);
+    InterlockedExchange(&socket_connect_event_count, 0);
+    InterlockedExchange(&socket_bind_event_count, 0);
+    InterlockedExchange(&socket_nonzero_port_event_count, 0);
+    InterlockedExchange(&relay_accept_log_count, 0);
+    InterlockedExchange(&relay_upstream_log_count, 0);
     InterlockedExchange(&proxy_start_result, 0);
 
     running = TRUE;

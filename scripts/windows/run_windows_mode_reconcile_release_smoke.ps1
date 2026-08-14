@@ -61,6 +61,10 @@ $externalScreenshotPath = Join-Path $resolvedArtifactRoot 'windows-mode-external
 $fullScreenshotPath = Join-Path $resolvedArtifactRoot 'windows-mode-full.png'
 $selectedScreenshotPath = Join-Path $resolvedArtifactRoot 'windows-mode-selected.png'
 $returnedFullScreenshotPath = Join-Path $resolvedArtifactRoot 'windows-mode-returned-full.png'
+$processRouterStdoutEvidencePath = Join-Path $resolvedArtifactRoot `
+    'windows-process-router.stdout.log'
+$processRouterStderrEvidencePath = Join-Path $resolvedArtifactRoot `
+    'windows-process-router.stderr.log'
 $originalAppData = $env:APPDATA
 $originalUserStateRoot = Join-Path $originalAppData 'GreenVPN\state'
 $privateScratchRoot = Join-Path $env:TEMP (
@@ -102,6 +106,25 @@ function Write-RunnerLog {
     Add-Content -LiteralPath $logPath -Encoding UTF8 -Value (
         "[$((Get-Date).ToUniversalTime().ToString('o'))] $Message"
     )
+}
+
+function Copy-ProcessRouterEvidence {
+    foreach ($entry in @(
+        @{
+            Source = Join-Path $resolvedProgramDataRoot 'process-router.stdout.log'
+            Destination = $processRouterStdoutEvidencePath
+        },
+        @{
+            Source = Join-Path $resolvedProgramDataRoot 'process-router.stderr.log'
+            Destination = $processRouterStderrEvidencePath
+        }
+    )) {
+        if (Test-Path -LiteralPath $entry.Source -PathType Leaf) {
+            Copy-Item -LiteralPath $entry.Source `
+                -Destination $entry.Destination -Force `
+                -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 function Test-IsAdministrator {
@@ -1116,6 +1139,8 @@ $summary = [ordered]@{
         fullScreenshot = $fullScreenshotPath
         selectedScreenshot = $selectedScreenshotPath
         returnedFullScreenshot = $returnedFullScreenshotPath
+        processRouterStdout = $processRouterStdoutEvidencePath
+        processRouterStderr = $processRouterStderrEvidencePath
         recovery = $recoveryReportPath
         deadman = $deadmanReportPath
     }
@@ -1161,7 +1186,8 @@ try {
         $summaryPath, $diagnosticPath, $recoveryReportPath,
         $runtimeEvidencePath,
         $deadmanReportPath, $externalScreenshotPath, $fullScreenshotPath,
-        $selectedScreenshotPath, $returnedFullScreenshotPath
+        $selectedScreenshotPath, $returnedFullScreenshotPath,
+        $processRouterStdoutEvidencePath, $processRouterStderrEvidencePath
     ) | Where-Object { Test-Path -LiteralPath $_ }
     if (@($staleEvidence).Count -gt 0) {
         throw 'ArtifactRoot contains stale mode-reconciliation evidence; use a new path.'
@@ -1360,6 +1386,7 @@ try {
     }
     Write-RunnerLog "failed: $($summary.failure)"
 } finally {
+    Copy-ProcessRouterEvidence
     $env:APPDATA = $originalAppData
     Remove-Item Env:GREENVPN_FUSION_UI_DIAGNOSTIC_PATH `
         -ErrorAction SilentlyContinue
