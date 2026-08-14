@@ -1492,8 +1492,12 @@ static DWORD WINAPI socket_tracker(LPVOID arg)
             Sleep(10);
             continue;
         }
-        if ((addr.Event != WINDIVERT_EVENT_SOCKET_CONNECT &&
-             addr.Event != WINDIVERT_EVENT_SOCKET_BIND) || !addr.Outbound)
+        // The WinDivert SOCKET layer does not expose the outbound/inbound
+        // filter fields. CONNECT and BIND already identify the local process
+        // operations we need, so requiring addr.Outbound would discard every
+        // pre-connect attribution event.
+        if (addr.Event != WINDIVERT_EVENT_SOCKET_CONNECT &&
+            addr.Event != WINDIVERT_EVENT_SOCKET_BIND)
             continue;
 
         BOOL is_udp = addr.Socket.Protocol == IPPROTO_UDP;
@@ -5113,7 +5117,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
     }
 
     socket_handle = WinDivertOpen(
-        "outbound and (event == CONNECT or event == BIND)",
+        "event == CONNECT or event == BIND",
         WINDIVERT_LAYER_SOCKET, 125,
         WINDIVERT_FLAG_SNIFF | WINDIVERT_FLAG_RECV_ONLY);
     if (socket_handle == INVALID_HANDLE_VALUE)

@@ -33,6 +33,7 @@ try {
         'WINDIVERT_EVENT_SOCKET_CONNECT',
         'addr.Socket.ProcessId',
         'store_socket_port_pid',
+        '"event == CONNECT or event == BIND"',
         '#define PROCESS_ATTRIBUTION_WAIT_MS 500',
         'unique_port_pid',
         'port_pid_ambiguous',
@@ -63,6 +64,8 @@ try {
         }
     }
     foreach ($invalidIpv4Layout in @(
+        '"outbound and (event == CONNECT or event == BIND)"',
+        'addr.Event != WINDIVERT_EVENT_SOCKET_BIND) || !addr.Outbound',
         '((const UINT8 *)addr.Flow.LocalAddr) + 12',
         'htonl(addr.Flow.LocalAddr[0])',
         'htonl(addr.Flow.RemoteAddr[0])',

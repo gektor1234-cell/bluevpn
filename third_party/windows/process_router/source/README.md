@@ -22,6 +22,8 @@ Green VPN carries a narrow production hardening patch:
   process path cannot be read, or its exact proxy configuration is unusable,
   after a bounded 500 ms pre-connect attribution wait; a source-port fallback
   is accepted only when every matching socket row has the same owner;
+- capture CONNECT/BIND directly at the direction-less WinDivert SOCKET layer,
+  without an unsupported outbound filter that would discard attribution events;
 - verify that the local relay is actually listening before packet capture starts
   and keep redirected CLI diagnostics unbuffered for recovery evidence;
 - parse SOCKS5 responses with exact-length reads and handle every address type;
