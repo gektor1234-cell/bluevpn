@@ -22,6 +22,8 @@
 #define PID_CACHE_TTL_MS 2000
 #define PROCESS_ATTRIBUTION_WAIT_MS 500
 #define SOCKET_PORT_PID_TTL_MS 5000
+#define SELECTED_SOCKET_EVENT_TTL_MS 2000
+#define SELECTED_SOCKET_EVENT_CAPACITY 256
 #define PROXY_START_TIMEOUT_MS 5000
 // Single packet-processor thread eliminates TCP packet reordering.
 // With multiple threads each racing to WinDivertRecv+WinDivertSend, thread N+1
@@ -215,8 +217,26 @@ typedef struct SOCKET_PORT_PID_ENTRY {
     BOOL has_remote;
 } SOCKET_PORT_PID_ENTRY;
 
+typedef struct SELECTED_SOCKET_EVENT_ENTRY {
+    DWORD pid;
+    ULONGLONG updated_at;
+    BOOL is_ipv6;
+    BOOL is_udp;
+    BOOL local_addr_known;
+    UINT16 local_port;
+    UINT16 remote_port;
+    UINT8 local_addr[16];
+    UINT8 remote_addr[16];
+} SELECTED_SOCKET_EVENT_ENTRY;
+
 static SOCKET_PORT_PID_ENTRY socket_port_pid_table[4][65536] = {0};
+static SELECTED_SOCKET_EVENT_ENTRY
+    selected_socket_events[SELECTED_SOCKET_EVENT_CAPACITY] = {0};
+static UINT32 selected_socket_event_next = 0;
 static SRWLOCK socket_port_pid_lock;
+static const UINT8 ipv4_mapped_prefix[12] = {
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff
+};
 
 static BOOL g_traffic_logging_enabled = TRUE;
 static volatile LONG unresolved_attribution_count = 0;
@@ -224,6 +244,9 @@ static volatile LONG resolved_attribution_count = 0;
 static volatile LONG socket_connect_event_count = 0;
 static volatile LONG socket_bind_event_count = 0;
 static volatile LONG socket_nonzero_port_event_count = 0;
+static volatile LONG selected_socket_event_count = 0;
+static volatile LONG selected_socket_zero_port_count = 0;
+static volatile LONG selected_socket_fallback_count = 0;
 static volatile LONG relay_accept_log_count = 0;
 static volatile LONG relay_upstream_log_count = 0;
 
@@ -454,6 +477,11 @@ static DWORD get_socket_port_pid_v4(BOOL is_udp, UINT16 local_port,
 static DWORD get_socket_port_pid_v6(BOOL is_udp, UINT16 local_port,
     const UINT8 remote_ip6[16], UINT16 remote_port,
     BOOL *used_cross_family);
+static DWORD get_selected_socket_pid_v4(BOOL is_udp, UINT32 local_ip,
+    UINT16 local_port, UINT32 remote_ip, UINT16 remote_port);
+static DWORD get_selected_socket_pid_v6(BOOL is_udp,
+    const UINT8 local_ip6[16], UINT16 local_port,
+    const UINT8 remote_ip6[16], UINT16 remote_port);
 static void clear_flow_pid_cache(void);
 static BOOL get_process_name_from_pid(DWORD pid, char *name, DWORD name_size);
 static RuleAction match_rule(const char *process_name, UINT32 dest_ip, UINT16 dest_port, BOOL is_udp, UINT32 *out_proxy_config_id);
@@ -1444,23 +1472,26 @@ static BOOL socket_entry_is_fresh(const SOCKET_PORT_PID_ENTRY *entry,
            now - entry->updated_at <= SOCKET_PORT_PID_TTL_MS;
 }
 
+static BOOL socket_port_matches(UINT16 stored_port, UINT16 expected_port)
+{
+    return stored_port == expected_port || ntohs(stored_port) == expected_port;
+}
+
 static BOOL socket_entry_matches_v4(const SOCKET_PORT_PID_ENTRY *entry,
                                     BOOL entry_is_ipv6, UINT32 remote_ip,
                                     UINT16 remote_port, ULONGLONG now)
 {
     UINT32 stored_ip = 0;
-    static const UINT8 mapped_prefix[12] = {
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff
-    };
     if (!socket_entry_is_fresh(entry, now) ||
-        entry->remote_port != remote_port)
+        !socket_port_matches(entry->remote_port, remote_port))
         return FALSE;
     if (entry_is_ipv6)
     {
-        if (memcmp(entry->remote_addr, mapped_prefix,
-                   sizeof(mapped_prefix)) != 0)
+        if (memcmp(entry->remote_addr, ipv4_mapped_prefix,
+                   sizeof(ipv4_mapped_prefix)) != 0)
             return FALSE;
-        memcpy(&stored_ip, entry->remote_addr + sizeof(mapped_prefix),
+        memcpy(&stored_ip,
+               entry->remote_addr + sizeof(ipv4_mapped_prefix),
                sizeof(stored_ip));
     }
     else
@@ -1475,18 +1506,17 @@ static BOOL socket_entry_matches_v6(const SOCKET_PORT_PID_ENTRY *entry,
                                     const UINT8 remote_ip6[16],
                                     UINT16 remote_port, ULONGLONG now)
 {
-    static const UINT8 mapped_prefix[12] = {
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff
-    };
     if (!socket_entry_is_fresh(entry, now) ||
-        entry->remote_port != remote_port)
+        !socket_port_matches(entry->remote_port, remote_port))
         return FALSE;
     if (entry_is_ipv6)
         return memcmp(entry->remote_addr, remote_ip6, 16) == 0;
-    if (memcmp(remote_ip6, mapped_prefix, sizeof(mapped_prefix)) != 0)
+    if (memcmp(remote_ip6, ipv4_mapped_prefix,
+               sizeof(ipv4_mapped_prefix)) != 0)
         return FALSE;
     return memcmp(entry->remote_addr,
-                  remote_ip6 + sizeof(mapped_prefix), sizeof(UINT32)) == 0;
+                  remote_ip6 + sizeof(ipv4_mapped_prefix),
+                  sizeof(UINT32)) == 0;
 }
 
 static DWORD select_socket_entry_pid(const SOCKET_PORT_PID_ENTRY *same,
@@ -1516,19 +1546,48 @@ static DWORD get_socket_port_pid_v4(BOOL is_udp, UINT16 local_port,
     if (local_port == 0 || remote_port == 0) return 0;
     int same_index = socket_port_pid_index(FALSE, is_udp);
     int cross_index = socket_port_pid_index(TRUE, is_udp);
+    UINT16 swapped_local_port = ntohs(local_port);
     ULONGLONG now = GetTickCount64();
     AcquireSRWLockShared(&socket_port_pid_lock);
     SOCKET_PORT_PID_ENTRY same =
         socket_port_pid_table[same_index][local_port];
     SOCKET_PORT_PID_ENTRY cross =
         socket_port_pid_table[cross_index][local_port];
+    SOCKET_PORT_PID_ENTRY same_swapped =
+        socket_port_pid_table[same_index][swapped_local_port];
+    SOCKET_PORT_PID_ENTRY cross_swapped =
+        socket_port_pid_table[cross_index][swapped_local_port];
     ReleaseSRWLockShared(&socket_port_pid_lock);
-    return select_socket_entry_pid(
+    BOOL primary_cross = FALSE;
+    DWORD primary = select_socket_entry_pid(
         &same, socket_entry_matches_v4(&same, FALSE, remote_ip,
                                        remote_port, now),
         &cross, socket_entry_matches_v4(&cross, TRUE, remote_ip,
                                         remote_port, now),
-        used_cross_family);
+        &primary_cross);
+    if (swapped_local_port == local_port)
+    {
+        if (used_cross_family != NULL) *used_cross_family = primary_cross;
+        return primary;
+    }
+    BOOL swapped_cross = FALSE;
+    DWORD swapped = select_socket_entry_pid(
+        &same_swapped,
+        socket_entry_matches_v4(&same_swapped, FALSE, remote_ip,
+                                remote_port, now),
+        &cross_swapped,
+        socket_entry_matches_v4(&cross_swapped, TRUE, remote_ip,
+                                remote_port, now),
+        &swapped_cross);
+    if (primary != 0 && swapped != 0 && primary != swapped)
+        return 0;
+    if (primary != 0)
+    {
+        if (used_cross_family != NULL) *used_cross_family = primary_cross;
+        return primary;
+    }
+    if (used_cross_family != NULL) *used_cross_family = swapped_cross;
+    return swapped;
 }
 
 static DWORD get_socket_port_pid_v6(BOOL is_udp, UINT16 local_port,
@@ -1540,19 +1599,235 @@ static DWORD get_socket_port_pid_v6(BOOL is_udp, UINT16 local_port,
     if (local_port == 0 || remote_port == 0) return 0;
     int same_index = socket_port_pid_index(TRUE, is_udp);
     int cross_index = socket_port_pid_index(FALSE, is_udp);
+    UINT16 swapped_local_port = ntohs(local_port);
     ULONGLONG now = GetTickCount64();
     AcquireSRWLockShared(&socket_port_pid_lock);
     SOCKET_PORT_PID_ENTRY same =
         socket_port_pid_table[same_index][local_port];
     SOCKET_PORT_PID_ENTRY cross =
         socket_port_pid_table[cross_index][local_port];
+    SOCKET_PORT_PID_ENTRY same_swapped =
+        socket_port_pid_table[same_index][swapped_local_port];
+    SOCKET_PORT_PID_ENTRY cross_swapped =
+        socket_port_pid_table[cross_index][swapped_local_port];
     ReleaseSRWLockShared(&socket_port_pid_lock);
-    return select_socket_entry_pid(
+    BOOL primary_cross = FALSE;
+    DWORD primary = select_socket_entry_pid(
         &same, socket_entry_matches_v6(&same, TRUE, remote_ip6,
                                        remote_port, now),
         &cross, socket_entry_matches_v6(&cross, FALSE, remote_ip6,
                                         remote_port, now),
-        used_cross_family);
+        &primary_cross);
+    if (swapped_local_port == local_port)
+    {
+        if (used_cross_family != NULL) *used_cross_family = primary_cross;
+        return primary;
+    }
+    BOOL swapped_cross = FALSE;
+    DWORD swapped = select_socket_entry_pid(
+        &same_swapped,
+        socket_entry_matches_v6(&same_swapped, TRUE, remote_ip6,
+                                remote_port, now),
+        &cross_swapped,
+        socket_entry_matches_v6(&cross_swapped, FALSE, remote_ip6,
+                                remote_port, now),
+        &swapped_cross);
+    if (primary != 0 && swapped != 0 && primary != swapped)
+        return 0;
+    if (primary != 0)
+    {
+        if (used_cross_family != NULL) *used_cross_family = primary_cross;
+        return primary;
+    }
+    if (used_cross_family != NULL) *used_cross_family = swapped_cross;
+    return swapped;
+}
+
+static BOOL address_is_zero(const UINT8 *address, size_t length)
+{
+    for (size_t i = 0; i < length; i++)
+    {
+        if (address[i] != 0) return FALSE;
+    }
+    return TRUE;
+}
+
+static void store_selected_socket_event(BOOL is_ipv6, BOOL is_udp,
+                                        UINT16 local_port, DWORD pid,
+                                        const void *local_addr,
+                                        const void *remote_addr,
+                                        UINT16 remote_port)
+{
+    if (pid == 0 || remote_addr == NULL || remote_port == 0)
+        return;
+    char process_name[MAX_PROCESS_NAME];
+    if (!get_process_name_from_pid(pid, process_name, sizeof(process_name)))
+        return;
+    UINT32 proxy_config_id = 0;
+    RuleAction action = is_ipv6 ?
+        match_rule_v6(process_name, (const UINT8 *)remote_addr,
+                      remote_port, is_udp, &proxy_config_id) :
+        match_rule(process_name, *(const UINT32 *)remote_addr,
+                   remote_port, is_udp, &proxy_config_id);
+    if (action == RULE_ACTION_DIRECT)
+        return;
+
+    size_t address_length = is_ipv6 ? 16 : sizeof(UINT32);
+    BOOL local_addr_known = local_addr != NULL &&
+        !address_is_zero((const UINT8 *)local_addr, address_length);
+    AcquireSRWLockExclusive(&socket_port_pid_lock);
+    SELECTED_SOCKET_EVENT_ENTRY *entry =
+        &selected_socket_events[
+            selected_socket_event_next++ % SELECTED_SOCKET_EVENT_CAPACITY];
+    memset(entry, 0, sizeof(*entry));
+    entry->pid = pid;
+    entry->updated_at = GetTickCount64();
+    entry->is_ipv6 = is_ipv6;
+    entry->is_udp = is_udp;
+    entry->local_port = local_port;
+    entry->remote_port = remote_port;
+    entry->local_addr_known = local_addr_known;
+    if (local_addr != NULL)
+        memcpy(entry->local_addr, local_addr, address_length);
+    memcpy(entry->remote_addr, remote_addr, address_length);
+    ReleaseSRWLockExclusive(&socket_port_pid_lock);
+
+    LONG sample = InterlockedIncrement(&selected_socket_event_count);
+    if (local_port == 0)
+        InterlockedIncrement(&selected_socket_zero_port_count);
+    if (sample <= 16)
+        log_message("[ATTR] Selected CONNECT cached; family=%s protocol=%s local_port_known=%d local_addr_known=%d sample=%ld",
+            is_ipv6 ? "IPv6" : "IPv4", is_udp ? "UDP" : "TCP",
+            local_port != 0 ? 1 : 0,
+            local_addr_known ? 1 : 0, sample);
+}
+
+static BOOL selected_event_matches_v4(
+    const SELECTED_SOCKET_EVENT_ENTRY *entry, BOOL is_udp,
+    UINT32 local_ip, UINT16 local_port, UINT32 remote_ip,
+    UINT16 remote_port, ULONGLONG now)
+{
+    UINT32 stored_local = 0;
+    UINT32 stored_remote = 0;
+    if (entry->pid == 0 || entry->is_udp != is_udp ||
+        now - entry->updated_at > SELECTED_SOCKET_EVENT_TTL_MS ||
+        !socket_port_matches(entry->remote_port, remote_port) ||
+        (entry->local_port != 0 &&
+         !socket_port_matches(entry->local_port, local_port)))
+        return FALSE;
+    if (entry->is_ipv6)
+    {
+        if (memcmp(entry->remote_addr, ipv4_mapped_prefix,
+                   sizeof(ipv4_mapped_prefix)) != 0)
+            return FALSE;
+        memcpy(&stored_remote,
+               entry->remote_addr + sizeof(ipv4_mapped_prefix),
+               sizeof(stored_remote));
+        if (entry->local_addr_known)
+        {
+            if (memcmp(entry->local_addr, ipv4_mapped_prefix,
+                       sizeof(ipv4_mapped_prefix)) != 0)
+                return FALSE;
+            memcpy(&stored_local,
+                   entry->local_addr + sizeof(ipv4_mapped_prefix),
+                   sizeof(stored_local));
+        }
+    }
+    else
+    {
+        memcpy(&stored_remote, entry->remote_addr, sizeof(stored_remote));
+        if (entry->local_addr_known)
+            memcpy(&stored_local, entry->local_addr, sizeof(stored_local));
+    }
+    return stored_remote == remote_ip &&
+        (!entry->local_addr_known || stored_local == local_ip);
+}
+
+static BOOL selected_event_matches_v6(
+    const SELECTED_SOCKET_EVENT_ENTRY *entry, BOOL is_udp,
+    const UINT8 local_ip6[16], UINT16 local_port,
+    const UINT8 remote_ip6[16], UINT16 remote_port, ULONGLONG now)
+{
+    if (entry->pid == 0 || entry->is_udp != is_udp ||
+        now - entry->updated_at > SELECTED_SOCKET_EVENT_TTL_MS ||
+        !socket_port_matches(entry->remote_port, remote_port) ||
+        (entry->local_port != 0 &&
+         !socket_port_matches(entry->local_port, local_port)))
+        return FALSE;
+    if (entry->is_ipv6)
+    {
+        return memcmp(entry->remote_addr, remote_ip6, 16) == 0 &&
+            (!entry->local_addr_known ||
+             memcmp(entry->local_addr, local_ip6, 16) == 0);
+    }
+    if (memcmp(remote_ip6, ipv4_mapped_prefix,
+               sizeof(ipv4_mapped_prefix)) != 0)
+        return FALSE;
+    if (memcmp(entry->remote_addr,
+               remote_ip6 + sizeof(ipv4_mapped_prefix),
+               sizeof(UINT32)) != 0)
+        return FALSE;
+    if (!entry->local_addr_known)
+        return TRUE;
+    return memcmp(local_ip6, ipv4_mapped_prefix,
+                  sizeof(ipv4_mapped_prefix)) == 0 &&
+        memcmp(entry->local_addr,
+               local_ip6 + sizeof(ipv4_mapped_prefix),
+               sizeof(UINT32)) == 0;
+}
+
+static DWORD get_selected_socket_pid_v4(BOOL is_udp, UINT32 local_ip,
+                                        UINT16 local_port, UINT32 remote_ip,
+                                        UINT16 remote_port)
+{
+    DWORD pid = 0;
+    BOOL ambiguous = FALSE;
+    ULONGLONG now = GetTickCount64();
+    AcquireSRWLockShared(&socket_port_pid_lock);
+    for (UINT32 i = 0; i < SELECTED_SOCKET_EVENT_CAPACITY; i++)
+    {
+        const SELECTED_SOCKET_EVENT_ENTRY *entry =
+            &selected_socket_events[i];
+        if (!selected_event_matches_v4(entry, is_udp, local_ip, local_port,
+                                       remote_ip, remote_port, now))
+            continue;
+        if (pid == 0)
+            pid = entry->pid;
+        else if (pid != entry->pid)
+            ambiguous = TRUE;
+    }
+    ReleaseSRWLockShared(&socket_port_pid_lock);
+    if (ambiguous) return 0;
+    if (pid != 0) InterlockedIncrement(&selected_socket_fallback_count);
+    return pid;
+}
+
+static DWORD get_selected_socket_pid_v6(BOOL is_udp,
+                                        const UINT8 local_ip6[16],
+                                        UINT16 local_port,
+                                        const UINT8 remote_ip6[16],
+                                        UINT16 remote_port)
+{
+    DWORD pid = 0;
+    BOOL ambiguous = FALSE;
+    ULONGLONG now = GetTickCount64();
+    AcquireSRWLockShared(&socket_port_pid_lock);
+    for (UINT32 i = 0; i < SELECTED_SOCKET_EVENT_CAPACITY; i++)
+    {
+        const SELECTED_SOCKET_EVENT_ENTRY *entry =
+            &selected_socket_events[i];
+        if (!selected_event_matches_v6(entry, is_udp, local_ip6, local_port,
+                                       remote_ip6, remote_port, now))
+            continue;
+        if (pid == 0)
+            pid = entry->pid;
+        else if (pid != entry->pid)
+            ambiguous = TRUE;
+    }
+    ReleaseSRWLockShared(&socket_port_pid_lock);
+    if (ambiguous) return 0;
+    if (pid != 0) InterlockedIncrement(&selected_socket_fallback_count);
+    return pid;
 }
 
 static void clear_flow_pid_cache(void)
@@ -1568,6 +1843,8 @@ static void clear_flow_pid_cache(void)
     ReleaseSRWLockExclusive(&flow_pid_lock);
     AcquireSRWLockExclusive(&socket_port_pid_lock);
     memset(socket_port_pid_table, 0, sizeof(socket_port_pid_table));
+    memset(selected_socket_events, 0, sizeof(selected_socket_events));
+    selected_socket_event_next = 0;
     ReleaseSRWLockExclusive(&socket_port_pid_lock);
 }
 
@@ -1648,6 +1925,10 @@ static DWORD WINAPI socket_tracker(LPVOID arg)
             store_socket_port_pid(TRUE, is_udp, addr.Socket.LocalPort,
                                   addr.Socket.ProcessId, remote,
                                   addr.Socket.RemotePort);
+            store_selected_socket_event(
+                TRUE, is_udp, addr.Socket.LocalPort,
+                addr.Socket.ProcessId, local, remote,
+                addr.Socket.RemotePort);
             store_flow_pid(TRUE, is_udp, addr.Socket.LocalPort,
                            addr.Socket.RemotePort, local, remote,
                            addr.Socket.ProcessId);
@@ -1657,6 +1938,10 @@ static DWORD WINAPI socket_tracker(LPVOID arg)
             store_socket_port_pid(FALSE, is_udp, addr.Socket.LocalPort,
                                   addr.Socket.ProcessId, &remote,
                                   addr.Socket.RemotePort);
+            store_selected_socket_event(
+                FALSE, is_udp, addr.Socket.LocalPort,
+                addr.Socket.ProcessId, &local, &remote,
+                addr.Socket.RemotePort);
             store_flow_pid(FALSE, is_udp, addr.Socket.LocalPort,
                            addr.Socket.RemotePort, &local, &remote,
                            addr.Socket.ProcessId);
@@ -1918,6 +2203,7 @@ typedef enum ATTRIBUTION_SOURCE {
     ATTRIBUTION_SOURCE_FLOW,
     ATTRIBUTION_SOURCE_SOCKET,
     ATTRIBUTION_SOURCE_SOCKET_CROSS_FAMILY,
+    ATTRIBUTION_SOURCE_SELECTED_SOCKET,
     ATTRIBUTION_SOURCE_IP_HELPER
 } ATTRIBUTION_SOURCE;
 
@@ -1929,6 +2215,8 @@ static const char *attribution_source_name(ATTRIBUTION_SOURCE source)
         case ATTRIBUTION_SOURCE_SOCKET: return "socket";
         case ATTRIBUTION_SOURCE_SOCKET_CROSS_FAMILY:
             return "socket_cross_family";
+        case ATTRIBUTION_SOURCE_SELECTED_SOCKET:
+            return "selected_socket";
         case ATTRIBUTION_SOURCE_IP_HELPER: return "ip_helper";
         default: return "none";
     }
@@ -1959,11 +2247,14 @@ static void log_unresolved_attribution(const char *family, BOOL is_udp)
 {
     LONG sample = InterlockedIncrement(&unresolved_attribution_count);
     if (sample <= 8)
-        log_message("[ATTR] Process attribution unavailable; family=%s protocol=%s fail_closed=%d sample=%ld socket_connects=%ld socket_binds=%ld socket_ports=%ld",
+        log_message("[ATTR] Process attribution unavailable; family=%s protocol=%s fail_closed=%d sample=%ld socket_connects=%ld socket_binds=%ld socket_ports=%ld selected_connects=%ld selected_zero_ports=%ld selected_fallbacks=%ld",
             family, is_udp ? "UDP" : "TCP", g_fail_closed ? 1 : 0, sample,
             InterlockedCompareExchange(&socket_connect_event_count, 0, 0),
             InterlockedCompareExchange(&socket_bind_event_count, 0, 0),
-            InterlockedCompareExchange(&socket_nonzero_port_event_count, 0, 0));
+            InterlockedCompareExchange(&socket_nonzero_port_event_count, 0, 0),
+            InterlockedCompareExchange(&selected_socket_event_count, 0, 0),
+            InterlockedCompareExchange(&selected_socket_zero_port_count, 0, 0),
+            InterlockedCompareExchange(&selected_socket_fallback_count, 0, 0));
 }
 
 static RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port, const UINT8 dest_ip6[16], UINT16 dest_port, BOOL is_udp, DWORD *out_pid, UINT32 *out_proxy_config_id)
@@ -1985,6 +2276,13 @@ static RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port
                 source = cross_family ?
                     ATTRIBUTION_SOURCE_SOCKET_CROSS_FAMILY :
                     ATTRIBUTION_SOURCE_SOCKET;
+        }
+        if (pid == 0)
+        {
+            pid = get_selected_socket_pid_v6(
+                is_udp, src_ip6, src_port, dest_ip6, dest_port);
+            if (pid != 0)
+                source = ATTRIBUTION_SOURCE_SELECTED_SOCKET;
         }
         if (pid == 0) {
             pid = is_udp ? get_process_id_from_udp_connection_v6(src_ip6, src_port)
@@ -2588,6 +2886,13 @@ static RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest
                 source = cross_family ?
                     ATTRIBUTION_SOURCE_SOCKET_CROSS_FAMILY :
                     ATTRIBUTION_SOURCE_SOCKET;
+        }
+        if (pid == 0)
+        {
+            pid = get_selected_socket_pid_v4(
+                is_udp, src_ip, src_port, dest_ip, dest_port);
+            if (pid != 0)
+                source = ATTRIBUTION_SOURCE_SELECTED_SOCKET;
         }
         if (pid == 0) {
             pid = is_udp ? get_process_id_from_udp_connection(src_ip, src_port)
@@ -5335,6 +5640,9 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
     InterlockedExchange(&socket_connect_event_count, 0);
     InterlockedExchange(&socket_bind_event_count, 0);
     InterlockedExchange(&socket_nonzero_port_event_count, 0);
+    InterlockedExchange(&selected_socket_event_count, 0);
+    InterlockedExchange(&selected_socket_zero_port_count, 0);
+    InterlockedExchange(&selected_socket_fallback_count, 0);
     InterlockedExchange(&relay_accept_log_count, 0);
     InterlockedExchange(&relay_upstream_log_count, 0);
     InterlockedExchange(&proxy_start_result, 0);

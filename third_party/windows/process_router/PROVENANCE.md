@@ -12,11 +12,13 @@ The ordinary full-tunnel mode does not load them.
 - Fork source: `source\`; the GUI is not included.
 - Green VPN changes: pre-connect socket PID attribution with normalized
   IPv4-mapped/IPv6 tuples and direction-less SOCKET-layer CONNECT/BIND capture,
-  remote-tuple-bound ambiguity-safe socket fallback, verified local relay
-  startup, privacy-safe durable attribution and relay diagnostics, exact SOCKS5
-  framing, long executable paths, immutable active config, orderly worker
-  shutdown, and fail-closed selected traffic when attribution or the exact proxy
-  route is unavailable. No global `svchost.exe` DNS rule is installed.
+  remote-tuple-bound ambiguity-safe socket fallback, a short-lived selected-rule
+  CONNECT cache for sockets whose local tuple is not assigned before connect,
+  verified local relay startup, privacy-safe durable attribution and relay
+  diagnostics, exact SOCKS5 framing, long executable paths, immutable active
+  config, orderly worker shutdown, and fail-closed selected traffic when
+  attribution or the exact proxy route is unavailable. No global `svchost.exe`
+  DNS rule is installed.
 - Build: x64 release with MSVC using `source\build.ps1`.
 
 ## WinDivert
@@ -34,7 +36,7 @@ The ordinary full-tunnel mode does not load them.
 | File | SHA-256 |
 | --- | --- |
 | `ProxyBridge_CLI.exe` | `6C215C7975E3CBEE086DE0EE2F3226FAE84F35A7B0A2FFD432FC346EF56A0569` |
-| `ProxyBridgeCore.dll` | `55926D7C1AC65CB20BF059A81B37B055DE1BDC4172628C2525CE8F9C8B08065F` |
+| `ProxyBridgeCore.dll` | `323FCE25A06FC75C8A3E6A52673F58E961A607D5AE624CA5B3CF5D1780600D78` |
 | `WinDivert.dll` | `C1E060EE19444A259B2162F8AF0F3FE8C4428A1C6F694DCE20DE194AC8D7D9A2` |
 | `WinDivert64.sys` | `8DA085332782708D8767BCACE5327A6EC7283C17CFB85E40B03CD2323A90DDC2` |
 
