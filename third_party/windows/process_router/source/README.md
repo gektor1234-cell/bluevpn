@@ -13,8 +13,9 @@ Green VPN carries a narrow production hardening patch:
 - capture WinDivert socket bind/connect events before the first packet, then
   retain flow events and short-lived Windows socket tables as fallbacks;
 - normalize WinDivert host-order IPv4/IPv6 event addresses before matching the
-  complete packet tuple, and keep a five-second source-port bridge for sockets
-  whose local address is not assigned yet;
+  complete packet tuple, including the fourth word of IPv4-mapped event
+  addresses, and keep a five-second source-port bridge for sockets whose local
+  address is not assigned yet;
 - cache attribution for selected and unselected processes so fail-closed mode
   does not block unrelated applications;
 - fail closed when an intercepted connection cannot be attributed, its

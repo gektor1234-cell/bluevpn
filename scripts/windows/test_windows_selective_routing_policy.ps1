@@ -34,16 +34,26 @@ try {
         'addr.Socket.ProcessId',
         'store_socket_port_pid',
         'PROCESS_ATTRIBUTION_WAIT_MS',
-        'WinDivertHelperHtonIPv6Address'
+        'WinDivertHelperHtonIPv6Address',
+        'htonl(addr.Flow.LocalAddr[3])',
+        'htonl(addr.Flow.RemoteAddr[3])',
+        'htonl(addr.Socket.LocalAddr[3])',
+        'htonl(addr.Socket.RemoteAddr[3])'
     )) {
         if (-not $processRouterSource.Contains($marker)) {
             throw "Process-router pre-connect attribution marker is missing: $marker"
         }
     }
-    if ($processRouterSource.Contains(
-            '((const UINT8 *)addr.Flow.LocalAddr) + 12'
-        )) {
-        throw 'Process-router retained the invalid IPv4 FLOW address layout.'
+    foreach ($invalidIpv4Layout in @(
+        '((const UINT8 *)addr.Flow.LocalAddr) + 12',
+        'htonl(addr.Flow.LocalAddr[0])',
+        'htonl(addr.Flow.RemoteAddr[0])',
+        'htonl(addr.Socket.LocalAddr[0])',
+        'htonl(addr.Socket.RemoteAddr[0])'
+    )) {
+        if ($processRouterSource.Contains($invalidIpv4Layout)) {
+            throw "Process-router retained invalid IPv4 event address layout: $invalidIpv4Layout"
+        }
     }
 
     $RuntimeMutationMutexName =

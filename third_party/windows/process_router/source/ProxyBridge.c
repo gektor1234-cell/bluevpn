@@ -1464,8 +1464,11 @@ static DWORD WINAPI flow_tracker(LPVOID arg)
                            addr.Flow.RemotePort, local, remote,
                            addr.Flow.ProcessId);
         } else {
-            UINT32 local = htonl(addr.Flow.LocalAddr[0]);
-            UINT32 remote = htonl(addr.Flow.RemoteAddr[0]);
+            // WinDivert represents IPv4 FLOW/SOCKET addresses as host-order
+            // IPv4-mapped IPv6 values.  The IPv4 word is therefore [3], not
+            // [0]; convert that word to the packet header's network order.
+            UINT32 local = htonl(addr.Flow.LocalAddr[3]);
+            UINT32 remote = htonl(addr.Flow.RemoteAddr[3]);
             store_flow_pid(FALSE, is_udp, addr.Flow.LocalPort,
                            addr.Flow.RemotePort, &local, &remote,
                            addr.Flow.ProcessId);
@@ -1505,8 +1508,8 @@ static DWORD WINAPI socket_tracker(LPVOID arg)
                            addr.Socket.RemotePort, local, remote,
                            addr.Socket.ProcessId);
         } else {
-            UINT32 local = htonl(addr.Socket.LocalAddr[0]);
-            UINT32 remote = htonl(addr.Socket.RemoteAddr[0]);
+            UINT32 local = htonl(addr.Socket.LocalAddr[3]);
+            UINT32 remote = htonl(addr.Socket.RemoteAddr[3]);
             store_flow_pid(FALSE, is_udp, addr.Socket.LocalPort,
                            addr.Socket.RemotePort, &local, &remote,
                            addr.Socket.ProcessId);
