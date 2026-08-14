@@ -30,7 +30,8 @@ param(
     [ValidateRange(600, 1800)][int]$DeadmanDelaySeconds = 900,
     [ValidateRange(10, 120)][int]$MaxConnectSeconds = 30,
     [ValidateRange(15, 120)][int]$MaxModeSwitchSeconds = 60,
-    [string]$ExpectedApplicationModeEgress = '5.129.216.42'
+    [string]$ExpectedApplicationModeEgress = '5.129.216.42',
+    [switch]$RecoverInitialBaselineAfterDelay
 )
 
 Set-StrictMode -Version Latest
@@ -1071,6 +1072,8 @@ $summary = [ordered]@{
     initialDelaySeconds = $InitialDelaySeconds
     deadmanDelaySeconds = $DeadmanDelaySeconds
     initialBaseline = $null
+    initialBaselineRecovery = $null
+    delayedBaseline = $null
     installer = $null
     isolatedState = $null
     externalVpnUi = $null
@@ -1148,13 +1151,48 @@ try {
                 (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
         }
     }
-    $summary.initialBaseline = Assert-ReadOnlySafeBaseline `
-        -Label 'Initial read-only baseline'
+    $summary.initialBaseline = Get-ReadOnlyBaseline
+    $summary.initialBaseline['success'] = @(
+        $summary.initialBaseline.Values | Where-Object { -not [bool]$_ }
+    ).Count -eq 0
+    if ([bool]$summary.initialBaseline.success) {
+        $summary.initialBaseline = Assert-ReadOnlySafeBaseline `
+            -Label 'Initial read-only baseline'
+    } else {
+        $failedRecoveryPreconditions = @(
+            'betaComponentsStopped', 'publicHealth', 'youtube',
+            'noProbeMetricRoutes', 'noFailsafes'
+        ) | Where-Object {
+            -not [bool]$summary.initialBaseline[$_]
+        }
+        if (-not $RecoverInitialBaselineAfterDelay -or
+                @($failedRecoveryPreconditions).Count -gt 0) {
+            throw "Initial read-only baseline failed: $($summary.initialBaseline | ConvertTo-Json -Compress)."
+        }
+        Write-RunnerLog (
+            'initial baseline requires delayed recovery; ' +
+            'only Green/external VPN state may differ'
+        )
+    }
     Write-RunnerLog "waiting $InitialDelaySeconds seconds before installation or network transitions"
     Start-Sleep -Seconds $InitialDelaySeconds
 
     $deadman = Start-DeadmanRecovery
     Write-RunnerLog "deadman started pid=$($deadman.Id) delay=$DeadmanDelaySeconds"
+    if (-not [bool]$summary.initialBaseline.success) {
+        $summary.initialBaselineRecovery = Invoke-FinalRecovery
+        if ($null -eq $summary.initialBaselineRecovery -or
+                -not [bool]$summary.initialBaselineRecovery.success) {
+            throw 'Delayed initial baseline recovery failed.'
+        }
+    }
+    $summary.delayedBaseline = Get-ReadOnlyBaseline
+    $summary.delayedBaseline['success'] = @(
+        $summary.delayedBaseline.Values | Where-Object { -not [bool]$_ }
+    ).Count -eq 0
+    if (-not [bool]$summary.delayedBaseline.success) {
+        throw "Delayed read-only baseline failed: $($summary.delayedBaseline | ConvertTo-Json -Compress)."
+    }
     Assert-MutableSafeBaseline -Label 'Delayed mutable baseline'
 
     $summary.installer = Install-ExactCandidate

@@ -25,7 +25,8 @@ param(
     [ValidateRange(90, 600)][int]$InitialDelaySeconds = 90,
     [ValidateRange(600, 1800)][int]$DeadmanDelaySeconds = 900,
     [ValidateRange(10, 120)][int]$MaxConnectSeconds = 30,
-    [ValidateRange(15, 120)][int]$MaxModeSwitchSeconds = 60
+    [ValidateRange(15, 120)][int]$MaxModeSwitchSeconds = 60,
+    [switch]$RecoverInitialBaselineAfterDelay
 )
 
 Set-StrictMode -Version Latest
@@ -57,6 +58,7 @@ function Write-LauncherStatus {
         expectedInstallerSize = $ExpectedInstallerSize
         expectedVersion = $ExpectedVersion
         candidateSourceCommit = $CandidateSourceCommit.ToLowerInvariant()
+        recoverInitialBaselineAfterDelay = [bool]$RecoverInitialBaselineAfterDelay
         elevatedProcessId = if ($ElevatedProcessId -gt 0) {
             $ElevatedProcessId
         } else { $null }
@@ -113,6 +115,9 @@ try {
         '-MaxConnectSeconds', [string]$MaxConnectSeconds,
         '-MaxModeSwitchSeconds', [string]$MaxModeSwitchSeconds
     )
+    if ($RecoverInitialBaselineAfterDelay) {
+        $arguments += '-RecoverInitialBaselineAfterDelay'
+    }
     Write-LauncherStatus -Phase 'uac_requested'
     $elevated = Start-Process -FilePath 'powershell.exe' -Verb RunAs `
         -ArgumentList $arguments -WindowStyle Hidden -PassThru
