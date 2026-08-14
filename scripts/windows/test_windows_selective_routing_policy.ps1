@@ -41,10 +41,10 @@ try {
         'proxy_start_event',
         'Process attribution unavailable',
         'WinDivertHelperHtonIPv6Address',
-        'htonl(addr.Flow.LocalAddr[3])',
-        'htonl(addr.Flow.RemoteAddr[3])',
-        'htonl(addr.Socket.LocalAddr[3])',
-        'htonl(addr.Socket.RemoteAddr[3])'
+        'htonl(addr.Flow.LocalAddr[0])',
+        'htonl(addr.Flow.RemoteAddr[0])',
+        'htonl(addr.Socket.LocalAddr[0])',
+        'htonl(addr.Socket.RemoteAddr[0])'
     )) {
         if (-not $processRouterSource.Contains($marker)) {
             throw "Process-router pre-connect attribution marker is missing: $marker"
@@ -67,10 +67,10 @@ try {
         '"outbound and (event == CONNECT or event == BIND)"',
         'addr.Event != WINDIVERT_EVENT_SOCKET_BIND) || !addr.Outbound',
         '((const UINT8 *)addr.Flow.LocalAddr) + 12',
-        'htonl(addr.Flow.LocalAddr[0])',
-        'htonl(addr.Flow.RemoteAddr[0])',
-        'htonl(addr.Socket.LocalAddr[0])',
-        'htonl(addr.Socket.RemoteAddr[0])'
+        'htonl(addr.Flow.LocalAddr[3])',
+        'htonl(addr.Flow.RemoteAddr[3])',
+        'htonl(addr.Socket.LocalAddr[3])',
+        'htonl(addr.Socket.RemoteAddr[3])'
     )) {
         if ($processRouterSource.Contains($invalidIpv4Layout)) {
             throw "Process-router retained invalid IPv4 event address layout: $invalidIpv4Layout"
