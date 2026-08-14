@@ -23,6 +23,7 @@
 #define PROCESS_ATTRIBUTION_WAIT_MS 8000
 #define PROCESS_ATTRIBUTION_RETRY_SLICE_MS 25
 #define SOCKET_PORT_PID_TTL_MS 5000
+#define SELECTED_BIND_EVENT_TTL_MS 30000
 #define SELECTED_SOCKET_EVENT_TTL_MS 30000
 #define SELECTED_SOCKET_EVENT_CAPACITY 256
 #define PROXY_START_TIMEOUT_MS 5000
@@ -186,10 +187,10 @@ static SOCKET udp_relay_socket = INVALID_SOCKET;
 static SOCKET udp_relay_socket6 = INVALID_SOCKET;
 static volatile BOOL running = FALSE;
 static DWORD g_current_process_id = 0;
-// Green VPN selected-app mode is privacy fail-closed. Socket CONNECT events
-// provide attribution before the first packet, while FLOW events and socket
-// tables provide bounded fallback coverage. If every source is unavailable,
-// the packet must not escape directly while application rules are active.
+// Green VPN selected-app mode is privacy fail-closed. Socket BIND events map
+// selected owners to their assigned local ports before the first packet;
+// CONNECT/FLOW events and socket tables provide bounded fallback coverage. If
+// every source is unavailable, the packet must not escape directly.
 static volatile BOOL g_fail_closed = FALSE;
 
 typedef struct FLOW_PID_ENTRY {
@@ -231,7 +232,15 @@ typedef struct SELECTED_SOCKET_EVENT_ENTRY {
     UINT8 remote_addr[16];
 } SELECTED_SOCKET_EVENT_ENTRY;
 
+typedef struct SELECTED_BIND_EVENT_ENTRY {
+    DWORD owner_pid;
+    ULONGLONG updated_at;
+    BOOL owner_selected;
+    BOOL ambiguous;
+} SELECTED_BIND_EVENT_ENTRY;
+
 static SOCKET_PORT_PID_ENTRY socket_port_pid_table[4][65536] = {0};
+static SELECTED_BIND_EVENT_ENTRY selected_bind_events[4][65536] = {0};
 static SELECTED_SOCKET_EVENT_ENTRY
     selected_socket_events[SELECTED_SOCKET_EVENT_CAPACITY] = {0};
 static UINT32 selected_socket_event_next = 0;
@@ -246,6 +255,9 @@ static volatile LONG resolved_attribution_count = 0;
 static volatile LONG socket_connect_event_count = 0;
 static volatile LONG socket_bind_event_count = 0;
 static volatile LONG socket_nonzero_port_event_count = 0;
+static volatile LONG selected_bind_event_count = 0;
+static volatile LONG selected_bind_zero_port_count = 0;
+static volatile LONG selected_bind_fallback_count = 0;
 static volatile LONG selected_socket_event_count = 0;
 static volatile LONG selected_socket_zero_port_count = 0;
 static volatile LONG selected_socket_fallback_count = 0;
@@ -479,11 +491,14 @@ static DWORD get_socket_port_pid_v4(BOOL is_udp, UINT16 local_port,
 static DWORD get_socket_port_pid_v6(BOOL is_udp, UINT16 local_port,
     const UINT8 remote_ip6[16], UINT16 remote_port,
     BOOL *used_cross_family);
+static DWORD get_selected_bind_pid(BOOL is_ipv6, BOOL is_udp,
+    UINT16 local_port);
 static DWORD get_selected_socket_pid_v4(BOOL is_udp, UINT32 local_ip,
     UINT16 local_port, UINT32 remote_ip, UINT16 remote_port);
 static DWORD get_selected_socket_pid_v6(BOOL is_udp,
     const UINT8 local_ip6[16], UINT16 local_port,
     const UINT8 remote_ip6[16], UINT16 remote_port);
+static BOOL address_is_zero(const UINT8 *address, size_t length);
 static void clear_flow_pid_cache(void);
 static BOOL get_process_name_from_pid(DWORD pid, char *name, DWORD name_size);
 static RuleAction match_rule(const char *process_name, UINT32 dest_ip, UINT16 dest_port, BOOL is_udp, UINT32 *out_proxy_config_id);
@@ -1479,6 +1494,96 @@ static BOOL socket_port_matches(UINT16 stored_port, UINT16 expected_port)
     return stored_port == expected_port || ntohs(stored_port) == expected_port;
 }
 
+static BOOL process_has_selected_rule(const char *process_name, BOOL is_udp)
+{
+    PROCESS_RULE *rule = rules_list;
+    while (rule != NULL)
+    {
+        if (rule->enabled && rule->action != RULE_ACTION_DIRECT)
+        {
+            BOOL protocol_matches = rule->protocol == RULE_PROTOCOL_BOTH ||
+                (rule->protocol == RULE_PROTOCOL_TCP && !is_udp) ||
+                (rule->protocol == RULE_PROTOCOL_UDP && is_udp);
+            if (protocol_matches &&
+                match_process_list(rule->process_name, process_name))
+                return TRUE;
+        }
+        rule = rule->next;
+    }
+    return FALSE;
+}
+
+static void store_selected_bind_event(BOOL is_ipv6, BOOL is_udp,
+                                      UINT16 local_port, DWORD pid,
+                                      const void *local_addr)
+{
+    if (pid == 0)
+        return;
+    char process_name[MAX_PROCESS_NAME];
+    if (!get_process_name_from_pid(pid, process_name, sizeof(process_name)))
+        return;
+    BOOL selected = process_has_selected_rule(process_name, is_udp);
+    if (local_port == 0)
+    {
+        if (selected)
+            InterlockedIncrement(&selected_bind_zero_port_count);
+        return;
+    }
+
+    size_t address_length = is_ipv6 ? 16 : sizeof(UINT32);
+    BOOL local_addr_known = local_addr != NULL &&
+        !address_is_zero((const UINT8 *)local_addr, address_length);
+    int index = socket_port_pid_index(is_ipv6, is_udp);
+    ULONGLONG now = GetTickCount64();
+    AcquireSRWLockExclusive(&socket_port_pid_lock);
+    SELECTED_BIND_EVENT_ENTRY *entry = &selected_bind_events[index][local_port];
+    if (entry->owner_pid == 0 ||
+        now - entry->updated_at > SELECTED_BIND_EVENT_TTL_MS)
+        memset(entry, 0, sizeof(*entry));
+    else if (entry->owner_pid != pid)
+        entry->ambiguous = TRUE;
+    if (!entry->ambiguous)
+    {
+        entry->owner_pid = pid;
+        entry->owner_selected = selected;
+    }
+    entry->updated_at = now;
+    ReleaseSRWLockExclusive(&socket_port_pid_lock);
+
+    port_clear(local_port);
+    if (attribution_update_event != NULL)
+        SetEvent(attribution_update_event);
+
+    if (selected)
+    {
+        LONG sample = InterlockedIncrement(&selected_bind_event_count);
+        if (sample <= 16)
+            log_message("[ATTR] Selected BIND cached; family=%s protocol=%s local_addr_known=%d sample=%ld",
+                is_ipv6 ? "IPv6" : "IPv4", is_udp ? "UDP" : "TCP",
+                local_addr_known ? 1 : 0, sample);
+    }
+}
+
+static DWORD get_selected_bind_pid(BOOL is_ipv6, BOOL is_udp,
+                                   UINT16 local_port)
+{
+    if (local_port == 0)
+        return 0;
+    DWORD pid = 0;
+    ULONGLONG now = GetTickCount64();
+    int index = socket_port_pid_index(is_ipv6, is_udp);
+    AcquireSRWLockShared(&socket_port_pid_lock);
+    const SELECTED_BIND_EVENT_ENTRY entry =
+        selected_bind_events[index][local_port];
+    ReleaseSRWLockShared(&socket_port_pid_lock);
+    if (entry.owner_pid != 0 && entry.owner_selected && !entry.ambiguous &&
+        now - entry.updated_at <= SELECTED_BIND_EVENT_TTL_MS)
+        pid = entry.owner_pid;
+    if (pid != 0)
+        InterlockedIncrement(&selected_bind_fallback_count);
+    return pid;
+}
+
 static BOOL ipv4_address_matches(UINT32 stored_ip, UINT32 expected_ip)
 {
     return stored_ip == expected_ip || htonl(stored_ip) == expected_ip;
@@ -1848,6 +1953,7 @@ static void clear_flow_pid_cache(void)
     ReleaseSRWLockExclusive(&flow_pid_lock);
     AcquireSRWLockExclusive(&socket_port_pid_lock);
     memset(socket_port_pid_table, 0, sizeof(socket_port_pid_table));
+    memset(selected_bind_events, 0, sizeof(selected_bind_events));
     memset(selected_socket_events, 0, sizeof(selected_socket_events));
     selected_socket_event_next = 0;
     ReleaseSRWLockExclusive(&socket_port_pid_lock);
@@ -1918,8 +2024,28 @@ static DWORD WINAPI socket_tracker(LPVOID arg)
             InterlockedIncrement(&socket_nonzero_port_event_count);
 
         BOOL is_udp = addr.Socket.Protocol == IPPROTO_UDP;
-        if (addr.Event != WINDIVERT_EVENT_SOCKET_CONNECT)
+        if (addr.Event == WINDIVERT_EVENT_SOCKET_BIND)
+        {
+            if (addr.IPv6)
+            {
+                UINT32 local_host[4];
+                UINT8 local[16];
+                WinDivertHelperHtonIPv6Address(
+                    addr.Socket.LocalAddr, local_host);
+                memcpy(local, local_host, sizeof(local));
+                store_selected_bind_event(
+                    TRUE, is_udp, addr.Socket.LocalPort,
+                    addr.Socket.ProcessId, local);
+            }
+            else
+            {
+                UINT32 local = htonl(addr.Socket.LocalAddr[0]);
+                store_selected_bind_event(
+                    FALSE, is_udp, addr.Socket.LocalPort,
+                    addr.Socket.ProcessId, &local);
+            }
             continue;
+        }
         if (addr.IPv6) {
             UINT32 local_host[4], remote_host[4];
             UINT8 local[16], remote[16];
@@ -2212,6 +2338,7 @@ typedef enum ATTRIBUTION_SOURCE {
     ATTRIBUTION_SOURCE_FLOW,
     ATTRIBUTION_SOURCE_SOCKET,
     ATTRIBUTION_SOURCE_SOCKET_CROSS_FAMILY,
+    ATTRIBUTION_SOURCE_SELECTED_BIND,
     ATTRIBUTION_SOURCE_SELECTED_SOCKET,
     ATTRIBUTION_SOURCE_IP_HELPER
 } ATTRIBUTION_SOURCE;
@@ -2224,6 +2351,8 @@ static const char *attribution_source_name(ATTRIBUTION_SOURCE source)
         case ATTRIBUTION_SOURCE_SOCKET: return "socket";
         case ATTRIBUTION_SOURCE_SOCKET_CROSS_FAMILY:
             return "socket_cross_family";
+        case ATTRIBUTION_SOURCE_SELECTED_BIND:
+            return "selected_bind";
         case ATTRIBUTION_SOURCE_SELECTED_SOCKET:
             return "selected_socket";
         case ATTRIBUTION_SOURCE_IP_HELPER: return "ip_helper";
@@ -2256,11 +2385,14 @@ static void log_unresolved_attribution(const char *family, BOOL is_udp)
 {
     LONG sample = InterlockedIncrement(&unresolved_attribution_count);
     if (sample <= 8)
-        log_message("[ATTR] Process attribution unavailable; family=%s protocol=%s fail_closed=%d sample=%ld socket_connects=%ld socket_binds=%ld socket_ports=%ld selected_connects=%ld selected_zero_ports=%ld selected_fallbacks=%ld",
+        log_message("[ATTR] Process attribution unavailable; family=%s protocol=%s fail_closed=%d sample=%ld socket_connects=%ld socket_binds=%ld socket_ports=%ld selected_binds=%ld selected_bind_zero_ports=%ld selected_bind_fallbacks=%ld selected_connects=%ld selected_zero_ports=%ld selected_fallbacks=%ld",
             family, is_udp ? "UDP" : "TCP", g_fail_closed ? 1 : 0, sample,
             InterlockedCompareExchange(&socket_connect_event_count, 0, 0),
             InterlockedCompareExchange(&socket_bind_event_count, 0, 0),
             InterlockedCompareExchange(&socket_nonzero_port_event_count, 0, 0),
+            InterlockedCompareExchange(&selected_bind_event_count, 0, 0),
+            InterlockedCompareExchange(&selected_bind_zero_port_count, 0, 0),
+            InterlockedCompareExchange(&selected_bind_fallback_count, 0, 0),
             InterlockedCompareExchange(&selected_socket_event_count, 0, 0),
             InterlockedCompareExchange(&selected_socket_zero_port_count, 0, 0),
             InterlockedCompareExchange(&selected_socket_fallback_count, 0, 0));
@@ -2300,6 +2432,12 @@ static RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port
                 source = cross_family ?
                     ATTRIBUTION_SOURCE_SOCKET_CROSS_FAMILY :
                     ATTRIBUTION_SOURCE_SOCKET;
+        }
+        if (pid == 0)
+        {
+            pid = get_selected_bind_pid(TRUE, is_udp, src_port);
+            if (pid != 0)
+                source = ATTRIBUTION_SOURCE_SELECTED_BIND;
         }
         if (pid == 0)
         {
@@ -2910,6 +3048,12 @@ static RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest
                 source = cross_family ?
                     ATTRIBUTION_SOURCE_SOCKET_CROSS_FAMILY :
                     ATTRIBUTION_SOURCE_SOCKET;
+        }
+        if (pid == 0)
+        {
+            pid = get_selected_bind_pid(FALSE, is_udp, src_port);
+            if (pid != 0)
+                source = ATTRIBUTION_SOURCE_SELECTED_BIND;
         }
         if (pid == 0)
         {
@@ -5664,6 +5808,9 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
     InterlockedExchange(&socket_connect_event_count, 0);
     InterlockedExchange(&socket_bind_event_count, 0);
     InterlockedExchange(&socket_nonzero_port_event_count, 0);
+    InterlockedExchange(&selected_bind_event_count, 0);
+    InterlockedExchange(&selected_bind_zero_port_count, 0);
+    InterlockedExchange(&selected_bind_fallback_count, 0);
     InterlockedExchange(&selected_socket_event_count, 0);
     InterlockedExchange(&selected_socket_zero_port_count, 0);
     InterlockedExchange(&selected_socket_fallback_count, 0);

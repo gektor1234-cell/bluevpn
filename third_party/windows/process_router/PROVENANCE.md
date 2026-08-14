@@ -12,6 +12,8 @@ The ordinary full-tunnel mode does not load them.
 - Fork source: `source\`; the GUI is not included.
 - Green VPN changes: pre-connect socket PID attribution with normalized
   IPv4-mapped/IPv6 tuples and direction-less SOCKET-layer CONNECT/BIND capture,
+  selected-process BIND ownership keyed by the assigned local port so the
+  first packet can be attributed before a causally later CONNECT event,
   remote-tuple-bound ambiguity-safe socket fallback, a bounded selected-rule
   CONNECT cache keyed by the assigned source port and complete remote endpoint
   for sockets whose pre-route local address is not yet authoritative, an
@@ -39,7 +41,7 @@ The ordinary full-tunnel mode does not load them.
 | File | SHA-256 |
 | --- | --- |
 | `ProxyBridge_CLI.exe` | `6C215C7975E3CBEE086DE0EE2F3226FAE84F35A7B0A2FFD432FC346EF56A0569` |
-| `ProxyBridgeCore.dll` | `A783286F3404A0918337CB07DFD7DC793DCE204BB543CED95F7A28FFDFED4F49` |
+| `ProxyBridgeCore.dll` | `978F381BE67A582505D5B9BE44F38D5AD348FD69C02A08B93D67D66BDB352801` |
 | `WinDivert.dll` | `C1E060EE19444A259B2162F8AF0F3FE8C4428A1C6F694DCE20DE194AC8D7D9A2` |
 | `WinDivert64.sys` | `8DA085332782708D8767BCACE5327A6EC7283C17CFB85E40B03CD2323A90DDC2` |
 
