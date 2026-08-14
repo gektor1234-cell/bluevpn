@@ -158,6 +158,28 @@ const String kFusionLocationMemoryFlag = 'fusion.location_memory';
 const String kFusionConnectionDetailsFlag = 'fusion.connection_details';
 const String kFusionWindowsCloseBehaviorFlag = 'fusion.windows_close_behavior';
 const String kFusionFriendlyErrorsFlag = 'fusion.friendly_errors';
+const Set<String> kFusionRequiredPublicProductFeatures = <String>{
+  kFusionConnectionActionsFlag,
+  kFusionConnectionDetailsFlag,
+};
+
+bool fusionClientFeatureEnabled({
+  required String key,
+  required Map<String, bool> serverFeatures,
+  required bool fusionUiEnabled,
+  required bool publicProductBuild,
+  required bool productionPromotionCandidate,
+  required bool developerSession,
+}) {
+  if (!fusionUiEnabled) return false;
+  if (developerSession) return true;
+  if (publicProductBuild &&
+      productionPromotionCandidate &&
+      kFusionRequiredPublicProductFeatures.contains(key)) {
+    return true;
+  }
+  return serverFeatures[key] == true;
+}
 
 const Color kBrandPrimary = Color(0xFF12A36F);
 const Color kBrandPrimaryDeep = Color(0xFF08785D);
@@ -7819,9 +7841,14 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   bool get _vpnInteractionLocked => vpnBusy || _vpnTapCooldown;
 
   bool _clientFeatureEnabled(String key) {
-    if (!kFusionUiEnabled) return false;
-    if (widget.session.accessToken == 'dev-token') return true;
-    return _clientFeatures[key] == true;
+    return fusionClientFeatureEnabled(
+      key: key,
+      serverFeatures: _clientFeatures,
+      fusionUiEnabled: kFusionUiEnabled,
+      publicProductBuild: kPublicProductBuild,
+      productionPromotionCandidate: kFusionProductionPromotionCandidate,
+      developerSession: widget.session.accessToken == 'dev-token',
+    );
   }
 
   bool get _vpnPauseActive {
