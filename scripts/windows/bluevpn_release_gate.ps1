@@ -2616,6 +2616,8 @@ $windowsRuntimeFailoverChecks = [ordered]@{
         'Assert-RuntimeMode',
         'Capture-RuntimeEvidence',
         'windows-mode-runtime-evidence.json',
+        "thresholdBasis = 'auth_log_request_to_probe'",
+        "thresholdBasis = 'auth_log_request_to_confirmation'",
         'processRouterRequirementValueKind',
         'runtimeStateGenerationValueKind',
         'runtimeStateGenerationEven',

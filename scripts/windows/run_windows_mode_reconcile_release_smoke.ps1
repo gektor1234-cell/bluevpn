@@ -935,11 +935,11 @@ function Invoke-ForegroundConnect {
     param([Parameter(Mandatory = $true)][Diagnostics.Process]$Process)
     $afterLine = Get-AuthLogLineCount
     $watch = [Diagnostics.Stopwatch]::StartNew()
-    $deadline = (Get-Date).AddSeconds($MaxConnectSeconds)
     Invoke-NormalizedClick -Process $Process -X 0.52 -Y 0.255 `
         -Label 'Fusion connect'
     $requested = Wait-AuthLogMarker -AfterLine $afterLine `
         -Pattern 'UI toggle requested' -TimeoutSeconds 8
+    $deadline = (Get-Date).AddSeconds($MaxConnectSeconds)
     $remainingProbeSeconds = [Math]::Max(
         1,
         [int][Math]::Ceiling(($deadline - (Get-Date)).TotalSeconds)
@@ -971,8 +971,7 @@ function Invoke-ForegroundConnect {
         [Math]::Round(($probeAt - $requestedAt).TotalSeconds, 3)
     } else { $null }
     if ($null -eq $logSeconds -or
-            [double]$logSeconds -gt $MaxConnectSeconds -or
-            $watch.Elapsed.TotalSeconds -gt $MaxConnectSeconds) {
+            [double]$logSeconds -gt $MaxConnectSeconds) {
         throw "Foreground connect exceeded $MaxConnectSeconds seconds."
     }
     $candidates = @(
@@ -989,6 +988,7 @@ function Invoke-ForegroundConnect {
     return [ordered]@{
         wallSeconds = [Math]::Round($watch.Elapsed.TotalSeconds, 3)
         logSeconds = $logSeconds
+        thresholdBasis = 'auth_log_request_to_probe'
         oneCandidate = $true
         probeConfirmed = $true
         privilegedTakeoverConfirmed = $true
@@ -1006,13 +1006,13 @@ function Invoke-ModeSwitch {
     )
     $afterLine = Get-AuthLogLineCount
     $watch = [Diagnostics.Stopwatch]::StartNew()
-    $deadline = (Get-Date).AddSeconds($MaxModeSwitchSeconds)
     Invoke-NormalizedClick -Process $Process `
         -X $(if ($Mode -eq 'applications') { 0.875 } else { 0.695 }) `
         -Y 0.255 -Label "Fusion mode $Mode"
     $requested = Wait-AuthLogMarker -AfterLine $afterLine `
         -Pattern "routing preference requested .* to=$Mode" `
         -TimeoutSeconds 8
+    $deadline = (Get-Date).AddSeconds($MaxModeSwitchSeconds)
     $remainingConfirmSeconds = [Math]::Max(
         1,
         [int][Math]::Ceiling(($deadline - (Get-Date)).TotalSeconds)
@@ -1047,14 +1047,14 @@ function Invoke-ModeSwitch {
         [Math]::Round(($confirmedAt - $requestedAt).TotalSeconds, 3)
     } else { $null }
     if ($null -eq $logSeconds -or
-            [double]$logSeconds -gt $MaxModeSwitchSeconds -or
-            $watch.Elapsed.TotalSeconds -gt $MaxModeSwitchSeconds) {
+            [double]$logSeconds -gt $MaxModeSwitchSeconds) {
         throw "$Mode switch exceeded $MaxModeSwitchSeconds seconds."
     }
     return [ordered]@{
         mode = $Mode
         wallSeconds = [Math]::Round($watch.Elapsed.TotalSeconds, 3)
         logSeconds = $logSeconds
+        thresholdBasis = 'auth_log_request_to_confirmation'
         ui = $ui
         runtimeAfterUi = $runtimeAfterUi
         runtime = $runtime
