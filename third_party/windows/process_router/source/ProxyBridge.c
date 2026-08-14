@@ -20,8 +20,9 @@
 #define VERSION "4.0.0"
 #define PID_CACHE_SIZE 1024
 #define PID_CACHE_TTL_MS 2000
-#define PROCESS_ATTRIBUTION_WAIT_MS 100
+#define PROCESS_ATTRIBUTION_WAIT_MS 500
 #define SOCKET_PORT_PID_TTL_MS 5000
+#define PROXY_START_TIMEOUT_MS 5000
 // Single packet-processor thread eliminates TCP packet reordering.
 // With multiple threads each racing to WinDivertRecv+WinDivertSend, thread N+1
 // can re-inject its segment before thread N injects segment N, causing the
@@ -173,6 +174,8 @@ static HANDLE flow_handle = INVALID_HANDLE_VALUE;
 static HANDLE flow_thread = NULL;
 static HANDLE socket_handle = INVALID_HANDLE_VALUE;
 static HANDLE socket_thread = NULL;
+static HANDLE proxy_start_event = NULL;
+static volatile LONG proxy_start_result = 0;
 static PID_CACHE_ENTRY *pid_cache[PID_CACHE_SIZE] = {NULL};
 static volatile BOOL g_has_active_rules = FALSE;
 static SOCKET udp_relay_socket = INVALID_SOCKET;
@@ -213,6 +216,7 @@ static SOCKET_PORT_PID_ENTRY socket_port_pid_table[4][65536] = {0};
 static SRWLOCK socket_port_pid_lock;
 
 static BOOL g_traffic_logging_enabled = TRUE;
+static volatile LONG unresolved_attribution_count = 0;
 
 static DNS_CACHE_ENTRY    *g_dns_cache[DNS_CACHE_BUCKETS];
 static DNS_CACHE_ENTRY_V6 *g_dns_cache_v6[DNS_CACHE_BUCKETS];
@@ -1552,6 +1556,8 @@ static DWORD get_process_id_from_connection(UINT32 src_ip, UINT16 src_port)
     MIB_TCPTABLE_OWNER_PID *tcp_table = NULL;
     DWORD size = 0;
     DWORD pid = 0;
+    DWORD unique_port_pid = 0;
+    BOOL port_pid_ambiguous = FALSE;
 
     if (GetExtendedTcpTable(NULL, &size, FALSE, AF_INET,
                             TCP_TABLE_OWNER_PID_ALL, 0) != ERROR_INSUFFICIENT_BUFFER)
@@ -1576,13 +1582,26 @@ static DWORD get_process_id_from_connection(UINT32 src_ip, UINT16 src_port)
     {
         MIB_TCPROW_OWNER_PID *row = &tcp_table->table[i];
 
-        if (row->dwLocalAddr == src_ip &&
-            ntohs((UINT16)row->dwLocalPort) == src_port)
+        if (ntohs((UINT16)row->dwLocalPort) != src_port)
+            continue;
+
+        if (row->dwLocalAddr == src_ip)
         {
             pid = row->dwOwningPid;
             break;
         }
+
+        if (row->dwOwningPid != 0)
+        {
+            if (unique_port_pid == 0)
+                unique_port_pid = row->dwOwningPid;
+            else if (unique_port_pid != row->dwOwningPid)
+                port_pid_ambiguous = TRUE;
+        }
     }
+
+    if (pid == 0 && !port_pid_ambiguous)
+        pid = unique_port_pid;
 
     free(tcp_table);
 
@@ -1603,6 +1622,8 @@ static DWORD get_process_id_from_udp_connection(UINT32 src_ip, UINT16 src_port)
     MIB_UDPTABLE_OWNER_PID *udp_table = NULL;
     DWORD size = 0;
     DWORD pid = 0;
+    DWORD unique_port_pid = 0;
+    BOOL port_pid_ambiguous = FALSE;
 
     if (GetExtendedUdpTable(NULL, &size, FALSE, AF_INET,
                             UDP_TABLE_OWNER_PID, 0) != ERROR_INSUFFICIENT_BUFFER)
@@ -1628,30 +1649,28 @@ static DWORD get_process_id_from_udp_connection(UINT32 src_ip, UINT16 src_port)
     {
         MIB_UDPROW_OWNER_PID *row = &udp_table->table[i];
 
-        if (row->dwLocalAddr == src_ip &&
-            ntohs((UINT16)row->dwLocalPort) == src_port)
+        if (ntohs((UINT16)row->dwLocalPort) != src_port)
+            continue;
+
+        if (row->dwLocalAddr == src_ip)
         {
             pid = row->dwOwningPid;
             break;
         }
-    }
 
-    // Second pass: If not found, try matching port on 0.0.0.0 (INADDR_ANY)
-    // Many UDP applications bind to 0.0.0.0:port instead of specific IP
-    if (pid == 0)
-    {
-        for (DWORD i = 0; i < udp_table->dwNumEntries; i++)
+        if (row->dwOwningPid != 0)
         {
-            MIB_UDPROW_OWNER_PID *row = &udp_table->table[i];
-
-            if (row->dwLocalAddr == 0 &&  // 0.0.0.0 (INADDR_ANY)
-                ntohs((UINT16)row->dwLocalPort) == src_port)
-            {
-                pid = row->dwOwningPid;
-                break;
-            }
+            if (unique_port_pid == 0)
+                unique_port_pid = row->dwOwningPid;
+            else if (unique_port_pid != row->dwOwningPid)
+                port_pid_ambiguous = TRUE;
         }
     }
+
+    // A wildcard-bound socket is accepted only through the unique-owner
+    // fallback below. Multiple owners on the same port remain fail-closed.
+    if (pid == 0 && !port_pid_ambiguous)
+        pid = unique_port_pid;
 
     free(udp_table);
 
@@ -1664,7 +1683,8 @@ static DWORD get_process_id_from_udp_connection(UINT32 src_ip, UINT16 src_port)
 static DWORD get_process_id_from_connection_v6(const UINT8 src_ip6[16], UINT16 src_port)
 {
     MIB_TCP6TABLE_OWNER_PID *tcp_table = NULL;
-    DWORD size = 0, pid = 0;
+    DWORD size = 0, pid = 0, unique_port_pid = 0;
+    BOOL port_pid_ambiguous = FALSE;
 
     if (GetExtendedTcpTable(NULL, &size, FALSE, AF_INET6, TCP_TABLE_OWNER_PID_ALL, 0) != ERROR_INSUFFICIENT_BUFFER)
         return 0;
@@ -1675,22 +1695,33 @@ static DWORD get_process_id_from_connection_v6(const UINT8 src_ip6[16], UINT16 s
         for (DWORD i = 0; i < tcp_table->dwNumEntries; i++)
         {
             MIB_TCP6ROW_OWNER_PID *row = &tcp_table->table[i];
-            if (ntohs((UINT16)row->dwLocalPort) == src_port &&
-                memcmp(row->ucLocalAddr, src_ip6, 16) == 0)
+            if (ntohs((UINT16)row->dwLocalPort) != src_port)
+                continue;
+            if (memcmp(row->ucLocalAddr, src_ip6, 16) == 0)
             {
                 pid = row->dwOwningPid;
                 break;
             }
+            if (row->dwOwningPid != 0)
+            {
+                if (unique_port_pid == 0)
+                    unique_port_pid = row->dwOwningPid;
+                else if (unique_port_pid != row->dwOwningPid)
+                    port_pid_ambiguous = TRUE;
+            }
         }
     }
     free(tcp_table);
+    if (pid == 0 && !port_pid_ambiguous)
+        pid = unique_port_pid;
     return pid;
 }
 
 static DWORD get_process_id_from_udp_connection_v6(const UINT8 src_ip6[16], UINT16 src_port)
 {
     MIB_UDP6TABLE_OWNER_PID *udp_table = NULL;
-    DWORD size = 0, pid = 0;
+    DWORD size = 0, pid = 0, unique_port_pid = 0;
+    BOOL port_pid_ambiguous = FALSE;
 
     if (GetExtendedUdpTable(NULL, &size, FALSE, AF_INET6, UDP_TABLE_OWNER_PID, 0) != ERROR_INSUFFICIENT_BUFFER)
         return 0;
@@ -1701,16 +1732,25 @@ static DWORD get_process_id_from_udp_connection_v6(const UINT8 src_ip6[16], UINT
         for (DWORD i = 0; i < udp_table->dwNumEntries; i++)
         {
             MIB_UDP6ROW_OWNER_PID *row = &udp_table->table[i];
-            if (ntohs((UINT16)row->dwLocalPort) == src_port &&
-                (memcmp(row->ucLocalAddr, src_ip6, 16) == 0 ||
-                 memcmp(row->ucLocalAddr, "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", 16) == 0))
+            if (ntohs((UINT16)row->dwLocalPort) != src_port)
+                continue;
+            if (memcmp(row->ucLocalAddr, src_ip6, 16) == 0)
             {
                 pid = row->dwOwningPid;
                 break;
             }
+            if (row->dwOwningPid != 0)
+            {
+                if (unique_port_pid == 0)
+                    unique_port_pid = row->dwOwningPid;
+                else if (unique_port_pid != row->dwOwningPid)
+                    port_pid_ambiguous = TRUE;
+            }
         }
     }
     free(udp_table);
+    if (pid == 0 && !port_pid_ambiguous)
+        pid = unique_port_pid;
     return pid;
 }
 
@@ -1749,6 +1789,10 @@ static RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port
     } while (running);
     if (out_pid) *out_pid = pid;
     if (pid == 0) {
+        LONG count = InterlockedIncrement(&unresolved_attribution_count);
+        if (count <= 8)
+            log_message("[ATTR] Process attribution unavailable; family=IPv6 protocol=%s fail_closed=%d sample=%ld",
+                is_udp ? "UDP" : "TCP", g_fail_closed ? 1 : 0, count);
         return g_fail_closed ? RULE_ACTION_BLOCK : RULE_ACTION_DIRECT;
     }
     if (pid == g_current_process_id) return RULE_ACTION_DIRECT;
@@ -2344,7 +2388,13 @@ static RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest
         *out_pid = pid;
 
     if (pid == 0)
+    {
+        LONG count = InterlockedIncrement(&unresolved_attribution_count);
+        if (count <= 8)
+            log_message("[ATTR] Process attribution unavailable; family=IPv4 protocol=%s fail_closed=%d sample=%ld",
+                is_udp ? "UDP" : "TCP", g_fail_closed ? 1 : 0, count);
         return g_fail_closed ? RULE_ACTION_BLOCK : RULE_ACTION_DIRECT;
+    }
 
     // Auto-exclude: Always bypass the process that loaded this DLL (prevents loops)
     if (pid == g_current_process_id)
@@ -3551,6 +3601,8 @@ static DWORD WINAPI local_proxy_server(LPVOID arg)
     if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0)
     {
         log_message("WSAStartup failed (%lu)", GetLastError());
+        InterlockedExchange(&proxy_start_result, -1);
+        if (proxy_start_event != NULL) SetEvent(proxy_start_event);
         return 1;
     }
 
@@ -3558,6 +3610,8 @@ static DWORD WINAPI local_proxy_server(LPVOID arg)
     if (listen_sock == INVALID_SOCKET)
     {
         log_message("Socket creation failed (%d)", WSAGetLastError());
+        InterlockedExchange(&proxy_start_result, -1);
+        if (proxy_start_event != NULL) SetEvent(proxy_start_event);
         WSACleanup();
         return 1;
     }
@@ -3576,6 +3630,8 @@ static DWORD WINAPI local_proxy_server(LPVOID arg)
     if (bind(listen_sock, (struct sockaddr *)&addr, sizeof(addr)) == SOCKET_ERROR)
     {
         log_message("Bind failed (%d)", WSAGetLastError());
+        InterlockedExchange(&proxy_start_result, -1);
+        if (proxy_start_event != NULL) SetEvent(proxy_start_event);
         closesocket(listen_sock);
         WSACleanup();
         return 1;
@@ -3584,6 +3640,8 @@ static DWORD WINAPI local_proxy_server(LPVOID arg)
     if (listen(listen_sock, SOMAXCONN) == SOCKET_ERROR)
     {
         log_message("Listen failed (%d)", WSAGetLastError());
+        InterlockedExchange(&proxy_start_result, -1);
+        if (proxy_start_event != NULL) SetEvent(proxy_start_event);
         closesocket(listen_sock);
         WSACleanup();
         return 1;
@@ -3616,6 +3674,8 @@ static DWORD WINAPI local_proxy_server(LPVOID arg)
     }
 
     log_message("Local proxy listening on port %d", g_local_relay_port);
+    InterlockedExchange(&proxy_start_result, 1);
+    if (proxy_start_event != NULL) SetEvent(proxy_start_event);
 
     while (running)
     {
@@ -4746,6 +4806,7 @@ PROXYBRIDGE_API int ProxyBridge_TestProxyConfig(UINT32 config_id, const char* ta
             snprintf(result_buffer, buffer_size, "Connection failed (code %d)", result);
         return result;
     }
+
 }
 
 PROXYBRIDGE_API void ProxyBridge_SetLocalhostViaProxy(BOOL enable)
@@ -5029,6 +5090,8 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
     clear_flow_pid_cache();
     memset((void*)port_decided_bitmap, 0, sizeof(port_decided_bitmap));
     memset((void*)port_direct_bitmap, 0, sizeof(port_direct_bitmap));
+    InterlockedExchange(&unresolved_attribution_count, 0);
+    InterlockedExchange(&proxy_start_result, 0);
 
     running = TRUE;
 
@@ -5068,13 +5131,40 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
         return FALSE;
     }
 
-    proxy_thread = CreateThread(NULL, 0, local_proxy_server, NULL, 0, NULL);
-    if (proxy_thread == NULL)
+    proxy_start_event = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (proxy_start_event == NULL)
     {
         running = FALSE;
         stop_attribution_trackers();
         return FALSE;
     }
+
+    proxy_thread = CreateThread(NULL, 0, local_proxy_server, NULL, 0, NULL);
+    if (proxy_thread == NULL)
+    {
+        running = FALSE;
+        stop_attribution_trackers();
+        CloseHandle(proxy_start_event);
+        proxy_start_event = NULL;
+        return FALSE;
+    }
+
+    DWORD proxy_start_wait = WaitForSingleObject(
+        proxy_start_event, PROXY_START_TIMEOUT_MS);
+    if (proxy_start_wait != WAIT_OBJECT_0 ||
+        InterlockedCompareExchange(&proxy_start_result, 0, 0) != 1)
+    {
+        running = FALSE;
+        stop_attribution_trackers();
+        WaitForSingleObject(proxy_thread, INFINITE);
+        CloseHandle(proxy_thread);
+        proxy_thread = NULL;
+        CloseHandle(proxy_start_event);
+        proxy_start_event = NULL;
+        return FALSE;
+    }
+    CloseHandle(proxy_start_event);
+    proxy_start_event = NULL;
 
     // Start cleanup thread to avoid blocking packet processing
     cleanup_thread = CreateThread(NULL, 0, cleanup_worker, NULL, 0, NULL);

@@ -604,14 +604,19 @@ function Get-EgressFingerprint {
     param(
         [switch]$UseSelectedExecutable,
         [string]$ExecutablePath = '',
+        [string]$Socks5Proxy = '',
         [ValidateSet('Any', 'IPv4', 'IPv6')][string]$AddressFamily = 'Any'
     )
+    $attempts = [Collections.Generic.List[object]]::new()
+    $script:lastEgressProbeDiagnostics = @()
     $familyArgument = switch ($AddressFamily) {
         'IPv4' { '-4' }
         'IPv6' { '-6' }
         default { '' }
     }
+    $sourceIndex = 0
     foreach ($url in @('https://api.ipify.org', 'https://ifconfig.me/ip')) {
+        $sourceIndex++
         $value = ''
         try {
             if ($UseSelectedExecutable -or -not [string]::IsNullOrWhiteSpace($ExecutablePath)) {
@@ -621,10 +626,21 @@ function Get-EgressFingerprint {
                     '--connect-timeout', '8', '--max-time', '15'
                 )
                 if ($familyArgument) { $arguments += $familyArgument }
+                if (-not [string]::IsNullOrWhiteSpace($Socks5Proxy)) {
+                    $arguments += @('--socks5-hostname', $Socks5Proxy)
+                }
                 $arguments += $url
                 $rawValue = & $curlPath @arguments 2>$null |
                     Select-Object -First 1
-                if ($LASTEXITCODE -ne 0 -or $null -eq $rawValue) { continue }
+                $exitCode = $LASTEXITCODE
+                [void]$attempts.Add([ordered]@{
+                    sourceIndex = $sourceIndex
+                    exitCode = $exitCode
+                    outputPresent = $null -ne $rawValue
+                    explicitProxy = -not [string]::IsNullOrWhiteSpace($Socks5Proxy)
+                })
+                $script:lastEgressProbeDiagnostics = @($attempts)
+                if ($exitCode -ne 0 -or $null -eq $rawValue) { continue }
                 $value = ([string]$rawValue).Trim()
             } else {
                 $value = (Invoke-RestMethod -Uri $url -TimeoutSec 15).ToString().Trim()
@@ -641,14 +657,26 @@ function Get-EgressFingerprint {
             $bytes = [Text.Encoding]::UTF8.GetBytes($value)
             $sha = [Security.Cryptography.SHA256]::Create()
             try {
+                $script:lastEgressProbeDiagnostics = @($attempts)
                 return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '')
             } finally {
                 $sha.Dispose()
                 [Array]::Clear($bytes, 0, $bytes.Length)
                 $value = $null
             }
-        } catch { $value = $null }
+        } catch {
+            [void]$attempts.Add([ordered]@{
+                sourceIndex = $sourceIndex
+                exitCode = $null
+                outputPresent = $false
+                explicitProxy = -not [string]::IsNullOrWhiteSpace($Socks5Proxy)
+                exceptionType = $_.Exception.GetType().Name
+            })
+            $script:lastEgressProbeDiagnostics = @($attempts)
+            $value = $null
+        }
     }
+    $script:lastEgressProbeDiagnostics = @($attempts)
     return ''
 }
 
@@ -1243,15 +1271,33 @@ try {
     }
     $directFingerprint = Get-EgressFingerprint `
         -ExecutablePath $directControlExecutable -AddressFamily IPv4
+    $directProbeDiagnostics = @($script:lastEgressProbeDiagnostics)
+    $explicitProxyFingerprint = Get-EgressFingerprint `
+        -ExecutablePath $directControlExecutable -AddressFamily IPv4 `
+        -Socks5Proxy "${applicationProxyHost}:$applicationProxyPort"
+    $explicitProxyProbeDiagnostics = @($script:lastEgressProbeDiagnostics)
     $selectedFingerprint = Get-EgressFingerprint -UseSelectedExecutable `
         -AddressFamily IPv4
+    $selectedProbeDiagnostics = @($script:lastEgressProbeDiagnostics)
     $summary.selectedMode['egressProbeAttempt'] = [ordered]@{
         directFingerprintCaptured = [bool]$directFingerprint
+        explicitProxyFingerprintCaptured = [bool]$explicitProxyFingerprint
         selectedExecutableFingerprintCaptured = [bool]$selectedFingerprint
+        directDiagnostics = $directProbeDiagnostics
+        explicitProxyDiagnostics = $explicitProxyProbeDiagnostics
+        selectedDiagnostics = $selectedProbeDiagnostics
         rawAddressesStored = $false
     }
     if (-not $directFingerprint) {
         throw 'Unselected direct-control egress fingerprint was unavailable.'
+    }
+    if (-not $explicitProxyFingerprint) {
+        throw 'Application SOCKS5 egress preflight was unavailable.'
+    }
+    $expectedApplicationFingerprint = Get-StringSha256 `
+        -Value $ExpectedApplicationModeEgress
+    if ($explicitProxyFingerprint -ne $expectedApplicationFingerprint) {
+        throw 'Application SOCKS5 preflight did not use the dedicated egress.'
     }
     if (-not $selectedFingerprint) {
         throw 'Selected executable egress fingerprint was unavailable.'
@@ -1259,8 +1305,6 @@ try {
     if ($directFingerprint -eq $selectedFingerprint) {
         throw 'Selected executable did not prove a separate VPN egress.'
     }
-    $expectedApplicationFingerprint = Get-StringSha256 `
-        -Value $ExpectedApplicationModeEgress
     if ($selectedFingerprint -ne $expectedApplicationFingerprint) {
         throw 'Selected executable did not use the dedicated application-routing egress.'
     }

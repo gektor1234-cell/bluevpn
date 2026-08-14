@@ -20,7 +20,10 @@ Green VPN carries a narrow production hardening patch:
   does not block unrelated applications;
 - fail closed when an intercepted connection cannot be attributed, its
   process path cannot be read, or its exact proxy configuration is unusable,
-  after a bounded 100 ms pre-connect attribution wait;
+  after a bounded 500 ms pre-connect attribution wait; a source-port fallback
+  is accepted only when every matching socket row has the same owner;
+- verify that the local relay is actually listening before packet capture starts
+  and keep redirected CLI diagnostics unbuffered for recovery evidence;
 - parse SOCKS5 responses with exact-length reads and handle every address type;
 - preserve long executable paths and keep IPv4/IPv6 on one routing policy;
 - make rule/proxy configuration immutable while the router is active and wait

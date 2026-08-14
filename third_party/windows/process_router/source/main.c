@@ -767,6 +767,11 @@ int main(int argc, char* argv[])
     bool do_upd       = false;
     char profile_path[MAX_PATH] = {0};
 
+    // Runtime recovery may terminate the redirected CLI before a graceful
+    // flush. Keep local diagnostic evidence durable for every physical run.
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+
     // No args: show full help
     if (argc < 2)
     {

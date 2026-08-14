@@ -33,7 +33,12 @@ try {
         'WINDIVERT_EVENT_SOCKET_CONNECT',
         'addr.Socket.ProcessId',
         'store_socket_port_pid',
-        'PROCESS_ATTRIBUTION_WAIT_MS',
+        '#define PROCESS_ATTRIBUTION_WAIT_MS 500',
+        'unique_port_pid',
+        'port_pid_ambiguous',
+        'PROXY_START_TIMEOUT_MS',
+        'proxy_start_event',
+        'Process attribution unavailable',
         'WinDivertHelperHtonIPv6Address',
         'htonl(addr.Flow.LocalAddr[3])',
         'htonl(addr.Flow.RemoteAddr[3])',
@@ -42,6 +47,19 @@ try {
     )) {
         if (-not $processRouterSource.Contains($marker)) {
             throw "Process-router pre-connect attribution marker is missing: $marker"
+        }
+    }
+    $processRouterCliSourcePath = Join-Path $projectRoot `
+        'third_party\windows\process_router\source\main.c'
+    $processRouterCliSource = [IO.File]::ReadAllText(
+        $processRouterCliSourcePath
+    )
+    foreach ($marker in @(
+        'setvbuf(stdout, NULL, _IONBF, 0)',
+        'setvbuf(stderr, NULL, _IONBF, 0)'
+    )) {
+        if (-not $processRouterCliSource.Contains($marker)) {
+            throw "Process-router durable diagnostic marker is missing: $marker"
         }
     }
     foreach ($invalidIpv4Layout in @(
