@@ -20,7 +20,8 @@
 #define VERSION "4.0.0"
 #define PID_CACHE_SIZE 1024
 #define PID_CACHE_TTL_MS 2000
-#define PROCESS_ATTRIBUTION_WAIT_MS 1500
+#define PROCESS_ATTRIBUTION_WAIT_MS 8000
+#define PROCESS_ATTRIBUTION_RETRY_SLICE_MS 25
 #define SOCKET_PORT_PID_TTL_MS 5000
 #define SELECTED_SOCKET_EVENT_TTL_MS 30000
 #define SELECTED_SOCKET_EVENT_CAPACITY 256
@@ -176,6 +177,7 @@ static HANDLE flow_handle = INVALID_HANDLE_VALUE;
 static HANDLE flow_thread = NULL;
 static HANDLE socket_handle = INVALID_HANDLE_VALUE;
 static HANDLE socket_thread = NULL;
+static HANDLE attribution_update_event = NULL;
 static HANDLE proxy_start_event = NULL;
 static volatile LONG proxy_start_result = 0;
 static PID_CACHE_ENTRY *pid_cache[PID_CACHE_SIZE] = {NULL};
@@ -1697,6 +1699,19 @@ static void store_selected_socket_event(BOOL is_ipv6, BOOL is_udp,
     memcpy(entry->remote_addr, remote_addr, address_length);
     ReleaseSRWLockExclusive(&socket_port_pid_lock);
 
+    // A SYN may reach the NETWORK layer before user mode drains the matching
+    // ALE CONNECT event. Clear any earlier fail-closed decision for both port
+    // byte orders and wake the packet-side attribution wait immediately.
+    if (local_port != 0)
+    {
+        UINT16 swapped_local_port = ntohs(local_port);
+        port_clear(local_port);
+        if (swapped_local_port != local_port)
+            port_clear(swapped_local_port);
+    }
+    if (attribution_update_event != NULL)
+        SetEvent(attribution_update_event);
+
     LONG sample = InterlockedIncrement(&selected_socket_event_count);
     if (local_port == 0)
         InterlockedIncrement(&selected_socket_zero_port_count);
@@ -1961,6 +1976,10 @@ static void stop_attribution_trackers(void)
         WaitForSingleObject(flow_thread, 5000);
         CloseHandle(flow_thread);
         flow_thread = NULL;
+    }
+    if (attribution_update_event != NULL) {
+        CloseHandle(attribution_update_event);
+        attribution_update_event = NULL;
     }
 }
 
@@ -2247,6 +2266,21 @@ static void log_unresolved_attribution(const char *family, BOOL is_udp)
             InterlockedCompareExchange(&selected_socket_fallback_count, 0, 0));
 }
 
+static void wait_for_attribution_update(ULONGLONG deadline)
+{
+    ULONGLONG now = GetTickCount64();
+    if (now >= deadline)
+        return;
+    DWORD remaining = (DWORD)(deadline - now);
+    DWORD wait_ms = remaining < PROCESS_ATTRIBUTION_RETRY_SLICE_MS ?
+        remaining : PROCESS_ATTRIBUTION_RETRY_SLICE_MS;
+    HANDLE event_handle = attribution_update_event;
+    if (event_handle != NULL)
+        WaitForSingleObject(event_handle, wait_ms);
+    else
+        Sleep(wait_ms);
+}
+
 static RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port, const UINT8 dest_ip6[16], UINT16 dest_port, BOOL is_udp, DWORD *out_pid, UINT32 *out_proxy_config_id)
 {
     DWORD pid = 0;
@@ -2280,7 +2314,7 @@ static RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port
             if (pid != 0) source = ATTRIBUTION_SOURCE_IP_HELPER;
         }
         if (pid != 0 || GetTickCount64() >= deadline) break;
-        Sleep(1);
+        wait_for_attribution_update(deadline);
     } while (running);
     if (out_pid) *out_pid = pid;
     if (pid == 0) {
@@ -2895,7 +2929,7 @@ static RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest
             if (pid != 0) source = ATTRIBUTION_SOURCE_IP_HELPER;
         }
         if (pid != 0 || GetTickCount64() >= deadline) break;
-        Sleep(1);
+        wait_for_attribution_update(deadline);
     } while (running);
 
     if (out_pid != NULL)
@@ -5675,6 +5709,14 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
         return FALSE;
     }
 
+    attribution_update_event = CreateEventW(NULL, FALSE, FALSE, NULL);
+    if (attribution_update_event == NULL)
+    {
+        running = FALSE;
+        stop_attribution_trackers();
+        return FALSE;
+    }
+
     proxy_start_event = CreateEventW(NULL, TRUE, FALSE, NULL);
     if (proxy_start_event == NULL)
     {
@@ -5868,6 +5910,8 @@ PROXYBRIDGE_API BOOL ProxyBridge_Stop(void)
         return FALSE;
 
     running = FALSE;
+    if (attribution_update_event != NULL)
+        SetEvent(attribution_update_event);
 
     if (windivert_handle != INVALID_HANDLE_VALUE)
     {
