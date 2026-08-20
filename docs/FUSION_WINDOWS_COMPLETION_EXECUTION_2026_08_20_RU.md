@@ -24,8 +24,14 @@
   обнаружил зависимую от версии PowerShell запись `install_ui.ps1` без UTF-8 BOM.
 - Commit `7eca502` исправляет loopback relay, точную tuple-привязку,
   ambiguity fail-closed, UI-дублирование и ложное определение исходного VPN.
-- Следующий source commit делает кодировку installer UI детерминированной между
+- Commit `72443f9` делает кодировку installer UI детерминированной между
   Windows PowerShell 5.1 и PowerShell 7.
+- Clean-source candidate `0.4.6+4632` прошел package audit (`66` entries), но
+  отклонен physical smoke: клик подключения попал в момент незавершенного
+  startup catalog refresh, а параллельный refresh возвращал управление вместо
+  ожидания текущего запроса. Final recovery вернул исходный безопасный baseline.
+- Следующий source commit вводит single-flight catalog refresh и дожидается
+  фактической остановки deadman перед записью cleanup evidence.
 
 ## Исполняемый чек-лист
 
@@ -36,8 +42,11 @@
 - [x] Прогнать deterministic double build, policy tests, Flutter analyze/tests и
   Windows release gate без warnings/errors.
 - [x] Зафиксировать source commit и push.
-- [ ] Из clean source собрать следующий Windows-only candidate, проверить точную
-  версию, размеры, SHA-256, package audit и `productionPublished=false`.
+- [x] Из clean source собрать `0.4.6+4632`, проверить точную версию, размеры,
+  SHA-256, package audit и `productionPublished=false`; candidate отклонен по
+  physical acceptance и не подлежит публикации.
+- [ ] Из clean source собрать successor после catalog-race fix и повторить
+  точную проверку пакета.
 - [ ] Запустить один delayed detached physical smoke из уникального каталога.
 - [ ] Проверить логи, privacy-safe markers и screenshots.
 - [ ] Зафиксировать evidence/docs commit и push.

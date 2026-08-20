@@ -1509,6 +1509,11 @@ try {
             $summary.cleanup.originalStateUnmodified -and
             $null -ne $deadman) {
         Stop-Process -Id $deadman.Id -Force -ErrorAction SilentlyContinue
+        $deadmanStopDeadline = (Get-Date).AddSeconds(5)
+        while ((Get-Process -Id $deadman.Id -ErrorAction SilentlyContinue) -and
+                (Get-Date) -lt $deadmanStopDeadline) {
+            Start-Sleep -Milliseconds 100
+        }
     }
     $summary.cleanup.deadmanStopped =
         $null -eq $deadman -or

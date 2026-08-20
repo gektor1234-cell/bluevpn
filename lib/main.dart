@@ -16,6 +16,7 @@ import 'services/fusion_connection_status_policy.dart';
 import 'services/product_display_policy.dart';
 import 'services/route_failure_cooldown.dart';
 import 'services/server_location_policy.dart';
+import 'services/single_flight_operation.dart';
 import 'services/transport_preview_policy.dart';
 import 'services/windows_dpapi.dart';
 import 'services/windows_selective_routing_service.dart';
@@ -7707,6 +7708,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   bool _wireGuardBusy = false;
   bool _tariffBusy = false;
   bool _serverCatalogBusy = false;
+  final SingleFlightOperation _serverCatalogRefresh = SingleFlightOperation();
   Map<String, dynamic>? _tariffCatalog;
   Map<String, dynamic>? _tariffQuote;
   String? _tariffStatus;
@@ -13857,8 +13859,13 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _refreshServerCatalog({required bool showToast}) async {
-    if (_serverCatalogBusy) return;
+  Future<void> _refreshServerCatalog({required bool showToast}) {
+    return _serverCatalogRefresh.run(
+      () => _refreshServerCatalogOnce(showToast: showToast),
+    );
+  }
+
+  Future<void> _refreshServerCatalogOnce({required bool showToast}) async {
     if (mounted) {
       setState(() {
         _serverCatalogBusy = true;
