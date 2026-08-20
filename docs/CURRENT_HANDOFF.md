@@ -8,14 +8,24 @@ This is the current operational entry point. Read it together with
 
 ## Fusion Windows Selected-App Candidate, 2026-08-20
 
-- Exact Windows candidate `0.4.6+4634` is technically accepted but not
-  published. Installer size is `54026752`; SHA-256 is
-  `79CE8577E1ADBCD08977B471FF797C0A8527253ABC056D1F5301E4988B6C1D7F`;
+- Exact Windows `0.4.6+4634` passed the selected-app physical routing acceptance,
+  but owner review found a Diagnostics false negative while its tunnel was
+  active. It is superseded and must not be published.
+- Corrected clean-source candidate is `0.4.6+4635`. Installer size is
+  `54026240`; SHA-256 is
+  `0FBB24B4E79081A393D162130D593327B956D92453361A5944E89E661811ECB7`;
   Authenticode is `NotSigned`. Exact source anchor is
-  `58c3ac8c54395980b7addb5ad094a58786c8b30e`.
-- Package audit passed with `66` payload entries and no errors. Exact installed
-  app is `0.4.6+4634`; app, AOT, service and deterministic process-router
-  hashes are recorded in
+  `fcd0c6e8a83742aa71e4aabf480cfa9df19321d3`.
+- Diagnostics now uses authenticated GreenVPNService status as authoritative;
+  a denied direct `wg.exe` query can no longer turn a confirmed running tunnel
+  into `inactive`. Package audit passed with `66` payload entries and no errors;
+  analyze, `135` tests (`14` skipped), focused Fusion tests and release gate
+  `0/0` passed.
+- `+4635` is built but not installed. The owner was actively using installed
+  `+4634`, so no app/service/tunnel transition was performed. One targeted
+  post-install visual check of Diagnostics remains.
+- Exact installed app remains `0.4.6+4634`; app, AOT, service and deterministic
+  process-router hashes plus the `+4635` package hashes are recorded in
   `docs/FUSION_WINDOWS_SELECTED_APP_ACCEPTANCE_2026_08_20_RU.md`.
 - One delayed detached physical smoke passed the authoritative
   `full -> applications -> full` flow. Foreground used one candidate in
@@ -37,9 +47,11 @@ This is the current operational entry point. Read it together with
   also must not be published.
 - Stable production, backend, Android and public manifests remain unchanged.
   `productionPublished=false`; no production deployment was attempted.
-- Publication remains blocked on three separate owner decisions: Fusion UI
-  and email acceptance, Authenticode or explicit unsigned SmartScreen
-  acceptance, and explicit stable-production promotion approval.
+- The owner accepted the remaining Fusion UI and chose not to repeat a live
+  email login; auth/recovery automation is green. This acceptance is final for
+  `+4635` after its targeted Diagnostics check. The Authenticode/unsigned
+  SmartScreen gate was explicitly deferred, so stable-production promotion
+  remains blocked and was not requested.
 - Full exact evidence and remaining gates:
   `docs/FUSION_WINDOWS_SELECTED_APP_ACCEPTANCE_2026_08_20_RU.md`.
 

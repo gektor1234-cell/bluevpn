@@ -58,6 +58,21 @@
   вернул Amnezia/API `200`/YouTube `204`; metric `42739` и failsafes отсутствуют.
 - Все четыре screenshot-файла визуально проверены; privacy-safe router evidence
   подтверждает redirect injection, loopback relay acceptance и SOCKS5 upstream.
+- После owner review найден отдельный Diagnostics false negative: установленный
+  `+4634` показывал `не активно`, потому что обычный UI-процесс не имел доступа
+  к прямому `wg.exe show`, хотя authenticated GreenVPNService подтверждал
+  running full tunnel.
+- Commit `fcd0c6e8a83742aa71e4aabf480cfa9df19321d3` (pushed) переводит Diagnostics,
+  support summary и support report на authoritative local-service status;
+  direct WireGuard query остается fallback только при недоступном service.
+- Exact clean-source successor `0.4.6+4635`: installer SHA-256
+  `0FBB24B4E79081A393D162130D593327B956D92453361A5944E89E661811ECB7`,
+  размер `54026240`, `NotSigned`; package audit `66` entries, ошибок нет,
+  `productionPublished=false`. Analyze, `135` tests (`14` skipped), focused
+  Fusion tests и release gate `0/0` прошли.
+- Работающий `+4634` не останавливался и сетевые переходы не выполнялись.
+  `+4635` не установлен; целевая visual confirmation Diagnostics остается
+  последней технической проверкой этого UI-only successor.
 
 ## Исполняемый чек-лист
 
@@ -80,6 +95,12 @@
 - [x] Запустить один delayed detached physical smoke из уникального каталога.
 - [x] Проверить логи, privacy-safe markers и screenshots.
 - [x] Зафиксировать evidence/docs commit `0528f8e` и push.
+- [x] Исправить Diagnostics source-of-truth, добавить policy regressions и
+  зафиксировать/push source commit `fcd0c6e`.
+- [x] Собрать и проверить exact clean-source successor `0.4.6+4635` без
+  Android/backend изменений и без production publication.
+- [ ] После завершения пользовательской VPN-сессии безопасно установить
+  `+4635` и визуально подтвердить `Подключение: активно` в Diagnostics.
 
 ## Обязательный physical acceptance
 
@@ -100,8 +121,9 @@
 
 ## Что останется после технического завершения
 
-Только внешние owner decisions, строго по очереди:
-
-1. Принять Fusion UI и email-коммуникацию.
-2. Выбрать: принять unsigned/SmartScreen риск либо предоставить Authenticode.
-3. Отдельно разрешить stable production publication.
+- Fusion UI/email владелец принял без отдельного live email-прогона; automated
+  auth/recovery tests прошли. Acceptance окончательно привязывается к `+4635`
+  после целевой проверки Diagnostics.
+- Authenticode/unsigned SmartScreen gate владелец пока пропустил; он остается
+  непройденным.
+- Stable publication не разрешена и остается заблокированной предыдущим gate.

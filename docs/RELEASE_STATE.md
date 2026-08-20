@@ -6,17 +6,18 @@
 |---|---|
 | Stable production | unchanged: backend `0.9.153-update-channel-alias.4`, Android `0.3.19+2026072914`, Windows `0.3.26+3105` |
 | Accepted paid-beta | unchanged: Android `0.4.6-paid-beta.1+2026081106`, Windows `0.4.6-paid-beta.2+4602` |
-| Windows production candidate | `0.4.6+4634`, exact selected-app physical smoke passed, `NotSigned`, not published |
+| Windows production candidate | `0.4.6+4635`, diagnostics-fixed exact package; targeted post-install UI check pending, `NotSigned`, not published |
 | Android/backend candidate | not promoted and unchanged |
 | Money and advertising | disabled, unchanged |
 
 Exact candidate installer SHA-256 is
-`79CE8577E1ADBCD08977B471FF797C0A8527253ABC056D1F5301E4988B6C1D7F`;
-size is `54026752` bytes; source anchor is
-`58c3ac8c54395980b7addb5ad094a58786c8b30e`. Package audit passed with `66`
-payload entries and no errors.
+`0FBB24B4E79081A393D162130D593327B956D92453361A5944E89E661811ECB7`;
+size is `54026240` bytes; source anchor is
+`fcd0c6e8a83742aa71e4aabf480cfa9df19321d3`. Package audit passed with `66`
+payload entries and no errors. Analyze, `135` tests (`14` intentionally
+skipped), focused Fusion tests and release gate `0/0` passed.
 
-The exact delayed detached smoke passed the authoritative
+The exact `+4634` delayed detached smoke passed the authoritative
 `full -> applications -> full` flow. Foreground used one candidate in `17.988`
 client-log seconds and confirmed data-plane probe plus privileged takeover.
 Applications mode had consistent UI/runtime and one exact process-router.
@@ -31,14 +32,21 @@ empty. Four screenshots passed their visual contracts and were visually
 inspected: required quick actions are visible while public IP, protocol and
 route are hidden. Final recovery restored Amnezia, API `200` and YouTube `204`
 and left no Green components, process-router, metric-`42739` routes or
-failsafes. Builds `4630`-`4633` are rejected; earlier accepted `4610` is
-superseded. None may be published. Exact evidence and failure history are in
+failsafes. Owner review then found that Diagnostics used a non-elevated direct
+`wg.exe` query and could show `inactive` while authenticated GreenVPNService
+reported a running full tunnel. `+4635` fixes this source-of-truth defect; its
+process-router is byte-identical to the physically accepted `+4634` router.
+Builds `4630`-`4634` are rejected or superseded; earlier accepted `4610` is
+also superseded. None may be published. Exact evidence and failure history are in
 `FUSION_WINDOWS_SELECTED_APP_ACCEPTANCE_2026_08_20_RU.md`.
 
-This is a technically accepted candidate, not a release. No deployment was
-attempted and `productionPublished=false`. Publication requires three separate
-owner decisions: Fusion UI/email acceptance, Authenticode or explicit unsigned
-SmartScreen acceptance, and explicit stable-production promotion approval.
+This is a package-verified candidate, not a release. Installed `+4634` was left
+running unchanged; `+4635` still needs one targeted post-install Diagnostics
+visual check. No deployment was attempted and `productionPublished=false`.
+The owner accepted the remaining Fusion UI and relied on passing automated
+auth/recovery tests instead of repeating live email login. The next sequential
+Authenticode/unsigned SmartScreen gate was explicitly deferred, so stable
+production approval remains blocked and was not requested.
 
 ## Fusion Paid-Beta Closure (2026-08-13 MSK)
 

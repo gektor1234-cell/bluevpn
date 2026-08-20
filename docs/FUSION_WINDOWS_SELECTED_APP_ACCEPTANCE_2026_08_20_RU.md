@@ -9,9 +9,15 @@ Windows candidate `0.4.6+4634` технически принят по точно
 выход через dedicated VPN, selected YouTube вернул HTTP `204`, а после прогона
 исходный Amnezia/API/YouTube baseline был восстановлен.
 
-Candidate не опубликован. `productionPublished=false`; stable production,
-Android, backend и Friendly Linnet `5.129.237.163` не менялись. До публикации
-остаются только три последовательных owner gates, перечисленные в конце.
+После этой приемки владелец обнаружил отдельный UI-дефект: Diagnostics показывал
+`не активно`, хотя authenticated GreenVPNService подтверждал работающий full
+tunnel. Routing acceptance `+4634` остается действительным, но сам `+4634`
+считается superseded. Исправленный clean-source successor `0.4.6+4635` собран и
+прошел package/release gates; он пока не устанавливался, чтобы не прерывать
+активное подключение владельца.
+
+Ни один candidate не опубликован. `productionPublished=false`; stable
+production, Android, backend и Friendly Linnet `5.129.237.163` не менялись.
 
 ## Source и исправление
 
@@ -53,6 +59,41 @@ Build root:
 - Candidate manifest: `fusionUiEnabled=true`,
   `fusionProductionPromotionCandidate=true`, `ownerApprovalRequired=true`,
   `productionPublished=false`.
+
+## Diagnostics successor `0.4.6+4635`
+
+- Exact source commit:
+  `fcd0c6e8a83742aa71e4aabf480cfa9df19321d3`.
+- Build root:
+  `C:\BlueVPN_Builds\fusion_production_promotion_20260820_b4635_diagnostics_v1`.
+- Root cause: Diagnostics выполнял прямой `wg.exe show` из обычного процесса;
+  Windows возвращал `Permission denied`, пока authenticated local service
+  одновременно подтверждал `tunnelState=running`, `wireGuardState=running` и
+  `routingMode=full`.
+- Fix использует authenticated GreenVPNService status как authoritative source,
+  сохраняет direct `wg.exe` только как legacy fallback при недоступном service и
+  отображает transitional/unavailable state как `проверяется` или
+  `не удалось проверить`, а не как ложное `не активно`.
+
+| Компонент | Размер | SHA-256 |
+|---|---:|---|
+| `GreenVPN_Setup_0.4.6.exe` | `54026240` | `0FBB24B4E79081A393D162130D593327B956D92453361A5944E89E661811ECB7` |
+| packaged `greenvpn.exe` | `149504` | `E2DD276C55EDCC343D63EBC9925D0E9DC5A5B5708898D0D05D25488B1E1F2847` |
+| packaged `app.so` | `7046064` | `D9F882BD003CA10682BDF6CD96EC6A05379228AD3ABD99D331131E3061BB0231` |
+| packaged `greenvpn_service.exe` | `117760` | `4E0A63A0B2787CDEB3295F62B61AABAAEBC0F24A9A0B37FB10B4BE114E6B77DE` |
+| `ProxyBridge_CLI.exe` | `204288` | `6C215C7975E3CBEE086DE0EE2F3226FAE84F35A7B0A2FFD432FC346EF56A0569` |
+| `ProxyBridgeCore.dll` | `231424` | `B4759403D1550594A6032DA4869C6666B234B88868ED19D8A1FD38372B7349CE` |
+
+- Authenticode: `NotSigned`.
+- Package audit: `success=true`, channel `production`, `66` payload entries,
+  `0` errors.
+- Clean-source validation: `flutter analyze` без замечаний; `135` tests passed,
+  `14` intentionally skipped; focused Fusion tests passed; Windows release gate
+  `0` warnings, `0` errors.
+- Manifest retains `ownerApprovalRequired=true` and
+  `productionPublished=false`.
+- Installed `+4634` remained running unchanged during build; no app, tunnel,
+  route or service transition was performed.
 
 ## Build verification
 
@@ -133,10 +174,18 @@ public manifests не менялись; candidate manifest остается ло
 `productionPublished=false`. Android, backend, серверные маршруты и Friendly
 Linnet `5.129.237.163` не затрагивались.
 
-## Оставшиеся owner gates
+## Owner gates и оставшаяся проверка
 
-Техническая часть закрыта. Дальше только внешние решения, строго по очереди:
+1. Fusion UI/email acceptance: владелец принял остальной UI и решил не делать
+   отдельный live email-вход; automated auth/recovery tests прошли. Gate принят
+   для `+4635` при условии целевой проверки исправленного Diagnostics после
+   безопасной установки.
+2. Authenticode/unsigned SmartScreen: владелец решил пока пропустить. Gate не
+   принят и остается блокирующим.
+3. Stable production publication: не запрашивалась и не разрешена; из-за
+   последовательности gates публикация остается заблокированной.
 
-1. Принять Fusion UI и email-коммуникацию.
-2. Выбрать Authenticode либо явно принять unsigned/SmartScreen риск.
-3. Отдельно разрешить stable production publication.
+До установки `+4635` требуется только безопасно заменить активный `+4634` и
+визуально подтвердить, что при authoritative running status Diagnostics
+показывает `активно`. Это нельзя выполнять внутри активной сессии с работающим
+пользовательским VPN. Production publication по-прежнему запрещена.
