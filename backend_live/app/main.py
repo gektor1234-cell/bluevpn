@@ -30,7 +30,7 @@ from typing import Any, Iterator, Optional
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel
 
 
@@ -115,6 +115,9 @@ UPDATE_REQUIRED = (
     os.getenv("GREENVPN_UPDATE_REQUIRED", "").strip().lower()
     in {"1", "true", "yes", "on"}
 )
+WINDOWS_MIN_SUPPORTED_VERSION = os.getenv(
+    "GREENVPN_MIN_SUPPORTED_VERSION", ""
+).strip()
 UPDATE_RELEASED_AT = os.getenv("GREENVPN_UPDATE_RELEASED_AT", "").strip()
 UPDATE_CHANGELOG = [
     item.strip(" -")
@@ -617,6 +620,9 @@ ANDROID_UPDATE_REQUIRED = (
     os.getenv("GREENVPN_ANDROID_UPDATE_REQUIRED", "").strip().lower()
     in {"1", "true", "yes", "on"}
 )
+ANDROID_MIN_SUPPORTED_VERSION = os.getenv(
+    "GREENVPN_ANDROID_MIN_SUPPORTED_VERSION", ""
+).strip()
 ANDROID_UPDATE_RELEASED_AT = os.getenv(
     "GREENVPN_ANDROID_UPDATE_RELEASED_AT",
     UPDATE_RELEASED_AT,
@@ -17468,6 +17474,93 @@ def compare_versions(left: Optional[str], right: Optional[str]) -> int:
             return 1 if left_int > right_int else -1
         return 1 if left_part > right_part else -1
     return 0
+
+
+MANDATORY_UPDATE_EXEMPT_PATHS = {
+    "/healthz",
+    "/api/v1/updates/manifest",
+    "/api/v1/updates/windows",
+}
+
+
+def mandatory_client_update_requirement(
+    *,
+    platform: Optional[str],
+    current_version: Optional[str],
+    release_channel: Optional[str],
+) -> Optional[dict[str, str]]:
+    normalized_platform = clean_limited_text(platform, 40).strip().lower()
+    normalized_version = clean_limited_text(current_version, 120).strip()
+    normalized_channel = clean_limited_text(release_channel, 40).strip().lower()
+    if normalized_channel not in {"stable", "public-product"}:
+        return None
+    if normalized_platform == "android":
+        required = ANDROID_UPDATE_REQUIRED
+        minimum = ANDROID_MIN_SUPPORTED_VERSION
+        latest = ANDROID_UPDATE_LATEST_VERSION
+        download_url = ANDROID_UPDATE_DOWNLOAD_URL
+        sha256 = ANDROID_UPDATE_SHA256
+    elif normalized_platform == "windows":
+        required = UPDATE_REQUIRED
+        minimum = WINDOWS_MIN_SUPPORTED_VERSION
+        latest = UPDATE_LATEST_VERSION
+        download_url = UPDATE_DOWNLOAD_URL
+        sha256 = UPDATE_SHA256
+    else:
+        return None
+    if not required or not minimum or not normalized_version:
+        return None
+    parsed_url = urllib.parse.urlparse(download_url)
+    normalized_sha = re.sub(r"\s+", "", sha256).upper()
+    artifact_ready = (
+        parsed_url.scheme == "https"
+        and bool(parsed_url.netloc)
+        and bool(re.fullmatch(r"[0-9A-F]{64}", normalized_sha))
+    )
+    if not artifact_ready or compare_versions(normalized_version, minimum) >= 0:
+        return None
+    return {
+        "platform": normalized_platform,
+        "currentVersion": normalized_version,
+        "minSupportedVersion": minimum,
+        "latestVersion": latest,
+    }
+
+
+def mandatory_update_path_is_exempt(path: Optional[str]) -> bool:
+    normalized = (path or "").rstrip("/") or "/"
+    return normalized in MANDATORY_UPDATE_EXEMPT_PATHS
+
+
+@app.middleware("http")
+async def enforce_mandatory_client_update(request: Request, call_next):
+    if request.method == "OPTIONS" or mandatory_update_path_is_exempt(
+        request.url.path
+    ):
+        return await call_next(request)
+    requirement = mandatory_client_update_requirement(
+        platform=request.headers.get("X-GreenVPN-Platform"),
+        current_version=request.headers.get("X-GreenVPN-Version"),
+        release_channel=request.headers.get("X-GreenVPN-Release-Channel"),
+    )
+    if requirement is None:
+        return await call_next(request)
+    return JSONResponse(
+        status_code=426,
+        content={
+            "ok": False,
+            "detail": {
+                "code": "client_update_required",
+                "message": (
+                    "Чтобы продолжить пользоваться Green VPN, установите "
+                    "обязательное обновление."
+                ),
+                **requirement,
+                "updateManifestUrl": "/api/v1/updates/manifest",
+            },
+        },
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 def rollout_bucket(seed: Optional[str]) -> Optional[int]:

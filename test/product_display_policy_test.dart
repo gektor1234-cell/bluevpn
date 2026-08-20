@@ -294,6 +294,15 @@ void main() {
     );
     expect(
       greenVpnPublicErrorMessage(
+        rawError: 'Ошибка сервера (426)',
+        responseBody:
+            '{"detail":{"code":"client_update_required","message":"internal"}}',
+        statusCode: 426,
+      ),
+      'Чтобы продолжить пользоваться Green VPN, установите обязательное обновление.',
+    );
+    expect(
+      greenVpnPublicErrorMessage(
         rawError: 'Ошибка сервера (403)',
         responseBody:
             '{"detail":{"code":"premium_feature_required","message":"internal"}}',

@@ -3,7 +3,7 @@ set -euo pipefail
 
 APPLY=0
 ROLE=""
-INSTALLER=""
+APK=""
 VERSION=""
 BUILD_NUMBER=""
 SHA256=""
@@ -17,11 +17,11 @@ DATABASE="/opt/bluevpn/backend/data/bluevpn.db"
 
 usage() {
   cat <<'EOF'
-Atomically publish one Windows stable installer on one production control plane.
+Atomically publish one Android stable APK on one production control plane.
 
 Required arguments:
   --role timeweb|ruvds
-  --installer PATH
+  --apk PATH
   --version VERSION
   --build-number NUMBER
   --sha256 SHA256
@@ -31,17 +31,16 @@ Optional arguments:
   --min-supported-version VERSION
   --apply
 
-The default is dry-run. Apply mode preserves rollback files, switches the
-stable installer alias atomically, updates only the production environment and
-stable release row, restarts only the production backend, and verifies both
-stable and public-product update channels.
+The default is dry-run. Apply mode preserves rollback files, switches only the
+stable Android alias, updates only the production environment and stable
+release row, restarts only the production backend, and leaves paid-beta intact.
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --role) ROLE="${2:?missing role}"; shift 2 ;;
-    --installer) INSTALLER="${2:?missing installer}"; shift 2 ;;
+    --apk) APK="${2:?missing APK}"; shift 2 ;;
     --version) VERSION="${2:?missing version}"; shift 2 ;;
     --build-number) BUILD_NUMBER="${2:?missing build number}"; shift 2 ;;
     --sha256) SHA256="${2:?missing SHA256}"; shift 2 ;;
@@ -54,16 +53,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$ROLE" in
-  timeweb)
-    DOWNLOAD_URL="https://greenvpn.pro/downloads/GreenVPN_Setup.exe"
-    ;;
-  ruvds)
-    DOWNLOAD_URL="https://176-113-81-35.sslip.io/downloads/GreenVPN_Setup.exe"
-    ;;
-  *)
-    echo "--role must be timeweb or ruvds" >&2
-    exit 2
-    ;;
+  timeweb) DOWNLOAD_URL="https://greenvpn.pro/downloads/GreenVPN_Android.apk" ;;
+  ruvds) DOWNLOAD_URL="https://176-113-81-35.sslip.io/downloads/GreenVPN_Android.apk" ;;
+  *) echo "--role must be timeweb or ruvds" >&2; exit 2 ;;
 esac
 
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9._-]*$ ]] || {
@@ -93,7 +85,7 @@ SHA256="${SHA256^^}"
   exit 2
 }
 
-for path in "$INSTALLER" "$ENV_FILE" "$DATABASE"; do
+for path in "$APK" "$ENV_FILE" "$DATABASE"; do
   [[ -f "$path" && ! -L "$path" ]] || {
     echo "Missing or unsafe file: $path" >&2
     exit 2
@@ -103,14 +95,14 @@ done
   echo "Missing or unsafe downloads directory: $DOWNLOADS" >&2
   exit 2
 }
-[[ -f "$DOWNLOADS/GreenVPN_Setup.exe" && ! -L "$DOWNLOADS/GreenVPN_Setup.exe" ]] || {
-  echo "Missing or unsafe current stable installer" >&2
+[[ -f "$DOWNLOADS/GreenVPN_Android.apk" && ! -L "$DOWNLOADS/GreenVPN_Android.apk" ]] || {
+  echo "Missing or unsafe current stable APK" >&2
   exit 2
 }
 
-actual_sha256="$(sha256sum "$INSTALLER" | awk '{print toupper($1)}')"
+actual_sha256="$(sha256sum "$APK" | awk '{print toupper($1)}')"
 [[ "$actual_sha256" == "$SHA256" ]] || {
-  echo "Installer hash mismatch" >&2
+  echo "APK hash mismatch" >&2
   exit 2
 }
 
@@ -119,7 +111,7 @@ echo "role=$ROLE"
 echo "version=$VERSION"
 echo "build_number=$BUILD_NUMBER"
 echo "sha256=$SHA256"
-echo "size_bytes=$(stat -c %s "$INSTALLER")"
+echo "size_bytes=$(stat -c %s "$APK")"
 echo "required=$REQUIRED"
 echo "min_supported_version=$MIN_SUPPORTED_VERSION"
 [[ $APPLY -eq 1 ]] || exit 0
@@ -130,19 +122,18 @@ echo "min_supported_version=$MIN_SUPPORTED_VERSION"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 released_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-backup_dir="/root/greenvpn-windows-stable-release-backups/${timestamp}-${ROLE}-${VERSION}-${BUILD_NUMBER}"
-versioned_installer="$DOWNLOADS/GreenVPN_Setup_${VERSION}_${BUILD_NUMBER}.exe"
+backup_dir="/root/greenvpn-android-stable-release-backups/${timestamp}-${ROLE}-${VERSION}-${BUILD_NUMBER}"
+versioned_apk="$DOWNLOADS/GreenVPN_Android_${VERSION}_${BUILD_NUMBER}.apk"
 install -d -m 700 "$backup_dir"
 cp -a --reflink=auto "$ENV_FILE" "$backup_dir/backend.env"
 cp -a --reflink=auto \
-  "$DOWNLOADS/GreenVPN_Setup.exe" \
-  "$backup_dir/GreenVPN_Setup.previous.exe"
+  "$DOWNLOADS/GreenVPN_Android.apk" \
+  "$backup_dir/GreenVPN_Android.previous.apk"
 chmod 600 "$backup_dir"/*
-sha256sum "$backup_dir/GreenVPN_Setup.previous.exe" >"$backup_dir/previous-exe-sha256.txt"
-chmod 600 "$backup_dir/previous-exe-sha256.txt"
+sha256sum "$backup_dir/GreenVPN_Android.previous.apk" >"$backup_dir/previous-apk-sha256.txt"
+chmod 600 "$backup_dir/previous-apk-sha256.txt"
 
 python3 - "$DATABASE" "$backup_dir/production.db" <<'PY'
-import pathlib
 import sqlite3
 import sys
 
@@ -151,15 +142,15 @@ source = sqlite3.connect(source_raw, timeout=60)
 target = sqlite3.connect(target_raw)
 try:
     if source.execute("PRAGMA quick_check").fetchone()[0] != "ok":
-        raise SystemExit(f"source quick_check failed: {source_raw}")
+        raise SystemExit("source database quick_check failed")
     source.backup(target)
     if target.execute("PRAGMA quick_check").fetchone()[0] != "ok":
-        raise SystemExit(f"backup quick_check failed: {target_raw}")
+        raise SystemExit("backup database quick_check failed")
 finally:
     target.close()
     source.close()
-pathlib.Path(target_raw).chmod(0o600)
 PY
+chmod 600 "$backup_dir/production.db"
 
 alias_switched=0
 env_modified=0
@@ -179,7 +170,7 @@ target = sqlite3.connect(target_raw, timeout=60)
 try:
     source.backup(target)
     if target.execute("PRAGMA quick_check").fetchone()[0] != "ok":
-        raise SystemExit(f"database restore quick_check failed: {target_raw}")
+        raise SystemExit("database restore quick_check failed")
 finally:
     target.close()
     source.close()
@@ -187,9 +178,8 @@ PY
   fi
   if [[ $alias_switched -eq 1 ]]; then
     install -m 644 \
-      "$backup_dir/GreenVPN_Setup.previous.exe" \
-      "$DOWNLOADS/GreenVPN_Setup.exe"
-    rm -f "$versioned_installer"
+      "$backup_dir/GreenVPN_Android.previous.apk" \
+      "$DOWNLOADS/GreenVPN_Android.apk"
   fi
   if [[ $env_modified -eq 1 ]]; then
     cp -a "$backup_dir/backend.env" "$ENV_FILE"
@@ -199,9 +189,9 @@ PY
 }
 trap rollback_on_error ERR
 
-install -m 644 "$INSTALLER" "$versioned_installer"
-install -m 644 "$INSTALLER" "$DOWNLOADS/.GreenVPN_Setup.exe.new"
-mv -f "$DOWNLOADS/.GreenVPN_Setup.exe.new" "$DOWNLOADS/GreenVPN_Setup.exe"
+install -m 644 "$APK" "$versioned_apk"
+install -m 644 "$APK" "$DOWNLOADS/.GreenVPN_Android.apk.new"
+mv -f "$DOWNLOADS/.GreenVPN_Android.apk.new" "$DOWNLOADS/GreenVPN_Android.apk"
 alias_switched=1
 
 python3 - \
@@ -224,22 +214,17 @@ import sys
 path = pathlib.Path(path_raw)
 assignment = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
 updates = {
-    "GREENVPN_LATEST_VERSION": version,
-    "GREENVPN_UPDATE_URL": download_url,
-    "GREENVPN_UPDATE_SHA256": sha256,
-    "GREENVPN_UPDATE_REQUIRED": required,
-    "GREENVPN_MIN_SUPPORTED_VERSION": min_supported_version,
-    "GREENVPN_UPDATE_RELEASED_AT": released_at,
-    "GREENVPN_UPDATE_CHANGELOG": (
-        f"Green VPN {version}: быстрый запуск, фоновые резервные маршруты "
-        "и исправленная иконка в системном трее."
+    "GREENVPN_ANDROID_LATEST_VERSION": version,
+    "GREENVPN_ANDROID_UPDATE_URL": download_url,
+    "GREENVPN_ANDROID_UPDATE_SHA256": sha256,
+    "GREENVPN_ANDROID_UPDATE_REQUIRED": required,
+    "GREENVPN_ANDROID_MIN_SUPPORTED_VERSION": min_supported_version,
+    "GREENVPN_ANDROID_UPDATE_RELEASED_AT": released_at,
+    "GREENVPN_ANDROID_UPDATE_CHANGELOG": (
+        f"Green VPN {version}: режим выбранных приложений, улучшенная диагностика "
+        "и обязательное безопасное обновление."
     ),
-    "GREENVPN_PUBLIC_WINDOWS_DOWNLOAD_URL": download_url,
-    "GREENVPN_WINDOWS_CODE_SIGNING_PROVIDER": "",
-    "GREENVPN_WINDOWS_CODE_SIGNING_PUBLISHER": "",
-    "GREENVPN_WINDOWS_CODE_SIGNING_CERT_THUMBPRINT": "",
-    "GREENVPN_WINDOWS_SIGNED_INSTALLER_URL": "",
-    "GREENVPN_WINDOWS_SIGNED_INSTALLER_SHA256": "",
+    "GREENVPN_ANDROID_UPDATE_ROLLOUT": "100",
 }
 out = []
 for raw in path.read_text(encoding="utf-8").splitlines():
@@ -250,7 +235,7 @@ for raw in path.read_text(encoding="utf-8").splitlines():
 for key, value in updates.items():
     escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
     out.append(f'{key}="{escaped}"')
-temporary = path.with_name(path.name + ".windows-stable-release.tmp")
+temporary = path.with_name(path.name + ".android-stable-release.tmp")
 temporary.write_text("\n".join(out) + "\n", encoding="utf-8")
 os.chmod(temporary, 0o600)
 os.replace(temporary, path)
@@ -262,7 +247,7 @@ chmod 600 "$ENV_FILE"
 db_modified=1
 python3 - \
   "$DATABASE" "$VERSION" "$BUILD_NUMBER" "$DOWNLOAD_URL" "$SHA256" \
-  "$INSTALLER" "$REQUIRED" "$MIN_SUPPORTED_VERSION" "$released_at" <<'PY'
+  "$APK" "$REQUIRED" "$MIN_SUPPORTED_VERSION" "$released_at" <<'PY'
 import json
 import pathlib
 import sqlite3
@@ -274,18 +259,18 @@ import sys
     build_number,
     download_url,
     sha256,
-    installer_raw,
+    apk_raw,
     required_raw,
     min_supported_version,
     released_at,
 ) = sys.argv[1:]
-installer = pathlib.Path(installer_raw)
+apk = pathlib.Path(apk_raw)
 required = 1 if required_raw == "1" else 0
 changelog = json.dumps(
     [
-        "Быстрое подключение использует один основной маршрут без ожидания полного каскада.",
-        "Резервные маршруты проверяются в фоне и используются для быстрого восстановления.",
-        "Исправлены синхронизация статуса и дублирование значка в системном трее.",
+        "Добавлен режим VPN только для выбранных приложений и сайтов.",
+        "Улучшена диагностика активного подключения.",
+        "Обновление приложения теперь нельзя пропустить, когда оно обязательное.",
     ],
     ensure_ascii=False,
 )
@@ -298,7 +283,7 @@ try:
         """
         UPDATE app_releases
         SET status = 'retired', retired_at = ?, updated_at = ?
-        WHERE platform = 'windows' AND channel = 'stable'
+        WHERE platform = 'android' AND channel = 'stable'
           AND status = 'published' AND version <> ?
         """,
         (released_at, released_at, version),
@@ -310,7 +295,7 @@ try:
             size_bytes, is_required, min_supported_version, rollout_percent,
             changelog_json, status, created_at, updated_at, published_at, retired_at
         )
-        VALUES ('windows', 'stable', ?, ?, ?, ?, ?, ?, ?, 100, ?,
+        VALUES ('android', 'stable', ?, ?, ?, ?, ?, ?, ?, 100, ?,
                 'published', ?, ?, ?, NULL)
         ON CONFLICT(platform, channel, version) DO UPDATE SET
             build_number = excluded.build_number,
@@ -331,7 +316,7 @@ try:
             build_number,
             download_url,
             sha256,
-            installer.stat().st_size,
+            apk.stat().st_size,
             required,
             min_supported_version,
             changelog,
@@ -363,11 +348,11 @@ done
 
 stable_manifest="$(
   curl -fsS --max-time 20 \
-    "http://127.0.0.1:8000/api/v1/updates/manifest?platform=windows&channel=stable&currentVersion=0.0.0&clientId=stable-release"
+    "http://127.0.0.1:8000/api/v1/updates/manifest?platform=android&channel=stable&currentVersion=0.0.0&clientId=stable-release"
 )"
 public_product_manifest="$(
   curl -fsS --max-time 20 \
-    "http://127.0.0.1:8000/api/v1/updates/manifest?platform=windows&channel=public-product&currentVersion=0.0.0&clientId=stable-release"
+    "http://127.0.0.1:8000/api/v1/updates/manifest?platform=android&channel=public-product&currentVersion=0.0.0&clientId=stable-release"
 )"
 python3 - \
   "$VERSION" "$BUILD_NUMBER" "$SHA256" "$REQUIRED" "$MIN_SUPPORTED_VERSION" \
@@ -385,10 +370,7 @@ import sys
     public_product_raw,
 ) = sys.argv[1:]
 required = required_raw == "1"
-for label, raw in (
-    ("stable", stable_raw),
-    ("public-product", public_product_raw),
-):
+for label, raw in (("stable", stable_raw), ("public-product", public_product_raw)):
     manifest = json.loads(raw).get("manifest") or {}
     if manifest.get("latestVersion") != version:
         raise SystemExit(f"{label} manifest version mismatch")
@@ -408,15 +390,15 @@ PY
 
 if [[ "$REQUIRED" == "1" ]]; then
   blocked_status="$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
-    -H 'X-GreenVPN-Platform: windows' \
+    -H 'X-GreenVPN-Platform: android' \
     -H 'X-GreenVPN-Version: 0.0.0' \
     -H 'X-GreenVPN-Release-Channel: stable' \
     'http://127.0.0.1:8000/api/v1/catalog/servers')"
   [[ "$blocked_status" == "426" ]]
 fi
 
-[[ "$(sha256sum "$DOWNLOADS/GreenVPN_Setup.exe" | awk '{print toupper($1)}')" == "$SHA256" ]]
-[[ "$(stat -c %s "$DOWNLOADS/GreenVPN_Setup.exe")" == "$(stat -c %s "$INSTALLER")" ]]
+[[ "$(sha256sum "$DOWNLOADS/GreenVPN_Android.apk" | awk '{print toupper($1)}')" == "$SHA256" ]]
+[[ "$(stat -c %s "$DOWNLOADS/GreenVPN_Android.apk")" == "$(stat -c %s "$APK")" ]]
 trap - ERR
-echo "windows_stable_release_status=ok"
+echo "android_stable_release_status=ok"
 echo "backup_dir=$backup_dir"

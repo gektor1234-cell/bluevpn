@@ -512,6 +512,65 @@ class PaidBetaPolicyTests(unittest.TestCase):
         with self.assertRaises(main.HTTPException):
             main.normalize_update_manifest_channel("unknown")
 
+    def test_mandatory_update_blocks_only_outdated_stable_clients(self) -> None:
+        with (
+            patch.object(main, "UPDATE_REQUIRED", True),
+            patch.object(main, "WINDOWS_MIN_SUPPORTED_VERSION", "0.4.6+4636"),
+            patch.object(main, "UPDATE_LATEST_VERSION", "0.4.6+4636"),
+            patch.object(
+                main,
+                "UPDATE_DOWNLOAD_URL",
+                "https://greenvpn.pro/downloads/GreenVPN_Setup.exe",
+            ),
+            patch.object(main, "UPDATE_SHA256", "A" * 64),
+        ):
+            blocked = main.mandatory_client_update_requirement(
+                platform="windows",
+                current_version="0.3.26+3105",
+                release_channel="stable",
+            )
+            current = main.mandatory_client_update_requirement(
+                platform="windows",
+                current_version="0.4.6+4636",
+                release_channel="stable",
+            )
+            paid_beta = main.mandatory_client_update_requirement(
+                platform="windows",
+                current_version="0.3.26+3105",
+                release_channel="paid-beta",
+            )
+
+        self.assertEqual(blocked["minSupportedVersion"], "0.4.6+4636")
+        self.assertIsNone(current)
+        self.assertIsNone(paid_beta)
+
+    def test_mandatory_update_fails_open_without_safe_artifact(self) -> None:
+        with (
+            patch.object(main, "ANDROID_UPDATE_REQUIRED", True),
+            patch.object(
+                main, "ANDROID_MIN_SUPPORTED_VERSION", "0.4.6+2026082001"
+            ),
+            patch.object(main, "ANDROID_UPDATE_LATEST_VERSION", "0.4.6+2026082001"),
+            patch.object(main, "ANDROID_UPDATE_DOWNLOAD_URL", "http://example.test/app.apk"),
+            patch.object(main, "ANDROID_UPDATE_SHA256", "bad"),
+        ):
+            requirement = main.mandatory_client_update_requirement(
+                platform="android",
+                current_version="0.3.19+2026072914",
+                release_channel="stable",
+            )
+        self.assertIsNone(requirement)
+
+    def test_update_and_health_paths_are_exempt_from_api_lock(self) -> None:
+        self.assertTrue(main.mandatory_update_path_is_exempt("/healthz"))
+        self.assertTrue(
+            main.mandatory_update_path_is_exempt("/api/v1/updates/manifest")
+        )
+        self.assertTrue(
+            main.mandatory_update_path_is_exempt("/api/v1/updates/windows/")
+        )
+        self.assertFalse(main.mandatory_update_path_is_exempt("/api/v1/client/bootstrap"))
+
     def test_traffic_usage_replication_key_matches_database_unique_key(self) -> None:
         self.assertEqual(
             main.REPLICATION_DELETE_KEYS["device_traffic_usage"],

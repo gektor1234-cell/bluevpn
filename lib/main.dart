@@ -285,6 +285,10 @@ bool greenVpnUpdateManifestMatchesCurrentPlatform(
   return platform.isEmpty || platform == greenVpnClientPlatform();
 }
 
+bool greenVpnUpdatePromptCanBeDismissed(GreenVpnUpdateManifest manifest) {
+  return !manifest.required;
+}
+
 String greenVpnUpdateChannel() {
   final override = kUpdateChannelOverride.trim().toLowerCase();
   if (override.isNotEmpty) return override;
@@ -15660,6 +15664,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   Future<bool> _isUpdatePromptDismissed(GreenVpnUpdateManifest manifest) async {
+    if (!greenVpnUpdatePromptCanBeDismissed(manifest)) return false;
     if (manifest.latestVersion.trim().isEmpty) return false;
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_updatePromptDismissKey(manifest)) ==
@@ -15667,6 +15672,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   Future<void> _dismissUpdatePrompt(GreenVpnUpdateManifest manifest) async {
+    if (!greenVpnUpdatePromptCanBeDismissed(manifest)) return;
     final latest = manifest.latestVersion.trim();
     if (latest.isEmpty) return;
     final prefs = await SharedPreferences.getInstance();
@@ -15695,154 +15701,159 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           final displayedChangelog = kPublicProductBuild
               ? greenVpnPublicChangelog(manifest.changelog)
               : manifest.changelog;
-          return Dialog(
-            insetPadding: const EdgeInsets.symmetric(
-              horizontal: 18,
-              vertical: 24,
-            ),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(22),
-            ),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 430),
-              child: Stack(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              width: 44,
-                              height: 44,
-                              decoration: BoxDecoration(
-                                color: kBrandPrimarySoft,
-                                borderRadius: BorderRadius.circular(14),
+          return PopScope(
+            canPop: greenVpnUpdatePromptCanBeDismissed(manifest),
+            child: Dialog(
+              insetPadding: const EdgeInsets.symmetric(
+                horizontal: 18,
+                vertical: 24,
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(22),
+              ),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 430),
+                child: Stack(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 20, 20, 18),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                width: 44,
+                                height: 44,
+                                decoration: BoxDecoration(
+                                  color: kBrandPrimarySoft,
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                child: const Icon(
+                                  Icons.system_update_alt_rounded,
+                                  color: kBrandPrimary,
+                                ),
                               ),
-                              child: const Icon(
-                                Icons.system_update_alt_rounded,
-                                color: kBrandPrimary,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    manifest.required
-                                        ? 'Важное обновление'
-                                        : 'Доступно обновление',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w900,
-                                      fontSize: 18,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    '$platformTitle · $displayedVersion',
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: theme.colorScheme.onSurface
-                                          .withValues(alpha: 0.62),
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 14),
-                        Text(
-                          manifest.required
-                              ? 'Чтобы продолжить пользоваться Green VPN, установите это обновление.'
-                              : 'Можно продолжить пользоваться приложением, но лучше поставить свежую версию.',
-                          style: TextStyle(
-                            color: theme.colorScheme.onSurface.withValues(
-                              alpha: 0.72,
-                            ),
-                            fontWeight: FontWeight.w600,
-                            height: 1.28,
-                          ),
-                        ),
-                        if (displayedChangelog.isNotEmpty) ...[
-                          const SizedBox(height: 12),
-                          for (final item in displayedChangelog.take(3))
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 6),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    '• ',
-                                    style: TextStyle(
-                                      color: kBrandPrimary,
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                  Expanded(
-                                    child: Text(
-                                      item,
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      manifest.required
+                                          ? 'Важное обновление'
+                                          : 'Доступно обновление',
                                       style: const TextStyle(
+                                        fontWeight: FontWeight.w900,
+                                        fontSize: 18,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      '$platformTitle · $displayedVersion',
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: theme.colorScheme.onSurface
+                                            .withValues(alpha: 0.62),
                                         fontWeight: FontWeight.w700,
                                       ),
                                     ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
-                            ),
-                        ],
-                        const SizedBox(height: 16),
-                        ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: kBrandPrimary,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14),
+                            ],
+                          ),
+                          const SizedBox(height: 14),
+                          Text(
+                            manifest.required
+                                ? 'Чтобы продолжить пользоваться Green VPN, установите это обновление.'
+                                : 'Можно продолжить пользоваться приложением, но лучше поставить свежую версию.',
+                            style: TextStyle(
+                              color: theme.colorScheme.onSurface.withValues(
+                                alpha: 0.72,
+                              ),
+                              fontWeight: FontWeight.w600,
+                              height: 1.28,
                             ),
                           ),
-                          onPressed: !manifest.canDownload
-                              ? null
-                              : () {
-                                  Navigator.of(dialogContext).pop();
-                                  Navigator.of(context).push(
-                                    MaterialPageRoute(
-                                      builder: (_) => UpdatesPage(
-                                        initialManifest: manifest,
-                                        autoStart: true,
+                          if (displayedChangelog.isNotEmpty) ...[
+                            const SizedBox(height: 12),
+                            for (final item in displayedChangelog.take(3))
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 6),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      '• ',
+                                      style: TextStyle(
+                                        color: kBrandPrimary,
+                                        fontWeight: FontWeight.w900,
                                       ),
                                     ),
-                                  );
-                                },
-                          icon: const Icon(Icons.download_rounded),
-                          label: const Text('Обновить'),
+                                    Expanded(
+                                      child: Text(
+                                        item,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
+                          const SizedBox(height: 16),
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: kBrandPrimary,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                            ),
+                            onPressed: !manifest.canDownload
+                                ? null
+                                : () {
+                                    Navigator.of(dialogContext).pop();
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(
+                                        builder: (_) => UpdatesPage(
+                                          initialManifest: manifest,
+                                          autoStart: true,
+                                          forceRequired: manifest.required,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                            icon: const Icon(Icons.download_rounded),
+                            label: const Text('Обновить'),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (greenVpnUpdatePromptCanBeDismissed(manifest))
+                      Positioned(
+                        top: 4,
+                        right: 4,
+                        child: IconButton(
+                          tooltip: 'Закрыть',
+                          visualDensity: VisualDensity.compact,
+                          iconSize: 18,
+                          onPressed: () async {
+                            await _dismissUpdatePrompt(manifest);
+                            if (dialogContext.mounted) {
+                              Navigator.of(dialogContext).pop();
+                            }
+                          },
+                          icon: const Icon(Icons.close_rounded),
                         ),
-                      ],
-                    ),
-                  ),
-                  Positioned(
-                    top: 4,
-                    right: 4,
-                    child: IconButton(
-                      tooltip: 'Закрыть',
-                      visualDensity: VisualDensity.compact,
-                      iconSize: 18,
-                      onPressed: () async {
-                        await _dismissUpdatePrompt(manifest);
-                        if (dialogContext.mounted) {
-                          Navigator.of(dialogContext).pop();
-                        }
-                      },
-                      icon: const Icon(Icons.close_rounded),
-                    ),
-                  ),
-                ],
+                      ),
+                  ],
+                ),
               ),
             ),
           );

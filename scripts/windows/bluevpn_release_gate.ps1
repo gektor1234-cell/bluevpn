@@ -74,6 +74,7 @@ $signScriptPath = Join-Path $ProjectRoot "scripts\windows\sign_release_artifacts
 $trustedWindowsFinalizerPath = Join-Path $ProjectRoot "scripts\windows\finalize_windows_trusted_release.ps1"
 $windowsPublicReleaseInstallerPath = Join-Path $ProjectRoot "scripts\server\install_windows_public_product_release.sh"
 $windowsStableReleaseInstallerPath = Join-Path $ProjectRoot "scripts\server\install_windows_stable_release.sh"
+$androidStableReleaseInstallerPath = Join-Path $ProjectRoot "scripts\server\install_android_stable_release.sh"
 $servicePath = Join-Path $ProjectRoot "windows\green_vpn_service\main.cpp"
 $runnerPath = Join-Path $ProjectRoot "windows\runner\flutter_window.cpp"
 $runnerMainPath = Join-Path $ProjectRoot "windows\runner\main.cpp"
@@ -241,6 +242,7 @@ $signScript = Read-Text $signScriptPath
 $trustedWindowsFinalizer = Read-Text $trustedWindowsFinalizerPath
 $windowsPublicReleaseInstaller = Read-Text $windowsPublicReleaseInstallerPath
 $windowsStableReleaseInstaller = Read-Text $windowsStableReleaseInstallerPath
+$androidStableReleaseInstaller = Read-Text $androidStableReleaseInstallerPath
 $serviceSource = Read-Text $servicePath
 $doctorScript = Read-Text $doctorPath
 $networkProtectionScript = Read-Text $networkProtectionPath
@@ -530,6 +532,20 @@ if ($null -ne $androidHysteriaNativeManifest) {
 }
 
 Write-Section "CLIENT SAFETY CHECKS"
+
+$mandatoryUpdateClientMarkers = @(
+    'greenVpnUpdatePromptCanBeDismissed',
+    'forceRequired: manifest.required',
+    'canPop: greenVpnUpdatePromptCanBeDismissed(manifest)'
+)
+foreach ($marker in $mandatoryUpdateClientMarkers) {
+    if ($main.Contains($marker)) {
+        Add-Pass "Mandatory update client marker present: $marker"
+    }
+    else {
+        Add-Error "Missing mandatory update client marker: $marker"
+    }
+}
 $forbiddenClientPatterns = @(
     "Remove-NetRoute",
     "Remove-NetIPAddress",
@@ -726,6 +742,22 @@ else {
 }
 
 Write-Section "BACKEND API CHECKS"
+
+$mandatoryUpdateBackendMarkers = @(
+    'client_update_required',
+    'status_code=426',
+    'GREENVPN_MIN_SUPPORTED_VERSION',
+    'GREENVPN_ANDROID_MIN_SUPPORTED_VERSION',
+    'MANDATORY_UPDATE_EXEMPT_PATHS'
+)
+foreach ($marker in $mandatoryUpdateBackendMarkers) {
+    if ($backend.Contains($marker)) {
+        Add-Pass "Mandatory update backend marker present: $marker"
+    }
+    else {
+        Add-Error "Missing mandatory update backend marker: $marker"
+    }
+}
 $requiredBackendFragments = @(
     '@app.post("/api/v1/auth/register")',
     '@app.post("/api/v1/auth/login")',
@@ -3973,6 +4005,18 @@ if (Test-Path -LiteralPath $windowsStableReleaseInstallerPath) {
     }
     else {
         Add-Error 'Windows stable-only publication Bash parser check failed'
+    }
+}
+
+if (Test-Path -LiteralPath $androidStableReleaseInstallerPath) {
+    $gitBash = Join-Path $env:ProgramFiles 'Git\bin\bash.exe'
+    $bashCommand = if (Test-Path -LiteralPath $gitBash) { $gitBash } else { 'bash' }
+    & $bashCommand -n $androidStableReleaseInstallerPath
+    if ($LASTEXITCODE -eq 0) {
+        Add-Pass 'Android stable-only publication Bash parser check passed'
+    }
+    else {
+        Add-Error 'Android stable-only publication Bash parser check failed'
     }
 }
 

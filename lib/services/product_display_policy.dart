@@ -253,6 +253,9 @@ String greenVpnPublicErrorMessage({
   if (responseCode == 'paid_beta_client_required') {
     return 'Эта версия приложения устарела. Установите последнее обновление и повторите оплату.';
   }
+  if (responseCode == 'client_update_required') {
+    return 'Чтобы продолжить пользоваться Green VPN, установите обязательное обновление.';
+  }
   if (responseCode == 'premium_feature_required') {
     return 'Режим «Только для соцсетей» доступен по подписке.';
   }
