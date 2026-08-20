@@ -8,6 +8,7 @@ param(
     [string]$ManagedTunnelName = 'BlueVPNDev1',
     [string]$StandbyProbeTunnelName = 'GreenVPNTransportPreviewStandbyProbe',
     [string]$ExternalVpnServiceName = 'AmneziaWGTunnel$device20_full',
+    [string]$ExternalVpnConfigPath = '',
     [switch]$StopGreenUi,
     [ValidateRange(0, 900)]
     [int]$DelaySeconds = 0,
@@ -29,6 +30,9 @@ $resolvedProcessName = if ([string]::IsNullOrWhiteSpace($ProcessName)) {
 } else {
     [IO.Path]::GetFileNameWithoutExtension($ProcessName.Trim())
 }
+$resolvedExternalVpnConfigPath = if (
+    [string]::IsNullOrWhiteSpace($ExternalVpnConfigPath)
+) { '' } else { [IO.Path]::GetFullPath($ExternalVpnConfigPath) }
 if ($resolvedProcessName -notmatch '^[A-Za-z0-9_.-]+$') {
     throw 'ProcessName contains unsupported characters.'
 }
@@ -56,6 +60,7 @@ $report = [ordered]@{
     standbyRuntimeAbsent = $false
     standbyBypassRoutesAbsent = $false
     externalVpnRunning = $false
+    externalVpnServiceInstalledForRecovery = $false
     publicHealth = $false
     youtube = $false
     stopGreenUiRequested = [bool]$StopGreenUi
@@ -68,6 +73,9 @@ $report = [ordered]@{
         localServicePort = $LocalServicePort
         managedTunnelName = $ManagedTunnelName
         standbyProbeTunnelName = $StandbyProbeTunnelName
+        externalVpnConfigProvided = -not [string]::IsNullOrWhiteSpace(
+            $resolvedExternalVpnConfigPath
+        )
     }
     failure = $null
 }
@@ -143,6 +151,13 @@ function Resolve-ExternalVpnServiceName {
         )
     }
     $services = @($services | Sort-Object Name -Unique)
+    $managedServiceNames = @(
+        ('WireGuardTunnel$' + $ManagedTunnelName),
+        ('AmneziaWGTunnel$' + $ManagedTunnelName),
+        ('WireGuardTunnel$' + $StandbyProbeTunnelName),
+        ('AmneziaWGTunnel$' + $StandbyProbeTunnelName)
+    )
+    $services = @($services | Where-Object { $_.Name -notin $managedServiceNames })
     $running = @(
         $services | Where-Object { [string]$_.Status -eq 'Running' }
     )
@@ -151,6 +166,53 @@ function Resolve-ExternalVpnServiceName {
     if ($null -ne $candidate) { return [string]$candidate.Name }
     if ($services.Count -eq 1) { return [string]$services[0].Name }
     return $null
+}
+
+function Install-ExternalVpnServiceForRecovery {
+    param([Parameter(Mandatory = $true)][string]$ServiceName)
+
+    $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if ($null -ne $existing) { return $existing }
+    if ([string]::IsNullOrWhiteSpace($resolvedExternalVpnConfigPath)) {
+        throw 'External VPN service is missing and no protected recovery config was supplied.'
+    }
+    $allowedRoot = [IO.Path]::GetFullPath(
+        'C:\Program Files\AmneziaWG\Data\Configurations'
+    ).TrimEnd('\') + '\'
+    if (-not ($resolvedExternalVpnConfigPath + '\').StartsWith(
+            $allowedRoot,
+            [StringComparison]::OrdinalIgnoreCase
+        ) -or
+            -not $resolvedExternalVpnConfigPath.EndsWith(
+                '.conf.dpapi',
+                [StringComparison]::OrdinalIgnoreCase
+            )) {
+        throw 'External VPN recovery config is outside the protected AmneziaWG configuration root.'
+    }
+    if (-not (Test-Path -LiteralPath $resolvedExternalVpnConfigPath -PathType Leaf)) {
+        throw 'Protected external VPN recovery config is missing.'
+    }
+    $amneziaExe = 'C:\Program Files\AmneziaWG\amneziawg.exe'
+    if (-not (Test-Path -LiteralPath $amneziaExe -PathType Leaf)) {
+        throw 'AmneziaWG service executable is missing.'
+    }
+    $install = Start-Process -FilePath $amneziaExe -ArgumentList @(
+        '/installtunnelservice',
+        ('"' + $resolvedExternalVpnConfigPath + '"')
+    ) -WindowStyle Hidden -Wait -PassThru
+    if ($install.ExitCode -ne 0) {
+        throw "AmneziaWG recovery service install failed with exit code $($install.ExitCode)."
+    }
+    $deadline = (Get-Date).AddSeconds(30)
+    do {
+        $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+        if ($null -ne $service) {
+            $report.externalVpnServiceInstalledForRecovery = $true
+            return $service
+        }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+    throw 'AmneziaWG recovery service did not appear after installation.'
 }
 
 function Stop-GreenVpnUi {
@@ -329,10 +391,15 @@ try {
 
     $resolvedExternalVpnServiceName = Resolve-ExternalVpnServiceName -PreferredName $ExternalVpnServiceName
     if ([string]::IsNullOrWhiteSpace($resolvedExternalVpnServiceName)) {
-        throw 'Unable to resolve external VPN service name for recovery.'
+        if (-not [string]::IsNullOrWhiteSpace($resolvedExternalVpnConfigPath)) {
+            $resolvedExternalVpnServiceName = $ExternalVpnServiceName
+        } else {
+            throw 'Unable to resolve external VPN service name for recovery.'
+        }
     }
     $report.runtime.externalVpnServiceName = $resolvedExternalVpnServiceName
-    $service = Get-Service -Name $resolvedExternalVpnServiceName -ErrorAction Stop
+    $service = Install-ExternalVpnServiceForRecovery `
+        -ServiceName $resolvedExternalVpnServiceName
     if ([string]$service.Status -ne 'Running') {
         Start-Service -Name $resolvedExternalVpnServiceName -ErrorAction Stop
     }

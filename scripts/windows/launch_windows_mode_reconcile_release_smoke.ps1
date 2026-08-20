@@ -22,6 +22,8 @@ param(
     [ValidatePattern('^[0-9A-Fa-f]{40}$')]
     [string]$CandidateSourceCommit,
     [Parameter(Mandatory = $true)][string]$ArtifactRoot,
+    [string]$ExternalVpnServiceName = 'AmneziaWGTunnel$device20_full',
+    [string]$ExternalVpnConfigPath = '',
     [ValidateRange(90, 600)][int]$InitialDelaySeconds = 90,
     [ValidateRange(600, 1800)][int]$DeadmanDelaySeconds = 900,
     [ValidateRange(10, 120)][int]$MaxConnectSeconds = 30,
@@ -58,6 +60,10 @@ function Write-LauncherStatus {
         expectedInstallerSize = $ExpectedInstallerSize
         expectedVersion = $ExpectedVersion
         candidateSourceCommit = $CandidateSourceCommit.ToLowerInvariant()
+        externalVpnServiceName = $ExternalVpnServiceName
+        externalVpnConfigProvided = -not [string]::IsNullOrWhiteSpace(
+            $ExternalVpnConfigPath
+        )
         recoverInitialBaselineAfterDelay = [bool]$RecoverInitialBaselineAfterDelay
         elevatedProcessId = if ($ElevatedProcessId -gt 0) {
             $ElevatedProcessId
@@ -135,11 +141,21 @@ try {
         '-ExpectedServiceSize', [string]$ExpectedServiceSize,
         '-CandidateSourceCommit', $CandidateSourceCommit.ToLowerInvariant(),
         '-ArtifactRoot', (Quote-NativeArgument -Value $resolvedArtifactRoot),
+        '-ExternalVpnServiceName',
+        (Quote-NativeArgument -Value $ExternalVpnServiceName),
         '-InitialDelaySeconds', [string]$InitialDelaySeconds,
         '-DeadmanDelaySeconds', [string]$DeadmanDelaySeconds,
         '-MaxConnectSeconds', [string]$MaxConnectSeconds,
         '-MaxModeSwitchSeconds', [string]$MaxModeSwitchSeconds
     )
+    if (-not [string]::IsNullOrWhiteSpace($ExternalVpnConfigPath)) {
+        $arguments += @(
+            '-ExternalVpnConfigPath',
+            (Quote-NativeArgument -Value (
+                [IO.Path]::GetFullPath($ExternalVpnConfigPath)
+            ))
+        )
+    }
     if ($RecoverInitialBaselineAfterDelay) {
         $arguments += '-RecoverInitialBaselineAfterDelay'
     }

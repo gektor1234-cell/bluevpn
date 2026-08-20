@@ -26,6 +26,7 @@ param(
     [string]$ProgramDataRoot = 'C:\ProgramData\BlueVPN',
     [int]$LocalServicePort = 48737,
     [string]$ExternalVpnServiceName = 'AmneziaWGTunnel$device20_full',
+    [string]$ExternalVpnConfigPath = '',
     [ValidateRange(90, 600)][int]$InitialDelaySeconds = 90,
     [ValidateRange(600, 1800)][int]$DeadmanDelaySeconds = 900,
     [ValidateRange(10, 120)][int]$MaxConnectSeconds = 30,
@@ -43,6 +44,9 @@ $resolvedInstaller = [IO.Path]::GetFullPath($InstallerPath)
 $resolvedInstallRoot = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
 $resolvedProgramDataRoot = [IO.Path]::GetFullPath($ProgramDataRoot).TrimEnd('\')
 $resolvedArtifactRoot = [IO.Path]::GetFullPath($ArtifactRoot).TrimEnd('\')
+$resolvedExternalVpnConfigPath = if (
+    [string]::IsNullOrWhiteSpace($ExternalVpnConfigPath)
+) { '' } else { [IO.Path]::GetFullPath($ExternalVpnConfigPath) }
 $appPath = Join-Path $resolvedInstallRoot 'greenvpn.exe'
 $appSoPath = Join-Path $resolvedInstallRoot 'data\app.so'
 $servicePath = Join-Path $resolvedInstallRoot 'greenvpn_service.exe'
@@ -153,6 +157,13 @@ function Resolve-ExternalVpnServiceName {
             })
     }
     $services = @($services | Sort-Object Name -Unique)
+    $managedServiceNames = @(
+        'WireGuardTunnel$BlueVPNDev1',
+        'AmneziaWGTunnel$BlueVPNDev1',
+        'WireGuardTunnel$GreenVPNTransportPreviewStandbyProbe',
+        'AmneziaWGTunnel$GreenVPNTransportPreviewStandbyProbe'
+    )
+    $services = @($services | Where-Object { $_.Name -notin $managedServiceNames })
     $running = @($services | Where-Object { [string]$_.Status -eq 'Running' })
     if ($running.Count -eq 1) { return [string]$running[0].Name }
     if ($running.Count -gt 1) { return $null }
@@ -365,6 +376,7 @@ function Start-DeadmanRecovery {
         '-ProgramDataRoot', "`"$resolvedProgramDataRoot`"",
         '-LocalServicePort', [string]$LocalServicePort,
         '-ExternalVpnServiceName', "`"$resolvedExternalVpnServiceName`"",
+        '-ExternalVpnConfigPath', "`"$resolvedExternalVpnConfigPath`"",
         '-StopGreenUi',
         '-DelaySeconds', [string]$DeadmanDelaySeconds,
         '-ReportPath', "`"$deadmanReportPath`""
@@ -386,6 +398,7 @@ function Invoke-FinalRecovery {
             -ProgramDataRoot $resolvedProgramDataRoot `
             -LocalServicePort $LocalServicePort `
             -ExternalVpnServiceName $resolvedExternalVpnServiceName `
+            -ExternalVpnConfigPath $resolvedExternalVpnConfigPath `
             -StopGreenUi `
             -ReportPath $recoveryReportPath | Out-Null
     } catch {}
@@ -1232,7 +1245,16 @@ try {
     $resolvedExternalVpnServiceName = Resolve-ExternalVpnServiceName `
         -PreferredName $ExternalVpnServiceName
     if ([string]::IsNullOrWhiteSpace($resolvedExternalVpnServiceName)) {
-        throw 'External VPN service could not be resolved before the delayed run.'
+        if (-not [string]::IsNullOrWhiteSpace($resolvedExternalVpnConfigPath) -and
+                (Test-Path -LiteralPath $resolvedExternalVpnConfigPath -PathType Leaf)) {
+            $resolvedExternalVpnServiceName = $ExternalVpnServiceName
+            Write-RunnerLog (
+                'external VPN service is absent but its protected recovery ' +
+                'configuration is available'
+            )
+        } else {
+            throw 'External VPN service or protected recovery config could not be resolved before the delayed run.'
+        }
     }
     $ExternalVpnServiceName = $resolvedExternalVpnServiceName
     $summary.externalVpnServiceName = $ExternalVpnServiceName
