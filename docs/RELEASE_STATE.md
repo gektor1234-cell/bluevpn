@@ -1,6 +1,44 @@
 # Green VPN Release State
 
-## Fusion Windows Selected-App Candidate (2026-08-20 MSK)
+## Mandatory Stable Rollout (2026-08-20 MSK)
+
+| Layer | Current state |
+|---|---|
+| Stable backend | `0.9.156-mandatory-update.1` on fallback and primary |
+| Stable Android | `0.4.6+2026082001`, signed, mandatory |
+| Stable Windows | `0.4.6+4636`, `NotSigned`, mandatory |
+| Accepted paid-beta | unchanged: Android `0.4.6-paid-beta.1+2026081106`, Windows `0.4.6-paid-beta.2+4602` |
+| Mandatory policy | `required=true`, minimum `0.4.6`, rollout `100%` |
+| Money and advertising | disabled, unchanged |
+
+Owner-approved production rollout completed fallback first and primary second,
+using exact dry-run/apply publishers with atomic rollback backups. Android APK
+SHA-256 is
+`1D2D4015C4D1DD33E8CD31010F672AD901CBB09BE4065AF186980DF1E98F2210`;
+Windows installer SHA-256 is
+`EAD00F9094D1749C9FB9ECFC5ADC7322E015552F66A40BDDFBD19D3DA15111DB`;
+backend bundle SHA-256 is
+`2FAD96945FF80A35E1558537D0A3B90FA166694D867FAD4D2D9A60BD08E7C91D`.
+
+Exact Android in-place smoke passed API `200`, YouTube `204`, installed-byte
+identity and cleanup. Exact Windows `full -> applications -> full` smoke passed
+selected egress `5.129.216.42`, selected YouTube `204`, visual Diagnostics
+`Подключение: активно`, returned-full identity and final Amnezia/API/YouTube
+recovery without metric `42739` or failsafes.
+
+Both public HTTPS ingress paths return exact stable/public-product manifests.
+Old stable `0.4.5` clients get `426`; current `0.4.6` gets `200`; update
+manifests remain `200`. Four public downloads match exact SHA/size. Both DBs
+pass `quick_check`; services and sync timers are healthy; an explicit final
+sync completed with zero conflicts/errors and was followed by a complete
+post-sync verification. Paid-beta bytes/version did not change. Friendly Linnet
+`5.129.237.163` was not touched. Full evidence and rollback paths are in
+`FUSION_MANDATORY_STABLE_ROLLOUT_2026_08_20_RU.md`.
+
+Windows remains unsigned. Successful mandatory publication does not imply
+Authenticode trust; SmartScreen/reputation warnings remain a known limitation.
+
+## Historical Fusion Windows Selected-App Candidate (2026-08-20 MSK)
 
 | Layer | Current state |
 |---|---|

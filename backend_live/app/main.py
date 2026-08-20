@@ -36,8 +36,8 @@ from pydantic import BaseModel
 
 APP_TITLE = "Green VPN Backend"
 APP_VERSION = (
-    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.153-update-channel-alias.4").strip()
-    or "0.9.153-update-channel-alias.4"
+    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.156-mandatory-update.1").strip()
+    or "0.9.156-mandatory-update.1"
 )
 DEFAULT_PUBLIC_API_BASE_URL = "https://api.greenvpn.pro"
 

@@ -12,25 +12,25 @@ param(
     [string]$FallbackSiteBaseUrl = "https://176-113-81-35.sslip.io",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedAndroidVersion = "0.3.19",
+    [string]$ExpectedAndroidVersion = "0.4.6",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedAndroidSha256 = "BCA7CF6A4AB2381A6EB44836726AFC07B460B87F0789BA88DC81CF84CD37F4FB",
+    [string]$ExpectedAndroidSha256 = "1D2D4015C4D1DD33E8CD31010F672AD901CBB09BE4065AF186980DF1E98F2210",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestAndroidSha256 = "99EB6C2D44C955F43441039B5375CEC5AF925D19EDAFEE1D17042FAE6E2ED8A7",
+    [string]$ExpectedTestAndroidSha256 = "F2FF98B569C574910CEB4ED7BA18EBC33FD54013A1DD15DE808DEC69986F883D",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedAndroidBuildNumber = "2026072914",
+    [string]$ExpectedAndroidBuildNumber = "2026082001",
 
     [Parameter(Mandatory = $false)]
-    [bool]$ExpectedAndroidRequired = $false,
+    [bool]$ExpectedAndroidRequired = $true,
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestAndroidVersion = "0.3.19",
+    [string]$ExpectedTestAndroidVersion = "0.4.6-paid-beta.1",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestAndroidBuildNumber = "2026072914",
+    [string]$ExpectedTestAndroidBuildNumber = "2026081106",
 
     [Parameter(Mandatory = $false)]
     [string]$ExpectedTestAndroidApplicationId = "pro.greenvpn.app.beta",
@@ -42,22 +42,22 @@ param(
     [bool]$ExpectedTestAndroidRequired = $false,
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedWindowsVersion = "0.3.26",
+    [string]$ExpectedWindowsVersion = "0.4.6",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedWindowsSha256 = "1E5505E73B735A00E1C7C44BD1919F96F98EA8DC5F03497205EA39E89AAE00F6",
+    [string]$ExpectedWindowsSha256 = "EAD00F9094D1749C9FB9ECFC5ADC7322E015552F66A40BDDFBD19D3DA15111DB",
 
     [Parameter(Mandatory = $false)]
-    [bool]$ExpectedWindowsRequired = $false,
+    [bool]$ExpectedWindowsRequired = $true,
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestWindowsVersion = "0.3.21-paid-beta.1",
+    [string]$ExpectedTestWindowsVersion = "0.4.6-paid-beta.2",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestWindowsSha256 = "34D838226281190EB6B867D87884B4C9AF066FD69C7D49D05D045713530338CA",
+    [string]$ExpectedTestWindowsSha256 = "B882DB6EEF672C21786608888431126FAFC997EC6D7C5CEADB6CA16DD0AEC4B3",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedTestWindowsBuildNumber = "3001",
+    [string]$ExpectedTestWindowsBuildNumber = "4602",
 
     [Parameter(Mandatory = $false)]
     [bool]$ExpectedTestWindowsRequired = $false,

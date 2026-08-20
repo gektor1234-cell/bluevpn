@@ -9,16 +9,20 @@ param(
     [long]$BetaAndroidSize = 56340949,
     [string]$BetaWindowsSha256 = 'B882DB6EEF672C21786608888431126FAFC997EC6D7C5CEADB6CA16DD0AEC4B3',
     [long]$BetaWindowsSize = 55497728,
-    [string]$StableWindowsVersion = '0.3.26',
-    [string]$StableWindowsBuild = '3105',
-    [string]$StableWindowsSha256 = '1E5505E73B735A00E1C7C44BD1919F96F98EA8DC5F03497205EA39E89AAE00F6',
-    [long]$StableWindowsSize = 55441408,
-    [string]$StableAndroidVersion = '0.3.19',
-    [string]$StableAndroidBuild = '2026072914',
-    [string]$StableAndroidSha256 = 'BCA7CF6A4AB2381A6EB44836726AFC07B460B87F0789BA88DC81CF84CD37F4FB',
-    [long]$StableAndroidSize = 59988328,
-    [string]$StableBackendVersion = '0.9.153-update-channel-alias.4',
+    [string]$StableWindowsVersion = '0.4.6',
+    [string]$StableWindowsBuild = '4636',
+    [string]$StableWindowsSha256 = 'EAD00F9094D1749C9FB9ECFC5ADC7322E015552F66A40BDDFBD19D3DA15111DB',
+    [long]$StableWindowsSize = 52809216,
+    [string]$StableAndroidVersion = '0.4.6',
+    [string]$StableAndroidBuild = '2026082001',
+    [string]$StableAndroidSha256 = '1D2D4015C4D1DD33E8CD31010F672AD901CBB09BE4065AF186980DF1E98F2210',
+    [long]$StableAndroidSize = 56351293,
+    [string]$StableBackendVersion = '0.9.156-mandatory-update.1',
     [string]$BetaBackendVersion = '0.9.154-fusion-actions.1',
+    [bool]$StableRequired = $true,
+    [string]$StableMinSupportedVersion = '0.4.6',
+    [bool]$BetaRequired = $false,
+    [string]$BetaMinSupportedVersion = '',
     [string]$ReportPath = ''
 )
 
@@ -59,12 +63,16 @@ $betaExpected = @{
         build = $BetaAndroidBuild
         sha256 = $BetaAndroidSha256.ToUpperInvariant()
         size = $BetaAndroidSize
+        required = $BetaRequired
+        minSupportedVersion = $BetaMinSupportedVersion
     }
     windows = [pscustomobject]@{
         version = $BetaWindowsVersion
         build = [string]$BetaWindowsBuild
         sha256 = $BetaWindowsSha256.ToUpperInvariant()
         size = $BetaWindowsSize
+        required = $BetaRequired
+        minSupportedVersion = $BetaMinSupportedVersion
     }
 }
 $stableWindowsExpected = [pscustomobject]@{
@@ -72,12 +80,16 @@ $stableWindowsExpected = [pscustomobject]@{
     build = $StableWindowsBuild
     sha256 = $StableWindowsSha256.ToUpperInvariant()
     size = $StableWindowsSize
+    required = $StableRequired
+    minSupportedVersion = $StableMinSupportedVersion
 }
 $stableAndroidExpected = [pscustomobject]@{
     version = $StableAndroidVersion
     build = $StableAndroidBuild
     sha256 = $StableAndroidSha256.ToUpperInvariant()
     size = $StableAndroidSize
+    required = $StableRequired
+    minSupportedVersion = $StableMinSupportedVersion
 }
 
 function Assert-Manifest {
@@ -95,7 +107,8 @@ function Assert-Manifest {
         [string]$Manifest.sha256 -ne [string]$Expected.sha256 -or
         [long]$Manifest.sizeBytes -ne [long]$Expected.size -or
         $Manifest.fileReady -ne $true -or
-        $Manifest.required -ne $false
+        [bool]$Manifest.required -ne [bool]$Expected.required -or
+        [string]$Manifest.minSupportedVersion -ne [string]$Expected.minSupportedVersion
     ) {
         throw "Manifest mismatch: $Label"
     }

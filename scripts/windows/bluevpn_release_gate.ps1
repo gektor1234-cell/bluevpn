@@ -472,18 +472,39 @@ if ($null -ne $releaseContract) {
             Add-Error 'Release API roots do not match the canonical dual-control-plane contract'
         }
 
+        $publicationStateValid = (
+            $releaseContract.publication.ownerApprovalRequired -eq $true -and
+            (
+                $releaseContract.publication.productionPublished -eq $false -or
+                (
+                    $releaseContract.publication.productionPublished -eq $true -and
+                    $releaseContract.publication.androidProductionPublished -eq $true -and
+                    $releaseContract.publication.windowsProductionPublished -eq $true
+                )
+            )
+        )
         if (
             $releaseContract.billing.paidSalesEnabled -eq $false -and
             $releaseContract.billing.refundExecutionEnabled -eq $false -and
             $releaseContract.billing.autoRenewEnabled -eq $false -and
             $releaseContract.billing.rewardedAdsEnabled -eq $false -and
-            $releaseContract.publication.productionPublished -eq $false -and
-            $releaseContract.publication.ownerApprovalRequired -eq $true
+            $publicationStateValid
         ) {
-            Add-Pass 'Release contract remains fail-closed for money, ads, and publication'
+            Add-Pass 'Release contract keeps money and ads fail-closed with a coherent owner-gated publication state'
         }
         else {
-            Add-Error 'Release contract must remain fail-closed until explicit owner approval'
+            Add-Error 'Release contract money, ads, or publication state is inconsistent'
+        }
+
+        if (
+            $releaseContract.publication.productionPublished -eq $true -and
+            $releaseContract.publication.mandatoryUpdateRequired -eq $true -and
+            [string]$releaseContract.publication.minSupportedVersion -eq $appVersion
+        ) {
+            Add-Pass 'Published production contract requires the exact current app version'
+        }
+        else {
+            Add-Error 'Published production mandatory-update contract is incomplete or inconsistent'
         }
     }
 }

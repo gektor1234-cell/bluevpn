@@ -6,7 +6,35 @@ This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
 `PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md`. Dated reports are evidence only.
 
-## Fusion Windows Selected-App Candidate, 2026-08-20
+## Mandatory Stable Rollout, 2026-08-20
+
+- Owner-approved stable production is Android `0.4.6+2026082001`, Windows
+  `0.4.6+4636` and backend `0.9.156-mandatory-update.1` on fallback
+  `176.113.81.35` and primary `72.56.32.197`.
+- Android APK is `56351293` bytes, SHA-256
+  `1D2D4015C4D1DD33E8CD31010F672AD901CBB09BE4065AF186980DF1E98F2210`,
+  signed. Windows installer is `52809216` bytes, SHA-256
+  `EAD00F9094D1749C9FB9ECFC5ADC7322E015552F66A40BDDFBD19D3DA15111DB`,
+  `NotSigned`.
+- Exact Android in-place physical smoke and exact Windows authoritative
+  `full -> applications -> full` smoke passed. Windows selected egress matched
+  `5.129.216.42`, selected YouTube returned `204`, Diagnostics visibly showed
+  `Подключение: активно`, and cleanup restored external Amnezia/API/YouTube.
+- Both stable/public-product manifests are exact, `required=true`,
+  `minSupportedVersion=0.4.6`, `rolloutPercent=100` and `fileReady=true`.
+  Old stable Android/Windows `0.4.5` requests return `426`; current `0.4.6` and
+  update manifests return `200`.
+- Four public downloads through primary and fallback matched the exact hashes
+  and sizes. Both databases pass `quick_check`; backend, paid-beta and sync
+  timers are healthy. Explicit post-release sync completed with no conflicts or
+  errors, followed by another exact verification.
+- Paid-beta bytes and backend version are unchanged. Paid sales, refunds,
+  auto-renew, ads and forced disconnect remain disabled. Friendly Linnet
+  `5.129.237.163` was not touched.
+- Exact deployment, rollback and evidence record:
+  `docs/FUSION_MANDATORY_STABLE_ROLLOUT_2026_08_20_RU.md`.
+
+## Historical Fusion Windows Selected-App Candidate, 2026-08-20
 
 - Exact Windows `0.4.6+4634` passed the selected-app physical routing acceptance,
   but owner review found a Diagnostics false negative while its tunnel was
@@ -97,8 +125,9 @@ This is the current operational entry point. Read it together with
    client profiles.
 3. Never touch Friendly Linnet `5.129.237.163` without a new explicit owner
    instruction.
-4. Android `0.3.19+2026072914` and Windows `0.3.26+3105` are stable production
-   and optional. Paid-beta Android `0.4.6-paid-beta.1+2026081106` and Windows
+4. Android `0.4.6+2026082001` and Windows `0.4.6+4636` are stable production
+   and mandatory with minimum supported version `0.4.6`. Paid-beta Android
+   `0.4.6-paid-beta.1+2026081106` and Windows
    `0.4.6-paid-beta.2+4602` are isolated, public in the paid-beta contour and
    optional. Do not republish, force or roll them back without a verified exact
    artifact, alternate-node health and an atomic backup.
@@ -114,7 +143,7 @@ This is the current operational entry point. Read it together with
    must reject first-payment creation and must not run the renewal executor.
 8. Server maintenance is one node at a time after alternate control/data planes
    pass readiness. The owner Windows PC must not be rebooted by automation.
-9. Windows 0.3.26 is public and optional, but remains unsigned by explicit
+9. Windows 0.4.6 is public and mandatory, but remains unsigned by explicit
    owner instruction with the SmartScreen risk accepted. Keep the `NotSigned`
    status visible in operations and expect Windows SmartScreen/reputation
    warnings until a higher signed successor is released. On 2026-08-02 the
@@ -125,11 +154,11 @@ This is the current operational entry point. Read it together with
 10. The admin console is a protected operator surface. Keep Nginx Basic Auth,
     `noindex`, frame denial, staff authentication, RBAC and audit enabled; never
     expose bootstrap tokens or payment/tunnel secrets in the UI or exports.
-11. Stable production publishes Android `0.3.19` and Windows `0.3.26`.
-    Windows `0.3.26+3105` passed exact-package foreground, standby, failover,
-    takeover, tray and final-recovery smoke. It is not a trusted/signed Windows
-    release; do not conflate successful unsigned publication with
-    Authenticode trust.
+11. Stable production publishes Android `0.4.6+2026082001` and Windows
+    `0.4.6+4636`. Both passed exact physical acceptance before publication;
+    Windows selected-app routing and final recovery are confirmed. It is not a
+    trusted/signed Windows release; do not conflate successful unsigned
+    publication with Authenticode trust.
 
 ## Post-Release Control-Plane Helper Safety, 2026-08-02
 

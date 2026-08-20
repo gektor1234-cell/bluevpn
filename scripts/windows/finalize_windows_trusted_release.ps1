@@ -1,10 +1,12 @@
 param(
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
     [string]$OutDir = 'C:\BlueVPN_Builds\windows_trusted_release',
-    [string]$ProductionVersion = '0.3.26',
-    [string]$PaidBetaVersion = '0.3.26-paid-beta.1',
+    [string]$ProductionVersion = '0.4.6',
+    [string]$PaidBetaVersion = '0.4.6-paid-beta.2',
     [ValidateRange(0, 65535)]
-    [int]$WindowsBuildNumber = 3105,
+    [int]$WindowsBuildNumber = 4636,
+    [ValidateRange(0, 65535)]
+    [int]$PaidBetaWindowsBuildNumber = 4602,
     [string]$CertificateThumbprint = '',
     [string]$ExpectedPublisher = '',
     [string]$TimestampUrl = 'http://timestamp.digicert.com',
@@ -177,7 +179,7 @@ if (-not $?) {
 & (Join-Path $ProjectRoot 'scripts\windows\build_paid_beta.ps1') `
     -Mode windows `
     -WindowsAppVersion $PaidBetaVersion `
-    -WindowsBuildNumber $WindowsBuildNumber `
+    -WindowsBuildNumber $PaidBetaWindowsBuildNumber `
     -OutDir $paidBetaOut `
     -WindowsCodeSigningCertificateThumbprint $selected.thumbprint `
     -WindowsCodeSigningPublisher $effectivePublisher `
@@ -228,8 +230,10 @@ $release = [ordered]@{
     certificateNotAfter = $selected.notAfter.ToUniversalTime().ToString('o')
     timestampUrl = $TimestampUrl
     buildNumber = $WindowsBuildNumber
+    paidBetaBuildNumber = $PaidBetaWindowsBuildNumber
     production = [ordered]@{
         version = $ProductionVersion
+        buildNumber = $WindowsBuildNumber
         path = $productionInstaller
         sizeBytes = (Get-Item -LiteralPath $productionInstaller).Length
         sha256 = (Get-FileHash -LiteralPath $productionInstaller -Algorithm SHA256).Hash
@@ -237,6 +241,7 @@ $release = [ordered]@{
     }
     paidBeta = [ordered]@{
         version = $PaidBetaVersion
+        buildNumber = $PaidBetaWindowsBuildNumber
         path = $paidBetaInstaller
         sizeBytes = (Get-Item -LiteralPath $paidBetaInstaller).Length
         sha256 = (Get-FileHash -LiteralPath $paidBetaInstaller -Algorithm SHA256).Hash
