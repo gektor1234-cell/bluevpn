@@ -79,7 +79,7 @@
   successor `0.4.6+4634`.
 - [x] Запустить один delayed detached physical smoke из уникального каталога.
 - [x] Проверить логи, privacy-safe markers и screenshots.
-- [ ] Зафиксировать evidence/docs commit и push.
+- [x] Зафиксировать evidence/docs commit `0528f8e` и push.
 
 ## Обязательный physical acceptance
 
