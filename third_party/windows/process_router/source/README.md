@@ -26,6 +26,9 @@ Green VPN carries a narrow production hardening patch:
   without an unsupported outbound filter that would discard attribution events;
 - verify that the local relay is actually listening before packet capture starts
   and keep redirected CLI diagnostics unbuffered for recovery evidence;
+- rewrite both sides of each selected packet tuple to IPv4/IPv6 loopback while
+  retaining the exact original tuple for response restoration, so the relay can
+  remain loopback-only without exposing a machine-wide listener;
 - parse SOCKS5 responses with exact-length reads and handle every address type;
 - preserve long executable paths and keep IPv4/IPv6 on one routing policy;
 - make rule/proxy configuration immutable while the router is active and wait

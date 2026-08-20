@@ -30,8 +30,22 @@
   отклонен physical smoke: клик подключения попал в момент незавершенного
   startup catalog refresh, а параллельный refresh возвращал управление вместо
   ожидания текущего запроса. Final recovery вернул исходный безопасный baseline.
-- Следующий source commit вводит single-flight catalog refresh и дожидается
-  фактической остановки deadman перед записью cleanup evidence.
+- Commit `752968a` вводит single-flight catalog refresh и дожидается фактической
+  остановки deadman перед записью cleanup evidence.
+- Clean-source candidate `0.4.6+4633` прошел exact package audit и дошел до
+  applications runtime. Exact install, paid owner, foreground, direct
+  fingerprint, SOCKS5 preflight и selected attribution прошли; selected egress
+  отклонен, потому что TCP redirect не был принят loopback relay. Cleanup и
+  исходный Amnezia/API/YouTube baseline полностью восстановлены.
+- Durable router evidence локализовал дефект после attribution: пакет успешно
+  планировался и передавался `WinDivertSend`, но сохранял внешний source при
+  loopback destination. Windows отбрасывал такой tuple до TCP listener.
+- Текущий successor переписывает обе стороны selected tuple в IPv4/IPv6
+  loopback, сохраняет точный исходный tuple для обратного восстановления и
+  оставляет relay доступным только на loopback. Две независимые MSVC-сборки
+  совпали: core SHA-256 `B4759403D1550594A6032DA4869C6666B234B88868ED19D8A1FD38372B7349CE`,
+  размер `231424`; policy, analyze, `130` tests (`14` skipped) и release gate
+  прошли, warnings/errors `0/0`.
 
 ## Исполняемый чек-лист
 
@@ -45,8 +59,12 @@
 - [x] Из clean source собрать `0.4.6+4632`, проверить точную версию, размеры,
   SHA-256, package audit и `productionPublished=false`; candidate отклонен по
   physical acceptance и не подлежит публикации.
-- [ ] Из clean source собрать successor после catalog-race fix и повторить
-  точную проверку пакета.
+- [x] Из clean source собрать successor `0.4.6+4633` после catalog-race fix и
+  повторить точную проверку пакета; candidate отклонен по physical acceptance.
+- [x] Локализовать post-attribution relay failure и подготовить детерминированный
+  loopback-tuple successor без небезопасного attribution fallback.
+- [ ] Зафиксировать новый source commit/push и собрать exact clean-source
+  successor `0.4.6+4634`.
 - [ ] Запустить один delayed detached physical smoke из уникального каталога.
 - [ ] Проверить логи, privacy-safe markers и screenshots.
 - [ ] Зафиксировать evidence/docs commit и push.

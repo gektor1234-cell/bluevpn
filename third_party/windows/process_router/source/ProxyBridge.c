@@ -293,6 +293,7 @@ static volatile LONG deferred_packet_overflow_count = 0;
 static volatile LONG proxy_attribution_log_count = 0;
 static volatile LONG redirect_schedule_log_count = 0;
 static volatile LONG deferred_redirect_send_log_count = 0;
+static volatile LONG immediate_redirect_send_log_count = 0;
 static UINT32 attribution_diagnostic_salt = 0;
 static volatile LONG relay_accept_log_count = 0;
 static volatile LONG relay_upstream_log_count = 0;
@@ -601,10 +602,22 @@ static void log_redirect_schedule(const char *path, const char *family,
                     path, family, is_udp ? "UDP" : "TCP", sample);
 }
 
+static void log_immediate_redirect_injected(const char *path,
+                                            const char *family,
+                                            BOOL is_udp)
+{
+    LONG sample = InterlockedIncrement(&immediate_redirect_send_log_count);
+    if (sample <= 16)
+        log_message("[PACKET] Redirect injected; path=%s family=%s protocol=%s sample=%ld",
+                    path, family, is_udp ? "UDP" : "TCP", sample);
+}
+
 static void redirect_ipv4_to_loopback(PWINDIVERT_IPHDR ip_header,
                                       WINDIVERT_ADDRESS *addr)
 {
-    ip_header->DstAddr = htonl(INADDR_LOOPBACK);
+    UINT32 loopback = htonl(INADDR_LOOPBACK);
+    ip_header->SrcAddr = loopback;
+    ip_header->DstAddr = loopback;
     addr->Outbound = TRUE;
 }
 
@@ -613,6 +626,7 @@ static void redirect_ipv6_to_loopback(PWINDIVERT_IPV6HDR ipv6_header,
 {
     static const UINT8 loopback6[16] = {
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
+    memcpy(ipv6_header->SrcAddr, loopback6, sizeof(loopback6));
     memcpy(ipv6_header->DstAddr, loopback6, sizeof(loopback6));
     addr->Outbound = TRUE;
 }
@@ -992,6 +1006,7 @@ static DWORD WINAPI packet_processor(LPVOID arg)
 
     while (running)
     {
+        const char *redirect_path = NULL;
         if (!WinDivertRecv(windivert_handle, packet, sizeof(packet), &packet_len, &addr))
         {
             if (GetLastError() == ERROR_INVALID_HANDLE)
@@ -1034,6 +1049,7 @@ static DWORD WINAPI packet_processor(LPVOID arg)
                             (const UINT8 *)ipv6_header->DstAddr, dp, TRUE))
                     {
                         udp_header->DstPort = htons(LOCAL_UDP_RELAY_PORT);
+                        redirect_path = "tracked";
                         redirect_ipv6_to_loopback(ipv6_header, &addr);
                         goto ipv6u_send;
                     }
@@ -1109,6 +1125,7 @@ static DWORD WINAPI packet_processor(LPVOID arg)
                             TRUE, &addr);
 
                         udp_header->DstPort = htons(LOCAL_UDP_RELAY_PORT);
+                        redirect_path = "immediate";
                         redirect_ipv6_to_loopback(ipv6_header, &addr);
                         goto ipv6u_send;
                     }
@@ -1132,7 +1149,13 @@ static DWORD WINAPI packet_processor(LPVOID arg)
 
             ipv6u_send:
                 WinDivertHelperCalcChecksums(packet, packet_len, &addr, 0);
-                WinDivertSend(windivert_handle, packet, packet_len, NULL, &addr);
+                if (!WinDivertSend(windivert_handle, packet, packet_len,
+                                   NULL, &addr))
+                    log_message("Failed to send IPv6 UDP packet (%lu)",
+                                GetLastError());
+                else if (redirect_path != NULL)
+                    log_immediate_redirect_injected(
+                        redirect_path, "IPv6", TRUE);
                 continue;
             }
 
@@ -1168,6 +1191,7 @@ static DWORD WINAPI packet_processor(LPVOID arg)
                         (const UINT8 *)ipv6_header->DstAddr, dp, FALSE))
                 {
                     tcp_header->DstPort = htons(g_local_relay_port);
+                    redirect_path = "tracked";
                     redirect_ipv6_to_loopback(ipv6_header, &addr);
                     goto ipv6_send;
                 }
@@ -1259,6 +1283,7 @@ static DWORD WINAPI packet_processor(LPVOID arg)
                         (const UINT8*)ipv6_header->DstAddr, dp,
                         proxy_config_id6, FALSE, &addr);
                     tcp_header->DstPort = htons(g_local_relay_port);
+                    redirect_path = "immediate";
                     redirect_ipv6_to_loopback(ipv6_header, &addr);
                     goto ipv6_send;
                 }
@@ -1274,7 +1299,13 @@ static DWORD WINAPI packet_processor(LPVOID arg)
 
         ipv6_send:
             WinDivertHelperCalcChecksums(packet, packet_len, &addr, 0);
-            WinDivertSend(windivert_handle, packet, packet_len, NULL, &addr);
+            if (!WinDivertSend(windivert_handle, packet, packet_len,
+                               NULL, &addr))
+                log_message("Failed to send IPv6 TCP packet (%lu)",
+                            GetLastError());
+            else if (redirect_path != NULL)
+                log_immediate_redirect_injected(
+                    redirect_path, "IPv6", FALSE);
             continue;
         }
 
@@ -1301,6 +1332,7 @@ static DWORD WINAPI packet_processor(LPVOID arg)
                              TRUE))
                 {
                     udp_header->DstPort = htons(LOCAL_UDP_RELAY_PORT);
+                    redirect_path = "tracked";
                     redirect_ipv4_to_loopback(ip_header, &addr);
                 }
                 else
@@ -1399,6 +1431,7 @@ static DWORD WINAPI packet_processor(LPVOID arg)
                                        proxy_config_id, TRUE, &addr);
 
                         udp_header->DstPort = htons(LOCAL_UDP_RELAY_PORT);
+                        redirect_path = "immediate";
                         redirect_ipv4_to_loopback(ip_header, &addr);
                     }
                 }
@@ -1426,7 +1459,13 @@ static DWORD WINAPI packet_processor(LPVOID arg)
 
             // Modified UDP packet calculate checksums
             WinDivertHelperCalcChecksums(packet, packet_len, &addr, 0);
-            WinDivertSend(windivert_handle, packet, packet_len, NULL, &addr);
+            if (!WinDivertSend(windivert_handle, packet, packet_len,
+                               NULL, &addr))
+                log_message("Failed to send IPv4 UDP packet (%lu)",
+                            GetLastError());
+            else if (redirect_path != NULL)
+                log_immediate_redirect_injected(
+                    redirect_path, "IPv4", TRUE);
             continue;
         }        // TCP packets only from here
         if (tcp_header == NULL)
@@ -1451,6 +1490,7 @@ static DWORD WINAPI packet_processor(LPVOID arg)
                          FALSE))
             {
                 tcp_header->DstPort = htons(g_local_relay_port);
+                redirect_path = "tracked";
                 redirect_ipv4_to_loopback(ip_header, &addr);
             }
             else
@@ -1548,6 +1588,7 @@ static DWORD WINAPI packet_processor(LPVOID arg)
                 add_connection(src_port, src_ip, orig_dest_ip, orig_dest_port,
                                proxy_config_id, FALSE, &addr);
                 tcp_header->DstPort = htons(g_local_relay_port);
+                redirect_path = "immediate";
                 redirect_ipv4_to_loopback(ip_header, &addr);
                 }
             }
@@ -1567,6 +1608,11 @@ static DWORD WINAPI packet_processor(LPVOID arg)
         if (!WinDivertSend(windivert_handle, packet, packet_len, NULL, &addr))
         {
             log_message("Failed to send packet (%lu)", GetLastError());
+        }
+        else if (redirect_path != NULL)
+        {
+            log_immediate_redirect_injected(
+                redirect_path, "IPv4", FALSE);
         }
     }
 
@@ -6272,6 +6318,7 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
     InterlockedExchange(&proxy_attribution_log_count, 0);
     InterlockedExchange(&redirect_schedule_log_count, 0);
     InterlockedExchange(&deferred_redirect_send_log_count, 0);
+    InterlockedExchange(&immediate_redirect_send_log_count, 0);
     attribution_diagnostic_salt =
         (UINT32)GetTickCount() ^ GetCurrentProcessId() ^ 0x4756504Eu;
     InterlockedExchange(&relay_accept_log_count, 0);
