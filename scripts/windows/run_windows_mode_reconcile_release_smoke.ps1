@@ -59,6 +59,8 @@ $recoveryReportPath = Join-Path $resolvedArtifactRoot 'windows-mode-reconcile-fi
 $deadmanReportPath = Join-Path $resolvedArtifactRoot 'windows-mode-reconcile-deadman-recovery.json'
 $externalScreenshotPath = Join-Path $resolvedArtifactRoot 'windows-mode-external-vpn.png'
 $fullScreenshotPath = Join-Path $resolvedArtifactRoot 'windows-mode-full.png'
+$diagnosticsScreenshotPath = Join-Path $resolvedArtifactRoot `
+    'windows-mode-full-diagnostics.png'
 $selectedScreenshotPath = Join-Path $resolvedArtifactRoot 'windows-mode-selected.png'
 $returnedFullScreenshotPath = Join-Path $resolvedArtifactRoot 'windows-mode-returned-full.png'
 $processRouterStdoutEvidencePath = Join-Path $resolvedArtifactRoot `
@@ -1181,6 +1183,7 @@ $summary = [ordered]@{
         runtimeEvidence = $runtimeEvidencePath
         externalScreenshot = $externalScreenshotPath
         fullScreenshot = $fullScreenshotPath
+        diagnosticsScreenshot = $diagnosticsScreenshotPath
         selectedScreenshot = $selectedScreenshotPath
         returnedFullScreenshot = $returnedFullScreenshotPath
         processRouterStdout = $processRouterStdoutEvidencePath
@@ -1238,6 +1241,7 @@ try {
         $summaryPath, $diagnosticPath, $recoveryReportPath,
         $runtimeEvidencePath,
         $deadmanReportPath, $externalScreenshotPath, $fullScreenshotPath,
+        $diagnosticsScreenshotPath,
         $selectedScreenshotPath, $returnedFullScreenshotPath,
         $processRouterStdoutEvidencePath, $processRouterStderrEvidencePath
     ) | Where-Object { Test-Path -LiteralPath $_ }
@@ -1338,6 +1342,15 @@ try {
         -Path $fullScreenshotPath
     $fullFingerprint = Get-EgressFingerprint
     if (-not $fullFingerprint) { throw 'Full-mode egress fingerprint was unavailable.' }
+
+    Invoke-NormalizedClick -Process $process -X 0.17 -Y 0.525 `
+        -Label 'Open full-mode Diagnostics'
+    Start-Sleep -Seconds 5
+    $summary.foreground['diagnosticsScreenshot'] = Get-WindowScreenshot `
+        -Process $process -Path $diagnosticsScreenshotPath
+    Invoke-NormalizedClick -Process $process -X 0.03 -Y 0.04 `
+        -Label 'Close full-mode Diagnostics'
+    Start-Sleep -Seconds 2
 
     $summary.selectedMode = Invoke-ModeSwitch -Process $process `
         -Mode applications
