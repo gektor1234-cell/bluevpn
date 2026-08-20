@@ -29,7 +29,6 @@ class TransportProbeReceiver : BroadcastReceiver() {
                     .coerceIn(MIN_TIMEOUT_MS, MAX_TIMEOUT_MS)
                 val connectivity = context.getSystemService(ConnectivityManager::class.java)
                 val network = connectivity.activeNetwork
-                    ?: throw IllegalStateException("No active network")
                 val probe = probe(network, uri, timeoutMs)
                 val result = JSONObject()
                     .put("target", target)
@@ -55,8 +54,12 @@ class TransportProbeReceiver : BroadcastReceiver() {
         }, "GreenVPN-External-Transport-Probe").start()
     }
 
-    private fun probe(network: Network, uri: String, timeoutMs: Int): Probe = try {
-        val connection = network.openConnection(URL(uri)) as HttpURLConnection
+    private fun probe(network: Network?, uri: String, timeoutMs: Int): Probe = try {
+        val connection = if (network != null) {
+            network.openConnection(URL(uri))
+        } else {
+            URL(uri).openConnection()
+        } as HttpURLConnection
         try {
             connection.instanceFollowRedirects = true
             connection.connectTimeout = timeoutMs

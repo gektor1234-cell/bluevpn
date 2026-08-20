@@ -579,9 +579,34 @@ public static class GreenVpnModeSmokeInput {
     [DllImport("user32.dll")] private static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr hWnd);
-    [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] private static extern bool SetWindowPos(
+        IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] private static extern IntPtr WindowFromPoint(POINT point);
+    [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
     [DllImport("user32.dll")] private static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+
+    public static bool PinVisible(IntPtr hWnd) {
+        var topmost = new IntPtr(-1);
+        const uint flags = 0x0001 | 0x0002 | 0x0040;
+        ShowWindow(hWnd, 9);
+        if (!SetWindowPos(hWnd, topmost, 0, 0, 0, 0, flags)) return false;
+        BringWindowToTop(hWnd);
+        SetForegroundWindow(hWnd);
+        Thread.Sleep(250);
+        return true;
+    }
+
+    public static void Unpin(IntPtr hWnd) {
+        var notTopmost = new IntPtr(-2);
+        const uint flags = 0x0001 | 0x0002 | 0x0010 | 0x0040;
+        SetWindowPos(hWnd, notTopmost, 0, 0, 0, 0, flags);
+    }
+
+    private static bool PointTargetsWindow(IntPtr hWnd, POINT point) {
+        var hit = WindowFromPoint(point);
+        return hit != IntPtr.Zero && GetAncestor(hit, 2) == hWnd;
+    }
 
     public static bool ClickNormalized(IntPtr hWnd, double x, double y) {
         RECT rect; POINT original;
@@ -591,18 +616,18 @@ public static class GreenVpnModeSmokeInput {
             Y = Math.Max(1, (int)Math.Round((rect.Bottom - rect.Top) * y))
         };
         if (!ClientToScreen(hWnd, ref point)) return false;
-        ShowWindow(hWnd, 9);
-        for (var attempt = 0; attempt < 20; attempt++) {
-            BringWindowToTop(hWnd);
-            SetForegroundWindow(hWnd);
-            if (GetForegroundWindow() == hWnd) break;
+        if (!PinVisible(hWnd)) return false;
+        try {
+            if (!PointTargetsWindow(hWnd, point)) return false;
+            if (!SetCursorPos(point.X, point.Y)) return false;
+            mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
+            mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
             Thread.Sleep(100);
+            return true;
+        } finally {
+            SetCursorPos(original.X, original.Y);
+            Unpin(hWnd);
         }
-        if (!SetCursorPos(point.X, point.Y)) return false;
-        mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
-        mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
-        SetCursorPos(original.X, original.Y);
-        return true;
     }
 }
 '@
@@ -636,45 +661,58 @@ function Get-WindowScreenshot {
         [Parameter(Mandatory = $true)][string]$Path
     )
     $Process.Refresh()
-    $rect = New-Object GreenVpnModeSmokeInput+RECT
-    if (-not [GreenVpnModeSmokeInput]::GetWindowRect(
-            $Process.MainWindowHandle, [ref]$rect
-        )) { throw 'Unable to read the app window rectangle.' }
-    $width = $rect.Right - $rect.Left
-    $height = $rect.Bottom - $rect.Top
-    if ($width -lt 900 -or $height -lt 650) {
-        throw "Unexpected app window size: ${width}x${height}."
+    if ($Process.HasExited -or $Process.MainWindowHandle -eq 0) {
+        throw 'Unable to capture the unavailable app window.'
     }
-    $bitmap = New-Object Drawing.Bitmap $width, $height
-    $graphics = [Drawing.Graphics]::FromImage($bitmap)
+    if (-not [GreenVpnModeSmokeInput]::PinVisible(
+            $Process.MainWindowHandle
+        )) {
+        throw 'Unable to pin the app window for screenshot.'
+    }
     try {
-        $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bitmap.Size)
-        $bitmap.Save($Path, [Drawing.Imaging.ImageFormat]::Png)
-        $distinct = [Collections.Generic.HashSet[int]]::new()
-        $nonBlack = 0
-        for ($x = 0; $x -lt $width; $x += 12) {
-            for ($y = 0; $y -lt $height; $y += 12) {
-                $color = $bitmap.GetPixel($x, $y)
-                [void]$distinct.Add($color.ToArgb())
-                if ($color.R -gt 20 -or $color.G -gt 20 -or $color.B -gt 20) {
-                    $nonBlack++
+        Start-Sleep -Milliseconds 300
+        $rect = New-Object GreenVpnModeSmokeInput+RECT
+        if (-not [GreenVpnModeSmokeInput]::GetWindowRect(
+                $Process.MainWindowHandle, [ref]$rect
+            )) { throw 'Unable to read the app window rectangle.' }
+        $width = $rect.Right - $rect.Left
+        $height = $rect.Bottom - $rect.Top
+        if ($width -lt 900 -or $height -lt 650) {
+            throw "Unexpected app window size: ${width}x${height}."
+        }
+        $bitmap = New-Object Drawing.Bitmap $width, $height
+        $graphics = [Drawing.Graphics]::FromImage($bitmap)
+        try {
+            $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bitmap.Size)
+            $bitmap.Save($Path, [Drawing.Imaging.ImageFormat]::Png)
+            $distinct = [Collections.Generic.HashSet[int]]::new()
+            $nonBlack = 0
+            for ($x = 0; $x -lt $width; $x += 12) {
+                for ($y = 0; $y -lt $height; $y += 12) {
+                    $color = $bitmap.GetPixel($x, $y)
+                    [void]$distinct.Add($color.ToArgb())
+                    if ($color.R -gt 20 -or $color.G -gt 20 -or $color.B -gt 20) {
+                        $nonBlack++
+                    }
                 }
             }
-        }
-        if ($distinct.Count -lt 40 -or $nonBlack -lt 500) {
-            throw 'Window screenshot failed the nonblank visual contract.'
-        }
-        return [ordered]@{
-            path = $Path
-            width = $width
-            height = $height
-            distinctColorCount = $distinct.Count
-            nonBlackSampleCount = $nonBlack
-            visualContractPassed = $true
+            if ($distinct.Count -lt 40 -or $nonBlack -lt 500) {
+                throw 'Window screenshot failed the nonblank visual contract.'
+            }
+            return [ordered]@{
+                path = $Path
+                width = $width
+                height = $height
+                distinctColorCount = $distinct.Count
+                nonBlackSampleCount = $nonBlack
+                visualContractPassed = $true
+            }
+        } finally {
+            $graphics.Dispose()
+            $bitmap.Dispose()
         }
     } finally {
-        $graphics.Dispose()
-        $bitmap.Dispose()
+        [GreenVpnModeSmokeInput]::Unpin($Process.MainWindowHandle)
     }
 }
 
