@@ -4,17 +4,16 @@
 
 ## Итог
 
-Windows candidate `0.4.6+4634` технически принят по точному физическому
+Windows candidate `0.4.6+4635` технически принят по точному физическому
 сценарию `full -> applications -> full`. Selected executable подтвердил
-выход через dedicated VPN, selected YouTube вернул HTTP `204`, а после прогона
-исходный Amnezia/API/YouTube baseline был восстановлен.
+выход через dedicated VPN `5.129.216.42`, selected YouTube вернул HTTP `204`,
+Diagnostics при работающем full tunnel визуально показал `Подключение: активно`,
+а после прогона исходный Amnezia/API/YouTube baseline был восстановлен.
 
-После этой приемки владелец обнаружил отдельный UI-дефект: Diagnostics показывал
-`не активно`, хотя authenticated GreenVPNService подтверждал работающий full
-tunnel. Routing acceptance `+4634` остается действительным, но сам `+4634`
-считается superseded. Исправленный clean-source successor `0.4.6+4635` собран и
-прошел package/release gates; он пока не устанавливался, чтобы не прерывать
-активное подключение владельца.
+Предшественник `+4634` прошел routing acceptance, но после owner review был
+superseded из-за отдельного Diagnostics false negative. Исправленный
+clean-source successor `+4635` повторил полный routing smoke и закрыл этот
+последний технический дефект.
 
 Ни один candidate не опубликован. `productionPublished=false`; stable
 production, Android, backend и Friendly Linnet `5.129.237.163` не менялись.
@@ -64,6 +63,8 @@ Build root:
 
 - Exact source commit:
   `fcd0c6e8a83742aa71e4aabf480cfa9df19321d3`.
+- Screenshot harness commit: `c74061f` (pushed).
+- Exact protected Amnezia recovery hardening: `2aac4b5` (pushed).
 - Build root:
   `C:\BlueVPN_Builds\fusion_production_promotion_20260820_b4635_diagnostics_v1`.
 - Root cause: Diagnostics выполнял прямой `wg.exe show` из обычного процесса;
@@ -93,7 +94,8 @@ Build root:
 - Manifest retains `ownerApprovalRequired=true` and
   `productionPublished=false`.
 - Installed `+4634` remained running unchanged during build; no app, tunnel,
-  route or service transition was performed.
+  route or service transition was performed during build/validation. The later
+  physical acceptance safely installed and retained exact `+4635`.
 
 ## Build verification
 
@@ -101,26 +103,32 @@ Build root:
   SHA-256.
 - Selective-routing policy regression прошел.
 - `flutter analyze`: без замечаний.
-- Flutter tests: `130` passed, `14` intentionally skipped.
+- Clean-source Flutter tests для `+4635`: `135` passed, `14` intentionally
+  skipped.
 - Focused Fusion tests в clean source прошли.
 - Windows release gate: `0` warnings, `0` errors.
 
 ## Physical acceptance
 
 Evidence root:
-`C:\BlueVPN_Builds\fusion_production_windows_mode_smoke_20260820_b4634_loopback_tuple_v1`.
+`C:\BlueVPN_Builds\fusion_production_windows_mode_smoke_20260820_b4635_diagnostics_v1`.
 
 Главный отчет:
 `windows-mode-reconcile-autonomous-summary.json`.
 
-- Прогон начат `2026-08-20T10:28:28.6519199Z`, завершен
-  `2026-08-20T10:32:23.4416340Z`; `success=true`, `failure=null`.
-- Выполнен ровно один delayed detached runner с начальной задержкой `120`
+- Прогон начат `2026-08-20T11:49:02.1272590Z`, завершен
+  `2026-08-20T11:54:14.1063663Z`; `success=true`, `failure=null`.
+- Выполнен ровно один delayed detached runner с начальной задержкой `180`
   секунд, независимым deadman `900` секунд и `try/finally` recovery.
+- Initial state содержал работающий Green `+4634` и отсутствующий внешний
+  tunnel service. До acceptance runner восстановил exact
+  `AmneziaWGTunnel$maxim_pc_full` из защищенного `.conf.dpapi`; delayed baseline
+  подтвердил Amnezia/API `200`/YouTube `204`, отсутствие metric `42739` и
+  failsafes.
 - Exact installer, version, payload hashes и paid owner session подтверждены.
-- Foreground full connect: `21.474` wall seconds, `17.988` client-log seconds;
+- Foreground full connect: `8.603` wall seconds, `5.982` client-log seconds;
   один candidate, data-plane probe и privileged takeover подтверждены.
-- Applications switch: `27.937` wall seconds, `25.590` client-log seconds;
+- Applications switch: `31.638` wall seconds, `29.584` client-log seconds;
   UI и runtime согласованы, process-router обязателен, запущен ровно один exact
   process и его PID совпадает с registry evidence.
 - Direct unselected, explicit SOCKS5 и selected-executable fingerprints
@@ -129,12 +137,16 @@ Evidence root:
   dedicated egress `5.129.216.42`; selected YouTube вернул HTTP `204`.
 - Direct IPv6 в этом прогоне отсутствовал, поэтому условие IPv6 escape было
   неприменимо; утечка не обнаружена.
-- Возврат в full: `14.020` wall seconds, `11.231` client-log seconds; egress
+- Возврат в full: `13.142` wall seconds, `10.251` client-log seconds; egress
   fingerprint получен и совпал с исходным full VPN.
+- Main summary: `51385` bytes, SHA-256
+  `79DA9B6BFA9386041180832D3114953FB4D6938DFD34E55A503CE065AE2448F6`.
+- Diagnostics screenshot: `54404` bytes, SHA-256
+  `A03C507310CDE0494D1E3E567EF633848C907A1E42E1247BCA2FFA012D0FADDA`.
 
 ## Router evidence
 
-- `windows-process-router.stdout.log`: `9962` bytes;
+- `windows-process-router.stdout.log`: `9888` bytes;
   `windows-process-router.stderr.log`: `0` bytes.
 - TCP listeners были только `127.0.0.1:34010` и `[::1]:34010`; UDP relay был
   только `127.0.0.1/[::1]:34011`.
@@ -148,17 +160,20 @@ Evidence root:
 
 ## Visual evidence
 
-Визуально проверены четыре screenshot-файла размером `980x720`:
+Визуально проверены пять screenshot-файлов размером `980x720`:
 
 - `windows-mode-external-vpn.png`;
 - `windows-mode-full.png`;
+- `windows-mode-full-diagnostics.png`;
 - `windows-mode-selected.png`;
 - `windows-mode-returned-full.png`.
 
 Full и returned-full явно показывают `Пауза`, `Сменить подключение`,
 `Диагностика` и `Детали`. Public IP, protocol и route не раскрываются.
+Diagnostics явно показывает зеленую строку `Подключение` со значением `активно`,
+а не `не активно`, `проверяется` или loading state.
 Selected state визуально однозначен, список выбранных приложений помещается без
-перекрытий. Все четыре screenshot contracts имеют
+перекрытий. Все пять screenshot contracts имеют
 `visualContractPassed=true`.
 
 ## Recovery и границы
@@ -169,6 +184,11 @@ metric `42739` и failsafes отсутствуют, scratch удален, исх
 изменено, deadman остановлен, exact install сохранен. Финальная проверка дала
 Amnezia running, API HTTP `200` и YouTube HTTP `204`.
 
+Независимая read-only post-run проверка повторно подтвердила exact installed
+payload hashes `+4635`, running `AmneziaWGTunnel$maxim_pc_full`, отсутствие
+managed `BlueVPNDev1`, standby probe, metric `42739` и трех smoke failsafes,
+API HTTP `200` и YouTube HTTP `204`.
+
 Никакой production deployment не выполнялся. Production release contract и
 public manifests не менялись; candidate manifest остается локальным
 `productionPublished=false`. Android, backend, серверные маршруты и Friendly
@@ -176,16 +196,15 @@ Linnet `5.129.237.163` не затрагивались.
 
 ## Owner gates и оставшаяся проверка
 
-1. Fusion UI/email acceptance: владелец принял остальной UI и решил не делать
-   отдельный live email-вход; automated auth/recovery tests прошли. Gate принят
-   для `+4635` при условии целевой проверки исправленного Diagnostics после
-   безопасной установки.
+1. Fusion UI/email acceptance: принят. Владелец принял остальной UI и решил не
+   делать отдельный live email-вход; automated auth/recovery tests прошли, а
+   целевая проверка исправленного Diagnostics на exact `+4635` завершилась
+   успешно.
 2. Authenticode/unsigned SmartScreen: владелец решил пока пропустить. Gate не
    принят и остается блокирующим.
 3. Stable production publication: не запрашивалась и не разрешена; из-за
    последовательности gates публикация остается заблокированной.
 
-До установки `+4635` требуется только безопасно заменить активный `+4634` и
-визуально подтвердить, что при authoritative running status Diagnostics
-показывает `активно`. Это нельзя выполнять внутри активной сессии с работающим
-пользовательским VPN. Production publication по-прежнему запрещена.
+Техническая Windows Fusion acceptance завершена. Остались только явно
+отложенный Authenticode/unsigned SmartScreen gate и отдельное stable-production
+approval; production publication по-прежнему запрещена.

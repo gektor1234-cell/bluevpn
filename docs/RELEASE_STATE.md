@@ -6,7 +6,7 @@
 |---|---|
 | Stable production | unchanged: backend `0.9.153-update-channel-alias.4`, Android `0.3.19+2026072914`, Windows `0.3.26+3105` |
 | Accepted paid-beta | unchanged: Android `0.4.6-paid-beta.1+2026081106`, Windows `0.4.6-paid-beta.2+4602` |
-| Windows production candidate | `0.4.6+4635`, diagnostics-fixed exact package; targeted post-install UI check pending, `NotSigned`, not published |
+| Windows production candidate | `0.4.6+4635`, exact physical and Diagnostics acceptance passed, `NotSigned`, not published |
 | Android/backend candidate | not promoted and unchanged |
 | Money and advertising | disabled, unchanged |
 
@@ -17,8 +17,8 @@ size is `54026240` bytes; source anchor is
 payload entries and no errors. Analyze, `135` tests (`14` intentionally
 skipped), focused Fusion tests and release gate `0/0` passed.
 
-The exact `+4634` delayed detached smoke passed the authoritative
-`full -> applications -> full` flow. Foreground used one candidate in `17.988`
+The exact `+4635` delayed detached smoke passed the authoritative
+`full -> applications -> full` flow. Foreground used one candidate in `5.982`
 client-log seconds and confirmed data-plane probe plus privileged takeover.
 Applications mode had consistent UI/runtime and one exact process-router.
 Direct, explicit SOCKS5 and selected-executable fingerprints were captured
@@ -28,23 +28,23 @@ matched the initial full VPN.
 
 Router evidence contains two complete loopback relay chains from redirect
 schedule/injection through relay acceptance to SOCKS5 upstream. Router stderr is
-empty. Four screenshots passed their visual contracts and were visually
+empty. Five screenshots passed their visual contracts and were visually
 inspected: required quick actions are visible while public IP, protocol and
-route are hidden. Final recovery restored Amnezia, API `200` and YouTube `204`
-and left no Green components, process-router, metric-`42739` routes or
-failsafes. Owner review then found that Diagnostics used a non-elevated direct
-`wg.exe` query and could show `inactive` while authenticated GreenVPNService
-reported a running full tunnel. `+4635` fixes this source-of-truth defect; its
-process-router is byte-identical to the physically accepted `+4634` router.
-Builds `4630`-`4634` are rejected or superseded; earlier accepted `4610` is
-also superseded. None may be published. Exact evidence and failure history are in
+route are hidden; Diagnostics explicitly shows `Подключение: активно`. Final
+recovery restored exact external Amnezia, API `200` and YouTube `204`, retained
+the exact `+4635` install and left no managed Green tunnel, process-router,
+metric-`42739` routes or failsafes.
+
+Build `+4634` remains historical routing evidence but is superseded by the
+complete `+4635` acceptance. Builds `4630`-`4634` and earlier accepted `4610`
+must not be published. Exact evidence and failure history are in
 `FUSION_WINDOWS_SELECTED_APP_ACCEPTANCE_2026_08_20_RU.md`.
 
-This is a package-verified candidate, not a release. Installed `+4634` was left
-running unchanged; `+4635` still needs one targeted post-install Diagnostics
-visual check. No deployment was attempted and `productionPublished=false`.
-The owner accepted the remaining Fusion UI and relied on passing automated
-auth/recovery tests instead of repeating live email login. The next sequential
+This is a technically accepted production candidate, not a release. No
+production deployment was attempted and `productionPublished=false`. The owner
+accepted the remaining Fusion UI and relied on passing automated auth/recovery
+tests instead of repeating live email login; targeted Diagnostics verification
+now completes that gate for exact `+4635`. The next sequential
 Authenticode/unsigned SmartScreen gate was explicitly deferred, so stable
 production approval remains blocked and was not requested.
 

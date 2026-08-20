@@ -21,15 +21,13 @@ This is the current operational entry point. Read it together with
   into `inactive`. Package audit passed with `66` payload entries and no errors;
   analyze, `135` tests (`14` skipped), focused Fusion tests and release gate
   `0/0` passed.
-- `+4635` is built but not installed. The owner was actively using installed
-  `+4634`, so no app/service/tunnel transition was performed. One targeted
-  post-install visual check of Diagnostics remains.
-- Exact installed app remains `0.4.6+4634`; app, AOT, service and deterministic
-  process-router hashes plus the `+4635` package hashes are recorded in
-  `docs/FUSION_WINDOWS_SELECTED_APP_ACCEPTANCE_2026_08_20_RU.md`.
-- One delayed detached physical smoke passed the authoritative
+- Exact `+4635` is installed and physically accepted. Installed app, AOT and
+  service bytes match the package hashes; the exact install was retained after
+  recovery. Evidence root is
+  `C:\BlueVPN_Builds\fusion_production_windows_mode_smoke_20260820_b4635_diagnostics_v1`.
+- One delayed detached `+4635` physical smoke passed the authoritative
   `full -> applications -> full` flow. Foreground used one candidate in
-  `17.988` client-log seconds with probe and privileged takeover confirmed.
+  `5.982` client-log seconds with probe and privileged takeover confirmed.
 - Direct unselected, explicit SOCKS5 and selected-executable fingerprints were
   captured without storing raw addresses. Selected egress differed from direct,
   matched dedicated egress `5.129.216.42`, and selected YouTube returned `204`.
@@ -37,21 +35,23 @@ This is the current operational entry point. Read it together with
 - The process-router accepted both selected redirects on loopback and reached
   SOCKS5 upstream. Its stderr was empty; one later unattributed packet remained
   fail-closed during shutdown and did not create a direct fallback or leak.
-- Full, applications and returned-full UI/runtime states were consistent. Four
-  screenshots were visually inspected; required controls are visible and
-  public IP/protocol/route remain hidden.
-- Cleanup restored external Amnezia, API `200` and YouTube `204`, with no Green
-  components, process-router, metric-`42739` routes or failsafes remaining.
+- Full, applications and returned-full UI/runtime states were consistent. Five
+  screenshots were visually inspected; required controls are visible, public
+  IP/protocol/route remain hidden, and Diagnostics explicitly shows
+  `Подключение: активно`.
+- Cleanup restored external Amnezia, API `200` and YouTube `204`, with no
+  managed Green tunnel, process-router, metric-`42739` routes or failsafes
+  remaining. Exact `+4635` stayed installed.
 - Builds `4630` through `4633` are rejected and must never be published. Earlier
   technically accepted `4610` is superseded by the selected-app acceptance and
   also must not be published.
 - Stable production, backend, Android and public manifests remain unchanged.
   `productionPublished=false`; no production deployment was attempted.
 - The owner accepted the remaining Fusion UI and chose not to repeat a live
-  email login; auth/recovery automation is green. This acceptance is final for
-  `+4635` after its targeted Diagnostics check. The Authenticode/unsigned
-  SmartScreen gate was explicitly deferred, so stable-production promotion
-  remains blocked and was not requested.
+  email login; auth/recovery automation is green. The targeted Diagnostics
+  check passed, so Fusion UI/email acceptance is final for exact `+4635`.
+  The Authenticode/unsigned SmartScreen gate was explicitly deferred, so
+  stable-production promotion remains blocked and was not requested.
 - Full exact evidence and remaining gates:
   `docs/FUSION_WINDOWS_SELECTED_APP_ACCEPTANCE_2026_08_20_RU.md`.
 

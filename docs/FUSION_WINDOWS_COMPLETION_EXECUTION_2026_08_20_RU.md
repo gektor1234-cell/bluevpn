@@ -70,9 +70,18 @@
   размер `54026240`, `NotSigned`; package audit `66` entries, ошибок нет,
   `productionPublished=false`. Analyze, `135` tests (`14` skipped), focused
   Fusion tests и release gate `0/0` прошли.
-- Работающий `+4634` не останавливался и сетевые переходы не выполнялись.
-  `+4635` не установлен; целевая visual confirmation Diagnostics остается
-  последней технической проверкой этого UI-only successor.
+- Во время build/validation работающий `+4634` не останавливался и сетевые
+  переходы не выполнялись. После этого один delayed detached runner с задержкой
+  `180` секунд, независимым deadman `900` секунд и `try/finally` recovery
+  безопасно установил exact `+4635` и выполнил полный physical acceptance.
+- Exact `+4635` повторно прошел `full -> applications -> full`: selected egress
+  совпал с `5.129.216.42`, selected YouTube вернул `204`, returned-full egress
+  восстановлен. Diagnostics screenshot визуально подтвердил
+  `Подключение: активно`.
+- Cleanup сохранил exact install, восстановил
+  `AmneziaWGTunnel$maxim_pc_full`, API `200` и YouTube `204`; managed
+  `BlueVPNDev1`, metric `42739` и failsafes отсутствуют. Main summary имеет
+  `success=true`, `failure=null`.
 
 ## Исполняемый чек-лист
 
@@ -99,7 +108,7 @@
   зафиксировать/push source commit `fcd0c6e`.
 - [x] Собрать и проверить exact clean-source successor `0.4.6+4635` без
   Android/backend изменений и без production publication.
-- [ ] После завершения пользовательской VPN-сессии безопасно установить
+- [x] После завершения пользовательской VPN-сессии безопасно установить
   `+4635` и визуально подтвердить `Подключение: активно` в Diagnostics.
 
 ## Обязательный physical acceptance
@@ -121,9 +130,9 @@
 
 ## Что останется после технического завершения
 
-- Fusion UI/email владелец принял без отдельного live email-прогона; automated
-  auth/recovery tests прошли. Acceptance окончательно привязывается к `+4635`
-  после целевой проверки Diagnostics.
+- Fusion UI/email gate принят для exact `+4635`: владелец принял UI без
+  отдельного live email-прогона, automated auth/recovery tests прошли, целевая
+  проверка Diagnostics завершилась успешно.
 - Authenticode/unsigned SmartScreen gate владелец пока пропустил; он остается
   непройденным.
 - Stable publication не разрешена и остается заблокированной предыдущим gate.
