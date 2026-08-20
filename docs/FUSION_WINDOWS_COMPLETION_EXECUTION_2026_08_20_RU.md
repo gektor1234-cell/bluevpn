@@ -46,6 +46,18 @@
   совпали: core SHA-256 `B4759403D1550594A6032DA4869C6666B234B88868ED19D8A1FD38372B7349CE`,
   размер `231424`; policy, analyze, `130` tests (`14` skipped) и release gate
   прошли, warnings/errors `0/0`.
+- Fix зафиксирован и pushed exact commit
+  `58c3ac8c54395980b7addb5ad094a58786c8b30e`.
+- Exact clean-source candidate `0.4.6+4634`: installer SHA-256
+  `79CE8577E1ADBCD08977B471FF797C0A8527253ABC056D1F5301E4988B6C1D7F`,
+  размер `54026752`, `NotSigned`; package audit `66` entries, ошибок нет,
+  `productionPublished=false`.
+- Единственный delayed detached physical smoke успешно прошел
+  `full -> applications -> full`: selected egress совпал с `5.129.216.42`,
+  selected YouTube вернул `204`, returned-full egress восстановлен. Cleanup
+  вернул Amnezia/API `200`/YouTube `204`; metric `42739` и failsafes отсутствуют.
+- Все четыре screenshot-файла визуально проверены; privacy-safe router evidence
+  подтверждает redirect injection, loopback relay acceptance и SOCKS5 upstream.
 
 ## Исполняемый чек-лист
 
@@ -63,10 +75,10 @@
   повторить точную проверку пакета; candidate отклонен по physical acceptance.
 - [x] Локализовать post-attribution relay failure и подготовить детерминированный
   loopback-tuple successor без небезопасного attribution fallback.
-- [ ] Зафиксировать новый source commit/push и собрать exact clean-source
+- [x] Зафиксировать новый source commit/push и собрать exact clean-source
   successor `0.4.6+4634`.
-- [ ] Запустить один delayed detached physical smoke из уникального каталога.
-- [ ] Проверить логи, privacy-safe markers и screenshots.
+- [x] Запустить один delayed detached physical smoke из уникального каталога.
+- [x] Проверить логи, privacy-safe markers и screenshots.
 - [ ] Зафиксировать evidence/docs commit и push.
 
 ## Обязательный physical acceptance

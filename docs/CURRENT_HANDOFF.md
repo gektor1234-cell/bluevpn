@@ -1,42 +1,47 @@
 # Green VPN Current Handoff
 
-Updated: 2026-08-13 MSK.
+Updated: 2026-08-20 MSK.
 
 This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
 `PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md`. Dated reports are evidence only.
 
-## Fusion Windows Production Candidate, 2026-08-13
+## Fusion Windows Selected-App Candidate, 2026-08-20
 
-- Exact Windows candidate `0.4.6+4610` is technically accepted but not
-  published. Installer size is `55506944`; SHA-256 is
-  `FCBA053F674FDFEAA1BA48604BDA455DB39C372490F2E9A6EBD20699E1EEB8CF`;
-  Authenticode is `NotSigned`. Source anchor is
-  `333a876f59fd1804c2793369578cfb347bf8aec4`.
-- Package audit passed with `66` payload entries. The exact installed app is
-  `0.4.6+4610`; app, AOT and service hashes are recorded in
-  `docs/FUSION_PRODUCTION_CANDIDATE_2026_08_13_RU.md`.
-- The exact delayed physical smoke passed. Foreground used one candidate in
-  `18.284` client-log seconds with probe and privileged takeover confirmed.
-  All `15` standby routes were accounted for; a fresh config-bound AmneziaWG
-  proof recovered an injected active-route failure in `17.17` seconds with no
-  transport overlap and `cleanupOk=true`.
-- Five tray lifecycle cycles, eight duplicate launches per cycle, forced
-  predecessor recovery, final icon/process cleanup, external Amnezia recovery,
-  API `200`, YouTube `204`, absence of metric-`42739` routes and removal of all
-  failsafes were confirmed.
-- Builds `4603` through `4607` and `4609` are rejected and must never be
-  published; accepted build `4608` is superseded and must not be published.
-  Build `4610` adds privacy-safe details, an explicit connected indicator,
-  corrected email recovery and fail-closed recovery restricted to standby
-  proofs completed before the active route failed.
+- Exact Windows candidate `0.4.6+4634` is technically accepted but not
+  published. Installer size is `54026752`; SHA-256 is
+  `79CE8577E1ADBCD08977B471FF797C0A8527253ABC056D1F5301E4988B6C1D7F`;
+  Authenticode is `NotSigned`. Exact source anchor is
+  `58c3ac8c54395980b7addb5ad094a58786c8b30e`.
+- Package audit passed with `66` payload entries and no errors. Exact installed
+  app is `0.4.6+4634`; app, AOT, service and deterministic process-router
+  hashes are recorded in
+  `docs/FUSION_WINDOWS_SELECTED_APP_ACCEPTANCE_2026_08_20_RU.md`.
+- One delayed detached physical smoke passed the authoritative
+  `full -> applications -> full` flow. Foreground used one candidate in
+  `17.988` client-log seconds with probe and privileged takeover confirmed.
+- Direct unselected, explicit SOCKS5 and selected-executable fingerprints were
+  captured without storing raw addresses. Selected egress differed from direct,
+  matched dedicated egress `5.129.216.42`, and selected YouTube returned `204`.
+  Returned-full egress matched the initial full VPN.
+- The process-router accepted both selected redirects on loopback and reached
+  SOCKS5 upstream. Its stderr was empty; one later unattributed packet remained
+  fail-closed during shutdown and did not create a direct fallback or leak.
+- Full, applications and returned-full UI/runtime states were consistent. Four
+  screenshots were visually inspected; required controls are visible and
+  public IP/protocol/route remain hidden.
+- Cleanup restored external Amnezia, API `200` and YouTube `204`, with no Green
+  components, process-router, metric-`42739` routes or failsafes remaining.
+- Builds `4630` through `4633` are rejected and must never be published. Earlier
+  technically accepted `4610` is superseded by the selected-app acceptance and
+  also must not be published.
 - Stable production, backend, Android and public manifests remain unchanged.
   `productionPublished=false`; no production deployment was attempted.
 - Publication remains blocked on three separate owner decisions: Fusion UI
   and email acceptance, Authenticode or explicit unsigned SmartScreen
   acceptance, and explicit stable-production promotion approval.
-- Full evidence and remaining gates:
-  `docs/FUSION_PRODUCTION_CANDIDATE_2026_08_13_RU.md`.
+- Full exact evidence and remaining gates:
+  `docs/FUSION_WINDOWS_SELECTED_APP_ACCEPTANCE_2026_08_20_RU.md`.
 
 ## Fusion Paid-Beta Closure, 2026-08-13
 

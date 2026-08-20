@@ -1,36 +1,39 @@
 # Green VPN Release State
 
-## Fusion Windows Production Candidate (2026-08-13 MSK)
+## Fusion Windows Selected-App Candidate (2026-08-20 MSK)
 
 | Layer | Current state |
 |---|---|
 | Stable production | unchanged: backend `0.9.153-update-channel-alias.4`, Android `0.3.19+2026072914`, Windows `0.3.26+3105` |
 | Accepted paid-beta | unchanged: Android `0.4.6-paid-beta.1+2026081106`, Windows `0.4.6-paid-beta.2+4602` |
-| Windows production candidate | `0.4.6+4610`, exact physical smoke passed, `NotSigned`, not published |
+| Windows production candidate | `0.4.6+4634`, exact selected-app physical smoke passed, `NotSigned`, not published |
 | Android/backend candidate | not promoted and unchanged |
 | Money and advertising | disabled, unchanged |
 
 Exact candidate installer SHA-256 is
-`FCBA053F674FDFEAA1BA48604BDA455DB39C372490F2E9A6EBD20699E1EEB8CF`;
-size is `55506944` bytes; source anchor is
-`333a876f59fd1804c2793369578cfb347bf8aec4`. Package audit passed with `66`
-payload entries.
+`79CE8577E1ADBCD08977B471FF797C0A8527253ABC056D1F5301E4988B6C1D7F`;
+size is `54026752` bytes; source anchor is
+`58c3ac8c54395980b7addb5ad094a58786c8b30e`. Package audit passed with `66`
+payload entries and no errors.
 
-The exact detached physical smoke passed with one foreground candidate in
-`18.284` client-log seconds, confirmed data-plane probe and privileged takeover.
-All `15` standby routes were accounted for. A fresh config-bound AmneziaWG
-proof recovered an injected active-route failure in `17.17` seconds, used the
-prevalidated standby, and never overlapped transport groups. Standby cleanup is
-`cleanupOk=true`; final recovery restored Amnezia, API `200` and YouTube `204`
-and left no Green transports, metric-`42739` routes or failsafes.
+The exact delayed detached smoke passed the authoritative
+`full -> applications -> full` flow. Foreground used one candidate in `17.988`
+client-log seconds and confirmed data-plane probe plus privileged takeover.
+Applications mode had consistent UI/runtime and one exact process-router.
+Direct, explicit SOCKS5 and selected-executable fingerprints were captured
+without raw addresses; selected differed from direct, matched dedicated egress
+`5.129.216.42`, and selected YouTube returned `204`. Returned-full egress
+matched the initial full VPN.
 
-Five tray cycles and forced-predecessor recovery confirmed a single process and
-correct icon lifecycle. Builds `4603`-`4607` and `4609` are rejected; `4608` is
-superseded. None may be published. Build `4610` also removes public-IP and
-route/protocol disclosure, adds an explicit connected check, corrects email
-recovery UX and limits failover to standby proofs completed before the active
-failure. Exact evidence and the failure history are in
-`FUSION_PRODUCTION_CANDIDATE_2026_08_13_RU.md`.
+Router evidence contains two complete loopback relay chains from redirect
+schedule/injection through relay acceptance to SOCKS5 upstream. Router stderr is
+empty. Four screenshots passed their visual contracts and were visually
+inspected: required quick actions are visible while public IP, protocol and
+route are hidden. Final recovery restored Amnezia, API `200` and YouTube `204`
+and left no Green components, process-router, metric-`42739` routes or
+failsafes. Builds `4630`-`4633` are rejected; earlier accepted `4610` is
+superseded. None may be published. Exact evidence and failure history are in
+`FUSION_WINDOWS_SELECTED_APP_ACCEPTANCE_2026_08_20_RU.md`.
 
 This is a technically accepted candidate, not a release. No deployment was
 attempted and `productionPublished=false`. Publication requires three separate
