@@ -75,6 +75,31 @@ function Quote-NativeArgument {
     return '"' + $Value.Replace('"', '\"') + '"'
 }
 
+function Get-FileSha256Hex {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    if (Get-Command -Name 'Get-FileHash' -ErrorAction SilentlyContinue) {
+        return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToUpperInvariant()
+    }
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = [IO.File]::OpenRead((Resolve-Path -LiteralPath $Path).Path)
+        try {
+            $hashBytes = $sha256.ComputeHash($stream)
+        } finally {
+            $stream.Dispose()
+        }
+    } finally {
+        $sha256.Dispose()
+    }
+
+    return ([System.BitConverter]::ToString($hashBytes)).Replace('-', '').ToUpperInvariant()
+}
+
 try {
     foreach ($required in @($runnerPath, $resolvedInstaller)) {
         if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
@@ -82,7 +107,7 @@ try {
         }
     }
     $installer = Get-Item -LiteralPath $resolvedInstaller
-    $actualHash = (Get-FileHash -LiteralPath $resolvedInstaller -Algorithm SHA256).Hash
+    $actualHash = Get-FileSha256Hex -Path $resolvedInstaller
     if ($actualHash -ne $expectedHash -or
             [long]$installer.Length -ne $ExpectedInstallerSize) {
         throw 'Exact installer SHA-256 or size mismatch.'

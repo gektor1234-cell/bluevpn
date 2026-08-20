@@ -93,7 +93,20 @@ try {
         '(void)local_ip',
         'attribution_update_event = CreateEventW(NULL, FALSE, FALSE, NULL)',
         'wait_for_attribution_update(deadline)',
-        'port_clear(swapped_local_port)',
+        'redirect_ipv4_to_loopback',
+        'redirect_ipv6_to_loopback',
+        'restore_ipv4_relay_response',
+        'restore_ipv6_relay_response',
+        'SO_EXCLUSIVEADDRUSE',
+        'INADDR_LOOPBACK',
+        'in6addr_loopback',
+        'connection_tuple_matches_v4',
+        'connection_tuple_matches_v6',
+        'find_unique_connection_by_port_locked',
+        'find_v4_udp_sender',
+        'find_v6_udp_sender',
+        'is_connection_tracked_v4',
+        'is_connection_tracked_v6',
         'unique_port_pid',
         'port_pid_ambiguous',
         'PROXY_START_TIMEOUT_MS',
@@ -147,7 +160,12 @@ try {
         'htonl(addr.Flow.LocalAddr[3])',
         'htonl(addr.Flow.RemoteAddr[3])',
         'htonl(addr.Socket.LocalAddr[3])',
-        'htonl(addr.Socket.RemoteAddr[3])'
+        'htonl(addr.Socket.RemoteAddr[3])',
+        'port_decided_bitmap',
+        'port_direct_bitmap',
+        'connection_key_matches',
+        'addr.sin_addr.s_addr = htonl(INADDR_ANY)',
+        'addr6.sin6_addr = in6addr_any'
     )) {
         if ($processRouterSource.Contains($invalidIpv4Layout)) {
             throw "Process-router retained invalid IPv4 event address layout: $invalidIpv4Layout"

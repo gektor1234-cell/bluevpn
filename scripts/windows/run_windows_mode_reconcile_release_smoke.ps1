@@ -135,6 +135,37 @@ function Test-IsAdministrator {
     )
 }
 
+function Resolve-ExternalVpnServiceName {
+    param([Parameter(Mandatory = $true)][string]$PreferredName)
+    $candidate = Get-Service -Name $PreferredName -ErrorAction SilentlyContinue
+    if ($null -ne $candidate -and [string]$candidate.Status -eq 'Running') {
+        return $candidate.Name
+    }
+
+    $prefixes = @('AmneziaWGTunnel$', 'WireGuardTunnel$')
+    $services = @()
+    foreach ($prefix in $prefixes) {
+        $services += @(Get-Service -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.Name -like "$prefix*" -or $_.DisplayName -like "$prefix*"
+            })
+    }
+    $services = @($services | Sort-Object Name -Unique)
+    $running = @($services | Where-Object { [string]$_.Status -eq 'Running' })
+    if ($running.Count -eq 1) { return [string]$running[0].Name }
+    if ($running.Count -gt 1) { return $null }
+    if ($null -ne $candidate) { return [string]$candidate.Name }
+    if ($services.Count -eq 1) { return [string]$services[0].Name }
+    return $null
+}
+
+function Test-ExternalVpnRunning {
+    param([string]$PreferredName = $ExternalVpnServiceName)
+    $resolvedName = Resolve-ExternalVpnServiceName -PreferredName $PreferredName
+    if ([string]::IsNullOrWhiteSpace($resolvedName)) { return $false }
+    return (Get-ServiceState -Name $resolvedName) -eq 'Running'
+}
+
 function Get-ServiceState {
     param([Parameter(Mandatory = $true)][string]$Name)
     $service = Get-Service -Name $Name -ErrorAction SilentlyContinue
@@ -270,8 +301,7 @@ function Get-ReadOnlyBaseline {
     return [ordered]@{
         greenComponentsStopped = Test-GreenComponentsStopped
         betaComponentsStopped = Test-BetaComponentsStopped
-        externalVpnRunning =
-            (Get-ServiceState -Name $ExternalVpnServiceName) -eq 'Running'
+        externalVpnRunning = Test-ExternalVpnRunning -PreferredName $ExternalVpnServiceName
         publicHealth = Test-HttpStatus `
             -Url 'https://api.greenvpn.pro/healthz' -ExpectedStatus 200
         youtube = Test-HttpStatus `
@@ -309,8 +339,8 @@ function Assert-MutableSafeBaseline {
     if (-not (Test-GreenComponentsStopped) -or -not (Test-BetaComponentsStopped)) {
         throw "${Label}: managed Green components are not fully stopped."
     }
-    if ((Get-ServiceState -Name $ExternalVpnServiceName) -ne 'Running') {
-        throw "${Label}: $ExternalVpnServiceName is not running."
+    if (-not (Test-ExternalVpnRunning -PreferredName $ExternalVpnServiceName)) {
+        throw "${Label}: external VPN service is not running."
     }
     if (-not (Test-HttpStatus -Url 'https://api.greenvpn.pro/healthz' -ExpectedStatus 200)) {
         throw "${Label}: public API probe failed."
@@ -321,13 +351,18 @@ function Assert-MutableSafeBaseline {
 }
 
 function Start-DeadmanRecovery {
+    $resolvedExternalVpnServiceName = Resolve-ExternalVpnServiceName `
+        -PreferredName $ExternalVpnServiceName
+    if ([string]::IsNullOrWhiteSpace($resolvedExternalVpnServiceName)) {
+        $resolvedExternalVpnServiceName = $ExternalVpnServiceName
+    }
     $arguments = @(
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
         '-File', "`"$restoreScript`"",
         '-InstallRoot', "`"$resolvedInstallRoot`"",
         '-ProgramDataRoot', "`"$resolvedProgramDataRoot`"",
         '-LocalServicePort', [string]$LocalServicePort,
-        '-ExternalVpnServiceName', "`"$ExternalVpnServiceName`"",
+        '-ExternalVpnServiceName', "`"$resolvedExternalVpnServiceName`"",
         '-StopGreenUi',
         '-DelaySeconds', [string]$DeadmanDelaySeconds,
         '-ReportPath', "`"$deadmanReportPath`""
@@ -337,13 +372,18 @@ function Start-DeadmanRecovery {
 }
 
 function Invoke-FinalRecovery {
+    $resolvedExternalVpnServiceName = Resolve-ExternalVpnServiceName `
+        -PreferredName $ExternalVpnServiceName
+    if ([string]::IsNullOrWhiteSpace($resolvedExternalVpnServiceName)) {
+        $resolvedExternalVpnServiceName = $ExternalVpnServiceName
+    }
     try {
         & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass `
             -File $restoreScript `
             -InstallRoot $resolvedInstallRoot `
             -ProgramDataRoot $resolvedProgramDataRoot `
             -LocalServicePort $LocalServicePort `
-            -ExternalVpnServiceName $ExternalVpnServiceName `
+            -ExternalVpnServiceName $resolvedExternalVpnServiceName `
             -StopGreenUi `
             -ReportPath $recoveryReportPath | Out-Null
     } catch {}
@@ -670,12 +710,15 @@ function Get-EgressFingerprint {
             }
             if (-not $value) { continue }
             $address = $null
+            $hasDot = $value.Contains('.')
+            $hasColon = $value.Contains(':')
             if (-not [Net.IPAddress]::TryParse($value, [ref]$address)) { continue }
             if (
                 ($AddressFamily -eq 'IPv4' -and
-                    $address.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) -or
+                    ($address.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork -or -not $hasDot)) -or
                 ($AddressFamily -eq 'IPv6' -and
-                    $address.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetworkV6)
+                    ($address.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetworkV6 -or -not $hasColon)) -or
+                ($AddressFamily -eq 'Any' -and -not ($hasDot -or $hasColon))
             ) { continue }
             $bytes = [Text.Encoding]::UTF8.GetBytes($value)
             $sha = [Security.Cryptography.SHA256]::Create()
@@ -1120,6 +1163,7 @@ $summary = [ordered]@{
     success = $false
     failure = $null
     candidateSourceCommit = $CandidateSourceCommit.ToLowerInvariant()
+    externalVpnServiceName = $null
     initialDelaySeconds = $InitialDelaySeconds
     deadmanDelaySeconds = $DeadmanDelaySeconds
     initialBaseline = $null
@@ -1182,6 +1226,14 @@ try {
             throw "Required mode-smoke file is missing: $required"
         }
     }
+    $resolvedExternalVpnServiceName = Resolve-ExternalVpnServiceName `
+        -PreferredName $ExternalVpnServiceName
+    if ([string]::IsNullOrWhiteSpace($resolvedExternalVpnServiceName)) {
+        throw 'External VPN service could not be resolved before the delayed run.'
+    }
+    $ExternalVpnServiceName = $resolvedExternalVpnServiceName
+    $summary.externalVpnServiceName = $ExternalVpnServiceName
+    Write-RunnerLog "resolved external VPN service=$ExternalVpnServiceName"
     $staleEvidence = @(
         $summaryPath, $diagnosticPath, $recoveryReportPath,
         $runtimeEvidencePath,
@@ -1213,15 +1265,21 @@ try {
         $summary.initialBaseline = Assert-ReadOnlySafeBaseline `
             -Label 'Initial read-only baseline'
     } else {
+        $recoverAfterDelay = [bool]$RecoverInitialBaselineAfterDelay
         $failedRecoveryPreconditions = @(
             'betaComponentsStopped', 'publicHealth', 'youtube',
             'noProbeMetricRoutes', 'noFailsafes'
         ) | Where-Object {
             -not [bool]$summary.initialBaseline[$_]
         }
-        if (-not $RecoverInitialBaselineAfterDelay -or
-                @($failedRecoveryPreconditions).Count -gt 0) {
-            throw "Initial read-only baseline failed: $($summary.initialBaseline | ConvertTo-Json -Compress)."
+        Write-RunnerLog "initial baseline failed: $($summary.initialBaseline | ConvertTo-Json -Compress)"
+        if (-not $recoverAfterDelay -or @($failedRecoveryPreconditions).Count -gt 0) {
+            $preconditionMessage = if (@($failedRecoveryPreconditions).Count -gt 0) {
+                "failed preconditions: $($failedRecoveryPreconditions -join ', ')"
+            } else {
+                'recover flag not requested'
+            }
+            throw "Initial read-only baseline failed; $preconditionMessage."
         }
         Write-RunnerLog (
             'initial baseline requires delayed recovery; ' +
@@ -1398,7 +1456,7 @@ try {
     $summary.cleanup.greenComponentsStopped = Test-GreenComponentsStopped
     $summary.cleanup.betaComponentsStopped = Test-BetaComponentsStopped
     $summary.cleanup.externalVpnRunning =
-        (Get-ServiceState -Name $ExternalVpnServiceName) -eq 'Running'
+        Test-ExternalVpnRunning -PreferredName $ExternalVpnServiceName
     $summary.cleanup.publicHealth = Test-HttpStatus `
         -Url 'https://api.greenvpn.pro/healthz' -ExpectedStatus 200
     $summary.cleanup.youtube = Test-HttpStatus `

@@ -94,8 +94,11 @@ typedef struct CONNECTION_INFO {
     ULONGLONG last_activity;
     UINT32 proxy_config_id;
     BOOL   is_ipv6;
+    BOOL   is_udp;
     UINT8  src_ip6[16];
     UINT8  orig_dest_ip6[16];
+    UINT32 if_idx;
+    UINT32 sub_if_idx;
     struct CONNECTION_INFO *next;
 } CONNECTION_INFO;
 
@@ -297,32 +300,6 @@ static volatile LONG relay_upstream_log_count = 0;
 static DNS_CACHE_ENTRY    *g_dns_cache[DNS_CACHE_BUCKETS];
 static DNS_CACHE_ENTRY_V6 *g_dns_cache_v6[DNS_CACHE_BUCKETS];
 static SRWLOCK             g_dns_cache_lock;
-
-static volatile LONG port_decided_bitmap[2048] = {0};
-static volatile LONG port_direct_bitmap[2048]  = {0};
-
-static __forceinline BOOL port_is_decided(UINT16 p)
-{
-    return (port_decided_bitmap[p >> 5] >> (p & 31)) & 1;
-}
-static __forceinline BOOL port_is_direct(UINT16 p)
-{
-    return (port_direct_bitmap[p >> 5] >> (p & 31)) & 1;
-}
-static __forceinline void port_set_direct(UINT16 p)
-{
-    InterlockedOr(&port_decided_bitmap[p >> 5], (LONG)(1u << (p & 31)));
-    InterlockedOr(&port_direct_bitmap[p >> 5],  (LONG)(1u << (p & 31)));
-}
-static __forceinline void port_set_decided(UINT16 p)
-{
-    InterlockedOr(&port_decided_bitmap[p >> 5], (LONG)(1u << (p & 31)));
-}
-static __forceinline void port_clear(UINT16 p)
-{
-    InterlockedAnd(&port_decided_bitmap[p >> 5], (LONG)~(1u << (p & 31)));
-    InterlockedAnd(&port_direct_bitmap[p >> 5], (LONG)~(1u << (p & 31)));
-}
 
 static UINT16 g_local_relay_port = LOCAL_PROXY_PORT;
 static BOOL g_localhost_via_proxy = FALSE;  // default disabled for security - most proxy server block localhost for ssrf and also many app might not work if localhost trafic goes to remote server if proxy server is on diffrent machine
@@ -540,15 +517,37 @@ static RuleAction match_rule(const char *process_name, UINT32 dest_ip, UINT16 de
 static RuleAction check_process_rule(UINT32 src_ip, UINT16 src_port, UINT32 dest_ip, UINT16 dest_port, BOOL is_udp, BOOL wait_for_attribution, DWORD *out_pid, UINT32 *out_proxy_config_id);
 static RuleAction check_process_rule_v6(const UINT8 src_ip6[16], UINT16 src_port, const UINT8 dest_ip6[16], UINT16 dest_port, BOOL is_udp, BOOL wait_for_attribution, DWORD *out_pid, UINT32 *out_proxy_config_id);
 static RuleAction match_rule_v6(const char *process_name, const UINT8 dest_ip6[16], UINT16 dest_port, BOOL is_udp, UINT32 *out_proxy_config_id);
-static void add_connection(UINT16 src_port, UINT32 src_ip, UINT32 dest_ip, UINT16 dest_port, UINT32 proxy_config_id);
-static void add_connection_v6(UINT16 src_port, const UINT8 src_ip6[16], const UINT8 dest_ip6[16], UINT16 dest_port, UINT32 proxy_config_id);
-static BOOL get_connection_full_v6(UINT16 src_port, UINT8 dest_ip6[16], UINT16 *dest_port, UINT32 *proxy_config_id);
+static void add_connection(UINT16 src_port, UINT32 src_ip, UINT32 dest_ip,
+    UINT16 dest_port, UINT32 proxy_config_id, BOOL is_udp,
+    const WINDIVERT_ADDRESS *packet_addr);
+static void add_connection_v6(UINT16 src_port, const UINT8 src_ip6[16],
+    const UINT8 dest_ip6[16], UINT16 dest_port, UINT32 proxy_config_id,
+    BOOL is_udp,
+    const WINDIVERT_ADDRESS *packet_addr);
+static BOOL get_connection_full_v6(UINT16 src_port, BOOL is_udp,
+    UINT8 dest_ip6[16], UINT16 *dest_port, UINT32 *proxy_config_id);
+static BOOL get_connection_network_v6(UINT16 src_port, BOOL is_udp,
+    UINT8 src_ip6[16],
+    UINT8 dest_ip6[16], UINT16 *dest_port, UINT32 *if_idx,
+    UINT32 *sub_if_idx);
+static BOOL find_v4_udp_sender(UINT32 orig_dest_ip, UINT16 orig_dest_port,
+    UINT32 *src_ip, UINT16 *src_port);
 static BOOL find_v6_udp_sender(const UINT8 orig_dest_ip6[16], UINT16 orig_dest_port, UINT8 src_ip6[16], UINT16 *src_port);
-static BOOL get_connection(UINT16 src_port, UINT32 *dest_ip, UINT16 *dest_port);
-static BOOL get_connection_full(UINT16 src_port, UINT32 *dest_ip, UINT16 *dest_port, UINT32 *proxy_config_id);
-static UINT32 get_connection_proxy_id(UINT16 src_port);
-static BOOL is_connection_tracked(UINT16 src_port);
-static void remove_connection(UINT16 src_port);
+static BOOL get_connection(UINT16 src_port, BOOL is_udp,
+    UINT32 *dest_ip, UINT16 *dest_port);
+static BOOL get_connection_full(UINT16 src_port, BOOL is_udp,
+    UINT32 *dest_ip, UINT16 *dest_port, UINT32 *proxy_config_id);
+static BOOL get_connection_network(UINT16 src_port, BOOL is_udp,
+    UINT32 *src_ip,
+    UINT32 *dest_ip, UINT16 *dest_port, UINT32 *if_idx,
+    UINT32 *sub_if_idx);
+static UINT32 get_connection_proxy_id(UINT16 src_port, BOOL is_ipv6,
+    BOOL is_udp);
+static BOOL is_connection_tracked_v4(UINT16 src_port, UINT32 src_ip,
+    UINT32 dest_ip, UINT16 dest_port, BOOL is_udp);
+static BOOL is_connection_tracked_v6(UINT16 src_port, const UINT8 src_ip6[16],
+    const UINT8 dest_ip6[16], UINT16 dest_port, BOOL is_udp);
+static void remove_connection(UINT16 src_port, BOOL is_ipv6, BOOL is_udp);
 static void cleanup_stale_connections(void);
 static BOOL is_connection_already_logged(DWORD pid, UINT32 dest_ip, UINT16 dest_port, RuleAction action);
 static void add_logged_connection(DWORD pid, UINT32 dest_ip, UINT16 dest_port, RuleAction action);
@@ -602,6 +601,68 @@ static void log_redirect_schedule(const char *path, const char *family,
                     path, family, is_udp ? "UDP" : "TCP", sample);
 }
 
+static void redirect_ipv4_to_loopback(PWINDIVERT_IPHDR ip_header,
+                                      WINDIVERT_ADDRESS *addr)
+{
+    ip_header->DstAddr = htonl(INADDR_LOOPBACK);
+    addr->Outbound = TRUE;
+}
+
+static void redirect_ipv6_to_loopback(PWINDIVERT_IPV6HDR ipv6_header,
+                                      WINDIVERT_ADDRESS *addr)
+{
+    static const UINT8 loopback6[16] = {
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
+    memcpy(ipv6_header->DstAddr, loopback6, sizeof(loopback6));
+    addr->Outbound = TRUE;
+}
+
+static BOOL restore_ipv4_relay_response(UINT16 client_port,
+                                        BOOL is_udp,
+                                        PWINDIVERT_IPHDR ip_header,
+                                        UINT16 *orig_dest_port,
+                                        WINDIVERT_ADDRESS *addr)
+{
+    UINT32 src_ip = 0;
+    UINT32 orig_dest_ip = 0;
+    UINT32 if_idx = 0;
+    UINT32 sub_if_idx = 0;
+
+    if (!get_connection_network(client_port, is_udp, &src_ip, &orig_dest_ip,
+                                orig_dest_port, &if_idx, &sub_if_idx))
+        return FALSE;
+
+    ip_header->SrcAddr = orig_dest_ip;
+    ip_header->DstAddr = src_ip;
+    addr->Outbound = FALSE;
+    addr->Network.IfIdx = if_idx;
+    addr->Network.SubIfIdx = sub_if_idx;
+    return TRUE;
+}
+
+static BOOL restore_ipv6_relay_response(UINT16 client_port,
+                                        BOOL is_udp,
+                                        PWINDIVERT_IPV6HDR ipv6_header,
+                                        UINT16 *orig_dest_port,
+                                        WINDIVERT_ADDRESS *addr)
+{
+    UINT8 src_ip6[16];
+    UINT8 orig_dest_ip6[16];
+    UINT32 if_idx = 0;
+    UINT32 sub_if_idx = 0;
+
+    if (!get_connection_network_v6(client_port, is_udp, src_ip6, orig_dest_ip6,
+                                   orig_dest_port, &if_idx, &sub_if_idx))
+        return FALSE;
+
+    memcpy(ipv6_header->SrcAddr, orig_dest_ip6, sizeof(orig_dest_ip6));
+    memcpy(ipv6_header->DstAddr, src_ip6, sizeof(src_ip6));
+    addr->Outbound = FALSE;
+    addr->Network.IfIdx = if_idx;
+    addr->Network.SubIfIdx = sub_if_idx;
+    return TRUE;
+}
+
 static void send_deferred_packet(DEFERRED_PACKET_ENTRY *entry, BOOL modified)
 {
     if (!running || windivert_handle == INVALID_HANDLE_VALUE)
@@ -642,17 +703,8 @@ static void process_deferred_packet(DEFERRED_PACKET_ENTRY *entry)
         UINT16 dest_port = ntohs(tcp_header->DstPort);
         UINT32 src_ip = ip_header->SrcAddr;
         UINT32 dest_ip = ip_header->DstAddr;
-        if (port_is_decided(src_port))
-        {
-            if (port_is_direct(src_port))
-            {
-                send_deferred_packet(entry, FALSE);
-                return;
-            }
-            if (!is_connection_tracked(src_port))
-                return;
-        }
-        else
+        if (!is_connection_tracked_v4(src_port, src_ip, dest_ip, dest_port,
+                                      FALSE))
         {
             DWORD pid = 0;
             UINT32 proxy_config_id = 0;
@@ -671,31 +723,18 @@ static void process_deferred_packet(DEFERRED_PACKET_ENTRY *entry)
                 InterlockedIncrement(&deferred_packet_resolved_count);
             if (action == RULE_ACTION_DIRECT)
             {
-                port_set_direct(src_port);
                 send_deferred_packet(entry, FALSE);
                 return;
             }
             if (action == RULE_ACTION_BLOCK)
-            {
-                port_set_decided(src_port);
                 return;
-            }
             log_redirect_schedule("deferred", "IPv4", FALSE);
             add_connection(src_port, src_ip, dest_ip, dest_port,
-                           proxy_config_id);
-            port_set_decided(src_port);
+                           proxy_config_id, FALSE, &entry->addr);
         }
 
         tcp_header->DstPort = htons(g_local_relay_port);
-        BYTE src_first = (ntohl(ip_header->SrcAddr) >> 24) & 0xFF;
-        BYTE dst_first = (ntohl(ip_header->DstAddr) >> 24) & 0xFF;
-        if (!(src_first == 127 && dst_first == 127))
-        {
-            UINT32 temp_addr = ip_header->DstAddr;
-            ip_header->DstAddr = ip_header->SrcAddr;
-            ip_header->SrcAddr = temp_addr;
-            entry->addr.Outbound = FALSE;
-        }
+        redirect_ipv4_to_loopback(ip_header, &entry->addr);
         send_deferred_packet(entry, TRUE);
         return;
     }
@@ -708,7 +747,8 @@ static void process_deferred_packet(DEFERRED_PACKET_ENTRY *entry)
         UINT16 dest_port = ntohs(udp_header->DstPort);
         UINT32 src_ip = ip_header->SrcAddr;
         UINT32 dest_ip = ip_header->DstAddr;
-        if (!is_connection_tracked(src_port))
+        if (!is_connection_tracked_v4(src_port, src_ip, dest_ip, dest_port,
+                                      TRUE))
         {
             DWORD pid = 0;
             UINT32 proxy_config_id = 0;
@@ -735,19 +775,10 @@ static void process_deferred_packet(DEFERRED_PACKET_ENTRY *entry)
                 return;
             log_redirect_schedule("deferred", "IPv4", TRUE);
             add_connection(src_port, src_ip, dest_ip, dest_port,
-                           proxy_config_id);
+                           proxy_config_id, TRUE, &entry->addr);
         }
         udp_header->DstPort = htons(LOCAL_UDP_RELAY_PORT);
-        BYTE src_first = (ntohl(ip_header->SrcAddr) >> 24) & 0xFF;
-        if (src_first == 127)
-            ip_header->DstAddr = htonl(INADDR_LOOPBACK);
-        else
-        {
-            UINT32 temp_addr = ip_header->DstAddr;
-            ip_header->DstAddr = ip_header->SrcAddr;
-            ip_header->SrcAddr = temp_addr;
-            entry->addr.Outbound = FALSE;
-        }
+        redirect_ipv4_to_loopback(ip_header, &entry->addr);
         send_deferred_packet(entry, TRUE);
         return;
     }
@@ -758,17 +789,9 @@ static void process_deferred_packet(DEFERRED_PACKET_ENTRY *entry)
             return;
         UINT16 src_port = ntohs(tcp_header->SrcPort);
         UINT16 dest_port = ntohs(tcp_header->DstPort);
-        if (port_is_decided(src_port))
-        {
-            if (port_is_direct(src_port))
-            {
-                send_deferred_packet(entry, FALSE);
-                return;
-            }
-            if (!is_connection_tracked(src_port))
-                return;
-        }
-        else
+        if (!is_connection_tracked_v6(
+                src_port, (const UINT8 *)ipv6_header->SrcAddr,
+                (const UINT8 *)ipv6_header->DstAddr, dest_port, FALSE))
         {
             DWORD pid = 0;
             UINT32 proxy_config_id = 0;
@@ -792,37 +815,20 @@ static void process_deferred_packet(DEFERRED_PACKET_ENTRY *entry)
                 InterlockedIncrement(&deferred_packet_resolved_count);
             if (action == RULE_ACTION_DIRECT)
             {
-                port_set_direct(src_port);
                 send_deferred_packet(entry, FALSE);
                 return;
             }
             if (action == RULE_ACTION_BLOCK)
-            {
-                port_set_decided(src_port);
                 return;
-            }
             log_redirect_schedule("deferred", "IPv6", FALSE);
             add_connection_v6(src_port,
                 (const UINT8 *)ipv6_header->SrcAddr,
                 (const UINT8 *)ipv6_header->DstAddr, dest_port,
-                proxy_config_id);
-            port_set_decided(src_port);
+                proxy_config_id, FALSE, &entry->addr);
         }
 
         tcp_header->DstPort = htons(g_local_relay_port);
-        static const UINT8 loopback6[16] = {
-            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
-        BOOL both_loopback =
-            memcmp(ipv6_header->SrcAddr, loopback6, 16) == 0 &&
-            memcmp(ipv6_header->DstAddr, loopback6, 16) == 0;
-        if (!both_loopback)
-        {
-            UINT32 temp_addr[4];
-            memcpy(temp_addr, ipv6_header->DstAddr, 16);
-            memcpy(ipv6_header->DstAddr, ipv6_header->SrcAddr, 16);
-            memcpy(ipv6_header->SrcAddr, temp_addr, 16);
-            entry->addr.Outbound = FALSE;
-        }
+        redirect_ipv6_to_loopback(ipv6_header, &entry->addr);
         send_deferred_packet(entry, TRUE);
         return;
     }
@@ -833,7 +839,9 @@ static void process_deferred_packet(DEFERRED_PACKET_ENTRY *entry)
             return;
         UINT16 src_port = ntohs(udp_header->SrcPort);
         UINT16 dest_port = ntohs(udp_header->DstPort);
-        if (!is_connection_tracked(src_port))
+        if (!is_connection_tracked_v6(
+                src_port, (const UINT8 *)ipv6_header->SrcAddr,
+                (const UINT8 *)ipv6_header->DstAddr, dest_port, TRUE))
         {
             DWORD pid = 0;
             UINT32 proxy_config_id = 0;
@@ -870,22 +878,10 @@ static void process_deferred_packet(DEFERRED_PACKET_ENTRY *entry)
             add_connection_v6(src_port,
                 (const UINT8 *)ipv6_header->SrcAddr,
                 (const UINT8 *)ipv6_header->DstAddr, dest_port,
-                proxy_config_id);
+                proxy_config_id, TRUE, &entry->addr);
         }
         udp_header->DstPort = htons(LOCAL_UDP_RELAY_PORT);
-        static const UINT8 loopback6[16] = {
-            0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
-        BOOL both_loopback =
-            memcmp(ipv6_header->SrcAddr, loopback6, 16) == 0 &&
-            memcmp(ipv6_header->DstAddr, loopback6, 16) == 0;
-        if (!both_loopback)
-        {
-            UINT32 temp_addr[4];
-            memcpy(temp_addr, ipv6_header->DstAddr, 16);
-            memcpy(ipv6_header->DstAddr, ipv6_header->SrcAddr, 16);
-            memcpy(ipv6_header->SrcAddr, temp_addr, 16);
-            entry->addr.Outbound = FALSE;
-        }
+        redirect_ipv6_to_loopback(ipv6_header, &entry->addr);
         send_deferred_packet(entry, TRUE);
     }
 }
@@ -1024,34 +1020,21 @@ static DWORD WINAPI packet_processor(LPVOID arg)
                     if (sp == LOCAL_UDP_RELAY_PORT)
                     {
                         UINT16 client_sp = ntohs(udp_header->DstPort);
-                        UINT8  orig_dst6[16]; UINT16 orig_dp = 0; UINT32 dummy = 0;
-                        if (get_connection_full_v6(client_sp, orig_dst6, &orig_dp, &dummy))
-                        {
-                            memcpy(ipv6_header->SrcAddr, orig_dst6, 16);
-                            udp_header->SrcPort = htons(orig_dp);
-                        }
-                        // ::1 loopback: keep OUTBOUND so the loopback adapter echo
-                        // delivers reliably (same reasoning as IPv4 path below).
-                        // Non-loopback: inject INBOUND.
-                        static const UINT8 _lb6r[16]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
-                        if (memcmp(ipv6_header->DstAddr, _lb6r, 16) != 0)
-                            addr.Outbound = FALSE;
+                        UINT16 orig_dp = 0;
+                        if (!restore_ipv6_relay_response(client_sp, TRUE,
+                                                         ipv6_header,
+                                                         &orig_dp, &addr))
+                            continue;
+                        udp_header->SrcPort = htons(orig_dp);
                         goto ipv6u_send;
                     }
 
-                    if (is_connection_tracked(sp))
+                    if (is_connection_tracked_v6(
+                            sp, (const UINT8 *)ipv6_header->SrcAddr,
+                            (const UINT8 *)ipv6_header->DstAddr, dp, TRUE))
                     {
                         udp_header->DstPort = htons(LOCAL_UDP_RELAY_PORT);
-                        static const UINT8 _lb6u2[16]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
-                        BOOL both_lb=(memcmp(ipv6_header->SrcAddr,_lb6u2,16)==0&&memcmp(ipv6_header->DstAddr,_lb6u2,16)==0);
-                        if (!both_lb)
-                        {
-                            UINT32 tmp[4];
-                            memcpy(tmp,ipv6_header->DstAddr,16);
-                            memcpy(ipv6_header->DstAddr,ipv6_header->SrcAddr,16);
-                            memcpy(ipv6_header->SrcAddr,tmp,16);
-                            addr.Outbound = FALSE;
-                        }
+                        redirect_ipv6_to_loopback(ipv6_header, &addr);
                         goto ipv6u_send;
                     }
 
@@ -1120,24 +1103,13 @@ static DWORD WINAPI packet_processor(LPVOID arg)
                             // HTTP proxy can't relay UDP — drop
                             continue;
                         }
-                        add_connection_v6(sp, (const UINT8*)ipv6_header->SrcAddr, (const UINT8*)ipv6_header->DstAddr, dp, pcid6u);
+                        add_connection_v6(sp,
+                            (const UINT8*)ipv6_header->SrcAddr,
+                            (const UINT8*)ipv6_header->DstAddr, dp, pcid6u,
+                            TRUE, &addr);
 
                         udp_header->DstPort = htons(LOCAL_UDP_RELAY_PORT);
-                        static const UINT8 _lb6up[16]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
-                        BOOL both_lb=(memcmp(ipv6_header->SrcAddr,_lb6up,16)==0&&memcmp(ipv6_header->DstAddr,_lb6up,16)==0);
-                        if (both_lb)
-                        {
-                            memset(ipv6_header->DstAddr, 0, 16);
-                            ((UINT8*)ipv6_header->DstAddr)[15] = 1;
-                        }
-                        else
-                        {
-                            UINT32 tmp[4];
-                            memcpy(tmp, ipv6_header->DstAddr, 16);
-                            memcpy(ipv6_header->DstAddr, ipv6_header->SrcAddr, 16);
-                            memcpy(ipv6_header->SrcAddr, tmp, 16);
-                            addr.Outbound = FALSE;
-                        }
+                        redirect_ipv6_to_loopback(ipv6_header, &addr);
                         goto ipv6u_send;
                     }
                 }
@@ -1176,57 +1148,27 @@ static DWORD WINAPI packet_processor(LPVOID arg)
                 UINT16 sp = ntohs(tcp_header->SrcPort);
                 UINT16 dp = ntohs(tcp_header->DstPort);
 
-                if (port_is_decided(sp))
-                {
-                    if (tcp_header->Fin || tcp_header->Rst) port_clear(sp);
-                    if (port_is_direct(sp))
-                    {
-                        WinDivertSend(windivert_handle, packet, packet_len, NULL, &addr);
-                        continue;
-                    }
-                }
-
                 // relay response: restore original src port and fix up addresses
                 if (sp == (UINT16)g_local_relay_port)
                 {
                     UINT16 client_sp = ntohs(tcp_header->DstPort);
-                    UINT8  orig_dst6[16];
                     UINT16 orig_dst_port = 0;
-                    UINT32 dummy_cfg = 0;
-                    get_connection_full_v6(client_sp, orig_dst6, &orig_dst_port, &dummy_cfg);
-                    if (orig_dst_port) tcp_header->SrcPort = htons(orig_dst_port);
-
-                    static const UINT8 _lb6[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
-                    BOOL both_lb = (memcmp(ipv6_header->SrcAddr, _lb6, 16) == 0 &&
-                                    memcmp(ipv6_header->DstAddr, _lb6, 16) == 0);
-                    if (!both_lb)
-                    {
-                        UINT32 tmp[4];
-                        memcpy(tmp, ipv6_header->DstAddr, 16);
-                        memcpy(ipv6_header->DstAddr, ipv6_header->SrcAddr, 16);
-                        memcpy(ipv6_header->SrcAddr, tmp, 16);
-                        addr.Outbound = FALSE;
-                    }
-                    if (tcp_header->Fin || tcp_header->Rst) remove_connection(client_sp);
+                    if (!restore_ipv6_relay_response(client_sp, FALSE,
+                                                     ipv6_header,
+                                                     &orig_dst_port, &addr))
+                        continue;
+                    tcp_header->SrcPort = htons(orig_dst_port);
+                    if (tcp_header->Fin || tcp_header->Rst)
+                        remove_connection(client_sp, TRUE, FALSE);
                     goto ipv6_send;
                 }
 
-                if (is_connection_tracked(sp))
+                if (is_connection_tracked_v6(
+                        sp, (const UINT8 *)ipv6_header->SrcAddr,
+                        (const UINT8 *)ipv6_header->DstAddr, dp, FALSE))
                 {
-                    if (tcp_header->Fin || tcp_header->Rst) { remove_connection(sp); port_clear(sp); }
                     tcp_header->DstPort = htons(g_local_relay_port);
-
-                    static const UINT8 _lb6t[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
-                    BOOL both_lb = (memcmp(ipv6_header->SrcAddr, _lb6t, 16) == 0 &&
-                                    memcmp(ipv6_header->DstAddr, _lb6t, 16) == 0);
-                    if (!both_lb)
-                    {
-                        UINT32 tmp[4];
-                        memcpy(tmp, ipv6_header->DstAddr, 16);
-                        memcpy(ipv6_header->DstAddr, ipv6_header->SrcAddr, 16);
-                        memcpy(ipv6_header->SrcAddr, tmp, 16);
-                        addr.Outbound = FALSE;
-                    }
+                    redirect_ipv6_to_loopback(ipv6_header, &addr);
                     goto ipv6_send;
                 }
 
@@ -1305,33 +1247,19 @@ static DWORD WINAPI packet_processor(LPVOID arg)
 
                 if (action6 == RULE_ACTION_DIRECT)
                 {
-                    port_set_direct(sp);
                     WinDivertSend(windivert_handle, packet, packet_len, NULL, &addr);
                     continue;
                 }
                 else if (action6 == RULE_ACTION_BLOCK)
-                {
-                    port_set_decided(sp);
                     continue;
-                }
                 else if (action6 == RULE_ACTION_PROXY)
                 {
-                    add_connection_v6(sp, (const UINT8*)ipv6_header->SrcAddr, (const UINT8*)ipv6_header->DstAddr, dp, proxy_config_id6);
-                    port_set_decided(sp);
+                    add_connection_v6(sp,
+                        (const UINT8*)ipv6_header->SrcAddr,
+                        (const UINT8*)ipv6_header->DstAddr, dp,
+                        proxy_config_id6, FALSE, &addr);
                     tcp_header->DstPort = htons(g_local_relay_port);
-
-                    static const UINT8 _lb6p[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1};
-                    BOOL both_lb = (memcmp(ipv6_header->SrcAddr, _lb6p, 16) == 0 &&
-                                    memcmp(ipv6_header->DstAddr, _lb6p, 16) == 0);
-                    if (!both_lb)
-                    {
-                        UINT32 tmp[4];
-                        memcpy(tmp, ipv6_header->DstAddr, 16);
-                        memcpy(ipv6_header->DstAddr, ipv6_header->SrcAddr, 16);
-                        memcpy(ipv6_header->SrcAddr, tmp, 16);
-                        addr.Outbound = FALSE;
-                    }
-                    // loopback (::1→::1): just changed DstPort, keep Outbound=TRUE
+                    redirect_ipv6_to_loopback(ipv6_header, &addr);
                     goto ipv6_send;
                 }
             }
@@ -1357,52 +1285,23 @@ static DWORD WINAPI packet_processor(LPVOID arg)
                 if (udp_header->SrcPort == htons(LOCAL_UDP_RELAY_PORT))
                 {
                     UINT16 dst_port = ntohs(udp_header->DstPort);
-                    UINT32 orig_dest_ip;
-                    UINT16 orig_dest_port;
+                    UINT16 orig_dest_port = 0;
 
-                    if (get_connection(dst_port, &orig_dest_ip, &orig_dest_port))
+                    if (!restore_ipv4_relay_response(dst_port, TRUE, ip_header,
+                                                     &orig_dest_port, &addr))
                     {
-                        // Restore both source IP and port to original destination
-                        ip_header->SrcAddr = orig_dest_ip;
-                        udp_header->SrcPort = htons(orig_dest_port);
-
-                        // loopback need outbound injection inbound dont work on windows loopback
-                        // bcz fast path skip the recive layer we inject into
-                        // outbound makes loopback echo it back as inbound which actualy reach socket
-                        // impostor flag stops it getting recaptured again
-                        // for real nic inbound injection works fine no extra hop
-                        BYTE dst_first_octet = (ntohl(ip_header->DstAddr) >> 24) & 0xFF;
-                        if (dst_first_octet != 127)
-                            addr.Outbound = FALSE;
-                        // else: stay OUTBOUND — loopback echo delivers the packet
-                    }
-                    else
-                    {
-                        /* Connection entry gone expired or not added
-                         * relay port 34011 as source would be rejected by any connected
-                         * socket expecting the real server port.  Drop instead. */
                         log_message("[UDP RELAY] No tracked connection for relay response to port %d dropping", dst_port);
                         continue;
                     }
+                    udp_header->SrcPort = htons(orig_dest_port);
                 }
-                else if (is_connection_tracked(ntohs(udp_header->SrcPort)))
+                else if (is_connection_tracked_v4(
+                             ntohs(udp_header->SrcPort), ip_header->SrcAddr,
+                             ip_header->DstAddr, ntohs(udp_header->DstPort),
+                             TRUE))
                 {
-                    UINT16 src_port = ntohs(udp_header->SrcPort);
                     udp_header->DstPort = htons(LOCAL_UDP_RELAY_PORT);
-
-                    BYTE src_first_octet = (ntohl(ip_header->SrcAddr) >> 24) & 0xFF;
-                    BOOL src_is_loopback = (src_first_octet == 127);
-                    if (src_is_loopback)
-                    {
-                        ip_header->DstAddr = htonl(INADDR_LOOPBACK);
-                    }
-                    else
-                    {
-                        UINT32 temp_addr = ip_header->DstAddr;
-                        ip_header->DstAddr = ip_header->SrcAddr;
-                        ip_header->SrcAddr = temp_addr;
-                        addr.Outbound = FALSE;
-                    }
+                    redirect_ipv4_to_loopback(ip_header, &addr);
                 }
                 else
                 {
@@ -1496,28 +1395,11 @@ static DWORD WINAPI packet_processor(LPVOID arg)
 
                     if (action == RULE_ACTION_PROXY)
                     {
-                        add_connection(src_port, src_ip, dest_ip, dest_port, proxy_config_id);
+                        add_connection(src_port, src_ip, dest_ip, dest_port,
+                                       proxy_config_id, TRUE, &addr);
 
-                        // redirect to UDP relay server at 127.0.0.1:34011
                         udp_header->DstPort = htons(LOCAL_UDP_RELAY_PORT);
-
-                        // check if source is localhost
-                        BYTE src_first_octet = (ntohl(ip_header->SrcAddr) >> 24) & 0xFF;
-                        BOOL src_is_loopback = (src_first_octet == 127);
-
-                        if (src_is_loopback)
-                        {
-                            ip_header->DstAddr = htonl(INADDR_LOOPBACK);
-                        }
-                        else
-                        {
-                            UINT32 temp_addr = ip_header->DstAddr;
-                            ip_header->DstAddr = ip_header->SrcAddr;
-                            ip_header->SrcAddr = temp_addr;
-                            addr.Outbound = FALSE;
-                        }
-                        // for loopback we need keep as outbound (127.x.x.x -> 127.0.0.1)
-                        // for a fucking stupid reason i missed this part for 6 months
+                        redirect_ipv4_to_loopback(ip_header, &addr);
                     }
                 }
             }
@@ -1552,78 +1434,24 @@ static DWORD WINAPI packet_processor(LPVOID arg)
 
         if (addr.Outbound)
         {
-            // per port decision fast-path.
-            // Once check_process_rule() has run for a source port and decided DIRECT,
-            // every subsequent packet from that port takes this branch one bitmap
-            // read 5 cycle + WinDivertSend, with zero kernel calls
-            // FIN/RST clears the cache entry so port can be reused safely
-            // Part of this taken from Cluade to fix windivert packet error
-            {
-                UINT16 sp = ntohs(tcp_header->SrcPort);
-                if (port_is_decided(sp))
-                {
-                    if (tcp_header->Fin || tcp_header->Rst)
-                        port_clear(sp);
-                    if (port_is_direct(sp))
-                    {
-                        WinDivertSend(windivert_handle, packet, packet_len, NULL, &addr);
-                        continue;
-                    }
-                    // For PROXY/BLOCK decisions the connection was already added on the
-                    // first packet; subsequent packets are handled by is_connection_tracked
-                    // below so just fall through.
-                }
-            }
-
             if (tcp_header->SrcPort == htons(g_local_relay_port))
             {
                 UINT16 dst_port = ntohs(tcp_header->DstPort);
-                UINT32 orig_dest_ip;
-                UINT16 orig_dest_port;
-
-                if (get_connection(dst_port, &orig_dest_ip, &orig_dest_port))
-                    tcp_header->SrcPort = htons(orig_dest_port);
-
-                BYTE src_first = (ntohl(ip_header->SrcAddr) >> 24) & 0xFF;
-                BYTE dst_first = (ntohl(ip_header->DstAddr) >> 24) & 0xFF;
-                BOOL is_loopback = (src_first == 127 && dst_first == 127);
-
-                if (!is_loopback)
-                {
-                    UINT32 temp_addr = ip_header->DstAddr;
-                    ip_header->DstAddr = ip_header->SrcAddr;
-                    ip_header->SrcAddr = temp_addr;
-                    addr.Outbound = FALSE;
-                }
-
-
+                UINT16 orig_dest_port = 0;
+                if (!restore_ipv4_relay_response(dst_port, FALSE, ip_header,
+                                                 &orig_dest_port, &addr))
+                    continue;
+                tcp_header->SrcPort = htons(orig_dest_port);
                 if (tcp_header->Fin || tcp_header->Rst)
-                    remove_connection(dst_port);
+                    remove_connection(dst_port, FALSE, FALSE);
             }
-            else if (is_connection_tracked(ntohs(tcp_header->SrcPort)))
+            else if (is_connection_tracked_v4(
+                         ntohs(tcp_header->SrcPort), ip_header->SrcAddr,
+                         ip_header->DstAddr, ntohs(tcp_header->DstPort),
+                         FALSE))
             {
-                UINT16 src_port = ntohs(tcp_header->SrcPort);
-
-                if (tcp_header->Fin || tcp_header->Rst)
-                {
-                    remove_connection(src_port);
-                    port_clear(src_port);
-                }
-
                 tcp_header->DstPort = htons(g_local_relay_port);
-
-                BYTE src_first = (ntohl(ip_header->SrcAddr) >> 24) & 0xFF;
-                BYTE dst_first = (ntohl(ip_header->DstAddr) >> 24) & 0xFF;
-                BOOL is_loopback = (src_first == 127 && dst_first == 127);
-
-                if (!is_loopback)
-                {
-                    UINT32 temp_addr = ip_header->DstAddr;
-                    ip_header->DstAddr = ip_header->SrcAddr;
-                    ip_header->SrcAddr = temp_addr;
-                    addr.Outbound = FALSE;
-                }
-
+                redirect_ipv4_to_loopback(ip_header, &addr);
             }
             else
             {
@@ -1705,51 +1533,22 @@ static DWORD WINAPI packet_processor(LPVOID arg)
 
                 if (action == RULE_ACTION_DIRECT)
                 {
-                    // Cache this decision so all subsequent packets from this port
-                    // fast-path at the top of the outbound branch (zero kernel calls).
-                    port_set_direct(src_port);
                     // Unmodified packet no checksum needed
                     WinDivertSend(windivert_handle, packet, packet_len, NULL, &addr);
                     continue;
                 }
                 else if (action == RULE_ACTION_BLOCK)
                 {
-                    port_set_decided(src_port);  // mark decided (not direct) so we don't re-run rule check
                     // Drop the packet - don't send it anywhere
                     continue;
                 }
                 else if (action == RULE_ACTION_PROXY)
             {
                 log_redirect_schedule("immediate", "IPv4", FALSE);
-                add_connection(src_port, src_ip, orig_dest_ip, orig_dest_port, proxy_config_id);
-                // Mark this port as decided (not direct) so subsequent packets from
-                // the same source port skip the rule check.  The is_connection_tracked
-                // branch above handles the actual per-packet redirect.
-                port_set_decided(src_port);
-
+                add_connection(src_port, src_ip, orig_dest_ip, orig_dest_port,
+                               proxy_config_id, FALSE, &addr);
                 tcp_header->DstPort = htons(g_local_relay_port);
-
-                // check if this is localhost -> localhost traffic
-                BYTE src_first_octet = (ntohl(ip_header->SrcAddr) >> 24) & 0xFF;
-                BYTE dst_first_octet = (ntohl(ip_header->DstAddr) >> 24) & 0xFF;
-                BOOL is_loopback_to_loopback = (src_first_octet == 127 && dst_first_octet == 127);
-
-                if (is_loopback_to_loopback)
-                {
-                    // for localhost -> localhost just change port, keep as outbound
-                    // dont swap IPs Windows loopback routing needs both to stay 127.x.x.x
-                    log_message("[PACKET] Loopback redirect: 127.x.x.x:%d -> 127.x.x.x:%d (relay port %d)",
-                        ntohs(tcp_header->SrcPort), orig_dest_port, g_local_relay_port);
-                    // addr.Outbound stays TRUE
-                }
-                else
-                {
-                    // for normal traffic: swap IPs and mark as inbound (standard relay behavior)
-                    UINT32 temp_addr = ip_header->DstAddr;
-                    ip_header->DstAddr = ip_header->SrcAddr;
-                    ip_header->SrcAddr = temp_addr;
-                    addr.Outbound = FALSE;
-                }
+                redirect_ipv4_to_loopback(ip_header, &addr);
                 }
             }
         }
@@ -2033,10 +1832,6 @@ static void store_selected_bind_event(BOOL is_ipv6, BOOL is_udp,
     entry->updated_at = now;
     ReleaseSRWLockExclusive(&socket_port_pid_lock);
 
-    port_clear(local_port);
-    UINT16 swapped_local_port = ntohs(local_port);
-    if (swapped_local_port != local_port)
-        port_clear(swapped_local_port);
     if (attribution_update_event != NULL)
         SetEvent(attribution_update_event);
 
@@ -2305,15 +2100,7 @@ static void store_selected_socket_event(BOOL is_ipv6, BOOL is_udp,
     ReleaseSRWLockExclusive(&socket_port_pid_lock);
 
     // A SYN may reach the NETWORK layer before user mode drains the matching
-    // ALE CONNECT event. Clear any earlier fail-closed decision for both port
-    // byte orders and wake the packet-side attribution wait immediately.
-    if (local_port != 0)
-    {
-        UINT16 swapped_local_port = ntohs(local_port);
-        port_clear(local_port);
-        if (swapped_local_port != local_port)
-            port_clear(swapped_local_port);
-    }
+    // ALE CONNECT event. Wake the deferred packet worker immediately.
     if (attribution_update_event != NULL)
         SetEvent(attribution_update_event);
 
@@ -4462,14 +4249,14 @@ static DWORD WINAPI udp_relay_server(LPVOID arg)
     }
 
     int on = 1;
-    setsockopt(udp_relay_socket, SOL_SOCKET, SO_REUSEADDR, (const char*)&on, sizeof(on));
+    setsockopt(udp_relay_socket, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+               (const char*)&on, sizeof(on));
     configure_udp_socket(udp_relay_socket, 262144, 30000);
 
     memset(&local_addr, 0, sizeof(local_addr));
     local_addr.sin_family = AF_INET;
-    local_addr.sin_addr.s_addr = htonl(INADDR_ANY);  // must be any WinDivert swaps src/dst IPs for
-    local_addr.sin_port = htons(LOCAL_UDP_RELAY_PORT);// tracked connections so packets arrive at the
-                                                      // machines real ip and not 127.0.0.1
+    local_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    local_addr.sin_port = htons(LOCAL_UDP_RELAY_PORT);
 
     if (bind(udp_relay_socket, (struct sockaddr *)&local_addr, sizeof(local_addr)) == SOCKET_ERROR)
     {
@@ -4485,12 +4272,13 @@ static DWORD WINAPI udp_relay_server(LPVOID arg)
     {
         int v6only = 1;
         setsockopt(udp_relay_socket6, IPPROTO_IPV6, IPV6_V6ONLY, (const char*)&v6only, sizeof(v6only));
-        setsockopt(udp_relay_socket6, SOL_SOCKET, SO_REUSEADDR, (const char*)&on, sizeof(on));
+        setsockopt(udp_relay_socket6, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+                   (const char*)&on, sizeof(on));
         configure_udp_socket(udp_relay_socket6, 262144, 30000);
         struct sockaddr_in6 a6;
         memset(&a6, 0, sizeof(a6));
         a6.sin6_family = AF_INET6;
-        a6.sin6_addr = in6addr_any;   // same tracked packets arrive at machines real IPv6
+        a6.sin6_addr = in6addr_loopback;
         a6.sin6_port = htons(LOCAL_UDP_RELAY_PORT);
         if (bind(udp_relay_socket6, (struct sockaddr*)&a6, sizeof(a6)) == SOCKET_ERROR)
         {
@@ -4508,7 +4296,8 @@ static DWORD WINAPI udp_relay_server(LPVOID arg)
         }
     }
 
-    log_message("UDP relay listening on port %d", LOCAL_UDP_RELAY_PORT);
+    log_message("UDP relay listening on 127.0.0.1/[::1]:%d",
+                LOCAL_UDP_RELAY_PORT);
 
     while (running)
     {
@@ -4595,9 +4384,10 @@ static DWORD WINAPI udp_relay_server(LPVOID arg)
                 UINT32 dest_ip;
                 UINT16 dest_port;
 
-                if (get_connection(from_port, &dest_ip, &dest_port))
+                if (get_connection(from_port, TRUE, &dest_ip, &dest_port))
                 {
-                    UINT32 proxy_config_id = get_connection_proxy_id(from_port);
+                    UINT32 proxy_config_id = get_connection_proxy_id(
+                        from_port, FALSE, TRUE);
                     PROXY_CONFIG *cfg = find_proxy_config(proxy_config_id);
 
                     if (cfg == NULL || cfg->type != PROXY_TYPE_SOCKS5)
@@ -4697,43 +4487,11 @@ static DWORD WINAPI udp_relay_server(LPVOID arg)
                     UINT32 src_ip = (recv_buf[4]<<0)|(recv_buf[5]<<8)|(recv_buf[6]<<16)|(recv_buf[7]<<24);
                     UINT16 src_port = (recv_buf[8]<<8)|recv_buf[9];
 
-                    BOOL found = FALSE;
                     UINT32 target_ip = 0;
                     UINT16 target_port = 0;
-                    CONNECTION_INFO *winner_conn = NULL;
 
-                    AcquireSRWLockShared(&lock);
-                    ULONGLONG best_activity = 0;
-                    for (int b = 0; b < CONNECTION_HASH_SIZE; b++)
-                    {
-                        CONNECTION_INFO *conn = connection_hash_table[b];
-                        while (conn != NULL)
-                        {
-                            if (!conn->is_ipv6 && conn->orig_dest_ip == src_ip && conn->orig_dest_port == src_port)
-                            {
-                                if (!found || conn->last_activity > best_activity)
-                                {
-                                    target_ip    = conn->src_ip;
-                                    target_port  = conn->src_port;
-                                    best_activity = conn->last_activity;
-                                    found        = TRUE;
-                                    winner_conn  = conn;
-                                    // Do NOT update last_activity here; doing so mid-loop
-                                    // corrupts best_activity comparisons for later entries,
-                                    // causing split delivery when multiple clients share the
-                                    // same destination. Update after the loop completes.
-                                }
-                            }
-                            conn = conn->next;
-                        }
-                    }
-                    // Keep winner's session alive (update outside loop so comparisons above
-                    // use the original, unmodified timestamps for all candidates).
-                    if (winner_conn != NULL)
-                        InterlockedExchange64((LONGLONG volatile*)&winner_conn->last_activity, (LONGLONG)GetTickCount64());
-                    ReleaseSRWLockShared(&lock);
-
-                    if (found)
+                    if (find_v4_udp_sender(src_ip, src_port, &target_ip,
+                                           &target_port))
                     {
                         struct sockaddr_in target_addr;
                         memset(&target_addr, 0, sizeof(target_addr));
@@ -4787,7 +4545,8 @@ static DWORD WINAPI udp_relay_server(LPVOID arg)
                 UINT16 dest_port = 0;
                 UINT32 proxy_config_id = 0;
 
-                if (get_connection_full_v6(from_port, dest_ip6, &dest_port, &proxy_config_id))
+                if (get_connection_full_v6(from_port, TRUE, dest_ip6,
+                                           &dest_port, &proxy_config_id))
                 {
                     PROXY_CONFIG *cfg = find_proxy_config(proxy_config_id);
                     if (cfg != NULL && cfg->type == PROXY_TYPE_SOCKS5)
@@ -4851,16 +4610,16 @@ static DWORD WINAPI local_proxy_server(LPVOID arg)
         return 1;
     }
 
-    setsockopt(listen_sock, SOL_SOCKET, SO_REUSEADDR, (const char*)&on, sizeof(on));
+    setsockopt(listen_sock, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+               (const char*)&on, sizeof(on));
 
     int nodelay = 1;
     setsockopt(listen_sock, IPPROTO_TCP, TCP_NODELAY, (char*)&nodelay, sizeof(nodelay));
 
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);  // must be ANY: WinDivert swaps src/dst IPs for
-    addr.sin_port = htons(g_local_relay_port); // non-loopback traffic, so redirected SYNs arrive
-                                               // at the machine's real IP, not 127.0.0.1
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(g_local_relay_port);
 
     if (bind(listen_sock, (struct sockaddr *)&addr, sizeof(addr)) == SOCKET_ERROR)
     {
@@ -4888,12 +4647,13 @@ static DWORD WINAPI local_proxy_server(LPVOID arg)
     {
         int v6only = 1;
         setsockopt(listen_sock6, IPPROTO_IPV6, IPV6_V6ONLY, (const char*)&v6only, sizeof(v6only));
-        setsockopt(listen_sock6, SOL_SOCKET, SO_REUSEADDR, (const char*)&on, sizeof(on));
+        setsockopt(listen_sock6, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+                   (const char*)&on, sizeof(on));
         setsockopt(listen_sock6, IPPROTO_TCP, TCP_NODELAY, (const char*)&nodelay, sizeof(nodelay));
         struct sockaddr_in6 addr6;
         memset(&addr6, 0, sizeof(addr6));
         addr6.sin6_family = AF_INET6;
-        addr6.sin6_addr = in6addr_any;   // same reason as IPv4: accept on any local address
+        addr6.sin6_addr = in6addr_loopback;
         addr6.sin6_port = htons(g_local_relay_port);
         if (bind(listen_sock6, (struct sockaddr*)&addr6, sizeof(addr6)) == SOCKET_ERROR ||
             listen(listen_sock6, SOMAXCONN) == SOCKET_ERROR)
@@ -4904,11 +4664,12 @@ static DWORD WINAPI local_proxy_server(LPVOID arg)
         }
         else
         {
-            log_message("Local proxy IPv6 listening on [::]:%d", g_local_relay_port);
+            log_message("Local proxy IPv6 listening on [::1]:%d",
+                        g_local_relay_port);
         }
     }
 
-    log_message("Local proxy listening on port %d", g_local_relay_port);
+    log_message("Local proxy listening on 127.0.0.1:%d", g_local_relay_port);
     InterlockedExchange(&proxy_start_result, 1);
     if (proxy_start_event != NULL) SetEvent(proxy_start_event);
 
@@ -4923,24 +4684,6 @@ static DWORD WINAPI local_proxy_server(LPVOID arg)
 
         if (select(0, &read_fds, NULL, NULL, &timeout) <= 0)
             continue;
-
-        // helper lambda-like macro to accept and dispatch a connection
-        #define ACCEPT_AND_DISPATCH(sock, saddr_type, addr_field) do { \
-            saddr_type ca; int cl = sizeof(ca); \
-            SOCKET cs = accept(sock, (struct sockaddr*)&ca, &cl); \
-            if (cs == INVALID_SOCKET) break; \
-            CONNECTION_CONFIG *cc = (CONNECTION_CONFIG*)malloc(sizeof(CONNECTION_CONFIG)); \
-            if (cc == NULL) { closesocket(cs); break; } \
-            cc->client_socket = cs; \
-            UINT16 cp = ntohs(((saddr_type*)&ca)->addr_field); \
-            BOOL ok = cc->is_ipv6 ? \
-                get_connection_full_v6(cp, cc->orig_dest_ip6, &cc->orig_dest_port, &cc->proxy_config_id) : \
-                get_connection_full(cp, &cc->orig_dest_ip, &cc->orig_dest_port, &cc->proxy_config_id); \
-            if (!ok) { closesocket(cs); free(cc); break; } \
-            HANDLE t = CreateThread(NULL, 0, connection_handler, (LPVOID)cc, 0, NULL); \
-            if (t == NULL) { closesocket(cs); free(cc); break; } \
-            CloseHandle(t); \
-        } while(0)
 
         if (FD_ISSET(listen_sock, &read_fds))
         {
@@ -4957,7 +4700,10 @@ static DWORD WINAPI local_proxy_server(LPVOID arg)
                     conn_config->is_ipv6 = FALSE;
 
                     UINT16 client_port = ntohs(client_addr.sin_port);
-                    if (get_connection_full(client_port, &conn_config->orig_dest_ip, &conn_config->orig_dest_port, &conn_config->proxy_config_id))
+                    if (get_connection_full(client_port, FALSE,
+                                            &conn_config->orig_dest_ip,
+                                            &conn_config->orig_dest_port,
+                                            &conn_config->proxy_config_id))
                     {
                         LONG sample = InterlockedIncrement(&relay_accept_log_count);
                         if (sample <= 16)
@@ -4990,7 +4736,10 @@ static DWORD WINAPI local_proxy_server(LPVOID arg)
                     conn_config->is_ipv6 = TRUE;
 
                     UINT16 client_port = ntohs(client_addr6.sin6_port);
-                    if (get_connection_full_v6(client_port, conn_config->orig_dest_ip6, &conn_config->orig_dest_port, &conn_config->proxy_config_id))
+                    if (get_connection_full_v6(client_port, FALSE,
+                                               conn_config->orig_dest_ip6,
+                                               &conn_config->orig_dest_port,
+                                               &conn_config->proxy_config_id))
                     {
                         LONG sample = InterlockedIncrement(&relay_accept_log_count);
                         if (sample <= 16)
@@ -5008,8 +4757,6 @@ static DWORD WINAPI local_proxy_server(LPVOID arg)
             }
         }
     }
-
-    #undef ACCEPT_AND_DISPATCH
 
     closesocket(listen_sock);
     if (listen_sock6 != INVALID_SOCKET) closesocket(listen_sock6);
@@ -5272,7 +5019,59 @@ static DWORD WINAPI transfer_handler(LPVOID arg)
     return 0;
 }
 
-static void add_connection(UINT16 src_port, UINT32 src_ip, UINT32 dest_ip, UINT16 dest_port, UINT32 proxy_config_id)
+static BOOL connection_port_key_matches(const CONNECTION_INFO *conn,
+                                        UINT16 src_port, BOOL is_ipv6,
+                                        BOOL is_udp)
+{
+    return conn->src_port == src_port && conn->is_ipv6 == is_ipv6 &&
+           conn->is_udp == is_udp;
+}
+
+static BOOL connection_tuple_matches_v4(const CONNECTION_INFO *conn,
+                                        UINT16 src_port, UINT32 src_ip,
+                                        UINT32 dest_ip, UINT16 dest_port,
+                                        BOOL is_udp)
+{
+    return connection_port_key_matches(conn, src_port, FALSE, is_udp) &&
+           conn->src_ip == src_ip && conn->orig_dest_ip == dest_ip &&
+           conn->orig_dest_port == dest_port;
+}
+
+static BOOL connection_tuple_matches_v6(const CONNECTION_INFO *conn,
+                                        UINT16 src_port,
+                                        const UINT8 src_ip6[16],
+                                        const UINT8 dest_ip6[16],
+                                        UINT16 dest_port, BOOL is_udp)
+{
+    return connection_port_key_matches(conn, src_port, TRUE, is_udp) &&
+           conn->orig_dest_port == dest_port &&
+           memcmp(conn->src_ip6, src_ip6, 16) == 0 &&
+           memcmp(conn->orig_dest_ip6, dest_ip6, 16) == 0;
+}
+
+static CONNECTION_INFO *find_unique_connection_by_port_locked(
+    UINT16 src_port, BOOL is_ipv6, BOOL is_udp)
+{
+    CONNECTION_INFO *match = NULL;
+    int hash = src_port % CONNECTION_HASH_SIZE;
+    CONNECTION_INFO *conn = connection_hash_table[hash];
+    while (conn != NULL)
+    {
+        if (connection_port_key_matches(conn, src_port, is_ipv6, is_udp))
+        {
+            if (match != NULL)
+                return NULL;
+            match = conn;
+        }
+        conn = conn->next;
+    }
+    return match;
+}
+
+static void add_connection(UINT16 src_port, UINT32 src_ip, UINT32 dest_ip,
+                           UINT16 dest_port, UINT32 proxy_config_id,
+                           BOOL is_udp,
+                           const WINDIVERT_ADDRESS *packet_addr)
 {
     AcquireSRWLockExclusive(&lock);
 
@@ -5281,13 +5080,14 @@ static void add_connection(UINT16 src_port, UINT32 src_ip, UINT32 dest_ip, UINT1
 
     // check if already exists in this hash bucket
     while (existing != NULL) {
-        if (existing->src_port == src_port) {
-            existing->is_ipv6 = FALSE;
-            existing->src_ip = src_ip;
-            existing->orig_dest_ip = dest_ip;
-            existing->orig_dest_port = dest_port;
+        if (connection_tuple_matches_v4(existing, src_port, src_ip, dest_ip,
+                                        dest_port, is_udp)) {
             existing->proxy_config_id = proxy_config_id;
             existing->is_tracked = TRUE;
+            existing->if_idx = packet_addr != NULL ?
+                packet_addr->Network.IfIdx : 0;
+            existing->sub_if_idx = packet_addr != NULL ?
+                packet_addr->Network.SubIfIdx : 0;
             existing->last_activity = GetTickCount64();
             ReleaseSRWLockExclusive(&lock);
             return;
@@ -5308,6 +5108,10 @@ static void add_connection(UINT16 src_port, UINT32 src_ip, UINT32 dest_ip, UINT1
     conn->proxy_config_id = proxy_config_id;
     conn->is_tracked = TRUE;
     conn->is_ipv6 = FALSE;
+    conn->is_udp = is_udp;
+    conn->if_idx = packet_addr != NULL ? packet_addr->Network.IfIdx : 0;
+    conn->sub_if_idx = packet_addr != NULL ?
+        packet_addr->Network.SubIfIdx : 0;
     conn->last_activity = GetTickCount64();
 
     conn->next = connection_hash_table[hash];
@@ -5315,7 +5119,10 @@ static void add_connection(UINT16 src_port, UINT32 src_ip, UINT32 dest_ip, UINT1
     ReleaseSRWLockExclusive(&lock);
 }
 
-static void add_connection_v6(UINT16 src_port, const UINT8 src_ip6[16], const UINT8 dest_ip6[16], UINT16 dest_port, UINT32 proxy_config_id)
+static void add_connection_v6(UINT16 src_port, const UINT8 src_ip6[16],
+                              const UINT8 dest_ip6[16], UINT16 dest_port,
+                              UINT32 proxy_config_id, BOOL is_udp,
+                              const WINDIVERT_ADDRESS *packet_addr)
 {
     AcquireSRWLockExclusive(&lock);
 
@@ -5323,13 +5130,14 @@ static void add_connection_v6(UINT16 src_port, const UINT8 src_ip6[16], const UI
     CONNECTION_INFO *existing = connection_hash_table[hash];
 
     while (existing != NULL) {
-        if (existing->src_port == src_port) {
-            existing->is_ipv6 = TRUE;
-            memcpy(existing->src_ip6, src_ip6, 16);
-            memcpy(existing->orig_dest_ip6, dest_ip6, 16);
-            existing->orig_dest_port = dest_port;
+        if (connection_tuple_matches_v6(existing, src_port, src_ip6,
+                                        dest_ip6, dest_port, is_udp)) {
             existing->proxy_config_id = proxy_config_id;
             existing->is_tracked = TRUE;
+            existing->if_idx = packet_addr != NULL ?
+                packet_addr->Network.IfIdx : 0;
+            existing->sub_if_idx = packet_addr != NULL ?
+                packet_addr->Network.SubIfIdx : 0;
             existing->last_activity = GetTickCount64();
             ReleaseSRWLockExclusive(&lock);
             return;
@@ -5337,83 +5145,141 @@ static void add_connection_v6(UINT16 src_port, const UINT8 src_ip6[16], const UI
         existing = existing->next;
     }
 
-    CONNECTION_INFO *conn = (CONNECTION_INFO *)malloc(sizeof(CONNECTION_INFO));
+    CONNECTION_INFO *conn = (CONNECTION_INFO *)calloc(1, sizeof(CONNECTION_INFO));
     if (conn == NULL) {
         ReleaseSRWLockExclusive(&lock);
         return;
     }
 
     conn->src_port = src_port;
-    conn->src_ip = 0;
-    conn->orig_dest_ip = 0;
     conn->is_ipv6 = TRUE;
+    conn->is_udp = is_udp;
     memcpy(conn->src_ip6, src_ip6, 16);
     memcpy(conn->orig_dest_ip6, dest_ip6, 16);
     conn->orig_dest_port = dest_port;
     conn->proxy_config_id = proxy_config_id;
     conn->is_tracked = TRUE;
+    conn->if_idx = packet_addr != NULL ? packet_addr->Network.IfIdx : 0;
+    conn->sub_if_idx = packet_addr != NULL ?
+        packet_addr->Network.SubIfIdx : 0;
     conn->last_activity = GetTickCount64();
     conn->next = connection_hash_table[hash];
     connection_hash_table[hash] = conn;
     ReleaseSRWLockExclusive(&lock);
 }
 
-static BOOL get_connection_full_v6(UINT16 src_port, UINT8 dest_ip6[16], UINT16 *dest_port, UINT32 *proxy_config_id)
+static BOOL get_connection_full_v6(UINT16 src_port, BOOL is_udp,
+                                   UINT8 dest_ip6[16], UINT16 *dest_port,
+                                   UINT32 *proxy_config_id)
 {
     BOOL found = FALSE;
     AcquireSRWLockShared(&lock);
-    int hash = src_port % CONNECTION_HASH_SIZE;
-    CONNECTION_INFO *conn = connection_hash_table[hash];
-    while (conn != NULL) {
-        if (conn->src_port == src_port && conn->is_ipv6) {
-            memcpy(dest_ip6, conn->orig_dest_ip6, 16);
-            *dest_port = conn->orig_dest_port;
-            if (proxy_config_id != NULL) *proxy_config_id = conn->proxy_config_id;
-            InterlockedExchange64((LONGLONG volatile*)&conn->last_activity, (LONGLONG)GetTickCount64());
-            found = TRUE;
-            break;
-        }
-        conn = conn->next;
+    CONNECTION_INFO *conn = find_unique_connection_by_port_locked(
+        src_port, TRUE, is_udp);
+    if (conn != NULL) {
+        memcpy(dest_ip6, conn->orig_dest_ip6, 16);
+        *dest_port = conn->orig_dest_port;
+        if (proxy_config_id != NULL) *proxy_config_id = conn->proxy_config_id;
+        InterlockedExchange64((LONGLONG volatile*)&conn->last_activity,
+                              (LONGLONG)GetTickCount64());
+        found = TRUE;
     }
     ReleaseSRWLockShared(&lock);
     return found;
 }
 
-// Reverse lookup for IPv6 UDP relay responses: find src addr+port by orig dest ip6+port
-static BOOL find_v6_udp_sender(const UINT8 orig_dest_ip6[16], UINT16 orig_dest_port, UINT8 src_ip6[16], UINT16 *src_port)
+static BOOL get_connection_network_v6(UINT16 src_port, BOOL is_udp,
+                                      UINT8 src_ip6[16], UINT8 dest_ip6[16],
+                                      UINT16 *dest_port, UINT32 *if_idx,
+                                      UINT32 *sub_if_idx)
 {
     BOOL found = FALSE;
-    ULONGLONG best = 0;
+    AcquireSRWLockShared(&lock);
+    CONNECTION_INFO *conn = find_unique_connection_by_port_locked(
+        src_port, TRUE, is_udp);
+    if (conn != NULL) {
+        memcpy(src_ip6, conn->src_ip6, 16);
+        memcpy(dest_ip6, conn->orig_dest_ip6, 16);
+        *dest_port = conn->orig_dest_port;
+        *if_idx = conn->if_idx;
+        *sub_if_idx = conn->sub_if_idx;
+        InterlockedExchange64((LONGLONG volatile*)&conn->last_activity,
+                              (LONGLONG)GetTickCount64());
+        found = TRUE;
+    }
+    ReleaseSRWLockShared(&lock);
+    return found;
+}
+
+// SOCKS5 UDP responses do not carry a local connection identifier. Require a
+// unique reverse mapping instead of selecting an arbitrary local socket.
+static BOOL find_v4_udp_sender(UINT32 orig_dest_ip, UINT16 orig_dest_port,
+                               UINT32 *src_ip, UINT16 *src_port)
+{
+    BOOL found = FALSE;
+    BOOL ambiguous = FALSE;
     AcquireSRWLockShared(&lock);
     for (int b = 0; b < CONNECTION_HASH_SIZE; b++) {
         CONNECTION_INFO *conn = connection_hash_table[b];
         while (conn != NULL) {
-            if (conn->is_ipv6 && conn->orig_dest_port == orig_dest_port &&
-                memcmp(conn->orig_dest_ip6, orig_dest_ip6, 16) == 0) {
-                if (!found || conn->last_activity > best) {
-                    memcpy(src_ip6, conn->src_ip6, 16);
-                    *src_port = conn->src_port;
-                    best = conn->last_activity;
-                    found = TRUE;
+            if (!conn->is_ipv6 && conn->is_udp &&
+                conn->orig_dest_ip == orig_dest_ip &&
+                conn->orig_dest_port == orig_dest_port) {
+                if (found) {
+                    ambiguous = TRUE;
+                    break;
                 }
+                *src_ip = conn->src_ip;
+                *src_port = conn->src_port;
+                found = TRUE;
             }
             conn = conn->next;
         }
+        if (ambiguous) break;
     }
     ReleaseSRWLockShared(&lock);
-    return found;
+    return found && !ambiguous;
 }
 
-static BOOL is_connection_tracked(UINT16 src_port)
+static BOOL find_v6_udp_sender(const UINT8 orig_dest_ip6[16], UINT16 orig_dest_port, UINT8 src_ip6[16], UINT16 *src_port)
+{
+    BOOL found = FALSE;
+    BOOL ambiguous = FALSE;
+    AcquireSRWLockShared(&lock);
+    for (int b = 0; b < CONNECTION_HASH_SIZE; b++) {
+        CONNECTION_INFO *conn = connection_hash_table[b];
+        while (conn != NULL) {
+            if (conn->is_ipv6 && conn->is_udp &&
+                conn->orig_dest_port == orig_dest_port &&
+                memcmp(conn->orig_dest_ip6, orig_dest_ip6, 16) == 0) {
+                if (found) {
+                    ambiguous = TRUE;
+                    break;
+                }
+                memcpy(src_ip6, conn->src_ip6, 16);
+                *src_port = conn->src_port;
+                found = TRUE;
+            }
+            conn = conn->next;
+        }
+        if (ambiguous) break;
+    }
+    ReleaseSRWLockShared(&lock);
+    return found && !ambiguous;
+}
+
+static BOOL is_connection_tracked_v4(UINT16 src_port, UINT32 src_ip,
+                                     UINT32 dest_ip, UINT16 dest_port,
+                                     BOOL is_udp)
 {
     BOOL tracked = FALSE;
     AcquireSRWLockShared(&lock);
-
     int hash = src_port % CONNECTION_HASH_SIZE;
     CONNECTION_INFO *conn = connection_hash_table[hash];
-
     while (conn != NULL) {
-        if (conn->src_port == src_port && conn->is_tracked) {
+        if (connection_tuple_matches_v4(conn, src_port, src_ip, dest_ip,
+                                        dest_port, is_udp) &&
+            conn->is_tracked) {
             tracked = TRUE;
             break;
         }
@@ -5423,99 +5289,137 @@ static BOOL is_connection_tracked(UINT16 src_port)
     return tracked;
 }
 
-static BOOL get_connection(UINT16 src_port, UINT32 *dest_ip, UINT16 *dest_port)
+static BOOL is_connection_tracked_v6(UINT16 src_port,
+                                     const UINT8 src_ip6[16],
+                                     const UINT8 dest_ip6[16],
+                                     UINT16 dest_port, BOOL is_udp)
+{
+    BOOL tracked = FALSE;
+    AcquireSRWLockShared(&lock);
+    int hash = src_port % CONNECTION_HASH_SIZE;
+    CONNECTION_INFO *conn = connection_hash_table[hash];
+    while (conn != NULL) {
+        if (connection_tuple_matches_v6(conn, src_port, src_ip6, dest_ip6,
+                                        dest_port, is_udp) &&
+            conn->is_tracked) {
+            tracked = TRUE;
+            break;
+        }
+        conn = conn->next;
+    }
+    ReleaseSRWLockShared(&lock);
+    return tracked;
+}
+
+static BOOL get_connection(UINT16 src_port, BOOL is_udp,
+                           UINT32 *dest_ip, UINT16 *dest_port)
 {
     BOOL found = FALSE;
 
     AcquireSRWLockShared(&lock);
-
-    int hash = src_port % CONNECTION_HASH_SIZE;
-    CONNECTION_INFO *conn = connection_hash_table[hash];
-
-    while (conn != NULL)
+    CONNECTION_INFO *conn = find_unique_connection_by_port_locked(
+        src_port, FALSE, is_udp);
+    if (conn != NULL)
     {
-        if (conn->src_port == src_port)
-        {
-            *dest_ip = conn->orig_dest_ip;
-            *dest_port = conn->orig_dest_port;
-            InterlockedExchange64((LONGLONG volatile*)&conn->last_activity, (LONGLONG)GetTickCount64());
-            found = TRUE;
-            break;
-        }
-        conn = conn->next;
+        *dest_ip = conn->orig_dest_ip;
+        *dest_port = conn->orig_dest_port;
+        InterlockedExchange64((LONGLONG volatile*)&conn->last_activity,
+                              (LONGLONG)GetTickCount64());
+        found = TRUE;
     }
     ReleaseSRWLockShared(&lock);
 
     return found;
 }
 
-static BOOL get_connection_full(UINT16 src_port, UINT32 *dest_ip, UINT16 *dest_port, UINT32 *proxy_config_id)
+static BOOL get_connection_full(UINT16 src_port, BOOL is_udp,
+                                UINT32 *dest_ip, UINT16 *dest_port,
+                                UINT32 *proxy_config_id)
 {
     BOOL found = FALSE;
 
     AcquireSRWLockShared(&lock);
-
-    int hash = src_port % CONNECTION_HASH_SIZE;
-    CONNECTION_INFO *conn = connection_hash_table[hash];
-
-    while (conn != NULL)
+    CONNECTION_INFO *conn = find_unique_connection_by_port_locked(
+        src_port, FALSE, is_udp);
+    if (conn != NULL)
     {
-        if (conn->src_port == src_port)
-        {
-            *dest_ip = conn->orig_dest_ip;
-            *dest_port = conn->orig_dest_port;
-            if (proxy_config_id != NULL) *proxy_config_id = conn->proxy_config_id;
-            InterlockedExchange64((LONGLONG volatile*)&conn->last_activity, (LONGLONG)GetTickCount64());
-            found = TRUE;
-            break;
-        }
-        conn = conn->next;
+        *dest_ip = conn->orig_dest_ip;
+        *dest_port = conn->orig_dest_port;
+        if (proxy_config_id != NULL) *proxy_config_id = conn->proxy_config_id;
+        InterlockedExchange64((LONGLONG volatile*)&conn->last_activity,
+                              (LONGLONG)GetTickCount64());
+        found = TRUE;
     }
     ReleaseSRWLockShared(&lock);
 
     return found;
 }
 
-static UINT32 get_connection_proxy_id(UINT16 src_port)
+static BOOL get_connection_network(UINT16 src_port, BOOL is_udp,
+                                   UINT32 *src_ip, UINT32 *dest_ip,
+                                   UINT16 *dest_port, UINT32 *if_idx,
+                                   UINT32 *sub_if_idx)
+{
+    BOOL found = FALSE;
+    AcquireSRWLockShared(&lock);
+    CONNECTION_INFO *conn = find_unique_connection_by_port_locked(
+        src_port, FALSE, is_udp);
+    if (conn != NULL)
+    {
+        *src_ip = conn->src_ip;
+        *dest_ip = conn->orig_dest_ip;
+        *dest_port = conn->orig_dest_port;
+        *if_idx = conn->if_idx;
+        *sub_if_idx = conn->sub_if_idx;
+        InterlockedExchange64((LONGLONG volatile*)&conn->last_activity,
+                              (LONGLONG)GetTickCount64());
+        found = TRUE;
+    }
+    ReleaseSRWLockShared(&lock);
+    return found;
+}
+
+static UINT32 get_connection_proxy_id(UINT16 src_port, BOOL is_ipv6,
+                                      BOOL is_udp)
 {
     UINT32 proxy_config_id = 0;
 
     AcquireSRWLockShared(&lock);
-
-    int hash = src_port % CONNECTION_HASH_SIZE;
-    CONNECTION_INFO *conn = connection_hash_table[hash];
-
-    while (conn != NULL)
-    {
-        if (conn->src_port == src_port)
-        {
-            proxy_config_id = conn->proxy_config_id;
-            break;
-        }
-        conn = conn->next;
-    }
+    CONNECTION_INFO *conn = find_unique_connection_by_port_locked(
+        src_port, is_ipv6, is_udp);
+    if (conn != NULL)
+        proxy_config_id = conn->proxy_config_id;
     ReleaseSRWLockShared(&lock);
 
     return proxy_config_id;
 }
 
-static void remove_connection(UINT16 src_port)
+static void remove_connection(UINT16 src_port, BOOL is_ipv6, BOOL is_udp)
 {
     AcquireSRWLockExclusive(&lock);
 
     int hash = src_port % CONNECTION_HASH_SIZE;
     CONNECTION_INFO **conn_ptr = &connection_hash_table[hash];
-
+    CONNECTION_INFO **match_ptr = NULL;
     while (*conn_ptr != NULL)
     {
-        if ((*conn_ptr)->src_port == src_port)
+        if (connection_port_key_matches(*conn_ptr, src_port, is_ipv6,
+                                        is_udp))
         {
-            CONNECTION_INFO *to_free = *conn_ptr;
-            *conn_ptr = (*conn_ptr)->next;
-            free(to_free);
-            break;
+            if (match_ptr != NULL)
+            {
+                match_ptr = NULL;
+                break;
+            }
+            match_ptr = conn_ptr;
         }
         conn_ptr = &(*conn_ptr)->next;
+    }
+    if (match_ptr != NULL)
+    {
+        CONNECTION_INFO *to_free = *match_ptr;
+        *match_ptr = to_free->next;
+        free(to_free);
     }
     ReleaseSRWLockExclusive(&lock);
 }
@@ -6350,8 +6254,6 @@ PROXYBRIDGE_API BOOL ProxyBridge_Start(void)
     dns_cache_init();
     clear_pid_cache();
     clear_flow_pid_cache();
-    memset((void*)port_decided_bitmap, 0, sizeof(port_decided_bitmap));
-    memset((void*)port_direct_bitmap, 0, sizeof(port_direct_bitmap));
     InterlockedExchange(&unresolved_attribution_count, 0);
     InterlockedExchange(&resolved_attribution_count, 0);
     InterlockedExchange(&socket_connect_event_count, 0);
@@ -6707,11 +6609,6 @@ PROXYBRIDGE_API BOOL ProxyBridge_Stop(void)
 
     clear_pid_cache();
     clear_flow_pid_cache();
-
-    // Reset per-port decision cache so stale entries don't carry over
-    // if ProxyBridge is stopped and restarted with different rules.
-    memset((void*)port_decided_bitmap, 0, sizeof(port_decided_bitmap));
-    memset((void*)port_direct_bitmap,  0, sizeof(port_direct_bitmap));
 
     log_message("ProxyBridge stopped");
 

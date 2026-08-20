@@ -125,6 +125,34 @@ function Test-GreenComponentsStopped {
     return $true
 }
 
+function Resolve-ExternalVpnServiceName {
+    param([Parameter(Mandatory = $true)][string]$PreferredName)
+    $candidate = Get-Service -Name $PreferredName -ErrorAction SilentlyContinue
+    if ($null -ne $candidate -and [string]$candidate.Status -eq 'Running') {
+        return $candidate.Name
+    }
+
+    $prefixes = @('AmneziaWGTunnel$', 'WireGuardTunnel$')
+    $services = @()
+    foreach ($prefix in $prefixes) {
+        $services += @(
+            Get-Service -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.Name -like "$prefix*" -or $_.DisplayName -like "$prefix*"
+                }
+        )
+    }
+    $services = @($services | Sort-Object Name -Unique)
+    $running = @(
+        $services | Where-Object { [string]$_.Status -eq 'Running' }
+    )
+    if ($running.Count -eq 1) { return [string]$running[0].Name }
+    if ($running.Count -gt 1) { return $null }
+    if ($null -ne $candidate) { return [string]$candidate.Name }
+    if ($services.Count -eq 1) { return [string]$services[0].Name }
+    return $null
+}
+
 function Stop-GreenVpnUi {
     if (-not $StopGreenUi) {
         return
@@ -299,9 +327,14 @@ try {
             Join-Path $resolvedProgramDataRoot 'standby-probe-runtime'
         ))
 
-    $service = Get-Service -Name $ExternalVpnServiceName -ErrorAction Stop
+    $resolvedExternalVpnServiceName = Resolve-ExternalVpnServiceName -PreferredName $ExternalVpnServiceName
+    if ([string]::IsNullOrWhiteSpace($resolvedExternalVpnServiceName)) {
+        throw 'Unable to resolve external VPN service name for recovery.'
+    }
+    $report.runtime.externalVpnServiceName = $resolvedExternalVpnServiceName
+    $service = Get-Service -Name $resolvedExternalVpnServiceName -ErrorAction Stop
     if ([string]$service.Status -ne 'Running') {
-        Start-Service -Name $ExternalVpnServiceName -ErrorAction Stop
+        Start-Service -Name $resolvedExternalVpnServiceName -ErrorAction Stop
     }
     $service.WaitForStatus(
         [System.ServiceProcess.ServiceControllerStatus]::Running,

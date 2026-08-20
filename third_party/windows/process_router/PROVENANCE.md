@@ -17,6 +17,11 @@ The ordinary full-tunnel mode does not load them.
   An unresolved first packet is removed from the capture thread and held in a
   bounded FIFO while WinDivert delivers the causally later socket/flow metadata;
   a dedicated worker then resolves and redirects it or drops it fail-closed.
+  Selected packets are redirected to IPv4/IPv6 loopback listeners while the
+  original network tuple and interface are retained for response restoration.
+  Connection tracking uses exact family, protocol, local address/port and remote
+  tuple matching; any port-only relay or SOCKS5 UDP reverse-map ambiguity is
+  dropped fail-closed instead of choosing an arbitrary connection.
   Direct and unselected processes never enter a selected-only attribution
   fallback. Run-salted local-port and tuple tags make attribution failures
   correlatable without persisting raw addresses or ports. The fork also provides
@@ -42,7 +47,7 @@ The ordinary full-tunnel mode does not load them.
 | File | SHA-256 |
 | --- | --- |
 | `ProxyBridge_CLI.exe` | `6C215C7975E3CBEE086DE0EE2F3226FAE84F35A7B0A2FFD432FC346EF56A0569` |
-| `ProxyBridgeCore.dll` | `860509A812930A819F0C956E2316149ADDEA2CAB5733F4F15751FFC6A62A672C` |
+| `ProxyBridgeCore.dll` | `982B7B5D64357746C183AA7A37B028E188D63495C3A39CF945A610E3D3F28180` |
 | `WinDivert.dll` | `C1E060EE19444A259B2162F8AF0F3FE8C4428A1C6F694DCE20DE194AC8D7D9A2` |
 | `WinDivert64.sys` | `8DA085332782708D8767BCACE5327A6EC7283C17CFB85E40B03CD2323A90DDC2` |
 

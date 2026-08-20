@@ -4,11 +4,15 @@ param(
         if ($env:WINDIVERT_ROOT) { $env:WINDIVERT_ROOT }
         else { 'C:\WinDivert-2.2.2-A' }
     ),
-    [string]$OutputRoot = (Join-Path $PSScriptRoot 'output')
+    [string]$OutputRoot
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+    $OutputRoot = Join-Path $PSScriptRoot 'output'
+}
 
 $vsWhere = Join-Path ${env:ProgramFiles(x86)} `
     'Microsoft Visual Studio\Installer\vswhere.exe'

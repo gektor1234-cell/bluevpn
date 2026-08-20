@@ -16156,10 +16156,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
       kFusionUiEnabled
           ? FusionModePage(
-              enabled: socialOnlyEnabled,
               allowed: _hasPaidSubscriptionEntitlement,
               selectedTitles: _selectedTrafficTitles(),
-              onToggle: _toggleSocialOnlyMode,
               onConfigure: _configureSocialOnlyTraffic,
               onOpenTariff: _openTariff,
             )
@@ -16239,7 +16237,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               kFusionUiEnabled ? Icons.route_rounded : Icons.star_rounded,
             ),
             label: kFusionUiEnabled
-                ? 'Режим'
+                ? 'Выбранное'
                 : kStoreDistributionBuild
                 ? 'Доступ'
                 : kTrialOnlyNoAdsBuild
@@ -16331,19 +16329,15 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 }
 
 class FusionModePage extends StatelessWidget {
-  final bool enabled;
   final bool allowed;
   final List<String> selectedTitles;
-  final ValueChanged<bool> onToggle;
   final VoidCallback onConfigure;
   final VoidCallback onOpenTariff;
 
   const FusionModePage({
     super.key,
-    required this.enabled,
     required this.allowed,
     required this.selectedTitles,
-    required this.onToggle,
     required this.onConfigure,
     required this.onOpenTariff,
   });
@@ -16351,116 +16345,20 @@ class FusionModePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
     final muted = theme.colorScheme.onSurface.withValues(alpha: 0.62);
-
-    Widget modeChoice({
-      required Key key,
-      required bool selected,
-      required IconData icon,
-      required String title,
-      required String subtitle,
-      required VoidCallback onTap,
-    }) {
-      return InkWell(
-        key: key,
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          constraints: const BoxConstraints(minHeight: 92),
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: selected
-                ? (isDark ? const Color(0xFF123126) : const Color(0xFFEAF7F0))
-                : theme.colorScheme.surface,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: selected ? kBrandPrimary : const Color(0xFFD7E3DC),
-              width: selected ? 2 : 1,
-            ),
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: selected
-                      ? kBrandPrimarySoft
-                      : theme.colorScheme.onSurface.withValues(alpha: 0.06),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Icon(icon, color: kBrandPrimaryDeep),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(fontWeight: FontWeight.w900),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      subtitle,
-                      style: TextStyle(
-                        color: muted,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Icon(
-                selected
-                    ? Icons.check_circle_rounded
-                    : Icons.radio_button_unchecked_rounded,
-                color: selected ? kBrandPrimary : muted,
-              ),
-            ],
-          ),
-        ),
-      );
-    }
 
     return ListView(
       key: const Key('fusion_mode_page'),
       padding: const EdgeInsets.all(16),
       children: [
         const Text(
-          'Режим защиты',
+          'Выбранные приложения и сайты',
           style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900),
         ),
         const SizedBox(height: 5),
         Text(
-          'Выберите, какой трафик направлять через Green VPN.',
+          'Настройте список для режима «Только выбранное».',
           style: TextStyle(color: muted, fontWeight: FontWeight.w700),
-        ),
-        const SizedBox(height: 16),
-        modeChoice(
-          key: const Key('fusion_mode_page_full'),
-          selected: !enabled,
-          icon: Icons.public_rounded,
-          title: 'Весь интернет',
-          subtitle: 'VPN защищает весь трафик устройства.',
-          onTap: () => onToggle(false),
-        ),
-        const SizedBox(height: 10),
-        modeChoice(
-          key: const Key('fusion_mode_page_selected'),
-          selected: enabled,
-          icon: allowed
-              ? Icons.auto_awesome_rounded
-              : Icons.lock_outline_rounded,
-          title: 'Только выбранное',
-          subtitle: allowed
-              ? 'Через VPN работают только выбранные пункты.'
-              : 'Доступно по подписке.',
-          onTap: () => onToggle(true),
         ),
         const SizedBox(height: 16),
         Container(
@@ -16477,7 +16375,7 @@ class FusionModePage extends StatelessWidget {
                 children: [
                   const Expanded(
                     child: Text(
-                      'Выбранные приложения и сайты',
+                      'Текущий список',
                       style: TextStyle(fontWeight: FontWeight.w900),
                     ),
                   ),

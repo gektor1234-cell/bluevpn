@@ -105,10 +105,8 @@ void main() {
       tester,
       const Size(390, 844),
       FusionModePage(
-        enabled: true,
         allowed: true,
         selectedTitles: const ['Discord', 'Telegram', 'YouTube'],
-        onToggle: (_) {},
         onConfigure: () => configured = true,
         onOpenTariff: () {},
       ),
@@ -118,6 +116,9 @@ void main() {
     expect(find.text('Discord'), findsOneWidget);
     expect(find.text('Telegram'), findsOneWidget);
     expect(find.text('YouTube'), findsOneWidget);
+    expect(find.text('Выбранные приложения и сайты'), findsOneWidget);
+    expect(find.byKey(const Key('fusion_mode_page_full')), findsNothing);
+    expect(find.byKey(const Key('fusion_mode_page_selected')), findsNothing);
     expect(find.text('Сервисы'), findsNothing);
     expect(find.text('Приложения'), findsNothing);
 

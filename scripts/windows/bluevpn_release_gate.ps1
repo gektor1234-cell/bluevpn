@@ -1548,7 +1548,7 @@ $processRouterInstallerFragments = @(
     'THIRD_PARTY_NOTICES.txt',
     'Get-AuthenticodeSignature'
     '6C215C7975E3CBEE086DE0EE2F3226FAE84F35A7B0A2FFD432FC346EF56A0569'
-    '860509A812930A819F0C956E2316149ADDEA2CAB5733F4F15751FFC6A62A672C'
+    '982B7B5D64357746C183AA7A37B028E188D63495C3A39CF945A610E3D3F28180'
 )
 foreach ($fragment in $processRouterInstallerFragments) {
     if ($installer.Contains($fragment)) {
@@ -2604,6 +2604,9 @@ $windowsRuntimeFailoverChecks = [ordered]@{
         '$ExpectedServiceSha256',
         '$CandidateSourceCommit',
         '$InitialDelaySeconds = 90',
+        'Resolve-ExternalVpnServiceName',
+        '$ExternalVpnServiceName = $resolvedExternalVpnServiceName',
+        'externalVpnServiceName = $null',
         'Assert-ReadOnlySafeBaseline',
         'waiting $InitialDelaySeconds seconds before installation or network transitions',
         'Start-DeadmanRecovery',
