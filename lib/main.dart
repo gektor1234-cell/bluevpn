@@ -15860,6 +15860,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         builder: (_) => DiagnosticsPage(
           accessToken: widget.session.accessToken,
           email: widget.session.email,
+          windowsFullTunnelDataPlaneConfirmed:
+              _windowsFullTunnelDataPlaneConfirmed,
         ),
       ),
     );
@@ -23611,11 +23613,13 @@ if ($route) { $route.InterfaceAlias }
 class DiagnosticsPage extends StatefulWidget {
   final String accessToken;
   final String email;
+  final bool windowsFullTunnelDataPlaneConfirmed;
 
   const DiagnosticsPage({
     super.key,
     required this.accessToken,
     required this.email,
+    required this.windowsFullTunnelDataPlaneConfirmed,
   });
 
   @override
@@ -23624,6 +23628,7 @@ class DiagnosticsPage extends StatefulWidget {
 
 class _DiagnosticsPageState extends State<DiagnosticsPage> {
   final _api = const BlueVpnApi(baseUrl: kApiBaseUrl);
+  final _windowsSystemService = const _GreenVpnSystemServiceClient();
 
   bool _loading = true;
   bool _sending = false;
@@ -23640,6 +23645,7 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
   bool _wgFound = false;
 
   WireGuardRuntimeStatus? _runtimeStatus;
+  _GreenVpnSystemServiceResponse? _windowsSystemStatus;
   Map<String, dynamic> _androidVpnStatus = const <String, dynamic>{};
   String? _fallbackReportCode;
 
@@ -23654,6 +23660,7 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
 
     final cfg = ConfigStore();
     _runtimeStatus = null;
+    _windowsSystemStatus = null;
     _androidVpnStatus = const <String, dynamic>{};
 
     if (!kIsWeb && Platform.isAndroid) {
@@ -23690,11 +23697,15 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
         File(_wgExe).existsSync() || _wgExe.toLowerCase() == 'wireguard.exe';
 
     _isAdmin = await _isAdminWindows();
+    final windowsSystemStatus = !kIsWeb && Platform.isWindows
+        ? await _windowsSystemService.status()
+        : null;
     _runtimeStatus = await WireGuardRuntimeStatus.query(
       tunnelName: kTunnelName,
       configPath: _configPath,
       wireguardExePath: _wgExe,
     );
+    _windowsSystemStatus = windowsSystemStatus;
 
     if (!mounted) return;
     setState(() => _loading = false);
@@ -23731,6 +23742,35 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
   }
 
   bool get _isAndroidDiagnostics => !kIsWeb && Platform.isAndroid;
+
+  bool get _isWindowsDiagnostics => !kIsWeb && Platform.isWindows;
+
+  GreenVpnWindowsDiagnosticsConnectionState _windowsConnectionState(
+    WireGuardRuntimeStatus? runtime,
+  ) {
+    final status = _windowsSystemStatus;
+    return greenVpnWindowsDiagnosticsConnectionState(
+      requestOk: status?.ok == true,
+      data: status?.data ?? const <String, dynamic>{},
+      fullTunnelDataPlaneConfirmed: widget.windowsFullTunnelDataPlaneConfirmed,
+      legacyConnected: runtime?.isReallyConnected == true,
+      legacyActivity:
+          runtime?.hasRecentHandshake == true || runtime?.hasTraffic == true,
+    );
+  }
+
+  String _windowsModeLabel(WireGuardRuntimeStatus? runtime) {
+    final status = _windowsSystemStatus;
+    final mode = greenVpnClassifyWindowsRoutingMode(
+      requestOk: status?.ok == true,
+      data: status?.data ?? const <String, dynamic>{},
+    );
+    return switch (mode) {
+      GreenVpnWindowsRoutingMode.full => 'full tunnel',
+      GreenVpnWindowsRoutingMode.applications => 'selected applications',
+      GreenVpnWindowsRoutingMode.unknown => runtime?.modeLabel ?? 'unknown',
+    };
+  }
 
   Map<String, Object?>? _androidSupportFields() {
     if (!_isAndroidDiagnostics) return null;
@@ -23774,6 +23814,16 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
   Future<String> _buildSupportReportCode() async {
     final runtime = _runtimeStatus;
     final android = _androidSupportFields();
+    final windowsConnectionState = _isWindowsDiagnostics
+        ? _windowsConnectionState(runtime)
+        : null;
+    final windowsRealTunnel = windowsConnectionState == null
+        ? null
+        : windowsConnectionState ==
+              GreenVpnWindowsDiagnosticsConnectionState.active;
+    final windowsMode = _isWindowsDiagnostics
+        ? _windowsModeLabel(runtime)
+        : null;
     final payload = <String, Object?>{
       'schema': 1,
       'product': kProductName,
@@ -23787,14 +23837,18 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
       'wireGuardFound': _wgFound,
       'admin': _isAdmin,
       'service': android?['service'] ?? runtime?.serviceState ?? 'unknown',
-      'mode': android?['mode'] ?? runtime?.modeLabel ?? 'unknown',
+      'mode':
+          android?['mode'] ?? windowsMode ?? runtime?.modeLabel ?? 'unknown',
       'hasHandshake':
           android?['hasHandshake'] ?? runtime?.hasRecentHandshake ?? false,
       'hasTraffic': android?['hasTraffic'] ?? runtime?.hasTraffic ?? false,
       'traffic':
           android?['traffic'] ?? runtime?.trafficLabel ?? 'rx 0 B / tx 0 B',
       'realTunnel':
-          android?['realTunnel'] ?? runtime?.isReallyConnected ?? false,
+          android?['realTunnel'] ??
+          windowsRealTunnel ??
+          runtime?.isReallyConnected ??
+          false,
       'competingVpn':
           android?['competingVpn'] ?? runtime?.competingTunnelsLabel ?? 'none',
       'routeOwner':
@@ -23812,9 +23866,17 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
   String _supportSummary() {
     final runtime = _runtimeStatus;
     final android = _androidSupportFields();
+    final windowsConnectionState = _isWindowsDiagnostics
+        ? _windowsConnectionState(runtime)
+        : null;
+    final windowsMode = _isWindowsDiagnostics
+        ? _windowsModeLabel(runtime)
+        : null;
     final parts = <String>[
       'service=${android?['service'] ?? runtime?.serviceState ?? 'unknown'}',
-      'mode=${android?['mode'] ?? runtime?.modeLabel ?? 'unknown'}',
+      'mode=${android?['mode'] ?? windowsMode ?? runtime?.modeLabel ?? 'unknown'}',
+      if (windowsConnectionState != null)
+        'connection=${windowsConnectionState.name}',
       'handshake=${(android?['hasHandshake'] ?? runtime?.hasRecentHandshake ?? false) == true ? 'yes' : 'no'}',
       'traffic=${android?['traffic'] ?? runtime?.trafficLabel ?? 'rx 0 B / tx 0 B'}',
       'competing=${android?['competingVpn'] ?? runtime?.competingTunnelsLabel ?? 'none'}',
@@ -23875,7 +23937,25 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
     final trafficOk =
         (android?['hasTraffic'] ?? runtime?.hasTraffic ?? false) == true;
     final realTunnelOk =
-        (android?['realTunnel'] ?? runtime?.isReallyConnected ?? false) == true;
+        (android?['realTunnel'] ??
+            (_isWindowsDiagnostics
+                ? _windowsConnectionState(runtime) ==
+                      GreenVpnWindowsDiagnosticsConnectionState.active
+                : runtime?.isReallyConnected) ??
+            false) ==
+        true;
+    final windowsConnectionState = _isWindowsDiagnostics
+        ? _windowsConnectionState(runtime)
+        : null;
+    final connectionChecking =
+        windowsConnectionState ==
+            GreenVpnWindowsDiagnosticsConnectionState.checking ||
+        (windowsConnectionState == null &&
+            !realTunnelOk &&
+            (handshakeOk || trafficOk));
+    final connectionUnknown =
+        windowsConnectionState ==
+        GreenVpnWindowsDiagnosticsConnectionState.unknown;
     final competingTunnels =
         (android?['competingVpn'] ?? runtime?.competingTunnelsLabel ?? 'none')
             .toString();
@@ -23931,8 +24011,10 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
                         ok: realTunnelOk,
                         value: realTunnelOk
                             ? 'активно'
-                            : handshakeOk || trafficOk
+                            : connectionChecking
                             ? 'проверяется'
+                            : connectionUnknown
+                            ? 'не удалось проверить'
                             : 'не активно',
                       ),
                       const SizedBox(height: 10),

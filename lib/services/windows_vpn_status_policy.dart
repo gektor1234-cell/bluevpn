@@ -2,6 +2,13 @@ enum GreenVpnWindowsManagedTunnelState { connected, disconnected, unknown }
 
 enum GreenVpnWindowsRoutingMode { full, applications, unknown }
 
+enum GreenVpnWindowsDiagnosticsConnectionState {
+  active,
+  inactive,
+  checking,
+  unknown,
+}
+
 const List<String> _greenVpnWindowsSingleProcessStateKeys = <String>[
   'wireGuardState',
   'amneziaWgState',
@@ -186,4 +193,51 @@ bool greenVpnWindowsUiProtectionIsConfirmed({
     GreenVpnWindowsRoutingMode.applications => true,
     GreenVpnWindowsRoutingMode.unknown => false,
   };
+}
+
+GreenVpnWindowsDiagnosticsConnectionState
+greenVpnWindowsDiagnosticsConnectionState({
+  required bool requestOk,
+  required Map<String, dynamic> data,
+  required bool fullTunnelDataPlaneConfirmed,
+  required bool legacyConnected,
+  required bool legacyActivity,
+}) {
+  if (requestOk && data['ok'] == true) {
+    final tunnelState = greenVpnClassifyWindowsManagedTunnelStatus(
+      requestOk: requestOk,
+      data: data,
+    );
+    if (tunnelState == GreenVpnWindowsManagedTunnelState.disconnected) {
+      return GreenVpnWindowsDiagnosticsConnectionState.inactive;
+    }
+    if (tunnelState == GreenVpnWindowsManagedTunnelState.unknown) {
+      return GreenVpnWindowsDiagnosticsConnectionState.checking;
+    }
+
+    final processRouterRequired = data['processRouterRequired'] == true;
+    final routingMode = greenVpnAuthoritativeActiveRoutingMode(
+      requestOk: requestOk,
+      data: data,
+      processRouterRequired: processRouterRequired,
+    );
+    if (routingMode == null) {
+      return GreenVpnWindowsDiagnosticsConnectionState.checking;
+    }
+    return greenVpnWindowsUiProtectionIsConfirmed(
+          systemStateConfirmed: true,
+          routingMode: routingMode,
+          fullTunnelDataPlaneConfirmed: fullTunnelDataPlaneConfirmed,
+        )
+        ? GreenVpnWindowsDiagnosticsConnectionState.active
+        : GreenVpnWindowsDiagnosticsConnectionState.checking;
+  }
+
+  if (legacyConnected) {
+    return GreenVpnWindowsDiagnosticsConnectionState.active;
+  }
+  if (legacyActivity) {
+    return GreenVpnWindowsDiagnosticsConnectionState.checking;
+  }
+  return GreenVpnWindowsDiagnosticsConnectionState.unknown;
 }

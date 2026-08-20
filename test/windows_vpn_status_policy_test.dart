@@ -477,6 +477,122 @@ void main() {
     );
   });
 
+  test(
+    'diagnostics trusts authenticated full status when direct wg is denied',
+    () {
+      expect(
+        greenVpnWindowsDiagnosticsConnectionState(
+          requestOk: true,
+          data: const <String, dynamic>{
+            'ok': true,
+            ..._stableRuntimeState,
+            'wireGuardState': 'running',
+            'routingMode': 'full',
+            'processRouterState': 'missing',
+            'processRouterRequired': false,
+            'processRouterRequirementKnown': true,
+            'externalVpnActive': false,
+            'externalVpnStateKnown': true,
+          },
+          fullTunnelDataPlaneConfirmed: true,
+          legacyConnected: false,
+          legacyActivity: false,
+        ),
+        GreenVpnWindowsDiagnosticsConnectionState.active,
+      );
+    },
+  );
+
+  test('diagnostics keeps unproven full data plane in checking state', () {
+    expect(
+      greenVpnWindowsDiagnosticsConnectionState(
+        requestOk: true,
+        data: const <String, dynamic>{
+          'ok': true,
+          ..._stableRuntimeState,
+          'wireGuardState': 'running',
+          'routingMode': 'full',
+          'processRouterState': 'missing',
+          'processRouterRequired': false,
+          'processRouterRequirementKnown': true,
+          'externalVpnActive': false,
+          'externalVpnStateKnown': true,
+        },
+        fullTunnelDataPlaneConfirmed: false,
+        legacyConnected: false,
+        legacyActivity: false,
+      ),
+      GreenVpnWindowsDiagnosticsConnectionState.checking,
+    );
+  });
+
+  test('diagnostics accepts authoritative selected-app routing', () {
+    expect(
+      greenVpnWindowsDiagnosticsConnectionState(
+        requestOk: true,
+        data: const <String, dynamic>{
+          'ok': true,
+          ..._stableRuntimeState,
+          'wireGuardState': 'running',
+          'routingMode': 'applications',
+          'processRouterState': 'running',
+          'processRouterRequired': true,
+          'processRouterRequirementKnown': true,
+          'externalVpnActive': false,
+          'externalVpnStateKnown': true,
+        },
+        fullTunnelDataPlaneConfirmed: false,
+        legacyConnected: false,
+        legacyActivity: false,
+      ),
+      GreenVpnWindowsDiagnosticsConnectionState.active,
+    );
+  });
+
+  test('diagnostics lets authenticated disconnect override stale wg data', () {
+    expect(
+      greenVpnWindowsDiagnosticsConnectionState(
+        requestOk: true,
+        data: const <String, dynamic>{
+          'ok': true,
+          'tunnelState': 'stopped',
+          'wireGuardState': 'missing',
+          'amneziaWgState': 'missing',
+        },
+        fullTunnelDataPlaneConfirmed: true,
+        legacyConnected: true,
+        legacyActivity: true,
+      ),
+      GreenVpnWindowsDiagnosticsConnectionState.inactive,
+    );
+  });
+
+  test(
+    'diagnostics falls back only when the system service is unavailable',
+    () {
+      expect(
+        greenVpnWindowsDiagnosticsConnectionState(
+          requestOk: false,
+          data: const <String, dynamic>{},
+          fullTunnelDataPlaneConfirmed: false,
+          legacyConnected: true,
+          legacyActivity: true,
+        ),
+        GreenVpnWindowsDiagnosticsConnectionState.active,
+      );
+      expect(
+        greenVpnWindowsDiagnosticsConnectionState(
+          requestOk: false,
+          data: const <String, dynamic>{},
+          fullTunnelDataPlaneConfirmed: false,
+          legacyConnected: false,
+          legacyActivity: false,
+        ),
+        GreenVpnWindowsDiagnosticsConnectionState.unknown,
+      );
+    },
+  );
+
   test('routing mode rejects missing, odd, and mixed runtime snapshots', () {
     for (final data in const <Map<String, dynamic>>[
       <String, dynamic>{'ok': true, 'routingMode': 'full'},
