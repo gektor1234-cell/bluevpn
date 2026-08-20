@@ -1362,6 +1362,7 @@ $protectedInstallerContracts = [ordered]@{
     'Production installer stages files before replacing the live installation' = @($installer, '$stagingRoot = "$installRoot.staging-$swapId"')
     'Production installer restores the previous installation on failure' = @($installer, 'if (-not $installCompleted -and ($runtimeStopped -or $existingRootBackedUp -or $installSwapped))')
     'Production installer launches in the original user context after UAC' = @($installer, '$launchAfterInstall = -not $NoLaunch')
+    'Installer UI is written with an explicit Windows PowerShell UTF-8 BOM' = @($installer, '[IO.File]::WriteAllText(', '$installUiScriptText', '[Text.UTF8Encoding]::new($true)')
     'Beta installer uses Program Files' = @($paidBetaWindowsInstaller, '[string]$InstallDir = "$env:ProgramFiles\Green VPN Beta"')
     'Beta installer creates common desktop shortcuts' = @($paidBetaWindowsInstaller, "CommonDesktopDirectory")
     'Beta installer creates common Start Menu shortcuts' = @($paidBetaWindowsInstaller, "CommonPrograms")

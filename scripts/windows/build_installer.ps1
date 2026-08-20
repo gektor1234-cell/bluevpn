@@ -1926,6 +1926,12 @@ if ($WindowsRuntimeScope -eq 'paid-beta') {
     $uiContent = $uiContent.Replace('Green VPN', 'Green VPN Beta')
     Set-Content -LiteralPath $installUiPs1 -Value $uiContent -Encoding UTF8
 }
+$installUiScriptText = [IO.File]::ReadAllText($installUiPs1)
+[IO.File]::WriteAllText(
+    $installUiPs1,
+    $installUiScriptText,
+    [Text.UTF8Encoding]::new($true)
+)
 
 Write-Section 'CREATE IEXPRESS SED'
 $sedPath = Join-Path $workRoot 'greenvpn_installer.sed'

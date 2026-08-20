@@ -20,8 +20,12 @@
 - Candidate `0.4.6+4630` отклонен: exact install, paid owner, full UI/runtime,
   foreground, direct fingerprint и SOCKS5 preflight прошли, selected executable
   не дал подтвержденный egress fingerprint.
-- Текущая незакоммиченная ветка исправляет loopback relay, точную tuple-привязку,
-  ambiguity fail-closed и ложное определение исходного VPN в smoke harness.
+- Clean-source candidate `0.4.6+4631` отклонен до установки: package audit
+  обнаружил зависимую от версии PowerShell запись `install_ui.ps1` без UTF-8 BOM.
+- Commit `7eca502` исправляет loopback relay, точную tuple-привязку,
+  ambiguity fail-closed, UI-дублирование и ложное определение исходного VPN.
+- Следующий source commit делает кодировку installer UI детерминированной между
+  Windows PowerShell 5.1 и PowerShell 7.
 
 ## Исполняемый чек-лист
 
@@ -31,7 +35,7 @@
 - [x] Добавить/обновить policy и UI regressions.
 - [x] Прогнать deterministic double build, policy tests, Flutter analyze/tests и
   Windows release gate без warnings/errors.
-- [ ] Зафиксировать source commit и push.
+- [x] Зафиксировать source commit и push.
 - [ ] Из clean source собрать следующий Windows-only candidate, проверить точную
   версию, размеры, SHA-256, package audit и `productionPublished=false`.
 - [ ] Запустить один delayed detached physical smoke из уникального каталога.
