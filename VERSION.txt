@@ -1,9 +1,10 @@
-Green VPN 0.4.6
-Android build: 2026082001
+Green VPN 0.4.7
+Windows version: 0.4.6
+Android build: 2026082401
 Windows build: 4636
 Platforms: Android, Windows
 Source backend: 0.9.156-mandatory-update.1
-Status: production publishes Android 0.4.6+2026082001 and Windows 0.4.6+4636 as mandatory stable releases; isolated Fusion paid-beta remains unchanged
+Status: production publishes Android 0.4.7+2026082401 and Windows 0.4.6+4636 as mandatory stable releases; isolated Fusion paid-beta remains unchanged
 Production sales: disabled
 Refund execution: disabled
 Auto-renew: disabled

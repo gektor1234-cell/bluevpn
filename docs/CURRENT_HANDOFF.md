@@ -1,12 +1,32 @@
 # Green VPN Current Handoff
 
-Updated: 2026-08-20 MSK.
+Updated: 2026-08-24 MSK.
 
 This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
 `PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md`. Dated reports are evidence only.
 
-## Mandatory Stable Rollout, 2026-08-20
+## Android Mandatory Stable Rollout, 2026-08-24
+
+- Owner-approved Android stable-only production is `0.4.7+2026082401` on
+  fallback `176.113.81.35` and primary `72.56.32.197`.
+- Exact signed APK is `56362397` bytes, SHA-256
+  `4BA46905702F7A42DD46F768119050FF7F36A31869A2986C0928BBC6F40E5ED2`.
+- Both stable/public-product manifests are exact, `required=true`, Android
+  `minSupportedVersion=0.4.7`, `rolloutPercent=100` and `fileReady=true`.
+  Android `0.4.6` receives `426`; Android `0.4.7` and update manifests receive
+  `200`.
+- All eight public artifact bodies passed SHA verification. Both production
+  DBs pass `quick_check`; explicit primary-then-fallback sync succeeded; all
+  backend, paid-beta, sync and probe units are active. Strict public verification
+  passed `12/12`; analyze, `138` tests (`14` skipped) and release gate `0/0`
+  passed.
+- Windows stable remains `0.4.6+4636`; paid-beta Android/Windows and backend
+  remain unchanged. Friendly Linnet `5.129.237.163` was not touched.
+- Exact deployment, rollback and evidence record:
+  `docs/ANDROID_MANDATORY_STABLE_ROLLOUT_2026_08_24_RU.md`.
+
+## Historical Mandatory Stable Rollout, 2026-08-20
 
 - Owner-approved stable production is Android `0.4.6+2026082001`, Windows
   `0.4.6+4636` and backend `0.9.156-mandatory-update.1` on fallback
@@ -125,8 +145,9 @@ This is the current operational entry point. Read it together with
    client profiles.
 3. Never touch Friendly Linnet `5.129.237.163` without a new explicit owner
    instruction.
-4. Android `0.4.6+2026082001` and Windows `0.4.6+4636` are stable production
-   and mandatory with minimum supported version `0.4.6`. Paid-beta Android
+4. Android `0.4.7+2026082401` and Windows `0.4.6+4636` are stable production
+   and mandatory. Minimum supported versions are Android `0.4.7` and Windows
+   `0.4.6`. Paid-beta Android
    `0.4.6-paid-beta.1+2026081106` and Windows
    `0.4.6-paid-beta.2+4602` are isolated, public in the paid-beta contour and
    optional. Do not republish, force or roll them back without a verified exact
@@ -154,7 +175,7 @@ This is the current operational entry point. Read it together with
 10. The admin console is a protected operator surface. Keep Nginx Basic Auth,
     `noindex`, frame denial, staff authentication, RBAC and audit enabled; never
     expose bootstrap tokens or payment/tunnel secrets in the UI or exports.
-11. Stable production publishes Android `0.4.6+2026082001` and Windows
+11. Stable production publishes Android `0.4.7+2026082401` and Windows
     `0.4.6+4636`. Both passed exact physical acceptance before publication;
     Windows selected-app routing and final recovery are confirmed. It is not a
     trusted/signed Windows release; do not conflate successful unsigned

@@ -1,12 +1,40 @@
 # Green VPN Release State
 
-## Android Runtime Regression Candidate (2026-08-24 MSK)
+## Android Mandatory Stable Rollout (2026-08-24 MSK)
+
+| Layer | Current state |
+|---|---|
+| Stable backend | `0.9.156-mandatory-update.1` on fallback and primary |
+| Stable Android | `0.4.7+2026082401`, signed, mandatory |
+| Stable Windows | unchanged: `0.4.6+4636`, `NotSigned`, mandatory |
+| Accepted paid-beta | unchanged: Android `0.4.6-paid-beta.1+2026081106`, Windows `0.4.6-paid-beta.2+4602` |
+| Mandatory policy | Android minimum `0.4.7`; Windows minimum `0.4.6`; rollout `100%` |
+| Money and advertising | disabled, unchanged |
+
+Owner-approved Android stable-only rollout completed fallback first and
+primary second. Exact APK SHA-256 is
+`4BA46905702F7A42DD46F768119050FF7F36A31869A2986C0928BBC6F40E5ED2`, size
+`56362397`; `productionPublished=true`.
+
+Both stable/public-product manifests expose exact version/build/SHA/size,
+`required=true`, `minSupportedVersion=0.4.7`, `rolloutPercent=100` and
+`fileReady=true`. Android `0.4.6` requests receive `426`; `0.4.7` receives
+`200`; update manifests remain `200`. All eight public Android/Windows,
+stable/paid-beta bodies passed SHA verification. Both DBs pass `quick_check`,
+explicit primary-then-fallback sync succeeded, and all backend/sync/probe units
+are active. Strict public verification passed `12/12`; `flutter analyze`, all
+`138` Flutter tests (`14` skipped) and release gate `0/0` passed. Windows and
+paid-beta remained byte-for-byte unchanged. Full evidence and rollback paths are in
+`ANDROID_MANDATORY_STABLE_ROLLOUT_2026_08_24_RU.md`.
+
+## Pre-Publication Android Runtime Regression Acceptance (2026-08-24 MSK)
 
 Android `0.4.7+2026082401` from source
-`be72d1325a568fe56cb4d10ecff03c823e5b780e` is technically accepted but not
-published. Exact APK SHA-256 is
+`be72d1325a568fe56cb4d10ecff03c823e5b780e` was technically accepted before
+publication. Exact APK SHA-256 is
 `4BA46905702F7A42DD46F768119050FF7F36A31869A2986C0928BBC6F40E5ED2`, size
-`56362397`; `productionPublished=false`.
+`56362397`. The immutable acceptance manifest records the true pre-deploy state
+`productionPublished=false`; the later rollout above records current production.
 
 Exact release full-tunnel smoke passed on API 36 emulator and physical API 28:
 installed bytes matched, VPN egress was distinct from direct, API returned
@@ -20,12 +48,12 @@ latency and `20%` packet loss it completed in `23.286 s`, with no hidden retry
 or residual VPN. Full evidence is in
 `ANDROID_RUNTIME_REGRESSION_ACCEPTANCE_2026_08_24_RU.md`.
 
-Stable production remains `0.4.6+2026082001`; Windows, backend, manifests and
-Friendly Linnet were not changed.
+At that checkpoint stable production remained `0.4.6+2026082001`; Windows,
+backend, manifests and Friendly Linnet were not changed.
 
-## Mandatory Stable Rollout (2026-08-20 MSK)
+## Historical Mandatory Stable Rollout (2026-08-20 MSK)
 
-| Layer | Current state |
+| Layer | State at that checkpoint |
 |---|---|
 | Stable backend | `0.9.156-mandatory-update.1` on fallback and primary |
 | Stable Android | `0.4.6+2026082001`, signed, mandatory |

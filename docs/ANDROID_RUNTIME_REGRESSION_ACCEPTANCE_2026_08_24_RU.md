@@ -16,9 +16,12 @@ Android candidate `0.4.7+2026082401` закрывает три регресси�
 Candidate прошёл exact release full-tunnel smoke на эмуляторе и физическом
 Android 9, takeover на Android 9 и Android 16, exact-source selected-app
 data-plane проверку, а также сценарии полностью отсутствующей и сильно
-деградировавшей сети. Candidate не опубликован:
-`productionPublished=false`. Windows, backend, production manifests и Friendly
-Linnet `5.129.237.163` не менялись.
+деградировавшей сети. В момент этого acceptance candidate ещё не был
+опубликован: immutable pre-deploy evidence содержит
+`productionPublished=false`. Позднее владелец отдельно разрешил mandatory
+stable rollout; текущая публикация записана в
+`ANDROID_MANDATORY_STABLE_ROLLOUT_2026_08_24_RU.md`. Windows, backend и Friendly
+Linnet `5.129.237.163` при Android rollout не менялись.
 
 ## Source и исправление
 
@@ -144,9 +147,9 @@ direct, а selected режим не наследует full-tunnel fallback.
 
 ## Границы
 
-- Stable production остаётся `0.4.6+2026082001` до отдельного решения о
-  публикации `0.4.7`.
-- Этот acceptance не меняет Windows/iOS/backend и не выполняет принудительный
-  rollout.
+- На момент acceptance stable production оставался `0.4.6+2026082001`; это
+  состояние позднее было заменено отдельно разрешённым rollout `0.4.7`.
+- Сам acceptance не менял Windows/iOS/backend и не выполнял принудительный
+  rollout; публикация зафиксирована отдельным evidence document.
 - Physical test оставляет exact production `0.4.7+2026082401` установленным,
   но отключённым; это локальный test device, не production publication.

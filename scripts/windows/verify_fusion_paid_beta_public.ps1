@@ -13,14 +13,16 @@ param(
     [string]$StableWindowsBuild = '4636',
     [string]$StableWindowsSha256 = 'EAD00F9094D1749C9FB9ECFC5ADC7322E015552F66A40BDDFBD19D3DA15111DB',
     [long]$StableWindowsSize = 52809216,
-    [string]$StableAndroidVersion = '0.4.6',
-    [string]$StableAndroidBuild = '2026082001',
-    [string]$StableAndroidSha256 = '1D2D4015C4D1DD33E8CD31010F672AD901CBB09BE4065AF186980DF1E98F2210',
-    [long]$StableAndroidSize = 56351293,
+    [string]$StableAndroidVersion = '0.4.7',
+    [string]$StableAndroidBuild = '2026082401',
+    [string]$StableAndroidSha256 = '4BA46905702F7A42DD46F768119050FF7F36A31869A2986C0928BBC6F40E5ED2',
+    [long]$StableAndroidSize = 56362397,
     [string]$StableBackendVersion = '0.9.156-mandatory-update.1',
     [string]$BetaBackendVersion = '0.9.154-fusion-actions.1',
     [bool]$StableRequired = $true,
-    [string]$StableMinSupportedVersion = '0.4.6',
+    [string]$StableMinSupportedVersion = '',
+    [string]$StableAndroidMinSupportedVersion = '0.4.7',
+    [string]$StableWindowsMinSupportedVersion = '0.4.6',
     [bool]$BetaRequired = $false,
     [string]$BetaMinSupportedVersion = '',
     [string]$ReportPath = ''
@@ -43,6 +45,17 @@ if (
     -not $PSBoundParameters.ContainsKey('BetaWindowsVersion')
 ) {
     $BetaWindowsVersion = $BetaVersion
+}
+if (
+    $PSBoundParameters.ContainsKey('StableMinSupportedVersion') -and
+    -not [string]::IsNullOrWhiteSpace($StableMinSupportedVersion)
+) {
+    if (-not $PSBoundParameters.ContainsKey('StableAndroidMinSupportedVersion')) {
+        $StableAndroidMinSupportedVersion = $StableMinSupportedVersion
+    }
+    if (-not $PSBoundParameters.ContainsKey('StableWindowsMinSupportedVersion')) {
+        $StableWindowsMinSupportedVersion = $StableMinSupportedVersion
+    }
 }
 
 $hosts = @(
@@ -81,7 +94,7 @@ $stableWindowsExpected = [pscustomobject]@{
     sha256 = $StableWindowsSha256.ToUpperInvariant()
     size = $StableWindowsSize
     required = $StableRequired
-    minSupportedVersion = $StableMinSupportedVersion
+    minSupportedVersion = $StableWindowsMinSupportedVersion
 }
 $stableAndroidExpected = [pscustomobject]@{
     version = $StableAndroidVersion
@@ -89,7 +102,7 @@ $stableAndroidExpected = [pscustomobject]@{
     sha256 = $StableAndroidSha256.ToUpperInvariant()
     size = $StableAndroidSize
     required = $StableRequired
-    minSupportedVersion = $StableMinSupportedVersion
+    minSupportedVersion = $StableAndroidMinSupportedVersion
 }
 
 function Assert-Manifest {

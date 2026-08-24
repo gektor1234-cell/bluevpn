@@ -1,7 +1,8 @@
 param(
-    [string]$OutDir = 'C:\BlueVPN_Builds\public_product_final_candidate_20260820_b4636',
-    [string]$AppVersion = '0.4.6',
-    [string]$AndroidBuildNumber = '2026082001',
+    [string]$OutDir = 'C:\BlueVPN_Builds\public_product_final_candidate_20260824_android_2026082401_windows_4636',
+    [string]$AppVersion = '0.4.7',
+    [string]$WindowsAppVersion = '0.4.6',
+    [string]$AndroidBuildNumber = '2026082401',
     [ValidateRange(0, 65535)]
     [int]$WindowsBuildNumber = 4636
 )
@@ -68,8 +69,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Android dnstt verifier failed.' }
 $windowsOut = Join-Path $OutDir 'windows'
 & (Join-Path $PSScriptRoot 'build_windows_awg2_preview.ps1') `
     -OutDir $windowsOut `
-    -AppVersion $AppVersion `
-    -WindowsBuildName $AppVersion `
+    -AppVersion $WindowsAppVersion `
+    -WindowsBuildName $WindowsAppVersion `
     -WindowsBuildNumber $WindowsBuildNumber `
     -ApiBaseUrl $apiBaseUrl `
     -ApiFallbackBaseUrls $apiFallbackBaseUrls `
@@ -77,7 +78,7 @@ $windowsOut = Join-Path $OutDir 'windows'
     -SkipChecks
 if ($LASTEXITCODE -ne 0) { throw 'Windows final candidate build failed.' }
 
-$safeAppVersion = $AppVersion -replace '[^A-Za-z0-9._-]', '_'
+$safeAppVersion = $WindowsAppVersion -replace '[^A-Za-z0-9._-]', '_'
 $windowsArtifact = Join-Path $windowsOut "GreenVPN_Windows_${safeAppVersion}_final_candidate.zip"
 if (-not (Test-Path -LiteralPath $windowsArtifact -PathType Leaf)) {
     throw "Windows final candidate ZIP is missing: $windowsArtifact"
@@ -131,6 +132,7 @@ $manifest = [ordered]@{
     }
     version = [ordered]@{
         app = $AppVersion
+        windowsApp = $WindowsAppVersion
         androidBuildNumber = $AndroidBuildNumber
         windowsBuildNumber = $WindowsBuildNumber
     }

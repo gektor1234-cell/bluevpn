@@ -392,6 +392,7 @@ if ($null -ne $releaseContract) {
     $requiredContractProperties = @(
         'schema',
         'appVersion',
+        'windowsAppVersion',
         'androidBuildNumber',
         'windowsBuildNumber',
         'backendVersion',
@@ -416,6 +417,7 @@ if ($null -ne $releaseContract) {
         }
 
         $appVersion = [string]$releaseContract.appVersion
+        $windowsAppVersion = [string]$releaseContract.windowsAppVersion
         $androidBuildNumber = [string]$releaseContract.androidBuildNumber
         $windowsBuildNumber = [int]$releaseContract.windowsBuildNumber
         $backendVersion = [string]$releaseContract.backendVersion
@@ -434,15 +436,17 @@ if ($null -ne $releaseContract) {
         $releaseIdentityChecks = [ordered]@{
             'pubspec version' = @($pubspec, "version: $appVersion+$androidBuildNumber")
             'VERSION product version' = @($versionFile, "Green VPN $appVersion")
+            'VERSION Windows version' = @($versionFile, "Windows version: $windowsAppVersion")
             'VERSION Android build' = @($versionFile, "Android build: $androidBuildNumber")
             'VERSION Windows build' = @($versionFile, "Windows build: $windowsBuildNumber")
             'VERSION backend source' = @($versionFile, "Source backend: $backendVersion")
             'Backend source default' = @($backend, "`"$backendVersion`"")
             'Final candidate app version' = @($finalCandidateBuildScript, "[string]`$AppVersion = '$appVersion'")
+            'Final candidate Windows app version' = @($finalCandidateBuildScript, "[string]`$WindowsAppVersion = '$windowsAppVersion'")
             'Final candidate Android build' = @($finalCandidateBuildScript, "[string]`$AndroidBuildNumber = '$androidBuildNumber'")
             'Final candidate Windows build' = @($finalCandidateBuildScript, "[int]`$WindowsBuildNumber = $windowsBuildNumber")
             'Public product app version' = @($publicProductBuildScript, "[string]`$AppVersion = `"$appVersion`"")
-            'Public product Windows app version' = @($publicProductBuildScript, "[string]`$WindowsAppVersion = `"$appVersion`"")
+            'Public product Windows app version' = @($publicProductBuildScript, "[string]`$WindowsAppVersion = `"$windowsAppVersion`"")
             'Public product Android build' = @($publicProductBuildScript, "[string]`$AndroidBuildNumber = `"$androidBuildNumber`"")
             'Public product Windows build' = @($publicProductBuildScript, "[int]`$WindowsBuildNumber = $windowsBuildNumber")
             'Paid-beta app version' = @($paidBetaBuildScript, "[string]`$AppVersion = `"$paidBetaVersion`"")
@@ -450,6 +454,7 @@ if ($null -ne $releaseContract) {
             'Paid-beta Android build' = @($paidBetaBuildScript, "[string]`$AndroidBuildNumber = `"$paidBetaAndroidBuildNumber`"")
             'Paid-beta Windows build' = @($paidBetaBuildScript, "[int]`$WindowsBuildNumber = $paidBetaWindowsBuildNumber")
             'Trusted Windows finalizer build' = @($trustedWindowsFinalizer, "[int]`$WindowsBuildNumber = $windowsBuildNumber")
+            'Trusted Windows finalizer version' = @($trustedWindowsFinalizer, "[string]`$ProductionVersion = '$windowsAppVersion'")
         }
         foreach ($check in $releaseIdentityChecks.GetEnumerator()) {
             if (([string]$check.Value[0]).Contains([string]$check.Value[1])) {
@@ -499,7 +504,9 @@ if ($null -ne $releaseContract) {
         if (
             $releaseContract.publication.productionPublished -eq $true -and
             $releaseContract.publication.mandatoryUpdateRequired -eq $true -and
-            [string]$releaseContract.publication.minSupportedVersion -eq $appVersion
+            [string]$releaseContract.publication.minSupportedVersion -eq $appVersion -and
+            [string]$releaseContract.publication.androidMinSupportedVersion -eq $appVersion -and
+            [string]$releaseContract.publication.windowsMinSupportedVersion -eq $windowsAppVersion
         ) {
             Add-Pass 'Published production contract requires the exact current app version'
         }
