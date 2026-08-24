@@ -236,11 +236,12 @@ void main() {
     );
   });
 
-  test('Windows never blocks the connect button on an Internet probe', () {
+  test('desktop and Android foreground probe policy is bounded', () {
     expect(
       greenVpnShouldBlockForegroundForPostConnectProbe(
         probeRequested: true,
         isWindows: true,
+        isAndroid: false,
       ),
       isFalse,
     );
@@ -248,6 +249,15 @@ void main() {
       greenVpnShouldBlockForegroundForPostConnectProbe(
         probeRequested: true,
         isWindows: false,
+        isAndroid: true,
+      ),
+      isFalse,
+    );
+    expect(
+      greenVpnShouldBlockForegroundForPostConnectProbe(
+        probeRequested: true,
+        isWindows: false,
+        isAndroid: false,
       ),
       isTrue,
     );
@@ -255,6 +265,7 @@ void main() {
       greenVpnShouldBlockForegroundForPostConnectProbe(
         probeRequested: false,
         isWindows: false,
+        isAndroid: false,
       ),
       isFalse,
     );
@@ -433,10 +444,11 @@ void main() {
     );
   });
 
-  test('Windows can immediately reuse only the exact fresh managed route', () {
+  test('foreground cache requires an exact fresh managed route', () {
     final now = DateTime.utc(2026, 7, 30, 10);
     bool canUse({
       bool isWindows = true,
+      bool isAndroid = false,
       bool socialOnlyEnabled = false,
       bool hasManagedConfig = true,
       String candidateId = 'nl1-fast',
@@ -448,6 +460,7 @@ void main() {
       DateTime? preferredAt,
     }) => greenVpnCanUseImmediateCachedRoute(
       isWindows: isWindows,
+      isAndroid: isAndroid,
       socialOnlyEnabled: socialOnlyEnabled,
       hasManagedConfig: hasManagedConfig,
       candidateId: candidateId,
@@ -463,6 +476,10 @@ void main() {
     expect(canUse(), isTrue);
     expect(canUse(isWindows: false), isFalse);
     expect(canUse(socialOnlyEnabled: true), isFalse);
+    expect(
+      canUse(isWindows: false, isAndroid: true, socialOnlyEnabled: true),
+      isTrue,
+    );
     expect(canUse(hasManagedConfig: false), isFalse);
     expect(canUse(managedRouteId: 'another-route'), isFalse);
     expect(canUse(managedProtocol: 'amneziawg'), isFalse);
@@ -482,6 +499,19 @@ void main() {
       canUse(preferredAt: now.subtract(const Duration(hours: 25))),
       isFalse,
     );
+  });
+
+  test('Android foreground cascade is bounded and preserves priority', () {
+    expect(
+      greenVpnAndroidForegroundCandidates(<String>[
+        'last-good',
+        'wireguard-fallback',
+        'awg-fallback',
+        'hysteria-fallback',
+      ]),
+      <String>['last-good', 'wireguard-fallback'],
+    );
+    expect(greenVpnAndroidForegroundCandidates(<String>[]), isEmpty);
   });
 
   test('cooldown demotes a failed route without changing cascade order', () {

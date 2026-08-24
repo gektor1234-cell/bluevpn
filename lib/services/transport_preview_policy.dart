@@ -35,6 +35,7 @@ const Duration greenVpnStandbyConfigTimestampTolerance = Duration(seconds: 1);
 
 const int greenVpnRuntimeFailoverFailureThreshold = 2;
 const int greenVpnManagedRouteIdMaxLength = 160;
+const int greenVpnAndroidForegroundCandidateLimit = 2;
 
 final RegExp _greenVpnManagedRouteIdPattern = RegExp(
   r'^[A-Za-z0-9][A-Za-z0-9_.:-]*$',
@@ -127,7 +128,8 @@ bool greenVpnCanAcceptWindowsStandbyProof({
 bool greenVpnShouldBlockForegroundForPostConnectProbe({
   required bool probeRequested,
   required bool isWindows,
-}) => probeRequested && !isWindows;
+  required bool isAndroid,
+}) => probeRequested && !isWindows && !isAndroid;
 
 int greenVpnWindowsForegroundCandidateIndex({
   required List<String> protocols,
@@ -200,6 +202,7 @@ bool greenVpnIsFreshPreferredRoute({
 
 bool greenVpnCanUseImmediateCachedRoute({
   required bool isWindows,
+  bool isAndroid = false,
   required bool socialOnlyEnabled,
   required bool hasManagedConfig,
   required String candidateId,
@@ -211,7 +214,11 @@ bool greenVpnCanUseImmediateCachedRoute({
   required DateTime? preferredAt,
   required DateTime now,
 }) {
-  if (!isWindows || socialOnlyEnabled || !hasManagedConfig) return false;
+  if ((!isWindows && !isAndroid) ||
+      (isWindows && socialOnlyEnabled) ||
+      !hasManagedConfig) {
+    return false;
+  }
   final normalizedCandidateId = greenVpnNormalizeManagedRouteId(candidateId);
   final normalizedManagedRouteId = greenVpnNormalizeManagedRouteId(
     managedRouteId,
@@ -233,6 +240,10 @@ bool greenVpnCanUseImmediateCachedRoute({
     now: now,
   );
 }
+
+List<T> greenVpnAndroidForegroundCandidates<T>(List<T> candidates) => candidates
+    .take(greenVpnAndroidForegroundCandidateLimit)
+    .toList(growable: false);
 
 int greenVpnCompareTransportPreviewCandidates({
   required String leftProtocol,

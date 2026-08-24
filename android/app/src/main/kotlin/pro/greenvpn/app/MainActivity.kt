@@ -155,11 +155,6 @@ class MainActivity : FlutterActivity() {
             return
         }
 
-        val effectiveConfigText = if (protocol in setOf("hysteria2", "vless_reality", "naive_https", "dnstt")) {
-            configText
-        } else {
-            filterVpnApplicationSelectors(configText)
-        }
         if (protocol !in setOf("wireguard_udp", "amneziawg", "hysteria2", "vless_reality", "naive_https", "dnstt")) {
             result.success(
                 response(
@@ -222,6 +217,13 @@ class MainActivity : FlutterActivity() {
         }
 
         val parsed: Any = try {
+            val effectiveConfigText = if (
+                protocol in setOf("hysteria2", "vless_reality", "naive_https", "dnstt")
+            ) {
+                configText
+            } else {
+                filterVpnApplicationSelectors(configText)
+            }
             when {
                 protocol == "hysteria2" -> GreenVpnHysteria2Preview.validateConfig(effectiveConfigText)
                 protocol == "vless_reality" -> GreenVpnVlessRealityPreview.validateConfig(effectiveConfigText)
@@ -672,10 +674,7 @@ class MainActivity : FlutterActivity() {
             if (BuildConfig.GREENVPN_DNSTT_PREVIEW_ENABLED) {
                 val dnstt = GreenVpnDnsttPreview.snapshot(applicationContext)
                 if (dnstt.connected || dnstt.state == "starting") {
-                    val markerOwnRunning = !systemOwnVpnActive &&
-                        systemVpnActive &&
-                        hasOwnVpnActiveMarker(systemVpnActive)
-                    val ownRunning = dnstt.connected || systemOwnVpnActive || markerOwnRunning
+                    val ownRunning = dnstt.connected || systemOwnVpnActive
                     runOnUiThread {
                         result.success(
                             mapOf(
@@ -690,12 +689,11 @@ class MainActivity : FlutterActivity() {
                                 "systemVpnActive" to systemVpnActive,
                                 "systemVpnActiveWithoutOwnTunnel" to (systemVpnActive && !ownRunning),
                                 "externalVpnActive" to (systemVpnActive && !ownRunning),
-                                "lastGreenVpnActive" to (systemOwnVpnActive || markerOwnRunning),
+                                "lastGreenVpnActive" to ownRunning,
                                 "lastGreenVpnActiveAgeMs" to ownVpnMarkerAgeMs(),
                                 "ownTunnelSource" to when {
                                     dnstt.connected -> "dnstt"
                                     systemOwnVpnActive -> "system_owner"
-                                    markerOwnRunning -> "marker"
                                     else -> "none"
                                 },
                                 "nativeTunnelName" to "GreenVPN",
@@ -710,10 +708,7 @@ class MainActivity : FlutterActivity() {
             if (BuildConfig.GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED) {
                 val naive = GreenVpnNaiveHttpsPreview.snapshot(applicationContext)
                 if (naive.connected || naive.state == "starting") {
-                    val markerOwnRunning = !systemOwnVpnActive &&
-                        systemVpnActive &&
-                        hasOwnVpnActiveMarker(systemVpnActive)
-                    val ownRunning = naive.connected || systemOwnVpnActive || markerOwnRunning
+                    val ownRunning = naive.connected || systemOwnVpnActive
                     runOnUiThread {
                         result.success(
                             mapOf(
@@ -728,12 +723,11 @@ class MainActivity : FlutterActivity() {
                                 "systemVpnActive" to systemVpnActive,
                                 "systemVpnActiveWithoutOwnTunnel" to (systemVpnActive && !ownRunning),
                                 "externalVpnActive" to (systemVpnActive && !ownRunning),
-                                "lastGreenVpnActive" to (systemOwnVpnActive || markerOwnRunning),
+                                "lastGreenVpnActive" to ownRunning,
                                 "lastGreenVpnActiveAgeMs" to ownVpnMarkerAgeMs(),
                                 "ownTunnelSource" to when {
                                     naive.connected -> "naive_https"
                                     systemOwnVpnActive -> "system_owner"
-                                    markerOwnRunning -> "marker"
                                     else -> "none"
                                 },
                                 "nativeTunnelName" to "GreenVPN",
@@ -748,10 +742,7 @@ class MainActivity : FlutterActivity() {
             if (BuildConfig.GREENVPN_VLESS_REALITY_PREVIEW_ENABLED) {
                 val vless = GreenVpnVlessRealityPreview.snapshot(applicationContext)
                 if (vless.connected || vless.state == "starting") {
-                    val markerOwnRunning = !systemOwnVpnActive &&
-                        systemVpnActive &&
-                        hasOwnVpnActiveMarker(systemVpnActive)
-                    val ownRunning = vless.connected || systemOwnVpnActive || markerOwnRunning
+                    val ownRunning = vless.connected || systemOwnVpnActive
                     runOnUiThread {
                         result.success(
                             mapOf(
@@ -766,12 +757,11 @@ class MainActivity : FlutterActivity() {
                                 "systemVpnActive" to systemVpnActive,
                                 "systemVpnActiveWithoutOwnTunnel" to (systemVpnActive && !ownRunning),
                                 "externalVpnActive" to (systemVpnActive && !ownRunning),
-                                "lastGreenVpnActive" to (systemOwnVpnActive || markerOwnRunning),
+                                "lastGreenVpnActive" to ownRunning,
                                 "lastGreenVpnActiveAgeMs" to ownVpnMarkerAgeMs(),
                                 "ownTunnelSource" to when {
                                     vless.connected -> "vless_reality"
                                     systemOwnVpnActive -> "system_owner"
-                                    markerOwnRunning -> "marker"
                                     else -> "none"
                                 },
                                 "nativeTunnelName" to "GreenVPN",
@@ -786,10 +776,7 @@ class MainActivity : FlutterActivity() {
             if (BuildConfig.GREENVPN_HYSTERIA2_PREVIEW_ENABLED) {
                 val hysteria = GreenVpnHysteria2Preview.snapshot(applicationContext)
                 if (hysteria.connected || hysteria.state == "starting") {
-                    val markerOwnRunning = !systemOwnVpnActive &&
-                        systemVpnActive &&
-                        hasOwnVpnActiveMarker(systemVpnActive)
-                    val ownRunning = hysteria.connected || systemOwnVpnActive || markerOwnRunning
+                    val ownRunning = hysteria.connected || systemOwnVpnActive
                     runOnUiThread {
                         result.success(
                             mapOf(
@@ -804,12 +791,11 @@ class MainActivity : FlutterActivity() {
                                 "systemVpnActive" to systemVpnActive,
                                 "systemVpnActiveWithoutOwnTunnel" to (systemVpnActive && !ownRunning),
                                 "externalVpnActive" to (systemVpnActive && !ownRunning),
-                                "lastGreenVpnActive" to (systemOwnVpnActive || markerOwnRunning),
+                                "lastGreenVpnActive" to ownRunning,
                                 "lastGreenVpnActiveAgeMs" to ownVpnMarkerAgeMs(),
                                 "ownTunnelSource" to when {
                                     hysteria.connected -> "hysteria2"
                                     systemOwnVpnActive -> "system_owner"
-                                    markerOwnRunning -> "marker"
                                     else -> "none"
                                 },
                                 "nativeTunnelName" to "GreenVPN",
@@ -824,10 +810,7 @@ class MainActivity : FlutterActivity() {
             if (BuildConfig.GREENVPN_AWG2_PREVIEW_ENABLED) {
                 val awg = GreenVpnAwg2Preview.snapshot(applicationContext)
                 if (GreenVpnTunnelBackendPolicy.previewSnapshotIsActive(awg.connected, awg.state)) {
-                    val markerOwnRunning = !systemOwnVpnActive &&
-                        systemVpnActive &&
-                        hasOwnVpnActiveMarker(systemVpnActive)
-                    val ownRunning = awg.connected || systemOwnVpnActive || markerOwnRunning
+                    val ownRunning = awg.connected || systemOwnVpnActive
                     runOnUiThread {
                         result.success(
                             mapOf(
@@ -842,12 +825,11 @@ class MainActivity : FlutterActivity() {
                                 "systemVpnActive" to systemVpnActive,
                                 "systemVpnActiveWithoutOwnTunnel" to (systemVpnActive && !ownRunning),
                                 "externalVpnActive" to (systemVpnActive && !ownRunning),
-                                "lastGreenVpnActive" to (systemOwnVpnActive || markerOwnRunning),
+                                "lastGreenVpnActive" to ownRunning,
                                 "lastGreenVpnActiveAgeMs" to ownVpnMarkerAgeMs(),
                                 "ownTunnelSource" to when {
                                     awg.connected -> "backend"
                                     systemOwnVpnActive -> "system_owner"
-                                    markerOwnRunning -> "marker"
                                     else -> "none"
                                 },
                                 "nativeTunnelName" to "GreenVPN",
@@ -883,10 +865,7 @@ class MainActivity : FlutterActivity() {
 
             val backendOwnRunning = systemVpnActive &&
                 (state == Tunnel.State.UP || runningNames.contains(tunnel.getName()))
-            val markerOwnRunning = !backendOwnRunning && !systemOwnVpnActive &&
-                systemVpnActive &&
-                hasOwnVpnActiveMarker(systemVpnActive)
-            val ownRunning = backendOwnRunning || systemOwnVpnActive || markerOwnRunning
+            val ownRunning = backendOwnRunning || systemOwnVpnActive
             val markerAgeMs = ownVpnMarkerAgeMs()
             val stats = try {
                 if (backendOwnRunning && currentBackend != null) currentBackend.getStatistics(tunnel) else null
@@ -903,7 +882,7 @@ class MainActivity : FlutterActivity() {
                         "ok" to (currentBackend != null),
                         "connected" to ownRunning,
                         "ownTunnelRunning" to ownRunning,
-                        "state" to if (systemOwnVpnActive || markerOwnRunning) "up" else (state?.name?.lowercase() ?: "unknown"),
+                        "state" to if (systemOwnVpnActive) "up" else (state?.name?.lowercase() ?: "unknown"),
                         "rxBytes" to (stats?.totalRx() ?: 0L),
                         "txBytes" to (stats?.totalTx() ?: 0L),
                         "version" to version,
@@ -911,12 +890,11 @@ class MainActivity : FlutterActivity() {
                         "systemVpnActive" to systemVpnActive,
                         "systemVpnActiveWithoutOwnTunnel" to (systemVpnActive && !ownRunning),
                         "externalVpnActive" to (systemVpnActive && !ownRunning),
-                        "lastGreenVpnActive" to (systemOwnVpnActive || markerOwnRunning),
+                        "lastGreenVpnActive" to ownRunning,
                         "lastGreenVpnActiveAgeMs" to markerAgeMs,
                         "ownTunnelSource" to when {
                             backendOwnRunning -> "backend"
                             systemOwnVpnActive -> "system_owner"
-                            markerOwnRunning -> "marker"
                             else -> "none"
                         },
                         "nativeTunnelName" to tunnel.getName(),
@@ -950,33 +928,13 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun filterVpnApplicationSelectors(configText: String): String {
-        val fieldRegex = Regex(
-            "^\\s*(IncludedApplications|ExcludedApplications)\\s*=\\s*(.*?)\\s*$",
-            setOf(RegexOption.IGNORE_CASE)
-        )
-        val lines = configText.split(Regex("\\r?\\n"))
-        val filtered = mutableListOf<String>()
-        for (line in lines) {
-            val match = fieldRegex.matchEntire(line)
-            if (match == null) {
-                filtered.add(line)
-                continue
-            }
-            val fieldName = match.groupValues[1]
-            val packages = match.groupValues[2]
-                .split(',')
-                .map { it.trim() }
-                .filter { it.isNotEmpty() }
-                .filter { isPackageInstalled(it) }
-                .distinct()
-                .sorted()
-            if (packages.isNotEmpty()) {
-                filtered.add("$fieldName = ${packages.joinToString(", ")}")
-            } else {
-                filtered.add(line)
-            }
+        val launcherPackages = queryLauncherActivities()
+            .mapNotNull { it.activityInfo?.applicationInfo?.packageName?.trim() }
+            .filter { it.isNotEmpty() }
+            .toSet()
+        return GreenVpnApplicationSelectorPolicy.filterInstalledApplications(configText) {
+            packageName -> packageName in launcherPackages || isPackageInstalled(packageName)
         }
-        return filtered.joinToString("\n")
     }
 
     private fun isPackageInstalled(packageName: String): Boolean {
@@ -999,18 +957,7 @@ class MainActivity : FlutterActivity() {
     private fun handleListInstalledApps(result: MethodChannel.Result) {
         executor.execute {
             try {
-                val launcherIntent = Intent(Intent.ACTION_MAIN).apply {
-                    addCategory(Intent.CATEGORY_LAUNCHER)
-                }
-                val resolved = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    packageManager.queryIntentActivities(
-                        launcherIntent,
-                        PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_ALL.toLong())
-                    )
-                } else {
-                    @Suppress("DEPRECATION")
-                    packageManager.queryIntentActivities(launcherIntent, PackageManager.MATCH_ALL)
-                }
+                val resolved = queryLauncherActivities()
                 val apps = resolved
                     .mapNotNull { info ->
                         val appInfo = info.activityInfo?.applicationInfo ?: return@mapNotNull null
@@ -1043,6 +990,21 @@ class MainActivity : FlutterActivity() {
                     )
                 }
             }
+        }
+    }
+
+    private fun queryLauncherActivities(): List<android.content.pm.ResolveInfo> {
+        val launcherIntent = Intent(Intent.ACTION_MAIN).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
+        }
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.queryIntentActivities(
+                launcherIntent,
+                PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_ALL.toLong()),
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.queryIntentActivities(launcherIntent, PackageManager.MATCH_ALL)
         }
     }
 
@@ -1301,14 +1263,6 @@ class MainActivity : FlutterActivity() {
         GreenVpnNetworkTransition.markInactive(applicationContext)
     }
 
-    private fun hasOwnVpnActiveMarker(systemVpnActive: Boolean): Boolean {
-        if (!systemVpnActive) {
-            markOwnVpnInactive()
-            return false
-        }
-        return GreenVpnNetworkTransition.hasRecentActiveMarker(applicationContext)
-    }
-
     private fun ownVpnMarkerAgeMs(): Long {
         val startedAtElapsed = securePrefs.getLong(OWN_VPN_ACTIVE_ELAPSED_AT_KEY, -1L)
         if (startedAtElapsed <= 0L) return -1L
@@ -1333,6 +1287,7 @@ class MainActivity : FlutterActivity() {
 
     @Suppress("DEPRECATION")
     private fun isOwnVpnNetworkActive(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
         return GreenVpnNetworkTransition.isActive(applicationContext)
     }
 

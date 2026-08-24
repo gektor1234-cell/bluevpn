@@ -76,4 +76,40 @@ class GreenVpnRuntimeFailoverPolicyTest {
             GreenVpnRuntimeFailoverPolicy.shouldCancelScheduledResume(true, "monitoring"),
         )
     }
+
+    @Test
+    fun competingVpnStopsOnlyAnArmedRuntimeWithoutItsOwnTunnel() {
+        assertEquals(
+            true,
+            GreenVpnRuntimeFailoverPolicy.shouldStopForCompetingVpn(
+                desired = true,
+                systemVpnActive = true,
+                ownVpnStillActive = false,
+            ),
+        )
+        assertEquals(
+            false,
+            GreenVpnRuntimeFailoverPolicy.shouldStopForCompetingVpn(
+                desired = true,
+                systemVpnActive = true,
+                ownVpnStillActive = true,
+            ),
+        )
+        assertEquals(
+            false,
+            GreenVpnRuntimeFailoverPolicy.shouldStopForCompetingVpn(
+                desired = false,
+                systemVpnActive = true,
+                ownVpnStillActive = false,
+            ),
+        )
+        assertEquals(
+            false,
+            GreenVpnRuntimeFailoverPolicy.shouldStopForCompetingVpn(
+                desired = true,
+                systemVpnActive = false,
+                ownVpnStillActive = false,
+            ),
+        )
+    }
 }

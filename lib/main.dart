@@ -3904,16 +3904,32 @@ while True:
     action, {
     String? preferredBaseUrl,
     bool allowApiBaseFailover = true,
+    Duration? totalBudget,
   }) async {
     Object? lastError;
+    final retryWatch = Stopwatch()..start();
     final normalizedPreferredBaseUrl = _normalizeApiBaseUrl(preferredBaseUrl);
+
+    Future<T> runAction(
+      HttpClient client,
+      bool direct,
+      String resolvedBaseUrl,
+    ) {
+      final budget = totalBudget;
+      if (budget == null) return action(client, direct, resolvedBaseUrl);
+      final remaining = budget - retryWatch.elapsed;
+      if (remaining <= Duration.zero) {
+        throw TimeoutException('HTTP retry budget exceeded', budget);
+      }
+      return action(client, direct, resolvedBaseUrl).timeout(remaining);
+    }
 
     final preferredRelay = await _preferredRelayUriIfNeeded();
     if (preferredRelay != null) {
       final client = _client(direct: false);
       try {
         await _authLog('HTTP preferred WSL relay base=$preferredRelay');
-        return await action(client, false, preferredRelay.toString());
+        return await runAction(client, false, preferredRelay.toString());
       } catch (e) {
         lastError = e;
       } finally {
@@ -3942,7 +3958,7 @@ while True:
       for (final direct in const [true, false]) {
         final client = _client(direct: direct);
         try {
-          final result = await action(client, direct, candidateBaseUrl);
+          final result = await runAction(client, direct, candidateBaseUrl);
           _markApiBaseSuccess(candidateBaseUrl);
           return result;
         } catch (e) {
@@ -3973,7 +3989,7 @@ while True:
         final client = _client(direct: false);
         try {
           await _authLog('HTTP retry via WSL relay base=$relayUri');
-          return await action(client, false, relayUri.toString());
+          return await runAction(client, false, relayUri.toString());
         } finally {
           client.close(force: true);
         }
@@ -4666,43 +4682,44 @@ while True:
     String platform = 'windows',
     String appVersion = '0.1.0',
     String? releaseChannel,
+    Duration? requestBudget,
   }) async {
     try {
-      final body = await _withHttpRetry<String>((
-        client,
-        _,
-        resolvedBaseUrl,
-      ) async {
-        final uri = _uFor(resolvedBaseUrl, '/api/v1/client/bootstrap');
-        final req = await client.postUrl(uri);
-        req.headers.contentType = ContentType.json;
-        req.headers.set('Authorization', 'Bearer $accessToken');
-        req.write(
-          jsonEncode({
-            'deviceUid': deviceId,
-            'deviceName': deviceName,
-            'platform': platform,
-            'appVersion': appVersion,
-            'releaseChannel': releaseChannel ?? greenVpnUpdateChannel(),
-            'supportedProtocols': kSupportedVpnProtocols,
-            if (kPaidBetaBuild) 'clientMarker': kPaidBetaClientMarker,
-          }),
-        );
-
-        final res = await req.close().timeout(const Duration(seconds: 8));
-        final body = await utf8
-            .decodeStream(res)
-            .timeout(const Duration(seconds: 5));
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          throw GreenVpnHttpStatusException(
-            statusCode: res.statusCode,
-            body: body,
-            uri: uri,
-            message: 'Ошибка bootstrap (${res.statusCode}): $body',
+      final body = await _withHttpRetry<String>(
+        (client, _, resolvedBaseUrl) async {
+          final uri = _uFor(resolvedBaseUrl, '/api/v1/client/bootstrap');
+          final req = await client.postUrl(uri);
+          req.headers.contentType = ContentType.json;
+          req.headers.set('Authorization', 'Bearer $accessToken');
+          req.write(
+            jsonEncode({
+              'deviceUid': deviceId,
+              'deviceName': deviceName,
+              'platform': platform,
+              'appVersion': appVersion,
+              'releaseChannel': releaseChannel ?? greenVpnUpdateChannel(),
+              'supportedProtocols': kSupportedVpnProtocols,
+              if (kPaidBetaBuild) 'clientMarker': kPaidBetaClientMarker,
+            }),
           );
-        }
-        return body;
-      }, preferredBaseUrl: _preferredApiBaseUrlForBearer(accessToken));
+
+          final res = await req.close().timeout(const Duration(seconds: 8));
+          final body = await utf8
+              .decodeStream(res)
+              .timeout(const Duration(seconds: 5));
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            throw GreenVpnHttpStatusException(
+              statusCode: res.statusCode,
+              body: body,
+              uri: uri,
+              message: 'Ошибка bootstrap (${res.statusCode}): $body',
+            );
+          }
+          return body;
+        },
+        preferredBaseUrl: _preferredApiBaseUrlForBearer(accessToken),
+        totalBudget: requestBudget,
+      );
 
       {
         final jsonMap = Map<String, dynamic>.from(jsonDecode(body) as Map);
@@ -4724,47 +4741,48 @@ while True:
     String? serverId,
     String? releaseChannel,
     String mode = 'full',
+    Duration? requestBudget,
   }) async {
     try {
       if (deviceId == null || deviceId.trim().isEmpty) {
         return const ApiResult.err('Отсутствует device id.');
       }
 
-      final body = await _withHttpRetry<String>((
-        client,
-        _,
-        resolvedBaseUrl,
-      ) async {
-        final uri = _uFor(resolvedBaseUrl, '/api/v1/client/config');
-        final req = await client.postUrl(uri);
-        req.headers.contentType = ContentType.json;
-        req.headers.set('Authorization', 'Bearer $accessToken');
-        final payload = <String, dynamic>{
-          'deviceUid': deviceId,
-          'mode': mode == 'social_only' ? 'social_only' : 'full',
-          'releaseChannel': releaseChannel ?? greenVpnUpdateChannel(),
-          'supportedProtocols': kSupportedVpnProtocols,
-          if (kPaidBetaBuild) 'clientMarker': kPaidBetaClientMarker,
-        };
-        if (serverId != null && serverId.trim().isNotEmpty) {
-          payload['serverId'] = serverId.trim();
-        }
-        req.write(jsonEncode(payload));
+      final body = await _withHttpRetry<String>(
+        (client, _, resolvedBaseUrl) async {
+          final uri = _uFor(resolvedBaseUrl, '/api/v1/client/config');
+          final req = await client.postUrl(uri);
+          req.headers.contentType = ContentType.json;
+          req.headers.set('Authorization', 'Bearer $accessToken');
+          final payload = <String, dynamic>{
+            'deviceUid': deviceId,
+            'mode': mode == 'social_only' ? 'social_only' : 'full',
+            'releaseChannel': releaseChannel ?? greenVpnUpdateChannel(),
+            'supportedProtocols': kSupportedVpnProtocols,
+            if (kPaidBetaBuild) 'clientMarker': kPaidBetaClientMarker,
+          };
+          if (serverId != null && serverId.trim().isNotEmpty) {
+            payload['serverId'] = serverId.trim();
+          }
+          req.write(jsonEncode(payload));
 
-        final res = await req.close().timeout(const Duration(seconds: 12));
-        final body = await utf8
-            .decodeStream(res)
-            .timeout(const Duration(seconds: 6));
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          throw GreenVpnHttpStatusException(
-            statusCode: res.statusCode,
-            body: body,
-            uri: uri,
-            message: 'Ошибка сервера (${res.statusCode}): $body',
-          );
-        }
-        return body;
-      }, preferredBaseUrl: _preferredApiBaseUrlForBearer(accessToken));
+          final res = await req.close().timeout(const Duration(seconds: 12));
+          final body = await utf8
+              .decodeStream(res)
+              .timeout(const Duration(seconds: 6));
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            throw GreenVpnHttpStatusException(
+              statusCode: res.statusCode,
+              body: body,
+              uri: uri,
+              message: 'Ошибка сервера (${res.statusCode}): $body',
+            );
+          }
+          return body;
+        },
+        preferredBaseUrl: _preferredApiBaseUrlForBearer(accessToken),
+        totalBudget: requestBudget,
+      );
 
       {
         final trimmed = body.trim();
@@ -10691,6 +10709,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           source: 'routing_mode_apply',
         );
       }
+      if (!kIsWeb &&
+          Platform.isAndroid &&
+          !requestedApplicationsOnly &&
+          _activeConnectionRoute != null) {
+        await _armRuntimeFailover(_activeConnectionRoute!);
+      }
     }
 
     if (!mounted) return false;
@@ -11042,31 +11066,50 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
   Future<ApiResult<Map<String, dynamic>>> _bootstrapWithDeviceRetry({
     required bool showToastOnRotate,
+    Duration? totalBudget,
   }) async {
+    final budgetWatch = Stopwatch()..start();
+    Duration? remainingBudget() {
+      final budget = totalBudget;
+      if (budget == null) return null;
+      final remaining = budget - budgetWatch.elapsed;
+      return remaining > Duration.zero ? remaining : Duration.zero;
+    }
+
+    Future<ApiResult<Map<String, dynamic>>> requestBootstrap(String deviceId) {
+      final remaining = remainingBudget();
+      if (remaining == Duration.zero) {
+        return Future.value(
+          const ApiResult.err(
+            'Сеть не ответила вовремя. Проверь связь и повтори подключение.',
+          ),
+        );
+      }
+      return _api.bootstrapClient(
+        accessToken: widget.session.accessToken,
+        deviceId: deviceId,
+        deviceName: greenVpnClientDeviceName(),
+        platform: greenVpnClientPlatform(),
+        appVersion: kAppVersion,
+        requestBudget: remaining,
+      );
+    }
+
     var did = await _ensureDeviceId();
     if (did == null || did.isEmpty) {
       return const ApiResult.err('Не удалось получить device id.');
     }
 
-    var boot = await _api.bootstrapClient(
-      accessToken: widget.session.accessToken,
-      deviceId: did,
-      deviceName: greenVpnClientDeviceName(),
-      platform: greenVpnClientPlatform(),
-      appVersion: kAppVersion,
-    );
+    var boot = await requestBootstrap(did);
 
-    if (!boot.ok && _isAndroidNetworkFailureMessage(boot.message)) {
+    if (!boot.ok &&
+        _isAndroidNetworkFailureMessage(boot.message) &&
+        (remainingBudget() == null ||
+            remainingBudget()! > const Duration(seconds: 2))) {
       await _recoverAndroidStaleVpnForNetwork(
         boot.message ?? 'bootstrap_network_failure',
       );
-      boot = await _api.bootstrapClient(
-        accessToken: widget.session.accessToken,
-        deviceId: did,
-        deviceName: greenVpnClientDeviceName(),
-        platform: greenVpnClientPlatform(),
-        appVersion: kAppVersion,
-      );
+      boot = await requestBootstrap(did);
     }
 
     final attachedToAnotherUser = greenVpnIsDeviceAttachedConflict(
@@ -11091,24 +11134,15 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       );
     }
 
-    boot = await _api.bootstrapClient(
-      accessToken: widget.session.accessToken,
-      deviceId: did,
-      deviceName: greenVpnClientDeviceName(),
-      platform: greenVpnClientPlatform(),
-      appVersion: kAppVersion,
-    );
-    if (!boot.ok && _isAndroidNetworkFailureMessage(boot.message)) {
+    boot = await requestBootstrap(did);
+    if (!boot.ok &&
+        _isAndroidNetworkFailureMessage(boot.message) &&
+        (remainingBudget() == null ||
+            remainingBudget()! > const Duration(seconds: 2))) {
       await _recoverAndroidStaleVpnForNetwork(
         boot.message ?? 'bootstrap_rotated_network_failure',
       );
-      boot = await _api.bootstrapClient(
-        accessToken: widget.session.accessToken,
-        deviceId: did,
-        deviceName: greenVpnClientDeviceName(),
-        platform: greenVpnClientPlatform(),
-        appVersion: kAppVersion,
-      );
+      boot = await requestBootstrap(did);
     }
     return boot;
   }
@@ -11637,23 +11671,43 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     String deviceId,
     ServerLocation effectiveServer, {
     required String source,
+    Duration? totalBudget,
   }) async {
-    var res = await _api.fetchWireGuardConfig(
-      accessToken: widget.session.accessToken,
-      deviceId: deviceId,
-      serverId: effectiveServer.isAuto ? null : effectiveServer.id,
-      mode: socialOnlyEnabled ? 'social_only' : 'full',
-    );
-    if (!res.ok && _isAndroidNetworkFailureMessage(res.message)) {
-      await _recoverAndroidStaleVpnForNetwork(
-        res.message ?? '${source}_network_failure',
-      );
-      res = await _api.fetchWireGuardConfig(
+    final budgetWatch = Stopwatch()..start();
+    Duration? remainingBudget() {
+      final budget = totalBudget;
+      if (budget == null) return null;
+      final remaining = budget - budgetWatch.elapsed;
+      return remaining > Duration.zero ? remaining : Duration.zero;
+    }
+
+    Future<ApiResult<WireGuardConfigResponse>> requestConfig() {
+      final remaining = remainingBudget();
+      if (remaining == Duration.zero) {
+        return Future.value(
+          const ApiResult.err(
+            'Сеть не ответила вовремя. Проверь связь и повтори подключение.',
+          ),
+        );
+      }
+      return _api.fetchWireGuardConfig(
         accessToken: widget.session.accessToken,
         deviceId: deviceId,
         serverId: effectiveServer.isAuto ? null : effectiveServer.id,
         mode: socialOnlyEnabled ? 'social_only' : 'full',
+        requestBudget: remaining,
       );
+    }
+
+    var res = await requestConfig();
+    if (!res.ok &&
+        _isAndroidNetworkFailureMessage(res.message) &&
+        (remainingBudget() == null ||
+            remainingBudget()! > const Duration(seconds: 2))) {
+      await _recoverAndroidStaleVpnForNetwork(
+        res.message ?? '${source}_network_failure',
+      );
+      res = await requestConfig();
     }
     await appendBlueVpnClientLog(
       'ensure config fetch source=$source ok=${res.ok} message=${res.message ?? ""} bytes=${res.data?.configText.length ?? 0} server=${res.data?.serverId ?? ""}',
@@ -11664,6 +11718,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   Future<ProvisionedConfigResult> _ensureProvisionedConfigInteractive({
     ServerLocation? serverOverride,
     bool requireExactServer = false,
+    bool boundedAndroidNetwork = false,
   }) async {
     if (kIsWeb) return const ProvisionedConfigResult.err('web_unavailable');
     final effectiveServer = serverOverride ?? selectedServer;
@@ -11702,7 +11757,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       return const ProvisionedConfigResult.err('dev_config_unavailable');
     }
 
-    final boot = await _bootstrapWithDeviceRetry(showToastOnRotate: true);
+    final useAndroidBudget =
+        boundedAndroidNetwork && !kIsWeb && Platform.isAndroid;
+    final boot = await _bootstrapWithDeviceRetry(
+      showToastOnRotate: true,
+      totalBudget: useAndroidBudget ? const Duration(seconds: 10) : null,
+    );
     await appendBlueVpnClientLog(
       'ensure config bootstrap ok=${boot.ok} message=${boot.message ?? ""}',
     );
@@ -11800,6 +11860,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         did,
         effectiveServer,
         source: 'ad_reward_prefetch',
+        totalBudget: useAndroidBudget ? const Duration(seconds: 12) : null,
       );
       await appendBlueVpnClientLog(
         'ensure config prefetch started after ad reward server=${effectiveServer.id}',
@@ -11821,6 +11882,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               did,
               effectiveServer,
               source: 'interactive_config',
+              totalBudget: useAndroidBudget
+                  ? const Duration(seconds: 12)
+                  : null,
             ));
     if (!mounted) {
       return const ProvisionedConfigResult.err('screen_closed');
@@ -12831,7 +12895,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         rightTitle: b.title,
         leftWasRecentlySuccessful:
             !kIsWeb &&
-            Platform.isWindows &&
+            (Platform.isWindows || Platform.isAndroid) &&
             greenVpnIsFreshPreferredRoute(
               candidateId: a.id,
               candidateProtocol: a.protocolCode,
@@ -12842,7 +12906,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             ),
         rightWasRecentlySuccessful:
             !kIsWeb &&
-            Platform.isWindows &&
+            (Platform.isWindows || Platform.isAndroid) &&
             greenVpnIsFreshPreferredRoute(
               candidateId: b.id,
               candidateProtocol: b.protocolCode,
@@ -12969,13 +13033,13 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         : const <ServerLocation>[];
   }
 
-  Future<ServerLocation?> _immediateCachedWindowsCandidate(
+  Future<ServerLocation?> _immediateCachedForegroundCandidate(
     List<ServerLocation> candidates,
   ) async {
-    if (kIsWeb ||
-        !Platform.isWindows ||
-        socialOnlyEnabled ||
-        _socialOnlyPreferenceRequested ||
+    final isWindows = !kIsWeb && Platform.isWindows;
+    final isAndroid = !kIsWeb && Platform.isAndroid;
+    if ((!isWindows && !isAndroid) ||
+        (isWindows && (socialOnlyEnabled || _socialOnlyPreferenceRequested)) ||
         candidates.isEmpty) {
       return null;
     }
@@ -13011,8 +13075,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     final hasCandidateCache =
         hasManagedConfig || (serverBase ?? '').trim().isNotEmpty;
     if (greenVpnCanUseImmediateCachedRoute(
-      isWindows: true,
-      socialOnlyEnabled: false,
+      isWindows: isWindows,
+      isAndroid: isAndroid,
+      socialOnlyEnabled: socialOnlyEnabled,
       hasManagedConfig: hasCandidateCache,
       candidateId: preferredCandidate.id,
       candidateProtocol: preferredCandidate.protocolCode,
@@ -13024,14 +13089,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       now: now,
     )) {
       try {
-        var cachedConfig = hasManagedConfig
-            ? await _cfg.readManagedConfig()
-            : null;
-        final managedMatchesCandidate =
-            cachedConfig != null &&
-            cachedConfig.trim().isNotEmpty &&
-            _configMatchesServer(preferredCandidate, cachedConfig);
-        if (!managedMatchesCandidate) {
+        String? cachedConfig;
+        if (isAndroid) {
           if (serverBase == null ||
               serverBase.trim().isEmpty ||
               !_configMatchesServer(preferredCandidate, serverBase)) {
@@ -13043,8 +13102,34 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           await _writeProvisionedConfig(serverBase, server: preferredCandidate);
           cachedConfig = await _cfg.readManagedConfig();
           await appendBlueVpnClientLog(
-            'immediate cached connect restored exact server cache server=${preferredCandidate.id}',
+            'immediate cached connect rebuilt Android mode from exact server cache server=${preferredCandidate.id} socialOnly=$socialOnlyEnabled',
           );
+        } else {
+          cachedConfig = hasManagedConfig
+              ? await _cfg.readManagedConfig()
+              : null;
+          final managedMatchesCandidate =
+              cachedConfig != null &&
+              cachedConfig.trim().isNotEmpty &&
+              _configMatchesServer(preferredCandidate, cachedConfig);
+          if (!managedMatchesCandidate) {
+            if (serverBase == null ||
+                serverBase.trim().isEmpty ||
+                !_configMatchesServer(preferredCandidate, serverBase)) {
+              await appendBlueVpnClientLog(
+                'immediate cached connect rejected server=${preferredCandidate.id} reason=route_config_mismatch',
+              );
+              return null;
+            }
+            await _writeProvisionedConfig(
+              serverBase,
+              server: preferredCandidate,
+            );
+            cachedConfig = await _cfg.readManagedConfig();
+            await appendBlueVpnClientLog(
+              'immediate cached connect restored exact server cache server=${preferredCandidate.id}',
+            );
+          }
         }
         if (cachedConfig == null || cachedConfig.trim().isEmpty) {
           return null;
@@ -13180,7 +13265,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     Object? disconnectError;
     try {
       disconnectResult = await _vpnBackend.disconnect().timeout(
-        const Duration(seconds: 130),
+        !kIsWeb && Platform.isAndroid
+            ? const Duration(seconds: 8)
+            : const Duration(seconds: 130),
       );
     } catch (e) {
       disconnectError = e;
@@ -13189,14 +13276,18 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     var stillConnected = true;
     Object? statusError;
     try {
-      stillConnected = await _vpnBackend.isConnected().timeout(
-        const Duration(seconds: 5),
-      );
-      for (var attempt = 0; stillConnected && attempt < 4; attempt += 1) {
+      final statusTimeout = !kIsWeb && Platform.isAndroid
+          ? const Duration(seconds: 2)
+          : const Duration(seconds: 5);
+      final statusAttempts = !kIsWeb && Platform.isAndroid ? 2 : 4;
+      stillConnected = await _vpnBackend.isConnected().timeout(statusTimeout);
+      for (
+        var attempt = 0;
+        stillConnected && attempt < statusAttempts;
+        attempt += 1
+      ) {
         await Future<void>.delayed(const Duration(milliseconds: 350));
-        stillConnected = await _vpnBackend.isConnected().timeout(
-          const Duration(seconds: 5),
-        );
+        stillConnected = await _vpnBackend.isConnected().timeout(statusTimeout);
       }
     } catch (e) {
       statusError = e;
@@ -13351,6 +13442,58 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     return completer.future;
   }
 
+  Future<void> _verifyAndroidConnectedRouteInBackground(
+    ServerLocation server,
+  ) async {
+    final probe = await _probeConnectedTunnelRoute(server);
+    if (!mounted) return;
+    final activeRoute = _activeConnectionRoute;
+    final stillCurrent =
+        vpnEnabled &&
+        activeRoute != null &&
+        activeRoute.id == server.id &&
+        activeRoute.protocolCode == server.protocolCode;
+    if (!stillCurrent) {
+      await appendBlueVpnClientLog(
+        'background Android post connect probe ignored stale server=${server.id}',
+      );
+      return;
+    }
+    unawaited(
+      _reportRouteEvent(
+        server,
+        stage: 'post_connect_probe',
+        ok: probe.ok,
+        latencyMs: probe.latencyMs,
+        errorCode: probe.ok
+            ? null
+            : (probe.statusCode == null
+                  ? 'youtube_probe_failed'
+                  : 'youtube_http_${probe.statusCode}'),
+        message: probe.ok
+            ? 'YouTube route confirmed after Android VPN connect.'
+            : 'Android VPN поднялся, проверка Интернета продолжится надзором.',
+        details: {
+          'background': true,
+          'target': probe.target,
+          'statusCode': probe.statusCode,
+          'error': probe.error,
+        },
+      ),
+    );
+    if (probe.ok) {
+      await _recordRouteSuccess(server);
+      await appendBlueVpnClientLog(
+        'background Android post connect probe accepted server=${server.id}',
+      );
+    } else {
+      _recordRouteFailure(server, 'post_connect_probe');
+      await appendBlueVpnClientLog(
+        'background Android post connect probe failed server=${server.id}; runtime supervision remains authoritative',
+      );
+    }
+  }
+
   Future<void> _toggleVpnReal() async {
     final toggleWatch = Stopwatch()..start();
     await appendBlueVpnClientLog(
@@ -13418,7 +13561,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         await _prepareAndroidConnectControlPlane('toggle_connect');
         if (!mounted) return;
         var candidates = _connectCandidatesForCurrentSelection();
-        if (kIsWeb || !Platform.isWindows || candidates.isEmpty) {
+        if (candidates.isEmpty) {
           await _refreshServerCatalog(showToast: false);
           if (!mounted) return;
           candidates = _connectCandidatesForCurrentSelection();
@@ -13428,9 +13571,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           _toast(context, 'Эту локацию пока нельзя подключить: $reason.');
           return;
         }
-        final immediateCachedCandidate = await _immediateCachedWindowsCandidate(
-          candidates,
-        );
+        final immediateCachedCandidate =
+            await _immediateCachedForegroundCandidate(candidates);
         if (!mounted) return;
         if (!kIsWeb && Platform.isWindows) {
           if (!_windowsRuntimeRecoveryRunning) {
@@ -13463,19 +13605,25 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               'windows background recovery retained ordered candidates=${candidates.length}',
             );
           }
-        } else if (immediateCachedCandidate != null &&
-            (candidates.first.id != immediateCachedCandidate.id ||
-                candidates.first.protocolCode !=
-                    immediateCachedCandidate.protocolCode)) {
-          candidates = <ServerLocation>[
-            immediateCachedCandidate,
-            ...candidates.where(
-              (candidate) =>
-                  candidate.id != immediateCachedCandidate.id ||
-                  candidate.protocolCode !=
-                      immediateCachedCandidate.protocolCode,
-            ),
-          ];
+        } else if (!kIsWeb && Platform.isAndroid) {
+          if (immediateCachedCandidate != null &&
+              (candidates.first.id != immediateCachedCandidate.id ||
+                  candidates.first.protocolCode !=
+                      immediateCachedCandidate.protocolCode)) {
+            candidates = <ServerLocation>[
+              immediateCachedCandidate,
+              ...candidates.where(
+                (candidate) =>
+                    candidate.id != immediateCachedCandidate.id ||
+                    candidate.protocolCode !=
+                        immediateCachedCandidate.protocolCode,
+              ),
+            ];
+          }
+          candidates = greenVpnAndroidForegroundCandidates(candidates);
+          await appendBlueVpnClientLog(
+            'android foreground connect bounded candidates=${candidates.length} cached=${immediateCachedCandidate != null}',
+          );
         }
 
         String? lastError;
@@ -13511,6 +13659,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             );
             provisioned = await _ensureProvisionedConfigInteractive(
               serverOverride: candidate,
+              boundedAndroidNetwork: !kIsWeb && Platform.isAndroid,
             );
           }
           configFetchWatch.stop();
@@ -13701,6 +13850,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           if (greenVpnShouldBlockForegroundForPostConnectProbe(
             probeRequested: _shouldRunPostConnectProbe,
             isWindows: !kIsWeb && Platform.isWindows,
+            isAndroid: !kIsWeb && Platform.isAndroid,
           )) {
             _setVpnBusyUi(
               stage: 'Проверяем YouTube...',
@@ -13775,12 +13925,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           }
 
           await appendBlueVpnClientLog(
-            !kIsWeb && Platform.isWindows
-                ? 'foreground connect accepted system-service tunnel server=${candidate.id}; Internet checks continue in background'
+            !kIsWeb && (Platform.isWindows || Platform.isAndroid)
+                ? 'foreground connect accepted system tunnel server=${candidate.id}; Internet checks continue in background'
                 : 'post connect checks accepted tunnel server=${candidate.id}',
           );
           if (!mounted) return;
-          if (kIsWeb || !Platform.isWindows) {
+          if (kIsWeb || (!Platform.isWindows && !Platform.isAndroid)) {
             await _recordRouteSuccess(candidate);
           }
           if (!mounted) return;
@@ -13790,6 +13940,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             route: candidate,
             latencyMs: connectionLatencyMs,
           );
+          if (!kIsWeb && Platform.isAndroid && _shouldRunPostConnectProbe) {
+            unawaited(_verifyAndroidConnectedRouteInBackground(candidate));
+          }
           _refreshConnectionOptionsAfterConnect(candidate);
           if (kPaidBetaBuild) {
             unawaited(_recordPaidBetaEvent('vpn_connected'));
@@ -14316,6 +14469,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         final configWatch = Stopwatch()..start();
         final provisioned = await _ensureProvisionedConfigInteractive(
           serverOverride: candidate,
+          boundedAndroidNetwork: !kIsWeb && Platform.isAndroid,
         );
         configWatch.stop();
         final effectiveServer = provisioned.server ?? candidate;

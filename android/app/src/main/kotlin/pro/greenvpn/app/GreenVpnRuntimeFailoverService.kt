@@ -145,10 +145,12 @@ class GreenVpnRuntimeFailoverService : Service() {
             disarm(context)
         }
 
-        fun disarm(context: Context) {
+        fun disarm(context: Context, reason: String = "user_disconnect") {
             prefs(context).edit()
                 .putBoolean(KEY_DESIRED, false)
                 .putString(KEY_STATE, "disarmed")
+                .putString(KEY_LAST_REASON, reason.trim().take(160))
+                .putString(KEY_LAST_ERROR, "")
                 .putInt(KEY_ROUTE_FAILURES, 0)
                 .putInt(KEY_RECOVERY_FAILURES, 0)
                 .putLong(KEY_NEXT_RECOVERY_AT_MS, 0L)
@@ -258,6 +260,29 @@ class GreenVpnRuntimeFailoverService : Service() {
             stopSelf()
             return
         }
+        val route = activeRoute() ?: run {
+            recover("route_missing", markCurrentRouteFailed = false)
+            return
+        }
+        val ownEngineConnected = coordinator.isProtocolConnected(route.protocol)
+        val systemVpnActive = GreenVpnNetworkTransition.isAnyVpnActive(applicationContext)
+        val ownVpnStillActive = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            GreenVpnNetworkTransition.isActive(applicationContext)
+        } else {
+            ownEngineConnected
+        }
+        if (GreenVpnRuntimeFailoverPolicy.shouldStopForCompetingVpn(
+                desired = true,
+                systemVpnActive = systemVpnActive,
+                ownVpnStillActive = ownVpnStillActive,
+            )
+        ) {
+            disarm(applicationContext, reason = "competing_vpn_active")
+            coordinator.disconnectAll()
+            GreenVpnNetworkTransition.markInactive(applicationContext)
+            Log.i(DEBUG_TAG, "runtime_failover_disarmed reason=competing_vpn_active")
+            return
+        }
         val values = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
         val state = values.getString(KEY_STATE, "monitoring").orEmpty()
@@ -275,12 +300,20 @@ class GreenVpnRuntimeFailoverService : Service() {
             return
         }
 
-        val route = activeRoute() ?: run {
-            recover("route_missing", markCurrentRouteFailed = false)
-            return
-        }
-        if (!coordinator.isProtocolConnected(route.protocol)) {
-            recover("engine_down", markCurrentRouteFailed = true)
+        if (!ownEngineConnected) {
+            val failures = GreenVpnRuntimeFailoverPolicy.nextRouteFailureCount(
+                values.getInt(KEY_ROUTE_FAILURES, 0),
+                probeOk = false,
+            )
+            values.edit()
+                .putInt(KEY_ROUTE_FAILURES, failures)
+                .putString(KEY_STATE, "degraded")
+                .putString(KEY_LAST_REASON, "engine_down")
+                .putLong(KEY_UPDATED_AT_MS, System.currentTimeMillis())
+                .apply()
+            if (GreenVpnRuntimeFailoverPolicy.shouldRecoverForRoute(failures)) {
+                recover("engine_down", markCurrentRouteFailed = true)
+            }
             return
         }
 

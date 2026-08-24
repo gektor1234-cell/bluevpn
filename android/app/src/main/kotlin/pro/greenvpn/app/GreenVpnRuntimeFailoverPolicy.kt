@@ -24,4 +24,10 @@ internal object GreenVpnRuntimeFailoverPolicy {
 
     fun shouldCancelScheduledResume(resumeScheduled: Boolean, state: String): Boolean =
         resumeScheduled && state in setOf("paused", "recovering", "error")
+
+    fun shouldStopForCompetingVpn(
+        desired: Boolean,
+        systemVpnActive: Boolean,
+        ownVpnStillActive: Boolean,
+    ): Boolean = desired && systemVpnActive && !ownVpnStillActive
 }

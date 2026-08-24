@@ -246,6 +246,13 @@ class TransportContractDebugService : Service() {
     private fun connectCandidate(result: JSONObject, intent: Intent) {
         val serverId = intent.getStringExtra("serverId").orEmpty().trim()
         val expectedProtocol = CANDIDATES[serverId] ?: error("unsupported_candidate")
+        val includedApplications = intent.getStringExtra("includedApplications")
+            .orEmpty()
+            .split(',')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .sorted()
         val session = JSONObject(readSecureString(this, SESSION_KEY))
         val accessToken = session.optString("accessToken").trim()
         val deviceId = readSecureString(this, DEVICE_ID_KEY).trim()
@@ -269,10 +276,18 @@ class TransportContractDebugService : Service() {
         val config = response ?: throw lastError ?: error("config_unavailable")
         val protocol = config.optString("protocol").trim().lowercase()
         val returnedServerId = config.optString("serverId").trim()
-        val configText = config.optString("configText")
+        val rawConfigText = config.optString("configText")
         require(protocol == expectedProtocol) { "protocol_mismatch" }
         require(returnedServerId == serverId) { "server_mismatch" }
-        require(configText.length in 16..1_048_576) { "config_missing" }
+        require(rawConfigText.length in 16..1_048_576) { "config_missing" }
+        val configText = if (includedApplications.isEmpty()) {
+            rawConfigText
+        } else {
+            require(protocol in setOf("wireguard_udp", "amneziawg")) {
+                "selected_app_protocol_unsupported"
+            }
+            applyIncludedApplications(rawConfigText, includedApplications)
+        }
 
         GreenVpnRuntimeFailoverService.disarm(this)
         GreenVpnConnectionOperationGate.awaitIdle()
@@ -330,11 +345,49 @@ class TransportContractDebugService : Service() {
                 .put("verifiedAtMs", System.currentTimeMillis())
                 .toString(),
         )
-        check(GreenVpnRuntimeFailoverService.arm(this, returnedServerId, protocol)) {
-            "runtime_failover_arm_failed"
+        if (includedApplications.isEmpty()) {
+            check(GreenVpnRuntimeFailoverService.arm(this, returnedServerId, protocol)) {
+                "runtime_failover_arm_failed"
+            }
         }
         writeTransportSnapshot(result)
-        result.put("serverId", serverId).put("protocol", protocol)
+        result
+            .put("serverId", serverId)
+            .put("protocol", protocol)
+            .put("includedApplications", JSONArray(includedApplications))
+    }
+
+    private fun applyIncludedApplications(
+        configText: String,
+        includedApplications: List<String>,
+    ): String {
+        val selectorPattern = Regex(
+            "^\\s*(IncludedApplications|ExcludedApplications)\\s*=.*$",
+            RegexOption.IGNORE_CASE,
+        )
+        val lines = configText
+            .split(Regex("\\r?\\n"))
+            .filterNot { selectorPattern.matches(it) }
+            .toMutableList()
+        val interfaceIndex = lines.indexOfFirst {
+            it.trim().equals("[Interface]", ignoreCase = true)
+        }
+        require(interfaceIndex >= 0) { "wireguard_interface_missing" }
+        lines.add(
+            interfaceIndex + 1,
+            "IncludedApplications = ${includedApplications.joinToString(", ")}",
+        )
+        return GreenVpnApplicationSelectorPolicy.filterInstalledApplications(
+            lines.joinToString("\n"),
+        ) { packageName -> isPackageInstalled(packageName) }
+    }
+
+    private fun isPackageInstalled(packageName: String): Boolean = try {
+        @Suppress("DEPRECATION")
+        packageManager.getPackageInfo(packageName, 0)
+        true
+    } catch (_: Exception) {
+        false
     }
 
     private fun fetchConfig(

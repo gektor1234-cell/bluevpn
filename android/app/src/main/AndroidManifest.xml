@@ -101,6 +101,7 @@
         <package android:name="org.telegram.messenger" />
         <package android:name="org.telegram.messenger.web" />
         <package android:name="org.thunderdog.challegram" />
+        <package android:name="com.vkontakte.android" />
         <package android:name="com.instagram.android" />
         <package android:name="com.google.android.youtube" />
         <package android:name="com.discord" />

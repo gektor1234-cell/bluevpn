@@ -45,6 +45,18 @@ internal object GreenVpnNetworkTransition {
         false
     }
 
+    @Suppress("DEPRECATION")
+    fun isAnyVpnActive(context: Context): Boolean = try {
+        val connectivity = context.applicationContext
+            .getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        connectivity.allNetworks.any { network ->
+            connectivity.getNetworkCapabilities(network)
+                ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+        }
+    } catch (_: Throwable) {
+        false
+    }
+
     fun markActive(context: Context) {
         prefs(context).edit()
             .putBoolean(ACTIVE_KEY, true)
