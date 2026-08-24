@@ -1,5 +1,28 @@
 # Green VPN Release State
 
+## Android Runtime Regression Candidate (2026-08-24 MSK)
+
+Android `0.4.7+2026082401` from source
+`be72d1325a568fe56cb4d10ecff03c823e5b780e` is technically accepted but not
+published. Exact APK SHA-256 is
+`4BA46905702F7A42DD46F768119050FF7F36A31869A2986C0928BBC6F40E5ED2`, size
+`56362397`; `productionPublished=false`.
+
+Exact release full-tunnel smoke passed on API 36 emulator and physical API 28:
+installed bytes matched, VPN egress was distinct from direct, API returned
+`200`, YouTube returned `204`, UI screenshots passed visual review, and cleanup
+left no VPN. Exact release competing-VPN takeover passed on both Android paths:
+Green stopped when another VPN became owner and did not restore after that VPN
+stopped. Exact-source selected-app evidence confirmed selected VPN egress,
+unselected direct egress, selected YouTube `204` and disabled runtime failover.
+Offline foreground failure completed in `3.299 s`; under `1500 +/- 500 ms`
+latency and `20%` packet loss it completed in `23.286 s`, with no hidden retry
+or residual VPN. Full evidence is in
+`ANDROID_RUNTIME_REGRESSION_ACCEPTANCE_2026_08_24_RU.md`.
+
+Stable production remains `0.4.6+2026082001`; Windows, backend, manifests and
+Friendly Linnet were not changed.
+
 ## Mandatory Stable Rollout (2026-08-20 MSK)
 
 | Layer | Current state |

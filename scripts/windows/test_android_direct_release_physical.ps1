@@ -135,6 +135,7 @@ function Wait-VpnState {
 }
 
 function Handle-SystemVpnConsent {
+    $graceDeadline = (Get-Date).AddSeconds(5)
     $deadline = (Get-Date).AddSeconds(12)
     do {
         $xml = Get-UiXml
@@ -146,7 +147,16 @@ function Handle-SystemVpnConsent {
             Tap-Node -Node $node
             return
         }
-        if ($null -ne (Get-MainVpnButton -Xml $xml)) { return }
+        $windowState = (Invoke-Adb -Arguments @(
+            'shell', 'dumpsys', 'window'
+        )) -join "`n"
+        $vpnDialogFocused = $windowState -match
+            'mCurrentFocus=.*com\.android\.vpndialogs'
+        if ((Get-Date) -ge $graceDeadline -and
+                -not $vpnDialogFocused -and
+                $null -ne (Get-MainVpnButton -Xml $xml)) {
+            return
+        }
         Start-Sleep -Milliseconds 500
     } while ((Get-Date) -lt $deadline)
 }
