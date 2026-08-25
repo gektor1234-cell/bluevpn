@@ -1,5 +1,32 @@
 # Green VPN Release State
 
+## Robokassa NPD Backend Deployment (2026-08-25 MSK)
+
+| Layer | Current state |
+|---|---|
+| Stable backend | `0.9.157-robokassa-npd.1` on fallback and primary |
+| Stable Android | unchanged: `0.4.7+2026082401`, signed, mandatory |
+| Stable Windows | unchanged: `0.4.6+4636`, `NotSigned`, mandatory |
+| Paid-beta | unchanged |
+| Payments | Robokassa/NPD code deployed; sales, refunds and auto charges disabled |
+
+Backend-only deployment completed fallback first and primary second from exact
+source `5fa411a4e1157543ff57cb04aef27ffadff79785`. Bundle SHA-256 is
+`011C6B0E83A8AA0D29CD828892754EC63EA80E752682544B4FBF14DDD92C96A8`, size
+`287550`; it contains no secrets and changes neither clients nor site.
+
+Both databases pass `quick_check` and have equal synchronized business counts.
+The fallback rejects payment callbacks before processing and never polls the
+provider to mutate an order. The primary is the only billing writer. Robokassa
+credentials and NPD partner confirmation are absent; paid sales, refund
+execution and automatic charges remain off, so payment readiness is correctly
+false. Email/auth readiness remains true.
+
+Strict public verification passed `12/12`: both stable backends report the new
+version, both paid-beta backends remain unchanged, and all eight Android/Windows
+stable/paid-beta bodies retain exact SHA/size. Full evidence and rollback paths
+are in `ROBOKASSA_NPD_BACKEND_DEPLOY_2026_08_25_RU.md`.
+
 ## Main Site Cache and Visual Hotfix (2026-08-25 MSK)
 
 Owner review in an existing Yandex Browser profile exposed a stale-CSS cache

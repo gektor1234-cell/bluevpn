@@ -6,6 +6,31 @@ This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
 `PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md`. Dated reports are evidence only.
 
+## Robokassa NPD Backend, 2026-08-25
+
+- Stable backend `0.9.157-robokassa-npd.1` is deployed on fallback
+  `176.113.81.35` and primary `72.56.32.197`; exact source commit is
+  `5fa411a4e1157543ff57cb04aef27ffadff79785`.
+- Backend-only bundle is `287550` bytes, SHA-256
+  `011C6B0E83A8AA0D29CD828892754EC63EA80E752682544B4FBF14DDD92C96A8`.
+  It contains no secrets and changes neither clients nor the main site.
+- Robokassa Invoice API, authoritative Invoice + OpStateExt activation,
+  ResultURL validation, NPD receipt items and guarded full refund are present.
+  Ambiguous invoice/refund creation is never retried automatically.
+- Fallback is read-only for payment callbacks and provider polling. Primary is
+  the only billing writer. Paid sales, refund execution and automatic charges
+  remain disabled; Robokassa credentials and NPD partner confirmation are not
+  installed, so `paymentsProductionReady=false` is intentional.
+- Both DBs return `quick_check=ok` and equal business counts after explicit
+  primary-then-fallback sync. Services and sync timers are active. Public
+  verification passed `12/12`; all eight stable/paid-beta Android/Windows
+  bodies remain byte-for-byte unchanged.
+- Remaining external gates are the action-time consent to transfer INN and
+  referral data to the NPD partner, Robokassa/Robocheck SMZ onboarding and one
+  separately approved real payment plus full refund.
+- Exact deployment and rollback evidence:
+  `docs/ROBOKASSA_NPD_BACKEND_DEPLOY_2026_08_25_RU.md`.
+
 ## Main Site Cache and Visual Hotfix, 2026-08-25
 
 - Owner review in an existing Yandex Browser profile exposed a real cache
