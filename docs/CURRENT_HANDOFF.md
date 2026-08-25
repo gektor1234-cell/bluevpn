@@ -1,10 +1,35 @@
 # Green VPN Current Handoff
 
-Updated: 2026-08-24 MSK.
+Updated: 2026-08-25 MSK.
 
 This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
 `PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md`. Dated reports are evidence only.
+
+## Main Site Refresh, 2026-08-25
+
+- Owner-approved production refresh is live at `https://greenvpn.pro/`.
+  The page now uses current Green VPN styling, real accepted Android/Windows
+  screens, direct download actions and factual descriptions of `Весь интернет`,
+  `Только выбранное`, pause, connection change, diagnostics and details.
+- Historical prices and obsolete sales copy were removed because production
+  sales remain disabled. Legal/support links and the unsigned Windows
+  SmartScreen notice remain explicit.
+- Exact seven-file bundle is `518187` bytes, SHA-256
+  `A19C1DC40D4469AAE98ABD472C9A71D4EEE2429EF59D76D1A399BC7888534BB3`.
+  Guarded dry-run/apply completed fallback first and primary second.
+- Rollback roots are
+  `/root/greenvpn-main-site-backups/20260825T135634Z` on fallback and
+  `/root/greenvpn-main-site-backups/20260825T135841Z` on primary.
+- All seven live primary files match source SHA-256. Live desktop and exact
+  `390 px` mobile screenshots have no overflow, broken images, missing anchors
+  or browser warnings/errors. Public manifest checks remain `10/10`, static
+  manifests `2/2`, downloads `8/8`; release gate passed with warnings/errors
+  `0/0`.
+- Stable Android `0.4.7`, stable Windows `0.4.6`, paid-beta, backend, databases,
+  VPN routing and Friendly Linnet `5.129.237.163` were not changed.
+- Exact deployment and visual evidence:
+  `docs/MAIN_SITE_REFRESH_2026_08_25_RU.md`.
 
 ## Android Mandatory Stable Rollout, 2026-08-24
 

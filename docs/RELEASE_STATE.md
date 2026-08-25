@@ -1,5 +1,25 @@
 # Green VPN Release State
 
+## Main Site Refresh (2026-08-25 MSK)
+
+The owner-approved public page refresh is live at `https://greenvpn.pro/`.
+Production now serves current Green VPN styling, direct Android/Windows download
+actions, real accepted product screens and factual descriptions of the current
+protection modes and main-screen actions. Historical prices and obsolete sales
+copy are absent because production sales remain disabled.
+
+The guarded seven-file bundle is `518187` bytes, SHA-256
+`A19C1DC40D4469AAE98ABD472C9A71D4EEE2429EF59D76D1A399BC7888534BB3`.
+Fallback-first and primary-second dry-run/apply completed with atomic rollback
+roots recorded in `MAIN_SITE_REFRESH_2026_08_25_RU.md`. All seven primary public
+files match source hashes. Live `1440 px` desktop and exact `390 px` mobile QA
+found no overflow, broken images, missing anchors or browser console warnings.
+
+Stable Android `0.4.7`, stable Windows `0.4.6`, both paid-beta channels,
+backend, databases and VPN routing were not changed. Public checks remain green:
+API manifests `10/10`, static manifests `2/2`, downloads `8/8`; release gate
+passed with warnings/errors `0/0`.
+
 ## Android Mandatory Stable Rollout (2026-08-24 MSK)
 
 | Layer | Current state |

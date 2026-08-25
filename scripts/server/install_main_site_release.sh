@@ -14,6 +14,9 @@ declare -a RELEASE_FILES=(
   "index.html"
   "styles.css"
   "assets/app_icon.ico"
+  "assets/app_android_full.png"
+  "assets/app_windows_full.png"
+  "assets/app_windows_selected.png"
   "privacy/index.html"
 )
 
@@ -23,9 +26,10 @@ Install the Green VPN main-site source without touching public downloads.
 
   install_main_site_release.sh --bundle /root/greenvpn-main-site-stage/site.tar.gz [--target timeweb|ruvds-msk] [--apply]
 
-Dry-run is the default. The archive must contain exactly index.html, styles.css,
-assets/app_icon.ico, and privacy/index.html. Apply creates a root-only rollback
-copy and restores it automatically when nginx or HTTPS verification fails.
+Dry-run is the default. The archive must contain exactly the guarded main page,
+shared styles, app icon, three product screenshots, and privacy page. Apply
+creates a root-only rollback copy and restores it automatically when nginx or
+HTTPS verification fails.
 USAGE
 }
 
@@ -116,6 +120,9 @@ expected_files = {
     "index.html",
     "styles.css",
     "assets/app_icon.ico",
+    "assets/app_android_full.png",
+    "assets/app_windows_full.png",
+    "assets/app_windows_selected.png",
     "privacy/index.html",
 }
 allowed_directories = {"assets", "privacy"}
@@ -146,13 +153,26 @@ if seen != expected_files:
     raise SystemExit("Bundle file-set guard failed")
 PY
 
-grep -Fq '<title>Green VPN для Windows и Android</title>' "${WORK_ROOT}/index.html"
-grep -Fq '249 ₽' "${WORK_ROOT}/index.html"
-grep -Fq '649 ₽' "${WORK_ROOT}/index.html"
-grep -Fq '1 099 ₽' "${WORK_ROOT}/index.html"
+grep -Fq '<title>Green VPN — скачать для Android и Windows</title>' "${WORK_ROOT}/index.html"
+grep -Fq 'Защищённое подключение для всего интернета или только выбранных приложений и сайтов.' "${WORK_ROOT}/index.html"
+grep -Fq 'Только выбранное' "${WORK_ROOT}/index.html"
+grep -Fq 'Диагностика' "${WORK_ROOT}/index.html"
+grep -Fq 'href="/downloads/GreenVPN_Android.apk"' "${WORK_ROOT}/index.html"
+grep -Fq 'href="/downloads/GreenVPN_Setup.exe"' "${WORK_ROOT}/index.html"
+if grep -Eq '249 ₽|649 ₽|1 099 ₽|Три понятных срока|приложение само|сам берёт' "${WORK_ROOT}/index.html"; then
+  echo "Stale main-site copy detected." >&2
+  exit 1
+fi
 grep -Fq 'href="/legal/offer"' "${WORK_ROOT}/index.html"
 grep -Fq 'Политика конфиденциальности' "${WORK_ROOT}/privacy/index.html"
-[[ -s "${WORK_ROOT}/styles.css" && -s "${WORK_ROOT}/assets/app_icon.ico" ]]
+for asset in \
+  "styles.css" \
+  "assets/app_icon.ico" \
+  "assets/app_android_full.png" \
+  "assets/app_windows_full.png" \
+  "assets/app_windows_selected.png"; do
+  [[ -s "${WORK_ROOT}/${asset}" ]]
+done
 
 echo "main_site_apply=${APPLY}"
 echo "main_site_target=${TARGET}"
@@ -196,15 +216,15 @@ systemctl reload nginx
 if [[ "${VERIFY_PUBLIC_SITE}" -eq 1 ]]; then
   curl --fail --silent --show-error --max-time 15 \
     --resolve "${VERIFY_HOST}:443:127.0.0.1" \
-    "https://${VERIFY_HOST}/" | grep -F '249 ₽' >/dev/null
+    "https://${VERIFY_HOST}/" | grep -F 'Скачать Green VPN' >/dev/null
   curl --fail --silent --show-error --max-time 15 \
     --resolve "${VERIFY_HOST}:443:127.0.0.1" \
     "https://${VERIFY_HOST}/legal/offer" | grep -F 'Публичная оферта' >/dev/null
 else
-  grep -Fq '249 ₽' "${SITE_ROOT}/index.html"
+  grep -Fq 'Скачать Green VPN' "${SITE_ROOT}/index.html"
   curl --fail --silent --show-error --max-time 15 \
     --resolve "${VERIFY_HOST}:443:127.0.0.1" \
-    "https://${VERIFY_HOST}/assets/app_icon.ico" >/dev/null
+    "https://${VERIFY_HOST}/assets/app_windows_selected.png" >/dev/null
   curl --fail --silent --show-error --max-time 15 \
     --resolve "${VERIFY_HOST}:443:127.0.0.1" \
     "https://${VERIFY_HOST}/healthz" >/dev/null
