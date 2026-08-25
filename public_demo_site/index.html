@@ -4,158 +4,189 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Скачайте Green VPN для Android и Windows. Защищайте весь интернет или только выбранные приложения и сайты.">
-  <meta name="theme-color" content="#06271d">
+  <meta name="theme-color" content="#f6f8f7">
   <title>Green VPN — скачать для Android и Windows</title>
   <link rel="canonical" href="https://greenvpn.pro/">
-  <link rel="stylesheet" href="styles.css">
-  <link rel="icon" href="assets/app_icon.ico">
+  <link rel="stylesheet" href="/styles.css?v=20260825-r2">
+  <link rel="icon" href="/assets/app_icon.ico">
 </head>
 <body>
   <a class="skip-link" href="#main">Перейти к содержанию</a>
 
   <header class="topbar">
-    <a class="brand" href="/" aria-label="Green VPN — главная">
-      <img src="assets/app_icon.ico" alt="">
-      <span>Green VPN</span>
-    </a>
-    <nav aria-label="Основная навигация">
-      <a href="#modes">Режимы</a>
-      <a href="#controls">Возможности</a>
-      <a href="#start">Как начать</a>
-      <a class="nav-download" href="#download">Скачать</a>
-    </nav>
+    <div class="topbar-inner">
+      <a class="brand" href="/" aria-label="Green VPN — главная">
+        <img src="/assets/app_icon.ico" alt="">
+        <span>Green VPN</span>
+      </a>
+      <nav aria-label="Основная навигация">
+        <a href="#modes">Режимы</a>
+        <a href="#features">Возможности</a>
+        <a href="#start">Как начать</a>
+        <a class="nav-download" href="#download">Скачать</a>
+      </nav>
+    </div>
   </header>
 
   <main id="main">
     <section class="hero" aria-labelledby="hero-title">
-      <picture class="hero-media">
-        <source media="(max-width: 700px)" srcset="assets/app_android_full.png">
-        <img src="assets/app_windows_full.png" alt="Интерфейс Green VPN с активным защищённым подключением">
-      </picture>
-      <div class="hero-shade" aria-hidden="true"></div>
-      <div class="hero-content">
-        <p class="hero-kicker">Для Android и Windows</p>
-        <h1 id="hero-title">Green VPN</h1>
-        <p class="hero-lead">Защищённое подключение для всего интернета или только выбранных приложений и сайтов.</p>
-        <div class="hero-actions" aria-label="Загрузки Green VPN">
-          <a class="button primary" href="/downloads/GreenVPN_Android.apk" download>Скачать для Android</a>
-          <a class="button secondary" href="/downloads/GreenVPN_Setup.exe" download>Скачать для Windows</a>
+      <div class="hero-inner">
+        <div class="hero-copy">
+          <p class="eyebrow">Для Android и Windows</p>
+          <h1 id="hero-title">Green VPN</h1>
+          <p class="hero-lead">Защищённое подключение для всего интернета или только выбранных приложений и сайтов.</p>
+          <div class="hero-actions" aria-label="Загрузки Green VPN">
+            <a class="button primary" href="/downloads/GreenVPN_Android.apk" download>Скачать для Android</a>
+            <a class="button secondary" href="/downloads/GreenVPN_Setup.exe" download>Скачать для Windows</a>
+          </div>
+          <p class="hero-note">Последние стабильные версии. Условия доступа отображаются в приложении.</p>
         </div>
-        <p class="hero-note">Последние стабильные версии. Условия доступа отображаются в приложении.</p>
+
+        <div class="signal-graphic" aria-label="Два режима защиты Green VPN">
+          <div class="signal-ring ring-outer" aria-hidden="true"></div>
+          <div class="signal-ring ring-inner" aria-hidden="true"></div>
+          <div class="signal-core">
+            <img src="/assets/app_icon.ico" alt="Логотип Green VPN">
+            <strong>Защита</strong>
+            <span>включается одним нажатием</span>
+          </div>
+          <div class="signal-node node-all">
+            <span>01</span>
+            <strong>Весь интернет</strong>
+          </div>
+          <div class="signal-node node-selected">
+            <span>02</span>
+            <strong>Только выбранное</strong>
+          </div>
+        </div>
       </div>
     </section>
 
     <section class="signal-strip" aria-label="Кратко о Green VPN">
       <div>
-        <strong>Два режима защиты</strong>
-        <span>Весь интернет или только выбранное</span>
+        <span class="signal-index">01</span>
+        <strong>Два режима</strong>
+        <p>Весь интернет или только выбранное</p>
       </div>
       <div>
-        <strong>Подключение на главном экране</strong>
-        <span>Статус, локация и основные действия рядом</span>
+        <span class="signal-index">02</span>
+        <strong>Главный экран</strong>
+        <p>Статус и основные действия в одном месте</p>
       </div>
       <div>
-        <strong>Android и Windows</strong>
-        <span>Один понятный интерфейс на обеих платформах</span>
+        <span class="signal-index">03</span>
+        <strong>Две платформы</strong>
+        <p>Android и Windows</p>
       </div>
     </section>
 
-    <section class="modes" id="modes" aria-labelledby="modes-title">
+    <section class="modes section" id="modes" aria-labelledby="modes-title">
       <div class="section-heading">
         <p class="eyebrow">Режимы защиты</p>
         <h2 id="modes-title">Выберите, что направлять через Green VPN</h2>
-        <p>Режим можно изменить в приложении. Текущее подключение и выбранная локация остаются видны на главном экране.</p>
+        <p>Режим меняется в приложении. Текущее подключение и выбранная локация остаются видны на главном экране.</p>
       </div>
 
-      <article class="mode-block">
-        <div class="mode-copy">
-          <span class="mode-number">01</span>
+      <div class="mode-grid">
+        <article class="mode-card mode-all">
+          <div class="mode-topline">
+            <span class="mode-number">01</span>
+            <span class="mode-mark" aria-hidden="true">●</span>
+          </div>
           <h3>Весь интернет</h3>
-          <p>Весь трафик устройства проходит через Green VPN. Этот режим подходит, когда нужно защитить подключение целиком.</p>
+          <p>Весь трафик устройства проходит через Green VPN. Подходит, когда нужно защитить подключение целиком.</p>
           <ul class="plain-list">
-            <li>Единый режим для всех приложений и сайтов</li>
+            <li>Один режим для приложений и сайтов</li>
             <li>Выбор доступной локации</li>
             <li>Проверка состояния подключения</li>
           </ul>
-        </div>
-        <figure class="product-shot phone-shot">
-          <img src="assets/app_android_full.png" alt="Режим «Весь интернет» в Green VPN для Android">
-          <figcaption>Green VPN для Android</figcaption>
-        </figure>
-      </article>
+        </article>
 
-      <article class="mode-block selected-mode">
-        <figure class="product-shot desktop-shot">
-          <img src="assets/app_windows_selected.png" alt="Режим «Только выбранное» в Green VPN для Windows">
-          <figcaption>Green VPN для Windows</figcaption>
-        </figure>
-        <div class="mode-copy">
-          <span class="mode-number">02</span>
+        <article class="mode-card mode-selected">
+          <div class="mode-topline">
+            <span class="mode-number">02</span>
+            <span class="mode-mark" aria-hidden="true">◆</span>
+          </div>
           <h3>Только выбранное</h3>
-          <p>Через Green VPN проходят только выбранные приложения и сайты. Остальной трафик продолжает использовать обычное подключение.</p>
+          <p>Через Green VPN проходят выбранные приложения и сайты. Остальной трафик использует обычное подключение.</p>
           <ul class="plain-list">
             <li>Отдельный список приложений и сайтов</li>
             <li>Понятный статус выбранного режима</li>
-            <li>Доступность режима показывается в приложении</li>
+            <li>Доступность показывается в приложении</li>
           </ul>
-        </div>
-      </article>
+        </article>
+      </div>
     </section>
 
-    <section class="controls" id="controls" aria-labelledby="controls-title">
-      <div class="controls-inner">
+    <section class="features" id="features" aria-labelledby="features-title">
+      <div class="features-inner">
         <div class="section-heading inverse">
           <p class="eyebrow">Главный экран</p>
-          <h2 id="controls-title">Основные действия всегда рядом</h2>
-          <p>Без отдельных технических настроек: приложение показывает состояние защиты и оставляет только нужные команды.</p>
+          <h2 id="features-title">Только нужные действия</h2>
+          <p>Приложение показывает состояние защиты и оставляет основные команды под рукой.</p>
         </div>
-        <div class="control-grid">
+
+        <div class="feature-list">
           <article>
             <span>01</span>
-            <h3>Пауза</h3>
-            <p>Временно приостановить защищённое подключение.</p>
+            <div>
+              <h3>Пауза</h3>
+              <p>Временно остановить защищённое подключение.</p>
+            </div>
           </article>
           <article>
             <span>02</span>
-            <h3>Сменить подключение</h3>
-            <p>Выбрать другую доступную локацию.</p>
+            <div>
+              <h3>Сменить подключение</h3>
+              <p>Выбрать другую доступную локацию.</p>
+            </div>
           </article>
           <article>
             <span>03</span>
-            <h3>Диагностика</h3>
-            <p>Проверить состояние и отправить отчёт в поддержку без паролей и приватных ключей.</p>
+            <div>
+              <h3>Диагностика</h3>
+              <p>Проверить состояние и подготовить отчёт для поддержки.</p>
+            </div>
           </article>
           <article>
             <span>04</span>
-            <h3>Детали</h3>
-            <p>Посмотреть состояние выбранного режима и подключения.</p>
+            <div>
+              <h3>Детали</h3>
+              <p>Посмотреть состояние режима и подключения.</p>
+            </div>
           </article>
         </div>
       </div>
     </section>
 
-    <section class="start" id="start" aria-labelledby="start-title">
-      <div class="section-heading">
+    <section class="start section" id="start" aria-labelledby="start-title">
+      <div class="section-heading compact-heading">
         <p class="eyebrow">Как начать</p>
         <h2 id="start-title">Три коротких шага</h2>
       </div>
-      <div class="steps">
-        <article>
+      <ol class="steps">
+        <li>
           <span>1</span>
-          <h3>Скачайте</h3>
-          <p>Выберите APK для Android или установщик для Windows.</p>
-        </article>
-        <article>
+          <div>
+            <h3>Скачайте</h3>
+            <p>Выберите APK для Android или установщик для Windows.</p>
+          </div>
+        </li>
+        <li>
           <span>2</span>
-          <h3>Установите</h3>
-          <p>Откройте загруженный файл и завершите установку на устройстве.</p>
-        </article>
-        <article>
+          <div>
+            <h3>Установите</h3>
+            <p>Откройте загруженный файл и завершите установку.</p>
+          </div>
+        </li>
+        <li>
           <span>3</span>
-          <h3>Подключитесь</h3>
-          <p>Выберите режим защиты и нажмите кнопку подключения.</p>
-        </article>
-      </div>
+          <div>
+            <h3>Подключитесь</h3>
+            <p>Выберите режим защиты и включите подключение.</p>
+          </div>
+        </li>
+      </ol>
     </section>
 
     <section class="download" id="download" aria-labelledby="download-title">
@@ -178,7 +209,7 @@
             <div>
               <span class="platform-label">Windows</span>
               <h3>Установщик</h3>
-              <p>Windows может показать предупреждение SmartScreen: установщик пока не подписан цифровой подписью.</p>
+              <p>Windows может показать SmartScreen: установщик пока не подписан цифровой подписью.</p>
             </div>
             <a class="button light" href="/downloads/GreenVPN_Setup.exe" download>Скачать для Windows</a>
           </article>
@@ -188,29 +219,31 @@
   </main>
 
   <footer id="contacts">
-    <div class="footer-brand">
-      <a class="brand" href="/">
-        <img src="assets/app_icon.ico" alt="">
-        <span>Green VPN</span>
-      </a>
-      <span>Защищённое подключение для Android и Windows</span>
-    </div>
-    <div>
-      <strong>Поддержка</strong>
-      <a href="mailto:support@greenvpn.pro">support@greenvpn.pro</a>
-    </div>
-    <div>
-      <strong>Загрузки</strong>
-      <a href="/downloads/GreenVPN_Android.apk" download>Android</a>
-      <a href="/downloads/GreenVPN_Setup.exe" download>Windows</a>
-    </div>
-    <div>
-      <strong>Документы</strong>
-      <a href="/legal/offer">Публичная оферта</a>
-      <a href="/legal/privacy">Конфиденциальность</a>
-      <a href="/legal/acceptable-use">Правила использования</a>
-      <a href="/legal/refunds">Возвраты</a>
-      <a href="/legal/requisites">Реквизиты</a>
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <a class="brand" href="/">
+          <img src="/assets/app_icon.ico" alt="">
+          <span>Green VPN</span>
+        </a>
+        <span>Защищённое подключение для Android и Windows</span>
+      </div>
+      <div>
+        <strong>Поддержка</strong>
+        <a href="mailto:support@greenvpn.pro">support@greenvpn.pro</a>
+      </div>
+      <div>
+        <strong>Загрузки</strong>
+        <a href="/downloads/GreenVPN_Android.apk" download>Android</a>
+        <a href="/downloads/GreenVPN_Setup.exe" download>Windows</a>
+      </div>
+      <div>
+        <strong>Документы</strong>
+        <a href="/legal/offer">Публичная оферта</a>
+        <a href="/legal/privacy">Конфиденциальность</a>
+        <a href="/legal/acceptable-use">Правила использования</a>
+        <a href="/legal/refunds">Возвраты</a>
+        <a href="/legal/requisites">Реквизиты</a>
+      </div>
     </div>
   </footer>
 </body>

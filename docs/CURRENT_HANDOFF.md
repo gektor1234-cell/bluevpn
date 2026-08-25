@@ -6,28 +6,29 @@ This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
 `PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md`. Dated reports are evidence only.
 
-## Main Site Refresh, 2026-08-25
+## Main Site Cache and Visual Hotfix, 2026-08-25
 
-- Owner-approved production refresh is live at `https://greenvpn.pro/`.
-  The page now uses current Green VPN styling, real accepted Android/Windows
-  screens, direct download actions and factual descriptions of `Весь интернет`,
-  `Только выбранное`, pause, connection change, diagnostics and details.
-- Historical prices and obsolete sales copy were removed because production
-  sales remain disabled. Legal/support links and the unsigned Windows
-  SmartScreen notice remain explicit.
-- Exact seven-file bundle is `518187` bytes, SHA-256
-  `A19C1DC40D4469AAE98ABD472C9A71D4EEE2429EF59D76D1A399BC7888534BB3`.
-  Guarded dry-run/apply completed fallback first and primary second.
-- Rollback roots are
-  `/root/greenvpn-main-site-backups/20260825T135634Z` on fallback and
-  `/root/greenvpn-main-site-backups/20260825T135841Z` on primary.
-- All seven live primary files match source SHA-256. Live desktop and exact
-  `390 px` mobile screenshots have no overflow, broken images, missing anchors
-  or browser warnings/errors. Public manifest checks remain `10/10`, static
-  manifests `2/2`, downloads `8/8`; release gate passed with warnings/errors
-  `0/0`.
-- Stable Android `0.4.7`, stable Windows `0.4.6`, paid-beta, backend, databases,
-  VPN routing and Friendly Linnet `5.129.237.163` were not changed.
+- Owner review in an existing Yandex Browser profile exposed a real cache
+  regression: new HTML was combined with stale CSS, and product screenshots
+  became oversized. The fresh-profile-only acceptance was insufficient.
+- Corrected production is live at `https://greenvpn.pro/`. Product screenshots
+  are no longer referenced, packaged or present in either site webroot. The only
+  image used by the page is the Green VPN application icon.
+- HTML binds CSS through the new key `/styles.css?v=20260825-r2`. The page uses a
+  restrained white/charcoal layout with green, blue and amber accents.
+- Exact four-file hotfix bundle is `29407` bytes, SHA-256
+  `0D9BBD8F6246894A2B3B127A5CF5265B3FD44490E4A152F0CFA84B173BD7DDFC`.
+  Successful rollback roots are
+  `/root/greenvpn-main-site-backups/20260825T142928Z` on fallback and
+  `/root/greenvpn-main-site-backups/20260825T143004Z` on primary.
+- All four live primary files match source SHA-256. Exact `2560 x 1336`,
+  `1440 x 1050` and `390 x 844` checks have no overflow, broken assets or browser
+  warnings/errors. The existing Yandex Browser tab was hard-refreshed after
+  publication.
+- Public manifest checks remain `10/10`, static manifests `2/2`, downloads
+  `8/8`; release gate passed with warnings/errors `0/0`. Stable Android `0.4.7`,
+  stable Windows `0.4.6`, paid-beta, backend, databases, VPN routing and
+  Friendly Linnet `5.129.237.163` were not changed.
 - Exact deployment and visual evidence:
   `docs/MAIN_SITE_REFRESH_2026_08_25_RU.md`.
 

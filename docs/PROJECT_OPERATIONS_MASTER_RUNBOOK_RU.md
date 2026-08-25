@@ -342,11 +342,15 @@ SHA-256 обоих артефактов. Эти файлы нельзя публ
 - Маршрутизация main-domain legal устанавливается idempotent-скриптом
   `scripts/server/install_main_site_legal_proxy.sh`; dry-run обязателен перед
   `--apply`, а проверка ищет заголовок реального документа через loopback TLS.
-- Семь файлов основной страницы, включая три точных продуктовых скриншота,
-  устанавливаются guarded-скриптом `scripts/server/install_main_site_release.sh`.
-  Архив не может содержать другие пути, symlink или downloads; при ошибке
-  nginx/HTTPS восстанавливается root-only rollback-копия. Guard дополнительно
-  отклоняет исторические цены и устаревшие формулировки.
+- Четыре файла основной страницы устанавливаются guarded-скриптом
+  `scripts/server/install_main_site_release.sh`: HTML, CSS, значок и статическая
+  privacy page. Архив не может содержать другие пути, symlink или downloads;
+  при ошибке nginx/HTTPS восстанавливается root-only rollback-копия. Guard
+  дополнительно отклоняет исторические цены, устаревшие формулировки и любые
+  ссылки на продуктовые скриншоты.
+- HTML обязан использовать release-specific cache key для CSS. Проверка новой
+  публикации включает свежий профиль и уже открытый браузер со старым кэшем;
+  правильный вид только в свежем headless-профиле недостаточен.
 - Сначала staging/preview, затем atomic switch production root.
 
 ## 11. Очистка серверов

@@ -14,11 +14,14 @@ declare -a RELEASE_FILES=(
   "index.html"
   "styles.css"
   "assets/app_icon.ico"
+  "privacy/index.html"
+)
+declare -a RETIRED_FILES=(
   "assets/app_android_full.png"
   "assets/app_windows_full.png"
   "assets/app_windows_selected.png"
-  "privacy/index.html"
 )
+declare -a BACKUP_FILES=("${RELEASE_FILES[@]}" "${RETIRED_FILES[@]}")
 
 usage() {
   cat <<'USAGE'
@@ -27,9 +30,9 @@ Install the Green VPN main-site source without touching public downloads.
   install_main_site_release.sh --bundle /root/greenvpn-main-site-stage/site.tar.gz [--target timeweb|ruvds-msk] [--apply]
 
 Dry-run is the default. The archive must contain exactly the guarded main page,
-shared styles, app icon, three product screenshots, and privacy page. Apply
-creates a root-only rollback copy and restores it automatically when nginx or
-HTTPS verification fails.
+shared styles, app icon, and privacy page. Apply retires the three obsolete
+product screenshots, creates a root-only rollback copy, and restores it
+automatically when nginx or HTTPS verification fails.
 USAGE
 }
 
@@ -88,7 +91,7 @@ cleanup() {
 rollback() {
   local status=$?
   if [[ "${APPLY_STARTED}" -eq 1 && -n "${BACKUP_DIR}" && -d "${BACKUP_DIR}" ]]; then
-    for relative in "${RELEASE_FILES[@]}"; do
+    for relative in "${BACKUP_FILES[@]}"; do
       destination="${SITE_ROOT}/${relative}"
       backup_file="${BACKUP_DIR}/${relative}"
       missing_marker="${BACKUP_DIR}/.missing/${relative}"
@@ -120,9 +123,6 @@ expected_files = {
     "index.html",
     "styles.css",
     "assets/app_icon.ico",
-    "assets/app_android_full.png",
-    "assets/app_windows_full.png",
-    "assets/app_windows_selected.png",
     "privacy/index.html",
 }
 allowed_directories = {"assets", "privacy"}
@@ -154,6 +154,7 @@ if seen != expected_files:
 PY
 
 grep -Fq '<title>Green VPN — скачать для Android и Windows</title>' "${WORK_ROOT}/index.html"
+grep -Fq 'href="/styles.css?v=20260825-r2"' "${WORK_ROOT}/index.html"
 grep -Fq 'Защищённое подключение для всего интернета или только выбранных приложений и сайтов.' "${WORK_ROOT}/index.html"
 grep -Fq 'Только выбранное' "${WORK_ROOT}/index.html"
 grep -Fq 'Диагностика' "${WORK_ROOT}/index.html"
@@ -163,14 +164,15 @@ if grep -Eq '249 ₽|649 ₽|1 099 ₽|Три понятных срока|при
   echo "Stale main-site copy detected." >&2
   exit 1
 fi
+if grep -Eq 'app_android_full|app_windows_full|app_windows_selected' "${WORK_ROOT}/index.html"; then
+  echo "Product screenshot reference detected." >&2
+  exit 1
+fi
 grep -Fq 'href="/legal/offer"' "${WORK_ROOT}/index.html"
 grep -Fq 'Политика конфиденциальности' "${WORK_ROOT}/privacy/index.html"
 for asset in \
   "styles.css" \
-  "assets/app_icon.ico" \
-  "assets/app_android_full.png" \
-  "assets/app_windows_full.png" \
-  "assets/app_windows_selected.png"; do
+  "assets/app_icon.ico"; do
   [[ -s "${WORK_ROOT}/${asset}" ]]
 done
 
@@ -178,12 +180,13 @@ echo "main_site_apply=${APPLY}"
 echo "main_site_target=${TARGET}"
 echo "main_site_bundle_sha256=$(sha256sum -- "${BUNDLE}" | cut -d' ' -f1)"
 echo "main_site_release_files=${#RELEASE_FILES[@]}"
+echo "main_site_retired_files=${#RETIRED_FILES[@]}"
 [[ "${APPLY}" -eq 1 ]] || exit 0
 
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP_DIR="${BACKUP_ROOT}/${TIMESTAMP}"
 install -d -m 0700 -- "${BACKUP_DIR}"
-for relative in "${RELEASE_FILES[@]}"; do
+for relative in "${BACKUP_FILES[@]}"; do
   source_path="${SITE_ROOT}/${relative}"
   [[ ! -L "${source_path}" ]] || {
     echo "Current site file is a symlink: ${relative}" >&2
@@ -210,6 +213,9 @@ for relative in "${RELEASE_FILES[@]}"; do
   install -m 0644 -- "${WORK_ROOT}/${relative}" "${temporary}"
   mv -f -- "${temporary}" "${destination}"
 done
+for relative in "${RETIRED_FILES[@]}"; do
+  rm -f -- "${SITE_ROOT}/${relative}"
+done
 
 nginx -t
 systemctl reload nginx
@@ -222,9 +228,10 @@ if [[ "${VERIFY_PUBLIC_SITE}" -eq 1 ]]; then
     "https://${VERIFY_HOST}/legal/offer" | grep -F 'Публичная оферта' >/dev/null
 else
   grep -Fq 'Скачать Green VPN' "${SITE_ROOT}/index.html"
+  grep -Fq -- '--sky:' "${SITE_ROOT}/styles.css"
   curl --fail --silent --show-error --max-time 15 \
     --resolve "${VERIFY_HOST}:443:127.0.0.1" \
-    "https://${VERIFY_HOST}/assets/app_windows_selected.png" >/dev/null
+    "https://${VERIFY_HOST}/assets/app_icon.ico" >/dev/null
   curl --fail --silent --show-error --max-time 15 \
     --resolve "${VERIFY_HOST}:443:127.0.0.1" \
     "https://${VERIFY_HOST}/healthz" >/dev/null

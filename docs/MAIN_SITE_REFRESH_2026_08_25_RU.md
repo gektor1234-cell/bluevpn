@@ -4,79 +4,88 @@
 
 ## Итог
 
-Обновлённая продуктовая страница опубликована на
-`https://greenvpn.pro/`. Публикация выполнена только для сайта и не меняла
-клиенты, update manifests, backend, базы данных или VPN-маршрутизацию.
+Исправленный сайт опубликован на `https://greenvpn.pro/`. На странице нет
+скриншотов приложения: они не входят в HTML, пакет или webroot обоих production
+узлов. Единственное изображение страницы — фирменный значок Green VPN.
 
-Новая страница:
+Текущий дизайн использует бело-графитовую основу и зелёный, голубой и янтарный
+акценты. Страница ведёт прямо к загрузке Android и Windows, кратко описывает два
+режима и основные действия приложения, не публикует исторические цены и честно
+предупреждает о разрешении Android на установку APK и о возможном SmartScreen.
 
-- ведёт прямо к загрузке Android APK и Windows installer;
-- показывает реальные принятые экраны Android и Windows;
-- описывает актуальные режимы `Весь интернет` и `Только выбранное`;
-- показывает доступные действия: пауза, смена подключения, диагностика и детали;
-- не публикует исторические цены и устаревшие обещания при отключённых продажах;
-- честно предупреждает о разрешении Android на установку APK и о возможном
-  SmartScreen для неподписанного Windows installer;
-- сохраняет ссылки на оферту, политику, правила, возвраты, реквизиты и поддержку.
+## Причина hotfix
 
-## Точный пакет
+Первый refresh был проверен только в чистом профиле браузера. В уже открытом
+профиле пользователя новый HTML соединился со старым закэшированным CSS. Из-за
+этого ссылка пропуска стала видимой, layout разрушился, а продуктовые скриншоты
+стали огромными.
+
+Hotfix устраняет обе причины:
+
+- CSS подключается через новый cache key `/styles.css?v=20260825-r2`;
+- все продуктовые скриншоты удалены из разметки, пакета, исходников и обоих
+  production webroot;
+- guarded installer отклоняет пакет со ссылками на эти изображения;
+- runbook теперь требует проверку и в свежем профиле, и в браузере со старым
+  кэшем.
+
+## Точный пакет R2
 
 Архив:
-`C:\BlueVPN_Builds\main_site_refresh_20260825_v1\greenvpn-main-site-20260825-v1.tar.gz`.
+`C:\BlueVPN_Builds\main_site_hotfix_20260825_r2\greenvpn-main-site-20260825-r2.tar.gz`.
 
-- размер: `518187` bytes;
+- размер: `29407` bytes;
 - SHA-256:
-  `A19C1DC40D4469AAE98ABD472C9A71D4EEE2429EF59D76D1A399BC7888534BB3`;
-- entries: `7`, без symlink и без `downloads/`.
+  `0D9BBD8F6246894A2B3B127A5CF5265B3FD44490E4A152F0CFA84B173BD7DDFC`;
+- entries: `4`, без symlink и без `downloads/`.
 
 | Путь | Размер | SHA-256 |
 |---|---:|---|
-| `index.html` | `10488` | `AE37015C8BA8586969A82C3BD1F6C963D4A1388CB58A9D66DC9837AF475AA560` |
-| `styles.css` | `14079` | `AC15F65022645614E3E8356467C7311FD800E3118D4186E21C62C08E8BDF7FE6` |
-| `privacy/index.html` | `6344` | `348E535A648F5458E7E73A6BE838AD9A3B077510F96BDABE4607837D2E9895B7` |
+| `index.html` | `10850` | `4C336BB97EA5C3BC74FF200DE9F3E8F3E592308B63DCD40392ABB42946C9909E` |
+| `styles.css` | `15412` | `8A56E8F0FBC57F051A6F27741AAC81A247F844F7CB7D279918952D13431DE14E` |
 | `assets/app_icon.ico` | `20282` | `D6E2F6F5AA38F222C28448F13E63C6362EFAF3C7086B34111F8172A6083485B4` |
-| `assets/app_android_full.png` | `244181` | `B09ADA02F258F97C37915B0C031333D0E97A28CD5F722019AE7C69A050B7C335` |
-| `assets/app_windows_full.png` | `145414` | `DBC3AD7702FC0AF1FD60E89F9D2C50E774E2F3E6E0FEDABE11E51C91C6CB00C4` |
-| `assets/app_windows_selected.png` | `133239` | `99430CE45BB00F7EE66D263F6609A6A559278C291F8B5640BB3197E567764015` |
+| `privacy/index.html` | `6500` | `28F4074C909058DCDC1D05F5CEDAAA0D0972ED8DCBC59C334F6DB1FAEDFFA829` |
 
 Guarded installer `scripts/server/install_main_site_release.sh` имеет SHA-256
-`F1A69C911B39A5E80994DAD4761646A62E948BBF08A9451C86F7A0D2000F143E`.
-Он разрешает только перечисленные семь файлов, проверяет актуальные тексты и
-download links и отклоняет исторические цены и формулировки.
+`F987B235C61055B2D0043269EF23F945014A3D4BD0E374EE1C7507A90F0509E9`.
 
 ## Публикация и откат
 
-На каждом узле сначала прошёл dry-run, затем apply. Порядок: fallback, затем
-primary.
+На каждом узле выполнены dry-run и apply в порядке fallback, затем primary.
+
+Первая попытка apply на fallback создала backup
+`/root/greenvpn-main-site-backups/20260825T142815Z`, но verifier ожидал CSS по
+корневому HTTPS location, который на этом узле намеренно проксируется в backend
+и возвращает `404`. Guarded installer автоматически восстановил предыдущую
+версию; primary на этом этапе не запускался. Verifier исправлен: CSS проверяется
+по точному локальному файлу, HTTPS — по существующему static asset.
 
 | Узел | Результат | Rollback root |
 |---|---|---|
-| fallback `176.113.81.35` | dry-run/apply success | `/root/greenvpn-main-site-backups/20260825T135634Z` |
-| primary `72.56.32.197` | dry-run/apply success | `/root/greenvpn-main-site-backups/20260825T135841Z` |
-
-Primary отдаёт основную публичную страницу. На fallback корневой location по
-существующей nginx-схеме остаётся backend proxy; точные static assets установлены
-в webroot и проверены напрямую. Эта публикация не меняла nginx topology.
+| fallback `176.113.81.35` | dry-run/apply success | `/root/greenvpn-main-site-backups/20260825T142928Z` |
+| primary `72.56.32.197` | dry-run/apply success | `/root/greenvpn-main-site-backups/20260825T143004Z` |
 
 ## Проверки
 
-- Все семь primary public files совпадают с локальными SHA-256.
+- Все четыре файла primary и fallback совпадают с локальными SHA-256.
+- Три прежних PNG отсутствуют в обоих webroot. Fallback возвращает для них
+  `404`; main-domain fallback route возвращает HTML, но не image bytes.
+- Живые проверки `2560 x 1336`, `1440 x 1050` и `390 x 844`: horizontal
+  overflow `false`, broken images `0`, browser warnings/errors `0`.
+- На `390 x 844` первый экран оставляет видимым начало следующего раздела.
+- В DOM главной есть только `assets/app_icon.ico`; CSS URL содержит
+  `v=20260825-r2`; skip-link вне экрана до keyboard focus.
+- Открытая вкладка Green VPN в Яндекс Браузере пользователя после публикации
+  обновлена через hard refresh.
 - Главная, `/healthz`, пять legal routes и обе стабильные загрузки возвращают
   HTTP `200`.
-- Живые desktop `1440 x 1050` и mobile `390 x 844` проверки: horizontal
-  overflow `false`, broken images `0`, missing anchors `0`, browser warnings и
-  errors `0`.
-- Живая privacy page на `390 px`: overflow `false`, broken images `0`, missing
-  anchors `0`, browser warnings и errors `0`.
-- Скриншоты сохранены в
-  `C:\BlueVPN_Builds\main_site_refresh_20260825_v1\visual`.
 - `check_public_download_manifests.ps1`: manifests `10/10`, static manifests
   `2/2`, downloads `8/8`.
 - Bash syntax и `git diff --check` прошли; release gate завершился с
   warnings/errors `0/0`.
-- Stable Android остаётся `0.4.7` с `required=true`; stable Windows остаётся
-  `0.4.6` с `required=true`. Paid-beta manifests остаются неизменными и
-  необязательными.
+
+QA-кадры сохранены только как локальные evidence и не публикуются:
+`C:\BlueVPN_Builds\main_site_hotfix_20260825_r2\visual`.
 
 ## Границы
 
