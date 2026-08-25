@@ -22,7 +22,8 @@ function Assert-NoSensitiveMarkers {
     "adminToken",
     "privateKey",
     "passwordHash",
-    "providerPaymentMethodId"
+    "providerPaymentMethodId",
+    "providerOperationKey"
   )
   $matches = @()
   foreach ($marker in $markers) {
@@ -139,6 +140,7 @@ function Convert-PaymentSafetyPayload {
     ok = $true
     version = $smoke.version
     generatedAt = (Get-Date).ToUniversalTime().ToString("o")
+    paymentProvider = $payment.provider
     productionPaymentReady = [bool]$smoke.productionPaymentReady
     safeToRunSmoke = [bool]$smoke.safeToRunSmoke
     smokeCompleted = [bool]$smoke.smokeCompleted
@@ -160,7 +162,8 @@ function Convert-PaymentSafetyPayload {
     summary = [ordered]@{
       smokeState = $smokeSummary.state
       smokeMessage = $smokeSummary.message
-      yookassaOrdersTotal = $smokeSummary.yookassaOrdersTotal
+      providerOrdersTotal = $smokeSummary.providerOrdersTotal
+      providerActivatedTotal = $smokeSummary.providerActivatedTotal
       successfulSmokeCandidates = $smokeSummary.successfulSmokeCandidates
       renewalMessage = $renewalSummary.message
       renewalDueWithinWindow = $renewalSummary.dueWithinWindow
@@ -172,6 +175,7 @@ function Convert-PaymentSafetyPayload {
     policy = [ordered]@{
       noSecretValues = $true
       noProviderPaymentMethodIds = $true
+      noProviderOperationKeys = $true
       requiresPaymentSmokeBeforeAutoRenewal = $true
       requiresPaymentSmokeBeforeExpiryEnforcement = $true
       requiresOwnerConfirmedFullRefundSmoke = $true
@@ -186,6 +190,7 @@ function Write-PaymentSafetySummary {
 
   Write-Output "Green VPN payment launch safety"
   Write-Output "version: $($Payload.version)"
+  Write-Output "paymentProvider=$($Payload.paymentProvider)"
   Write-Output "productionPaymentReady=$($Payload.productionPaymentReady); safeToRunSmoke=$($Payload.safeToRunSmoke); smokeCompleted=$($Payload.smokeCompleted)"
   Write-Output "refundProductionReady=$($Payload.refundProductionReady); refundExecutionEnabled=$($Payload.refundExecutionEnabled); refundBillingPrimary=$($Payload.refundBillingPrimary)"
   Write-Output "renewalSafeToEnableCharges=$($Payload.renewalSafeToEnableCharges); renewalPaymentSmokeReady=$($Payload.renewalPaymentSmokeReady); renewalRequiresPaymentSmoke=$($Payload.renewalRequiresPaymentSmoke)"

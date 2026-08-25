@@ -21,6 +21,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -36,8 +37,8 @@ from pydantic import BaseModel
 
 APP_TITLE = "Green VPN Backend"
 APP_VERSION = (
-    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.156-mandatory-update.1").strip()
-    or "0.9.156-mandatory-update.1"
+    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.157-robokassa-npd.1").strip()
+    or "0.9.157-robokassa-npd.1"
 )
 DEFAULT_PUBLIC_API_BASE_URL = "https://api.greenvpn.pro"
 
@@ -554,6 +555,55 @@ YOOKASSA_RETURN_URL = os.getenv(
 ).strip()
 PUBLIC_BASE_URL = clean_base_url(os.getenv("GREENVPN_PUBLIC_BASE_URL", PUBLIC_API_BASE_URL))
 YOOKASSA_WEBHOOK_URL = os.getenv("YOOKASSA_WEBHOOK_URL", "").strip()
+PAYMENT_PROVIDER = (
+    os.getenv("GREENVPN_PAYMENT_PROVIDER", "yookassa").strip().lower()
+    or "yookassa"
+)
+ROBOKASSA_MERCHANT_LOGIN = os.getenv("ROBOKASSA_MERCHANT_LOGIN", "").strip()
+ROBOKASSA_PASSWORD1 = os.getenv("ROBOKASSA_PASSWORD1", "").strip()
+ROBOKASSA_PASSWORD2 = os.getenv("ROBOKASSA_PASSWORD2", "").strip()
+ROBOKASSA_PASSWORD3 = os.getenv("ROBOKASSA_PASSWORD3", "").strip()
+ROBOKASSA_INVOICE_API_BASE = clean_base_url(
+    os.getenv(
+        "ROBOKASSA_INVOICE_API_BASE",
+        "https://services.robokassa.ru/InvoiceServiceWebApi/api",
+    )
+)
+ROBOKASSA_REFUND_API_BASE = clean_base_url(
+    os.getenv(
+        "ROBOKASSA_REFUND_API_BASE",
+        "https://services.robokassa.ru/RefundService/Refund",
+    )
+)
+ROBOKASSA_AUTH_BASE = clean_base_url(
+    os.getenv("ROBOKASSA_AUTH_BASE", "https://auth.robokassa.ru")
+)
+ROBOKASSA_RETURN_URL = os.getenv(
+    "ROBOKASSA_RETURN_URL",
+    f"{PUBLIC_BASE_URL}/payment/return" if PUBLIC_BASE_URL else "",
+).strip()
+ROBOKASSA_RESULT_URL = os.getenv(
+    "ROBOKASSA_RESULT_URL",
+    (
+        f"{PUBLIC_BASE_URL}/api/v1/billing/robokassa/result"
+        if PUBLIC_BASE_URL
+        else ""
+    ),
+).strip()
+ROBOKASSA_SIGNATURE_ALGORITHM = (
+    os.getenv("ROBOKASSA_SIGNATURE_ALGORITHM", "sha256").strip().lower()
+    or "sha256"
+)
+ROBOKASSA_JWT_ALGORITHM = (
+    os.getenv("ROBOKASSA_JWT_ALGORITHM", "HS256").strip().upper()
+    or "HS256"
+)
+ROBOKASSA_NPD_PARTNER_CONFIRMED = environment_flag(
+    "ROBOKASSA_NPD_PARTNER_CONFIRMED"
+)
+ROBOKASSA_RECURRING_ENABLED = environment_flag(
+    "ROBOKASSA_RECURRING_ENABLED"
+)
 PAID_SALES_ENABLED = environment_flag("GREENVPN_PAID_SALES_ENABLED")
 TAX_RECEIPT_MODE = os.getenv(
     "GREENVPN_TAX_RECEIPT_MODE",
@@ -769,7 +819,7 @@ PUBLIC_SITE_REQUIRED_PATHS = [
     {"path": "/legal/privacy", "title": "Политика конфиденциальности"},
     {"path": "/legal/acceptable-use", "title": "Правила использования"},
     {"path": "/legal/refunds", "title": "Возвраты"},
-    {"path": "/payment/return", "title": "Страница возврата ЮKassa"},
+    {"path": "/payment/return", "title": "Страница возврата после оплаты"},
 ]
 PUBLIC_SITE_REQUIRED_LANDING_LINKS = [
     {"code": "download_windows", "label": "Кнопка скачивания Windows", "needle": "/download/windows"},
@@ -3392,6 +3442,7 @@ def init_db() -> None:
                 provider TEXT,
                 provider_payment_id TEXT,
                 provider_payment_method_id TEXT,
+                provider_create_attempted_at TEXT,
                 paid_at TEXT,
                 activated_at TEXT,
                 created_at TEXT NOT NULL,
@@ -3411,6 +3462,18 @@ def init_db() -> None:
             "billing_orders",
             "provider_payment_method_id",
             "provider_payment_method_id TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "provider_operation_key",
+            "provider_operation_key TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "provider_create_attempted_at",
+            "provider_create_attempted_at TEXT",
         )
         ensure_column(
             conn,
@@ -6089,7 +6152,7 @@ def paid_beta_funnel_summary(limit: int = 100) -> dict:
 def build_public_product_tariff_catalog() -> dict:
     tax_receipt = tax_receipt_readiness()
     refunds = refund_execution_readiness()
-    payments = yookassa_payment_readiness()
+    payments = payment_provider_readiness()
     return {
         "policyVersion": PUBLIC_PRODUCT_POLICY_VERSION,
         "pricingModel": "fixed_term_plans",
@@ -6170,7 +6233,7 @@ def build_tariff_catalog(paid_beta: bool = False) -> dict:
             "speedSustainedMbps": 5,
             "speedBurstMbps": 20,
             "priorityClass": "free_ad",
-            "message": "Бесплатный режим живёт отдельно от YooKassa-заказов: реклама или промо-кредит вместо оплаты.",
+            "message": "Бесплатный режим работает независимо от платёжных заказов: без оплаты тариф остаётся бесплатным.",
         },
         "speedProfiles": TARIFF_SPEED_PROFILES,
         "gbSlider": {
@@ -14353,8 +14416,8 @@ def default_monitoring_targets() -> list[dict]:
                 "host": api_parsed.hostname or WG_ENDPOINT_HOST,
                 "port": api_port,
                 "expectedStatus": 200,
-                "tags": ["payments", "yookassa"],
-                "notes": "Страница возврата оплаты для боевой ЮKassa.",
+                "tags": ["payments", "provider_return"],
+                "notes": "Страница возврата после оплаты у выбранного провайдера.",
             },
         ]
     )
@@ -16837,8 +16900,8 @@ def seed_default_feature_flags_and_runbooks() -> None:
         {
             "key": "payments.production_enabled",
             "title": "Боевые платежи",
-            "description": "Включение боевых платежей после домена, HTTPS и ключей YooKassa.",
-            "value": {"provider": "yookassa", "mode": "manual_until_keys"},
+            "description": "Включение боевых платежей после HTTPS, ключей провайдера, чекового и возвратного smoke.",
+            "value": {"provider": selected_payment_provider(), "mode": "guarded_until_smoke"},
             "scope": "payments",
             "enabled": False,
             "rollout": 0,
@@ -16973,11 +17036,11 @@ def seed_default_feature_flags_and_runbooks() -> None:
             "title": "Оплата не активировала тариф",
             "category": "payments",
             "severity": "high",
-            "summary": "Сверить order, YooKassa payment id, webhook и статус подписки.",
+            "summary": "Сверить order, идентификатор и авторитетный статус платёжного провайдера, callback и подписку.",
             "steps": [
                 "Найти пользователя по email/phone и открыть его заказы.",
                 "Проверить, есть ли pending/paid order и привязан ли paymentProviderId.",
-                "Проверить webhook readiness и последние ошибки backend.",
+                "Проверить callback readiness и последние ошибки backend.",
                 "Если деньги точно получены, активировать заказ админ-действием и оставить audit note.",
             ],
             "ownerRole": "finance",
@@ -19661,6 +19724,7 @@ def public_billing_order_status(order: dict) -> dict:
     public_order = dict(order)
     public_order.pop("providerPaymentId", None)
     public_order.pop("providerPaymentMethodId", None)
+    public_order.pop("providerOperationKey", None)
     public_order.pop("betaInvitePublicId", None)
     public_order.pop("activationSubscriptionId", None)
     tax_receipt = public_order.get("taxReceipt")
@@ -19682,6 +19746,55 @@ def public_billing_order_status(order: dict) -> dict:
 
 def yookassa_configured() -> bool:
     return bool(YOOKASSA_SHOP_ID and YOOKASSA_SECRET_KEY)
+
+
+def selected_payment_provider() -> str:
+    return str(PAYMENT_PROVIDER or "").strip().lower()
+
+
+def robokassa_payment_configured() -> bool:
+    return bool(
+        ROBOKASSA_MERCHANT_LOGIN
+        and ROBOKASSA_PASSWORD1
+        and ROBOKASSA_PASSWORD2
+    )
+
+
+def robokassa_refund_configured() -> bool:
+    return bool(robokassa_payment_configured() and ROBOKASSA_PASSWORD3)
+
+
+def configured_payment_provider() -> str:
+    provider = selected_payment_provider()
+    if provider == "yookassa" and yookassa_configured():
+        return "yookassa"
+    if provider == "robokassa" and robokassa_payment_configured():
+        return "robokassa"
+    return "manual_mvp"
+
+
+def billing_writer_primary() -> bool:
+    if PUBLIC_PRODUCT_ENABLED:
+        return bool(PUBLIC_PRODUCT_BILLING_PRIMARY)
+    if PAID_BETA_ENABLED:
+        return bool(PAID_BETA_BILLING_PRIMARY)
+    return False
+
+
+def billing_callback_primary() -> bool:
+    return billing_writer_primary()
+
+
+def require_billing_callback_primary() -> None:
+    if billing_writer_primary():
+        return
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "code": "billing_callback_primary_required",
+            "message": "Платёжный callback принимается только основным billing-узлом.",
+        },
+    )
 
 
 def _is_https_url(url: str) -> bool:
@@ -19979,18 +20092,41 @@ def yookassa_effective_webhook_url() -> str:
     return ""
 
 
-def tax_receipt_readiness() -> dict:
-    supported_mode = TAX_RECEIPT_MODE == "yookassa_54fz"
+def payment_provider_return_url(provider: Optional[str] = None) -> str:
+    provider_name = (provider or selected_payment_provider()).strip().lower()
+    if provider_name == "robokassa":
+        return ROBOKASSA_RETURN_URL
+    if provider_name == "yookassa":
+        return YOOKASSA_RETURN_URL
+    return ""
+
+
+def payment_provider_callback_url(provider: Optional[str] = None) -> str:
+    provider_name = (provider or selected_payment_provider()).strip().lower()
+    if provider_name == "robokassa":
+        return ROBOKASSA_RESULT_URL
+    if provider_name == "yookassa":
+        return yookassa_effective_webhook_url()
+    return ""
+
+
+def tax_receipt_readiness(provider: Optional[str] = None) -> dict:
+    provider_name = (provider or selected_payment_provider()).strip().lower()
+    expected_mode = {
+        "yookassa": "yookassa_54fz",
+        "robokassa": "robokassa_npd",
+    }.get(provider_name, "")
+    supported_mode = bool(expected_mode and TAX_RECEIPT_MODE == expected_mode)
     checks = [
         {
             "code": "tax_receipt_mode",
             "ok": supported_mode,
             "message": (
-                "GREENVPN_TAX_RECEIPT_MODE=yookassa_54fz настроен."
+                f"GREENVPN_TAX_RECEIPT_MODE={expected_mode} настроен."
                 if supported_mode
                 else (
-                    "Платные продажи закрыты: выбери подтверждённый чековый "
-                    "режим. Встроенно поддержан yookassa_54fz."
+                    "Платные продажи закрыты: чековый режим должен совпадать "
+                    f"с выбранным провайдером ({expected_mode or 'unsupported'})."
                 )
             ),
             "value": TAX_RECEIPT_MODE,
@@ -20006,15 +20142,6 @@ def tax_receipt_readiness() -> dict:
                     "платных продаж."
                 )
             ),
-        },
-        {
-            "code": "tax_receipt_vat_code",
-            "ok": 1 <= TAX_RECEIPT_VAT_CODE <= 12,
-            "message": (
-                "GREENVPN_TAX_RECEIPT_VAT_CODE должен быть подтверждённым "
-                "кодом от 1 до 12."
-            ),
-            "value": TAX_RECEIPT_VAT_CODE,
         },
         {
             "code": "tax_receipt_subject",
@@ -20035,9 +20162,37 @@ def tax_receipt_readiness() -> dict:
             "value": TAX_RECEIPT_PAYMENT_MODE,
         },
     ]
+    if provider_name == "yookassa":
+        checks.append(
+            {
+                "code": "tax_receipt_vat_code",
+                "ok": 1 <= TAX_RECEIPT_VAT_CODE <= 12,
+                "message": (
+                    "GREENVPN_TAX_RECEIPT_VAT_CODE должен быть подтверждённым "
+                    "кодом от 1 до 12."
+                ),
+                "value": TAX_RECEIPT_VAT_CODE,
+            }
+        )
+    if provider_name == "robokassa":
+        checks.append(
+            {
+                "code": "robokassa_npd_partner_confirmed",
+                "ok": ROBOKASSA_NPD_PARTNER_CONFIRMED,
+                "message": (
+                    "Robokassa подтверждена партнёром НПД в «Мой налог»."
+                    if ROBOKASSA_NPD_PARTNER_CONFIRMED
+                    else (
+                        "Подключи Robokassa как партнёра в «Мой налог» и только "
+                        "после подтверждения включи ROBOKASSA_NPD_PARTNER_CONFIRMED."
+                    )
+                ),
+            }
+        )
     production_ready = all(check["ok"] for check in checks)
     return {
         "ok": True,
+        "provider": provider_name,
         "mode": TAX_RECEIPT_MODE,
         "productionReady": production_ready,
         "checks": checks,
@@ -20099,10 +20254,35 @@ def refund_policy_readiness() -> dict:
     }
 
 
-def refund_execution_readiness() -> dict:
+def refund_execution_readiness(provider: Optional[str] = None) -> dict:
+    provider_name = (provider or selected_payment_provider()).strip().lower()
     policy = refund_policy_readiness()
-    tax_receipt = tax_receipt_readiness()
+    tax_receipt = tax_receipt_readiness(provider_name)
+    provider_supported = provider_name in {"yookassa", "robokassa"}
+    provider_keys_ready = (
+        yookassa_configured()
+        if provider_name == "yookassa"
+        else robokassa_refund_configured()
+        if provider_name == "robokassa"
+        else False
+    )
+    provider_api_base = (
+        YOOKASSA_API_BASE
+        if provider_name == "yookassa"
+        else ROBOKASSA_REFUND_API_BASE
+        if provider_name == "robokassa"
+        else ""
+    )
     checks = [
+        {
+            "code": "refund_provider_supported",
+            "ok": provider_supported,
+            "message": (
+                f"Провайдер возвратов {provider_name} поддержан."
+                if provider_supported
+                else "Выбранный платёжный провайдер не поддерживает возвраты."
+            ),
+        },
         {
             "code": "refund_policy_ready",
             "ok": policy["productionReady"],
@@ -20114,24 +20294,29 @@ def refund_execution_readiness() -> dict:
         },
         {
             "code": "refund_provider_keys",
-            "ok": yookassa_configured(),
+            "ok": provider_keys_ready,
             "message": (
-                "Ключи ЮKassa для возврата настроены."
-                if yookassa_configured()
-                else "Для возврата нужны серверные ключи ЮKassa."
+                f"Ключи {provider_name} для возврата настроены."
+                if provider_keys_ready
+                else (
+                    "Для возврата Robokassa нужны MerchantLogin, Password1, "
+                    "Password2 и отдельный Password3."
+                    if provider_name == "robokassa"
+                    else "Для возврата нужны серверные ключи YooKassa."
+                )
             ),
         },
         {
             "code": "refund_provider_api_https",
-            "ok": _is_https_url(YOOKASSA_API_BASE),
-            "message": "YOOKASSA_API_BASE для возврата должен использовать HTTPS.",
-            "value": YOOKASSA_API_BASE,
+            "ok": _is_https_url(provider_api_base),
+            "message": "API провайдера возвратов должен использовать HTTPS.",
+            "value": provider_api_base,
         },
         {
             "code": "refund_receipt_workflow_ready",
             "ok": tax_receipt["productionReady"],
             "message": (
-                "Чек возврата будет формироваться ЮKassa по данным исходного чека."
+                "Чек возврата будет формироваться выбранным чековым контуром."
                 if tax_receipt["productionReady"]
                 else "Чековый процесс возврата не готов."
             ),
@@ -20139,7 +20324,7 @@ def refund_execution_readiness() -> dict:
     ]
     return {
         "ok": True,
-        "provider": "yookassa",
+        "provider": provider_name,
         "mode": (
             "guarded_full_refund"
             if policy["productionReady"]
@@ -20160,8 +20345,8 @@ def yookassa_payment_readiness() -> dict:
     return_host = _url_host(YOOKASSA_RETURN_URL)
     webhook_host = _url_host(webhook_url)
     public_host = _url_host(PUBLIC_BASE_URL)
-    tax_receipt = tax_receipt_readiness()
-    refunds = refund_execution_readiness()
+    tax_receipt = tax_receipt_readiness("yookassa")
+    refunds = refund_execution_readiness("yookassa")
 
     checks = [
         {
@@ -20248,6 +20433,160 @@ def yookassa_payment_readiness() -> dict:
     }
 
 
+def robokassa_payment_readiness() -> dict:
+    return_host = _url_host(ROBOKASSA_RETURN_URL)
+    result_host = _url_host(ROBOKASSA_RESULT_URL)
+    public_host = _url_host(PUBLIC_BASE_URL)
+    local_hosts = {"bluevpn.local", "localhost", "127.0.0.1"}
+    tax_receipt = tax_receipt_readiness("robokassa")
+    refunds = refund_execution_readiness("robokassa")
+    signature_supported = ROBOKASSA_SIGNATURE_ALGORITHM in {
+        "md5",
+        "sha1",
+        "sha256",
+        "sha384",
+        "sha512",
+    }
+    jwt_supported = ROBOKASSA_JWT_ALGORITHM in {"HS256", "HS384", "HS512"}
+    checks = [
+        {
+            "code": "paid_sales_enabled",
+            "ok": PAID_SALES_ENABLED,
+            "message": (
+                "GREENVPN_PAID_SALES_ENABLED включён."
+                if PAID_SALES_ENABLED
+                else "Платные продажи закрыты серверным флагом."
+            ),
+        },
+        {
+            "code": "tax_receipt_ready",
+            "ok": tax_receipt["productionReady"],
+            "message": (
+                "НПД-чек через Robokassa готов."
+                if tax_receipt["productionReady"]
+                else "НПД-чек через Robokassa не готов."
+            ),
+        },
+        {
+            "code": "refund_workflow_ready",
+            "ok": refunds["productionReady"],
+            "message": (
+                "Полный возврат и откат прав готовы."
+                if refunds["productionReady"]
+                else "Платные продажи закрыты до готовности полного возврата."
+            ),
+        },
+        {
+            "code": "robokassa_keys",
+            "ok": robokassa_payment_configured(),
+            "message": (
+                "MerchantLogin, Password1 и Password2 Robokassa настроены."
+                if robokassa_payment_configured()
+                else "Задай MerchantLogin, Password1 и Password2 Robokassa."
+            ),
+        },
+        {
+            "code": "robokassa_npd_partner",
+            "ok": ROBOKASSA_NPD_PARTNER_CONFIRMED,
+            "message": (
+                "Партнёр НПД Robokassa подтверждён."
+                if ROBOKASSA_NPD_PARTNER_CONFIRMED
+                else "Подтверди связь Robokassa с кабинетом «Мой налог»."
+            ),
+        },
+        {
+            "code": "return_url_https",
+            "ok": _is_https_url(ROBOKASSA_RETURN_URL)
+            and return_host not in local_hosts,
+            "message": "ROBOKASSA_RETURN_URL должен быть настоящим HTTPS URL.",
+            "value": ROBOKASSA_RETURN_URL,
+        },
+        {
+            "code": "result_url_https",
+            "ok": _is_https_url(ROBOKASSA_RESULT_URL)
+            and result_host not in local_hosts,
+            "message": "ROBOKASSA_RESULT_URL должен быть настоящим HTTPS URL.",
+            "value": ROBOKASSA_RESULT_URL,
+        },
+        {
+            "code": "public_base_url_https",
+            "ok": _is_https_url(PUBLIC_BASE_URL) and public_host not in local_hosts,
+            "message": "Задай GREENVPN_PUBLIC_BASE_URL как боевой HTTPS origin API.",
+            "value": PUBLIC_BASE_URL,
+        },
+        {
+            "code": "robokassa_invoice_api_https",
+            "ok": _is_https_url(ROBOKASSA_INVOICE_API_BASE),
+            "message": "ROBOKASSA_INVOICE_API_BASE должен использовать HTTPS.",
+            "value": ROBOKASSA_INVOICE_API_BASE,
+        },
+        {
+            "code": "robokassa_auth_api_https",
+            "ok": _is_https_url(ROBOKASSA_AUTH_BASE),
+            "message": "ROBOKASSA_AUTH_BASE должен использовать HTTPS.",
+            "value": ROBOKASSA_AUTH_BASE,
+        },
+        {
+            "code": "robokassa_signature_algorithm",
+            "ok": signature_supported and jwt_supported,
+            "message": (
+                "Алгоритмы подписи Robokassa поддерживаются."
+                if signature_supported and jwt_supported
+                else "Выбери поддерживаемые алгоритмы подписи Robokassa."
+            ),
+            "value": {
+                "result": ROBOKASSA_SIGNATURE_ALGORITHM,
+                "jwt": ROBOKASSA_JWT_ALGORITHM,
+            },
+        },
+    ]
+    return {
+        "ok": True,
+        "provider": "robokassa",
+        "productionReady": all(check["ok"] for check in checks),
+        "webhookUrl": ROBOKASSA_RESULT_URL,
+        "returnUrl": ROBOKASSA_RETURN_URL,
+        "paidSalesEnabled": PAID_SALES_ENABLED,
+        "taxReceipt": tax_receipt,
+        "refunds": refunds,
+        "recurringEnabled": ROBOKASSA_RECURRING_ENABLED,
+        "checks": checks,
+        "requiredActions": [check["message"] for check in checks if not check["ok"]],
+    }
+
+
+def payment_provider_readiness() -> dict:
+    provider = selected_payment_provider()
+    if provider == "yookassa":
+        return yookassa_payment_readiness()
+    if provider == "robokassa":
+        return robokassa_payment_readiness()
+    tax_receipt = tax_receipt_readiness(provider)
+    refunds = refund_execution_readiness(provider)
+    message = (
+        "GREENVPN_PAYMENT_PROVIDER должен быть yookassa или robokassa."
+    )
+    return {
+        "ok": True,
+        "provider": provider or "unsupported",
+        "productionReady": False,
+        "webhookUrl": "",
+        "returnUrl": "",
+        "paidSalesEnabled": PAID_SALES_ENABLED,
+        "taxReceipt": tax_receipt,
+        "refunds": refunds,
+        "checks": [
+            {
+                "code": "payment_provider_supported",
+                "ok": False,
+                "message": message,
+                "value": provider,
+            }
+        ],
+        "requiredActions": [message],
+    }
+
+
 def _public_site_url_path(url: str) -> str:
     try:
         return urllib.parse.urlparse(url).path.rstrip("/") or "/"
@@ -20327,10 +20666,16 @@ def paid_beta_site_readiness() -> dict:
         for phrase in PUBLIC_SITE_BANNED_PHRASES
         if phrase in re.sub(r"<[^>]+>", " ", html_lower)
     ]
-    webhook_url = yookassa_effective_webhook_url()
+    payment_provider = selected_payment_provider()
+    return_url = payment_provider_return_url(payment_provider)
+    callback_url = payment_provider_callback_url(payment_provider)
     public_base_path = urllib.parse.urlparse(PUBLIC_BASE_URL).path.rstrip("/")
     expected_return_path = f"{public_base_path}/payment/return"
-    expected_webhook_path = f"{public_base_path}/api/v1/billing/yookassa/webhook"
+    expected_callback_path = (
+        f"{public_base_path}/api/v1/billing/robokassa/result"
+        if payment_provider == "robokassa"
+        else f"{public_base_path}/api/v1/billing/yookassa/webhook"
+    )
     local_hosts = {"", "bluevpn.local", "localhost", "127.0.0.1"}
     legal_configured = (
         bool(LEGAL_OWNER_NAME)
@@ -20401,22 +20746,32 @@ def paid_beta_site_readiness() -> dict:
             "bannedMatches": banned_matches,
         },
         {
-            "code": "yookassa_required_urls",
-            "title": "YooKassa URLs",
-            "ok": (
-                _is_https_url(YOOKASSA_RETURN_URL)
-                and _is_https_url(webhook_url)
-                and _url_host(YOOKASSA_RETURN_URL) not in local_hosts
-                and _url_host(webhook_url) not in local_hosts
-                and _public_site_url_path(YOOKASSA_RETURN_URL) == expected_return_path
-                and _public_site_url_path(webhook_url) == expected_webhook_path
+            "code": (
+                "yookassa_required_urls"
+                if payment_provider == "yookassa"
+                else "robokassa_required_urls"
+                if payment_provider == "robokassa"
+                else "payment_provider_required_urls"
             ),
-            "message": "Return/webhook URL должны точно соответствовать paid-beta API prefix.",
+            "title": "URL платёжного провайдера",
+            "ok": (
+                payment_provider in {"yookassa", "robokassa"}
+                and _is_https_url(return_url)
+                and _is_https_url(callback_url)
+                and _url_host(return_url) not in local_hosts
+                and _url_host(callback_url) not in local_hosts
+                and _public_site_url_path(return_url) == expected_return_path
+                and _public_site_url_path(callback_url) == expected_callback_path
+            ),
+            "message": "Return/callback URL выбранного провайдера должны точно соответствовать paid-beta API prefix.",
             "value": {
-                "returnUrl": YOOKASSA_RETURN_URL,
-                "webhookUrl": webhook_url,
+                "provider": payment_provider,
+                "returnUrl": return_url,
+                "callbackUrl": callback_url,
+                "webhookUrl": callback_url,
                 "expectedReturnPath": expected_return_path,
-                "expectedWebhookPath": expected_webhook_path,
+                "expectedCallbackPath": expected_callback_path,
+                "expectedWebhookPath": expected_callback_path,
             },
         },
     ]
@@ -20472,14 +20827,21 @@ def public_site_readiness() -> dict:
             if phrase in searchable:
                 banned_matches.append({"path": path, "phrase": phrase})
 
-    webhook_url = yookassa_effective_webhook_url()
-    return_host = _url_host(YOOKASSA_RETURN_URL)
+    payment_provider = selected_payment_provider()
+    payment = payment_provider_readiness()
+    return_url = str(payment.get("returnUrl") or "")
+    webhook_url = str(payment.get("webhookUrl") or "")
+    return_host = _url_host(return_url)
     webhook_host = _url_host(webhook_url)
     public_base_host = _url_host(PUBLIC_BASE_URL)
     local_hosts = {"", "bluevpn.local", "localhost", "127.0.0.1"}
     public_base_path = urllib.parse.urlparse(PUBLIC_BASE_URL).path.rstrip("/")
     expected_return_path = f"{public_base_path}/payment/return"
-    expected_webhook_path = f"{public_base_path}/api/v1/billing/yookassa/webhook"
+    expected_webhook_path = (
+        f"{public_base_path}/api/v1/billing/robokassa/result"
+        if payment_provider == "robokassa"
+        else f"{public_base_path}/api/v1/billing/yookassa/webhook"
+    )
 
     legal_configured = (
         bool(LEGAL_OWNER_NAME)
@@ -20547,14 +20909,14 @@ def public_site_readiness() -> dict:
             "bannedMatches": banned_matches,
         },
         {
-            "code": "yookassa_required_urls",
-            "title": "YooKassa URLs",
+            "code": "payment_provider_required_urls",
+            "title": "Payment provider URLs",
             "ok": (
-                _is_https_url(YOOKASSA_RETURN_URL)
+                _is_https_url(return_url)
                 and _is_https_url(webhook_url)
                 and return_host not in local_hosts
                 and webhook_host not in local_hosts
-                and _public_site_url_path(YOOKASSA_RETURN_URL) == expected_return_path
+                and _public_site_url_path(return_url) == expected_return_path
                 and _public_site_url_path(webhook_url) == expected_webhook_path
                 and (
                     not public_base_host
@@ -20562,9 +20924,10 @@ def public_site_readiness() -> dict:
                     or return_host == _url_host(PUBLIC_SITE_URL)
                 )
             ),
-            "message": "Return/webhook URL для YooKassa должны быть публичными HTTPS-адресами Green VPN.",
+            "message": "Return/webhook URL выбранного провайдера должны быть публичными HTTPS-адресами Green VPN.",
             "value": {
-                "returnUrl": YOOKASSA_RETURN_URL,
+                "provider": payment_provider,
+                "returnUrl": return_url,
                 "webhookUrl": webhook_url,
                 "expectedReturnPath": expected_return_path,
                 "expectedWebhookPath": expected_webhook_path,
@@ -20596,14 +20959,277 @@ def public_site_readiness() -> dict:
             "androidConfigured": bool(_public_download_target(PUBLIC_ANDROID_DOWNLOAD_URL)),
             "iosConfigured": bool(_public_download_target(PUBLIC_IOS_DOWNLOAD_URL)),
         },
-        "yookassaUrls": {
-            "returnUrl": YOOKASSA_RETURN_URL,
+        "paymentProviderUrls": {
+            "provider": payment_provider,
+            "returnUrl": return_url,
             "webhookUrl": webhook_url,
+        },
+        "yookassaUrls": {
+            "returnUrl": return_url if payment_provider == "yookassa" else "",
+            "webhookUrl": webhook_url if payment_provider == "yookassa" else "",
         },
         "bannedPhraseMatches": banned_matches,
         "checks": checks,
         "requiredActions": [check["message"] for check in failed],
     }
+
+
+def _base64url_bytes(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def robokassa_jwt(payload: dict, secret: str, algorithm: str) -> str:
+    algorithm = algorithm.strip().upper()
+    digest = {
+        "HS256": hashlib.sha256,
+        "HS384": hashlib.sha384,
+        "HS512": hashlib.sha512,
+    }.get(algorithm)
+    if digest is None:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "robokassa_signature_algorithm_invalid",
+                "message": "Настроен неподдерживаемый JWT-алгоритм Robokassa.",
+            },
+        )
+    header = {"typ": "JWT", "alg": algorithm}
+    encoded_header = _base64url_bytes(
+        json.dumps(header, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    )
+    encoded_payload = _base64url_bytes(
+        json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    )
+    signing_input = f"{encoded_header}.{encoded_payload}"
+    signature = hmac.new(
+        secret.encode("utf-8"),
+        signing_input.encode("ascii"),
+        digest,
+    ).digest()
+    return f"{signing_input}.{_base64url_bytes(signature)}"
+
+
+def robokassa_signature(value: str) -> str:
+    if ROBOKASSA_SIGNATURE_ALGORITHM not in {
+        "md5",
+        "sha1",
+        "sha256",
+        "sha384",
+        "sha512",
+    }:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "robokassa_signature_algorithm_invalid",
+                "message": "Настроен неподдерживаемый алгоритм Robokassa.",
+            },
+        )
+    digest = hashlib.new(ROBOKASSA_SIGNATURE_ALGORITHM)
+    digest.update(value.encode("utf-8"))
+    return digest.hexdigest()
+
+
+def robokassa_json_http_request(
+    method: str,
+    url: str,
+    *,
+    payload: Optional[Any] = None,
+) -> dict:
+    data = None
+    headers = {"Accept": "application/json"}
+    if payload is not None:
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers=headers,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            body = response.read().decode("utf-8", errors="replace")
+            parsed = json.loads(body) if body else {}
+            if not isinstance(parsed, dict):
+                raise ValueError("provider response is not a JSON object")
+            return parsed
+    except urllib.error.HTTPError as exc:
+        try:
+            body = exc.read().decode("utf-8", errors="replace")
+            provider_error = json.loads(body) if body else {}
+        except Exception:
+            provider_error = {}
+        provider_code = str(
+            provider_error.get("code")
+            or provider_error.get("message")
+            or ""
+        ).strip()
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "payment_provider_rejected",
+                "message": "Платёжный оператор отклонил запрос. Повторите позже.",
+                "providerStatus": int(exc.code),
+                "providerCode": clean_limited_text(provider_code, 80) or None,
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "payment_provider_unavailable",
+                "message": "Платёжный оператор временно недоступен.",
+                "errorType": type(exc).__name__,
+            },
+        )
+
+
+def robokassa_invoice_request(path: str, payload: dict) -> dict:
+    token = robokassa_jwt(
+        payload,
+        f"{ROBOKASSA_MERCHANT_LOGIN}:{ROBOKASSA_PASSWORD1}",
+        ROBOKASSA_JWT_ALGORITHM,
+    )
+    result = robokassa_json_http_request(
+        "POST",
+        f"{ROBOKASSA_INVOICE_API_BASE}/{path.lstrip('/')}",
+        payload=token,
+    )
+    if result.get("isSuccess") is not True:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "payment_provider_rejected",
+                "message": "Robokassa не создала или не нашла счёт.",
+            },
+        )
+    return result
+
+
+def robokassa_get_invoice(*, invoice_id: Optional[str], inv_id: int) -> dict:
+    payload: dict[str, Any] = {"MerchantLogin": ROBOKASSA_MERCHANT_LOGIN}
+    if invoice_id:
+        payload["Id"] = invoice_id
+    else:
+        payload["InvId"] = int(inv_id)
+    result = robokassa_invoice_request("GetInvoiceInformation", payload)
+    information = result.get("invoiceInformation")
+    if not isinstance(information, dict):
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "payment_provider_response_invalid",
+                "message": "Robokassa вернула неполные сведения о счёте.",
+            },
+        )
+    return information
+
+
+def _xml_child_text(root: ET.Element, parent_name: str, child_name: str) -> str:
+    for parent in root.iter():
+        if parent.tag.rsplit("}", 1)[-1] != parent_name:
+            continue
+        for child in list(parent):
+            if child.tag.rsplit("}", 1)[-1] == child_name:
+                return str(child.text or "").strip()
+    return ""
+
+
+def robokassa_get_operation_state(inv_id: int) -> dict:
+    inv_id = int(inv_id)
+    signature = robokassa_signature(
+        f"{ROBOKASSA_MERCHANT_LOGIN}:{inv_id}:{ROBOKASSA_PASSWORD2}"
+    )
+    query = urllib.parse.urlencode(
+        {
+            "MerchantLogin": ROBOKASSA_MERCHANT_LOGIN,
+            "InvoiceID": str(inv_id),
+            "Signature": signature,
+        }
+    )
+    request = urllib.request.Request(
+        f"{ROBOKASSA_AUTH_BASE}/Merchant/WebService/Service.asmx/OpStateExt?{query}",
+        headers={"Accept": "application/xml,text/xml"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            body = response.read()
+        root = ET.fromstring(body)
+    except urllib.error.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "payment_provider_rejected",
+                "message": "Robokassa отклонила проверку операции.",
+                "providerStatus": int(exc.code),
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "payment_provider_unavailable",
+                "message": "Не удалось проверить операцию Robokassa.",
+                "errorType": type(exc).__name__,
+            },
+        )
+    return {
+        "resultCode": _xml_child_text(root, "Result", "Code"),
+        "stateCode": _xml_child_text(root, "State", "Code"),
+        "incSum": _xml_child_text(root, "Info", "IncSum"),
+        "outSum": _xml_child_text(root, "Info", "OutSum"),
+        "opKey": _xml_child_text(root, "Info", "OpKey"),
+        "paymentMethod": _xml_child_text(root, "PaymentMethod", "Code"),
+    }
+
+
+def robokassa_result_signature_valid(parameters: dict[str, str]) -> bool:
+    out_sum = str(parameters.get("OutSum") or "").strip()
+    inv_id = str(parameters.get("InvId") or parameters.get("InvID") or "").strip()
+    incoming = str(parameters.get("SignatureValue") or "").strip().lower()
+    if not out_sum or not inv_id or not incoming or not ROBOKASSA_PASSWORD2:
+        return False
+    parts = [out_sum, inv_id, ROBOKASSA_PASSWORD2]
+    for name in sorted(key for key in parameters if key.startswith("Shp_")):
+        parts.append(f"{name}={parameters[name]}")
+    expected = robokassa_signature(":".join(parts)).lower()
+    return hmac.compare_digest(incoming, expected)
+
+
+def robokassa_create_refund(payload: dict) -> dict:
+    token = robokassa_jwt(
+        payload,
+        ROBOKASSA_PASSWORD3,
+        ROBOKASSA_JWT_ALGORITHM,
+    )
+    result = robokassa_json_http_request(
+        "POST",
+        f"{ROBOKASSA_REFUND_API_BASE}/Create",
+        payload=token,
+    )
+    if result.get("success") is not True or not str(result.get("requestId") or "").strip():
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "refund_provider_rejected",
+                "message": "Robokassa не создала заявку на возврат.",
+            },
+        )
+    return result
+
+
+def robokassa_get_refund_state(request_id: str) -> dict:
+    request_id = clean_limited_text(request_id, 80).strip()
+    if not request_id:
+        raise HTTPException(status_code=400, detail="Robokassa refund id пустой.")
+    return robokassa_json_http_request(
+        "GET",
+        f"{ROBOKASSA_REFUND_API_BASE}/GetState?{urllib.parse.urlencode({'id': request_id})}",
+    )
 
 
 def yookassa_http_request(
@@ -20739,7 +21365,7 @@ def paid_sales_policy_readiness() -> dict:
 
 def ensure_paid_sales_ready(*, require_provider: bool = True) -> dict:
     readiness = (
-        yookassa_payment_readiness()
+        payment_provider_readiness()
         if require_provider
         else paid_sales_policy_readiness()
     )
@@ -20765,7 +21391,7 @@ def yookassa_receipt_payload(
     amount: str,
     currency: str,
 ) -> dict:
-    if not tax_receipt_readiness()["productionReady"]:
+    if not tax_receipt_readiness("yookassa")["productionReady"]:
         raise HTTPException(
             status_code=503,
             detail={
@@ -20896,6 +21522,415 @@ def create_yookassa_payment_for_order(row, user_email: str) -> dict:
         ).fetchone()
 
     return billing_order_status(updated)
+
+
+def robokassa_invoice_item(order: dict) -> dict:
+    quote = order["quote"] if isinstance(order.get("quote"), dict) else {}
+    plan_name = clean_limited_text(str(quote.get("planName") or "Green VPN"), 80)
+    return {
+        "Name": f"Подписка Green VPN: {plan_name}",
+        "Quantity": 1,
+        "Cost": int(order["amountRub"]),
+        "Tax": "none",
+        "PaymentMethod": "full_payment",
+        "PaymentObject": "service",
+    }
+
+
+def robokassa_payment_url_valid(value: str) -> bool:
+    if not _is_https_url(value):
+        return False
+    return _url_host(value).lower() == _url_host(ROBOKASSA_AUTH_BASE).lower()
+
+
+def persist_robokassa_invoice(
+    row: sqlite3.Row,
+    *,
+    invoice_id: str,
+    payment_url: str,
+) -> dict:
+    invoice_id = str(invoice_id or "").strip()
+    payment_url = str(payment_url or "").strip()
+    if not invoice_id or not robokassa_payment_url_valid(payment_url):
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "payment_provider_response_invalid",
+                "message": "Robokassa вернула некорректный счёт.",
+            },
+        )
+    now = utc_now_iso()
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE billing_orders
+            SET provider = 'robokassa', provider_payment_id = ?,
+                provider_payment_method_id = NULL, provider_operation_key = NULL,
+                payment_url = ?, tax_receipt_mode = ?,
+                tax_receipt_status = 'prepared_by_robocheck_smz',
+                tax_receipt_provider_id = ?, tax_receipt_error = NULL,
+                tax_receipt_updated_at = ?, updated_at = ?
+            WHERE public_id = ? AND status = 'pending'
+            """,
+            (
+                invoice_id,
+                payment_url,
+                TAX_RECEIPT_MODE,
+                invoice_id,
+                now,
+                now,
+                str(row["public_id"]),
+            ),
+        )
+        conn.commit()
+        updated = conn.execute(
+            "SELECT * FROM billing_orders WHERE public_id = ?",
+            (str(row["public_id"]),),
+        ).fetchone()
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
+    return billing_order_status(updated)
+
+
+def claim_robokassa_invoice_create(public_id: str) -> tuple[sqlite3.Row, bool]:
+    now = utc_now_iso()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        current = conn.execute(
+            "SELECT * FROM billing_orders WHERE public_id = ?",
+            (public_id,),
+        ).fetchone()
+        if current is None:
+            raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
+        if str(current["provider"] or "").strip().lower() != "robokassa":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "payment_provider_mismatch",
+                    "message": "Заказ создан для другого платёжного оператора.",
+                },
+            )
+
+        claimed = False
+        if str(current["status"] or "").strip().lower() == "pending":
+            cursor = conn.execute(
+                """
+                UPDATE billing_orders
+                SET provider_create_attempted_at = ?, updated_at = ?
+                WHERE public_id = ? AND status = 'pending'
+                  AND COALESCE(provider_create_attempted_at, '') = ''
+                  AND COALESCE(provider_payment_id, '') = ''
+                  AND COALESCE(payment_url, '') = ''
+                """,
+                (now, now, public_id),
+            )
+            claimed = cursor.rowcount == 1
+        conn.commit()
+        current = conn.execute(
+            "SELECT * FROM billing_orders WHERE public_id = ?",
+            (public_id,),
+        ).fetchone()
+    if current is None:
+        raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
+    return current, claimed
+
+
+def robokassa_invoice_reconciliation_pending(
+    *causes: HTTPException,
+) -> HTTPException:
+    cause_codes = []
+    for cause in causes:
+        detail = cause.detail if isinstance(cause.detail, dict) else {}
+        code = str(detail.get("code") or "").strip()
+        if code and code not in cause_codes:
+            cause_codes.append(code)
+    detail: dict[str, Any] = {
+        "code": "payment_provider_reconciliation_pending",
+        "message": (
+            "Состояние счёта проверяется. Повторное создание заблокировано, "
+            "чтобы исключить двойную оплату."
+        ),
+    }
+    if cause_codes:
+        detail["causeCodes"] = cause_codes
+    return HTTPException(status_code=503, detail=detail)
+
+
+def recover_existing_robokassa_invoice(row: sqlite3.Row) -> dict:
+    invoice = robokassa_get_invoice(invoice_id=None, inv_id=int(row["id"]))
+    validate_robokassa_invoice_for_order(row, invoice)
+    invoice_status = str(invoice.get("invoiceStatus") or "").strip().lower()
+    if invoice_status == "expired":
+        canceled = mark_billing_order_canceled(
+            str(row["public_id"]),
+            provider_payment_id=str(invoice.get("id") or "").strip() or None,
+        )
+        return canceled["order"]
+    payment_url = str(
+        invoice.get("invoicePaymentUrl")
+        or invoice.get("shortInvoicePaymentUrl")
+        or ""
+    ).strip()
+    return persist_robokassa_invoice(
+        row,
+        invoice_id=str(invoice.get("id") or "").strip(),
+        payment_url=payment_url,
+    )
+
+
+def create_robokassa_payment_for_order(row, user_email: str) -> dict:
+    readiness = robokassa_payment_readiness()
+    if not readiness["productionReady"]:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "paid_sales_not_ready",
+                "message": "Оплата Robokassa пока не прошла полный readiness-контур.",
+                "requiredActions": readiness["requiredActions"],
+            },
+        )
+    order = billing_order_status(row)
+    if order["autoRenew"] and not ROBOKASSA_RECURRING_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "recurring_payments_unavailable",
+                "message": (
+                    "Автопродление Robokassa пока не подтверждено оператором. "
+                    "Выберите оплату без автопродления."
+                ),
+            },
+        )
+    row, create_claimed = claim_robokassa_invoice_create(str(row["public_id"]))
+    order = billing_order_status(row)
+    if order["status"] != "pending":
+        return order
+    if order.get("providerPaymentId") and order.get("paymentUrl"):
+        return order
+    quote = order["quote"] if isinstance(order["quote"], dict) else {}
+    plan_name = clean_limited_text(str(quote.get("planName") or "Green VPN"), 80)
+    inv_id = int(row["id"])
+    if not create_claimed:
+        try:
+            return recover_existing_robokassa_invoice(row)
+        except HTTPException as recovery_error:
+            raise robokassa_invoice_reconciliation_pending(
+                recovery_error
+            ) from recovery_error
+    additional_parameters = {"Email": user_email}
+    if order["autoRenew"]:
+        additional_parameters["Recurring"] = "true"
+    payload = {
+        "MerchantLogin": ROBOKASSA_MERCHANT_LOGIN,
+        "InvId": inv_id,
+        "InvoiceType": "OneTime",
+        "Culture": "ru",
+        "OutSum": int(order["amountRub"]),
+        "Description": clean_limited_text(
+            f"Green VPN {plan_name} ({order['orderId']})",
+            100,
+        ),
+        "MerchantComments": clean_limited_text(order["orderId"], 120),
+        "InvoiceItems": [robokassa_invoice_item(order)],
+        "SuccessUrl2Data": {"Url": ROBOKASSA_RETURN_URL, "Method": "GET"},
+        "FailUrl2Data": {"Url": ROBOKASSA_RETURN_URL, "Method": "GET"},
+        "AdditionalParameters": additional_parameters,
+    }
+    try:
+        invoice = robokassa_invoice_request("CreateInvoice", payload)
+        invoice_id = str(invoice.get("id") or "").strip()
+        payment_url = str(invoice.get("url") or "").strip()
+        try:
+            response_inv_id = int(invoice.get("invId"))
+        except (TypeError, ValueError):
+            response_inv_id = -1
+        if (
+            not invoice_id
+            or response_inv_id != inv_id
+            or not robokassa_payment_url_valid(payment_url)
+        ):
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "code": "payment_provider_response_invalid",
+                    "message": "Robokassa вернула некорректный счёт.",
+                },
+            )
+        return persist_robokassa_invoice(
+            row,
+            invoice_id=invoice_id,
+            payment_url=payment_url,
+        )
+    except HTTPException as create_error:
+        try:
+            return recover_existing_robokassa_invoice(row)
+        except HTTPException as recovery_error:
+            raise robokassa_invoice_reconciliation_pending(
+                create_error,
+                recovery_error,
+            ) from create_error
+
+
+def _decimal_value(value: Any) -> Optional[Decimal]:
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+
+def validate_robokassa_invoice_for_order(row, invoice: dict) -> None:
+    try:
+        invoice_inv_id = int(invoice.get("invId"))
+    except (TypeError, ValueError):
+        invoice_inv_id = -1
+    if invoice_inv_id != int(row["id"]):
+        raise HTTPException(
+            status_code=409,
+            detail="Номер счёта Robokassa не совпадает с заказом.",
+        )
+    invoice_id = str(invoice.get("id") or "").strip()
+    saved_invoice_id = str(row["provider_payment_id"] or "").strip()
+    if not invoice_id:
+        raise HTTPException(
+            status_code=502,
+            detail="Robokassa не вернула идентификатор счёта.",
+        )
+    if saved_invoice_id and invoice_id and saved_invoice_id != invoice_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Идентификатор счёта Robokassa не совпадает с заказом.",
+        )
+    out_sum = _decimal_value(invoice.get("outSum"))
+    if out_sum is None or out_sum != Decimal(int(row["amount_rub"])):
+        raise HTTPException(
+            status_code=409,
+            detail="Сумма счёта Robokassa не совпадает с заказом.",
+        )
+    merchant_login = str(invoice.get("merchantLogin") or "").strip()
+    if merchant_login and merchant_login != ROBOKASSA_MERCHANT_LOGIN:
+        raise HTTPException(
+            status_code=409,
+            detail="Счёт Robokassa принадлежит другому магазину.",
+        )
+
+
+def validate_robokassa_operation_for_order(
+    row: sqlite3.Row,
+    operation: dict,
+) -> None:
+    out_sum = _decimal_value(operation.get("outSum"))
+    if out_sum is None or out_sum != Decimal(int(row["amount_rub"])):
+        raise HTTPException(
+            status_code=409,
+            detail="Сумма операции Robokassa не совпадает с заказом.",
+        )
+
+
+def get_billing_order_row_by_robokassa_inv_id(inv_id: int) -> Optional[sqlite3.Row]:
+    with db() as conn:
+        return conn.execute(
+            """
+            SELECT *
+            FROM billing_orders
+            WHERE id = ? AND provider = 'robokassa'
+            LIMIT 1
+            """,
+            (int(inv_id),),
+        ).fetchone()
+
+
+def sync_robokassa_billing_order(
+    public_id: str,
+    *,
+    user_id: Optional[int] = None,
+    require_paid: bool = False,
+) -> dict:
+    row = get_billing_order_row(public_id, user_id=user_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
+    if str(row["provider"] or "").strip().lower() != "robokassa":
+        raise HTTPException(status_code=409, detail="Заказ не принадлежит Robokassa.")
+    invoice = robokassa_get_invoice(
+        invoice_id=str(row["provider_payment_id"] or "").strip() or None,
+        inv_id=int(row["id"]),
+    )
+    validate_robokassa_invoice_for_order(row, invoice)
+    invoice_status = str(invoice.get("invoiceStatus") or "").strip().lower()
+    if invoice_status == "expired":
+        return mark_billing_order_canceled(
+            public_id,
+            provider_payment_id=str(invoice.get("id") or "").strip() or None,
+        )
+    if invoice_status != "paid":
+        if require_paid:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "robokassa_payment_not_confirmed",
+                    "message": "Robokassa ещё не подтверждает оплату счёта.",
+                },
+            )
+        return {"order": billing_order_status(row), "providerPending": True}
+
+    operation = robokassa_get_operation_state(int(row["id"]))
+    result_code = str(operation.get("resultCode") or "").strip()
+    state_code = str(operation.get("stateCode") or "").strip()
+    if result_code != "0" or state_code != "100":
+        if state_code == "10":
+            return mark_billing_order_canceled(
+                public_id,
+                provider_payment_id=str(invoice.get("id") or "").strip() or None,
+            )
+        if require_paid:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "robokassa_operation_not_confirmed",
+                    "message": "Операция Robokassa ещё не подтверждена авторитетным API.",
+                },
+            )
+        return {"order": billing_order_status(row), "providerPending": True}
+    validate_robokassa_operation_for_order(row, operation)
+    operation_key = str(operation.get("opKey") or "").strip()
+    if not operation_key:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "payment_provider_response_invalid",
+                "message": "Robokassa не вернула идентификатор операции для возврата.",
+            },
+        )
+    now = utc_now_iso()
+    invoice_id = str(invoice.get("id") or "").strip() or None
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE billing_orders
+            SET provider_payment_id = COALESCE(?, provider_payment_id),
+                provider_operation_key = ?,
+                tax_receipt_mode = ?,
+                tax_receipt_status = 'submitted_by_robocheck_smz',
+                tax_receipt_provider_id = COALESCE(?, tax_receipt_provider_id),
+                tax_receipt_error = NULL,
+                tax_receipt_updated_at = ?, updated_at = ?
+            WHERE public_id = ?
+            """,
+            (
+                invoice_id,
+                operation_key,
+                TAX_RECEIPT_MODE,
+                invoice_id,
+                now,
+                now,
+                public_id,
+            ),
+        )
+        conn.commit()
+    return mark_billing_order_paid_and_activate(
+        public_id,
+        provider_payment_id=invoice_id,
+        provider_payment_method_id=None,
+    )
 
 
 def create_billing_order_for_user(user_id: int, payload: TariffSelectionIn) -> dict:
@@ -21060,7 +22095,7 @@ def create_billing_order_for_user(user_id: int, payload: TariffSelectionIn) -> d
                     int(quote.get("originalMonthlyPriceRub") or quote["monthlyPriceRub"]),
                     beta_invite_public_id,
                     None,
-                    "yookassa" if yookassa_configured() else "manual_mvp",
+                    configured_payment_provider(),
                     TAX_RECEIPT_MODE,
                     "prepared",
                     now,
@@ -21110,7 +22145,8 @@ def create_billing_order_for_user(user_id: int, payload: TariffSelectionIn) -> d
             event_id=f"order_created:{order['orderId']}",
         )
 
-    if yookassa_configured():
+    order_provider = str(order.get("provider") or "").strip().lower()
+    if order_provider == "yookassa" and yookassa_configured():
         if not order.get("paymentUrl") and order.get("status") == "pending":
             try:
                 return create_yookassa_payment_for_order(row, user_email=user_email)
@@ -21119,6 +22155,18 @@ def create_billing_order_for_user(user_id: int, payload: TariffSelectionIn) -> d
                 if detail.get("code") in {
                     "recurring_payments_unavailable",
                     "payment_provider_rejected",
+                }:
+                    mark_billing_order_canceled(order["orderId"])
+                raise
+        return order
+    if order_provider == "robokassa" and robokassa_payment_configured():
+        if not order.get("paymentUrl") and order.get("status") == "pending":
+            try:
+                return create_robokassa_payment_for_order(row, user_email=user_email)
+            except HTTPException as exc:
+                detail = exc.detail if isinstance(exc.detail, dict) else {}
+                if detail.get("code") in {
+                    "recurring_payments_unavailable",
                 }:
                     mark_billing_order_canceled(order["orderId"])
                 raise
@@ -21295,6 +22343,8 @@ def sync_billing_order_with_provider_for_user(user_id: int, public_id: str) -> d
     row = get_billing_order_row(public_id, user_id=user_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
+    if not billing_writer_primary():
+        return public_billing_order_status(billing_order_status(row))
 
     provider = str(row["provider"] or "")
     payment_id = str(row["provider_payment_id"] or "")
@@ -21306,6 +22356,16 @@ def sync_billing_order_with_provider_for_user(user_id: int, public_id: str) -> d
     ):
         payment = yookassa_get_payment(payment_id)
         result = apply_yookassa_payment_update(public_id, payment, user_id=user_id)
+        order = result.get("order") if isinstance(result, dict) else None
+        if isinstance(order, dict):
+            return public_billing_order_status(order)
+    if (
+        row["status"] == "pending"
+        and provider == "robokassa"
+        and payment_id
+        and robokassa_payment_configured()
+    ):
+        result = sync_robokassa_billing_order(public_id, user_id=user_id)
         order = result.get("order") if isinstance(result, dict) else None
         if isinstance(order, dict):
             return public_billing_order_status(order)
@@ -21393,6 +22453,11 @@ def billing_order_requires_attention(row, now: datetime) -> list[dict]:
     activated_at = row["activated_at"] if "activated_at" in row.keys() else None
     payment_url = row["payment_url"] if "payment_url" in row.keys() else None
     provider_payment_id = row["provider_payment_id"] if "provider_payment_id" in row.keys() else None
+    provider_create_attempted_at = (
+        row["provider_create_attempted_at"]
+        if "provider_create_attempted_at" in row.keys()
+        else None
+    )
     age_hours = billing_order_age_hours(row, now)
     issues: list[dict] = []
 
@@ -21441,6 +22506,28 @@ def billing_order_requires_attention(row, now: datetime) -> list[dict]:
             "high",
             "YooKassa настроена, но у pending-заказа нет provider payment id или payment URL.",
         )
+    if (
+        status == "pending"
+        and provider == "robokassa"
+        and robokassa_payment_configured()
+        and not provider_payment_id
+        and not payment_url
+    ):
+        add_issue(
+            (
+                "robokassa_invoice_reconciliation_required"
+                if provider_create_attempted_at
+                else "robokassa_invoice_not_attached"
+            ),
+            "high",
+            (
+                "Попытка создания счёта Robokassa уже зафиксирована, но provider id "
+                "и payment URL не сохранены; повторное создание запрещено, нужна "
+                "сверка по InvId."
+                if provider_create_attempted_at
+                else "Robokassa настроена, но к pending-заказу не привязан счёт или payment URL."
+            ),
+        )
     if status in {"failed", "canceled", "cancelled"} and (paid_at or activated_at):
         add_issue(
             "terminal_order_has_payment_markers",
@@ -21480,7 +22567,7 @@ def billing_order_requires_attention(row, now: datetime) -> list[dict]:
         add_issue(
             f"refund_{refund_status}",
             severity,
-            "Возврат не завершён и требует сверки с ЮKassa.",
+            "Возврат не завершён и требует сверки с платёжным провайдером.",
         )
     if refund_status in {"succeeded", "partial_succeeded"} and refund_entitlement_status != "rolled_back":
         add_issue(
@@ -21580,8 +22667,8 @@ def billing_reconciliation_payload(limit: int = 25) -> dict:
     return {
         "ok": True,
         "generatedAt": utc_now_iso(),
-        "provider": "yookassa" if yookassa_configured() else "manual_mvp",
-        "productionPaymentReady": yookassa_payment_readiness()["productionReady"],
+        "provider": configured_payment_provider(),
+        "productionPaymentReady": payment_provider_readiness()["productionReady"],
         "requiresAttention": len(attention_orders) > 0,
         "summary": {
             "total": int(total),
@@ -21621,6 +22708,11 @@ def billing_payment_smoke_order_snapshot(row: sqlite3.Row) -> dict:
         if "provider_payment_method_id" in row.keys()
         else None
     )
+    order["providerOperationKeySaved"] = bool(
+        row["provider_operation_key"]
+        if "provider_operation_key" in row.keys()
+        else None
+    )
     order["paidAt"] = row["paid_at"] if "paid_at" in row.keys() else None
     order["activatedAt"] = row["activated_at"] if "activated_at" in row.keys() else None
     return order
@@ -21637,35 +22729,60 @@ def billing_payment_smoke_candidate(order: dict) -> bool:
     ).strip().lower()
     expected_plan = PUBLIC_PRODUCT_PLANS.get(PUBLIC_PRODUCT_PLAN_CODE) or {}
     expected_amount = int(expected_plan.get("priceRub") or 0)
-    return bool(
+    common_ready = bool(
         order.get("status") == "activated"
         and order.get("providerPaymentIdSaved")
-        and order.get("providerPaymentMethodSaved")
         and order.get("paymentUrlReady")
         and order.get("paidAt")
         and order.get("activatedAt")
-        and order.get("autoRenew")
         and plan_code == PUBLIC_PRODUCT_PLAN_CODE
         and int(order.get("amountRub") or 0) == expected_amount
     )
+    provider = str(order.get("provider") or "").strip().lower()
+    if provider == "yookassa":
+        return bool(
+            common_ready
+            and order.get("providerPaymentMethodSaved")
+            and order.get("autoRenew")
+        )
+    if provider == "robokassa":
+        return bool(
+            common_ready
+            and order.get("providerOperationKeySaved")
+            and not order.get("autoRenew")
+        )
+    return False
 
 
 def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
     safe_limit = max(1, min(int(limit or 10), 50))
-    payment = yookassa_payment_readiness()
+    provider = selected_payment_provider()
+    payment = payment_provider_readiness()
     site = public_site_readiness()
-    webhook_url = yookassa_effective_webhook_url()
+    webhook_url = str(payment.get("webhookUrl") or "")
     with db() as conn:
         rows = conn.execute(
             """
             SELECT *
             FROM billing_orders
-            WHERE provider = 'yookassa'
+            WHERE provider = ?
             ORDER BY id DESC
             LIMIT ?
             """,
-            (safe_limit,),
+            (provider, safe_limit),
         ).fetchall()
+        provider_orders_total = db_count(
+            conn,
+            "billing_orders",
+            "provider = ?",
+            (provider,),
+        )
+        provider_activated_total = db_count(
+            conn,
+            "billing_orders",
+            "provider = ? AND status = 'activated'",
+            (provider,),
+        )
         yookassa_orders_total = db_count(conn, "billing_orders", "provider = 'yookassa'")
         yookassa_activated_total = db_count(
             conn,
@@ -21698,12 +22815,12 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
     checks = [
         {
             "code": "payment_production_ready",
-            "title": "Готовность боевой ЮKassa",
+            "title": "Готовность боевого платёжного провайдера",
             "ok": bool(payment.get("productionReady")),
             "message": (
-                "Ключи YooKassa и production URL настроены."
+                f"Провайдер {provider} и production URL настроены."
                 if payment.get("productionReady")
-                else "Сначала применить YOOKASSA_SHOP_ID и YOOKASSA_SECRET_KEY через безопасный server env script."
+                else "Сначала завершить readiness выбранного платёжного провайдера."
             ),
         },
         {
@@ -21711,7 +22828,7 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
             "title": "Публичные return/webhook URL",
             "ok": bool(site.get("productionReady")),
             "message": (
-                "Публичный сайт и YooKassa URL зелёные."
+                "Публичный сайт и платёжные URL зелёные."
                 if site.get("productionReady")
                 else "Готовность публичного сайта должна быть зелёной до payment-smoke."
             ),
@@ -21729,21 +22846,21 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
             "title": "Платёжная ссылка получена",
             "ok": bool(pending_orders_with_url or activated_orders),
             "message": (
-                "Хотя бы один заказ YooKassa получил hosted payment URL."
+                f"Хотя бы один заказ {provider} получил hosted payment URL."
                 if pending_orders_with_url or activated_orders
-                else "Создать минимальный заказ после настройки ключей YooKassa и подтверждения владельца."
+                else "Создать минимальный заказ после настройки провайдера и подтверждения владельца."
             ),
         },
         {
             "code": "confirmed_payment_activation_observed",
-            "title": "Актуальный рекуррентный payment-smoke",
+            "title": "Актуальный provider-backed payment-smoke",
             "ok": bool(successful_orders),
             "message": (
-                "Тариф 249 ₽ активирован провайдером с включённым автопродлением и сохранённым способом оплаты."
+                "Тариф 249 ₽ активирован с провайдерским подтверждением и возвратным идентификатором."
                 if successful_orders
                 else (
-                    "Провести платёж 249 ₽, проверить provider confirmation, auto_renew=1 "
-                    "и сохранённый provider_payment_method_id."
+                    "Провести платёж 249 ₽ и проверить provider confirmation, "
+                    "идемпотентную активацию и готовность полного возврата."
                 )
             ),
         },
@@ -21760,14 +22877,13 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
     safe_to_run_smoke = bool(payment.get("productionReady")) and bool(site.get("productionReady"))
     smoke_steps = [
         {
-            "code": "apply_yookassa_env",
-            "title": "Применить env ЮKassa",
+            "code": "apply_payment_provider_env",
+            "title": "Применить env платёжного провайдера",
             "actor": "owner_or_ops",
             "status": "done" if payment.get("productionReady") else "blocked",
             "details": (
-                r"Run scripts\windows\configure_backend_env_wsl.ps1 "
-                r"-ServerHost 72.56.32.197 and enter "
-                "YOOKASSA_SHOP_ID plus YOOKASSA_SECRET_KEY only in the terminal."
+                "Ввести ключи выбранного провайдера только в защищённый server env; "
+                "не сохранять их в отчётах и репозитории."
             ),
             "secret": True,
         },
@@ -21777,8 +22893,7 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
             "actor": "ops",
             "status": "done" if site.get("productionReady") else "pending",
             "details": (
-                f"Return: {YOOKASSA_RETURN_URL}; webhook: {webhook_url}; "
-                "events: payment.succeeded and payment.canceled."
+                f"Return: {payment.get('returnUrl')}; webhook: {webhook_url}."
             ),
             "secret": False,
         },
@@ -21795,11 +22910,11 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
         },
         {
             "code": "open_hosted_payment_url",
-            "title": "Открыть hosted payment URL YooKassa",
+            "title": f"Открыть hosted payment URL {provider}",
             "actor": "owner",
             "status": "done" if pending_orders_with_url or activated_orders else "pending",
             "details": (
-                "Заказ должен оставаться pending до подтверждения YooKassa; "
+                "Заказ должен оставаться pending до авторитетного подтверждения провайдера; "
                 "Green VPN не должен активировать тариф только по локальному return."
             ),
             "secret": False,
@@ -21810,7 +22925,7 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
             "actor": "ops",
             "status": "done" if smoke_complete else "pending",
             "details": (
-                "Проверить, что статус заказа/подписка меняются только после подтверждения YooKassa "
+                "Проверить, что статус заказа/подписка меняются только после подтверждения провайдера "
                 "через webhook или authoritative payment fetch."
             ),
             "secret": False,
@@ -21821,7 +22936,7 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
         "ok": True,
         "version": APP_VERSION,
         "generatedAt": utc_now_iso(),
-        "provider": "yookassa" if yookassa_configured() else "manual_mvp",
+        "provider": provider,
         "productionPaymentReady": bool(payment.get("productionReady")),
         "publicSiteReady": bool(site.get("productionReady")),
         "safeToRunSmoke": safe_to_run_smoke,
@@ -21838,14 +22953,16 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
                 "Payment-smoke завершён."
                 if smoke_complete
                 else (
-                    "YooKassa настроена; нужно провести минимальный payment-smoke с подтверждением владельца."
+                    f"{provider} настроена; нужен минимальный payment-smoke с подтверждением владельца."
                     if safe_to_run_smoke
-                    else "Payment-smoke заблокирован до настройки production env YooKassa."
+                    else "Payment-smoke заблокирован до настройки production env провайдера."
                 )
             ),
             "yookassaOrdersTotal": int(yookassa_orders_total),
             "yookassaActivatedTotal": int(yookassa_activated_total),
-            "recentYookassaOrders": len(recent_orders),
+            "providerOrdersTotal": int(provider_orders_total),
+            "providerActivatedTotal": int(provider_activated_total),
+            "recentProviderOrders": len(recent_orders),
             "pendingWithPaymentUrl": len(pending_orders_with_url),
             "activatedLegacyOrIncomplete": len(activated_orders) - len(successful_orders),
             "successfulSmokeCandidates": len(successful_orders),
@@ -21857,15 +22974,20 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
         "blockingCodes": blocking_codes,
         "requiredActions": [check["message"] for check in checks if not check["ok"]],
         "smokeSteps": smoke_steps,
-        "recentYookassaOrders": recent_orders,
+        "recentProviderOrders": recent_orders,
+        "recentYookassaOrders": recent_orders if provider == "yookassa" else [],
         "latestSuccessfulOrder": successful_orders[0] if successful_orders else None,
         "policy": {
-            "noSecrets": "YooKassa secret key must only be entered into server-side env and is never returned by this endpoint.",
+            "noSecrets": "Provider keys must only be entered into server-side env and are never returned by this endpoint.",
             "noSyntheticActivation": "Provider smoke must not use admin mark-paid or direct subscription apply.",
-            "activationSource": "Tariff activation must follow YooKassa provider confirmation through webhook or authoritative API fetch.",
-            "returnUrl": YOOKASSA_RETURN_URL,
+            "activationSource": "Tariff activation must follow provider confirmation through webhook plus authoritative API fetch.",
+            "returnUrl": payment.get("returnUrl"),
             "webhookUrl": webhook_url,
-            "webhookEvents": ["payment.succeeded", "payment.canceled"],
+            "webhookEvents": (
+                ["payment.succeeded", "payment.canceled"]
+                if provider == "yookassa"
+                else ["ResultURL"]
+            ),
         },
     }
 
@@ -22025,7 +23147,7 @@ def renewal_candidate_payload(
 def billing_renewal_readiness_payload(limit: int = 25) -> dict:
     now = utc_now()
     safe_limit = max(1, min(int(limit or 25), 100))
-    payment_readiness = yookassa_payment_readiness()
+    payment_readiness = payment_provider_readiness()
     payment_smoke = billing_payment_smoke_readiness_payload(limit=5)
     payment_smoke_ready = bool(payment_smoke.get("productionReady"))
     payment_smoke_summary = payment_smoke.get("summary") or {}
@@ -22703,7 +23825,7 @@ def subscription_expiry_candidate_payload(
 def subscription_expiry_readiness_payload(limit: int = 25) -> dict:
     now = utc_now()
     safe_limit = max(1, min(int(limit or 25), 100))
-    payment_readiness = yookassa_payment_readiness()
+    payment_readiness = payment_provider_readiness()
     payment_smoke = billing_payment_smoke_readiness_payload(limit=5)
     payment_smoke_ready = bool(payment_smoke.get("productionReady"))
     payment_smoke_summary = payment_smoke.get("summary") or {}
@@ -23279,8 +24401,8 @@ def mark_billing_order_paid_and_activate(
     }
 
 
-def ensure_refund_execution_ready() -> dict:
-    readiness = refund_execution_readiness()
+def ensure_refund_execution_ready(provider: Optional[str] = None) -> dict:
+    readiness = refund_execution_readiness(provider)
     if readiness["productionReady"]:
         return readiness
     raise HTTPException(
@@ -23497,6 +24619,238 @@ def apply_yookassa_refund_update(
     }
 
 
+def ensure_robokassa_operation_key(row: sqlite3.Row) -> str:
+    existing = str(
+        row["provider_operation_key"]
+        if "provider_operation_key" in row.keys()
+        else ""
+    ).strip()
+    if existing:
+        return existing
+    invoice = robokassa_get_invoice(
+        invoice_id=str(row["provider_payment_id"] or "").strip() or None,
+        inv_id=int(row["id"]),
+    )
+    validate_robokassa_invoice_for_order(row, invoice)
+    if str(invoice.get("invoiceStatus") or "").strip().lower() != "paid":
+        raise HTTPException(
+            status_code=409,
+            detail="Robokassa не подтверждает оплаченный исходный счёт.",
+        )
+    operation = robokassa_get_operation_state(int(row["id"]))
+    if (
+        str(operation.get("resultCode") or "").strip() != "0"
+        or str(operation.get("stateCode") or "").strip() != "100"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Robokassa не подтверждает успешную исходную операцию.",
+        )
+    validate_robokassa_operation_for_order(row, operation)
+    operation_key = str(operation.get("opKey") or "").strip()
+    if not operation_key:
+        raise HTTPException(
+            status_code=502,
+            detail="Robokassa не вернула OpKey исходной операции.",
+        )
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE billing_orders
+            SET provider_operation_key = ?, updated_at = ?
+            WHERE public_id = ?
+            """,
+            (operation_key, utc_now_iso(), str(row["public_id"])),
+        )
+        conn.commit()
+    return operation_key
+
+
+def apply_robokassa_refund_update(public_id: str, state: dict) -> dict:
+    row = get_billing_order_row(public_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
+    request_id = str(state.get("requestId") or "").strip()
+    saved_request_id = str(row["refund_provider_id"] or "").strip()
+    if not request_id or (saved_request_id and request_id != saved_request_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Идентификатор возврата Robokassa не совпадает с заказом.",
+        )
+    amount = _decimal_value(state.get("amount"))
+    if amount is None or amount != Decimal(int(row["amount_rub"])):
+        raise HTTPException(
+            status_code=409,
+            detail="Сумма возврата Robokassa не совпадает с заказом.",
+        )
+    label = str(state.get("label") or "").strip().lower()
+    known_labels = {"finished", "processing", "canceled", "cancelled"}
+    if label not in known_labels:
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE billing_orders
+                SET refund_status = 'manual_reconciliation_required',
+                    refund_error = 'provider_refund_state_unknown',
+                    refund_updated_at = ?, updated_at = ?
+                WHERE public_id = ?
+                """,
+                (utc_now_iso(), utc_now_iso(), public_id),
+            )
+            conn.commit()
+        return {
+            "order": billing_order_status(get_billing_order_row(public_id)),
+            "fullRefund": True,
+            "entitlementRolledBack": False,
+        }
+    provider_status = {
+        "finished": "succeeded",
+        "processing": "pending",
+        "canceled": "canceled",
+        "cancelled": "canceled",
+    }.get(label, "pending")
+    result = apply_yookassa_refund_update(
+        public_id,
+        {
+            "id": request_id,
+            "status": provider_status,
+            "payment_id": str(row["provider_payment_id"] or ""),
+            "amount": {
+                "value": f"{amount:.2f}",
+                "currency": str(row["currency"]),
+            },
+        },
+    )
+    receipt_status = (
+        "canceled"
+        if provider_status == "canceled"
+        else "submitted_by_robocheck_smz"
+    )
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE billing_orders
+            SET refund_receipt_status = ?, refund_updated_at = ?, updated_at = ?
+            WHERE public_id = ?
+            """,
+            (receipt_status, utc_now_iso(), utc_now_iso(), public_id),
+        )
+        conn.commit()
+    result["order"] = billing_order_status(get_billing_order_row(public_id))
+    return result
+
+
+def execute_full_robokassa_refund(
+    row: sqlite3.Row,
+    *,
+    reason: str,
+) -> dict:
+    public_id = str(row["public_id"])
+    refund_status = str(row["refund_status"] or "").strip().lower()
+    existing_refund_id = str(row["refund_provider_id"] or "").strip()
+    if existing_refund_id:
+        state = robokassa_get_refund_state(existing_refund_id)
+        result = apply_robokassa_refund_update(public_id, state)
+        return {**result, "reused": True, "providerCalled": True}
+    if refund_status in {"processing", "manual_reconciliation_required"}:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "refund_manual_reconciliation_required",
+                "message": (
+                    "Нельзя повторять возврат без сверки Robokassa: предыдущий "
+                    "запрос мог быть принят без сохранённого requestId."
+                ),
+            },
+        )
+    billing_refund_entitlement_preflight(row)
+    operation_key = ensure_robokassa_operation_key(row)
+    idempotence_key = "greenvpn-refund-" + hashlib.sha256(
+        public_id.encode("utf-8")
+    ).hexdigest()[:32]
+    now = utc_now_iso()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        current = conn.execute(
+            "SELECT * FROM billing_orders WHERE public_id = ?",
+            (public_id,),
+        ).fetchone()
+        if current is None:
+            raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
+        current_refund_id = str(current["refund_provider_id"] or "").strip()
+        current_status = str(current["refund_status"] or "").strip().lower()
+        if current_refund_id:
+            conn.commit()
+            state = robokassa_get_refund_state(current_refund_id)
+            result = apply_robokassa_refund_update(public_id, state)
+            return {**result, "reused": True, "providerCalled": True}
+        if current_status in {"processing", "manual_reconciliation_required"}:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "refund_manual_reconciliation_required",
+                    "message": "Возврат Robokassa уже выполняется или требует сверки.",
+                },
+            )
+        conn.execute(
+            """
+            UPDATE billing_orders
+            SET refund_status = 'processing',
+                refund_amount_rub = amount_rub,
+                refund_reason = COALESCE(refund_reason, ?),
+                refund_idempotence_key = COALESCE(refund_idempotence_key, ?),
+                refund_receipt_status = 'prepared_by_robocheck_smz',
+                refund_entitlement_status = 'prepared',
+                refund_error = NULL,
+                refund_requested_at = COALESCE(refund_requested_at, ?),
+                refund_updated_at = ?, updated_at = ?
+            WHERE public_id = ?
+            """,
+            (reason, idempotence_key, now, now, now, public_id),
+        )
+        conn.commit()
+    order = billing_order_status(get_billing_order_row(public_id))
+    payload = {
+        "OpKey": operation_key,
+        "InvoiceItems": [robokassa_invoice_item(order)],
+    }
+    try:
+        created = robokassa_create_refund(payload)
+    except Exception as exc:
+        detail = exc.detail if isinstance(exc, HTTPException) else type(exc).__name__
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE billing_orders
+                SET refund_status = 'manual_reconciliation_required',
+                    refund_error = ?, refund_updated_at = ?, updated_at = ?
+                WHERE public_id = ? AND refund_status = 'processing'
+                """,
+                (
+                    clean_limited_text(str(detail), 500),
+                    utc_now_iso(),
+                    utc_now_iso(),
+                    public_id,
+                ),
+            )
+            conn.commit()
+        raise
+    request_id = str(created.get("requestId") or "").strip()
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE billing_orders
+            SET refund_provider_id = ?, refund_updated_at = ?, updated_at = ?
+            WHERE public_id = ? AND refund_status = 'processing'
+            """,
+            (request_id, utc_now_iso(), utc_now_iso(), public_id),
+        )
+        conn.commit()
+    state = robokassa_get_refund_state(request_id)
+    result = apply_robokassa_refund_update(public_id, state)
+    return {**result, "reused": False, "providerCalled": True}
+
+
 def execute_full_refund_for_order(
     public_id: str,
     *,
@@ -23524,16 +24878,19 @@ def execute_full_refund_for_order(
             "providerCalled": False,
         }
 
-    ensure_refund_execution_ready()
+    provider = str(row["provider"] or "").strip().lower()
+    ensure_refund_execution_ready(provider)
     if str(row["status"] or "").strip().lower() != "activated":
         raise HTTPException(
             status_code=409,
             detail="Полный возврат разрешён только для активированного заказа.",
         )
-    if str(row["provider"] or "").strip().lower() != "yookassa":
+    if provider == "robokassa":
+        return execute_full_robokassa_refund(row, reason=reason)
+    if provider != "yookassa":
         raise HTTPException(
             status_code=409,
-            detail="Автоматический возврат доступен только для заказа ЮKassa.",
+            detail="Автоматический возврат для провайдера заказа не поддержан.",
         )
     payment_id = str(row["provider_payment_id"] or "").strip()
     if not payment_id:
@@ -24911,7 +26268,7 @@ def build_monitoring_status() -> dict:
         )
     )
 
-    payment_readiness = yookassa_payment_readiness()
+    payment_readiness = payment_provider_readiness()
     checks.append(
         monitoring_check(
             "payments",
@@ -24919,7 +26276,7 @@ def build_monitoring_status() -> dict:
             "green" if payment_readiness["productionReady"] else "yellow",
             "Боевые платежи готовы."
             if payment_readiness["productionReady"]
-            else "Пока ручной режим оплаты или не настроен боевой HTTPS/YooKassa.",
+            else "Пока ручной режим оплаты или не готов выбранный провайдер.",
             provider=payment_readiness["provider"],
             productionReady=payment_readiness["productionReady"],
         )
@@ -24954,7 +26311,7 @@ def build_monitoring_status() -> dict:
 
 def build_product_readiness() -> dict:
     public_site = public_site_readiness()
-    payment = yookassa_payment_readiness()
+    payment = payment_provider_readiness()
     email = email_confirmation_readiness()
     auth_codes = auth_code_readiness()
     user_auth_flow = user_auth_flow_readiness()
@@ -24982,7 +26339,7 @@ def build_product_readiness() -> dict:
             "code": "public_site",
             "title": "Публичный сайт и юридические страницы",
             "ok": bool(public_site.get("productionReady")),
-            "message": "Публичный сайт должен показывать юридические страницы, кнопки тарифа/скачивания, безопасные формулировки и YooKassa URL.",
+            "message": "Публичный сайт должен показывать юридические страницы, кнопки тарифа/скачивания, безопасные формулировки и URL выбранного платёжного провайдера.",
             "value": {
                 "siteUrl": public_site.get("siteUrl"),
                 "summary": public_site.get("summary"),
@@ -25017,7 +26374,7 @@ def build_product_readiness() -> dict:
             "code": "payments",
             "title": "Платежи",
             "ok": bool(payment.get("productionReady")),
-            "message": "Боевые ключи YooKassa и HTTPS webhook должны быть настроены.",
+            "message": "Боевые ключи выбранного провайдера, чековый контур, возвраты и HTTPS webhook должны быть готовы.",
         },
         {
             "code": "updates",
@@ -25121,7 +26478,7 @@ LAUNCH_GATE_SEVERITY = {
 
 LAUNCH_GATE_TITLES_RU = {
     "public_api": "Публичный API и сайт",
-    "public_site": "Публичный сайт, legal и YooKassa URL",
+    "public_site": "Публичный сайт, legal и платёжные URL",
     "api_vpn_endpoint_split": "Разделение сайта/API и VPN endpoint",
     "server_catalog": "Каталог серверов",
     "payments": "Платежи",
@@ -25138,10 +26495,10 @@ LAUNCH_GATE_TITLES_RU = {
 
 LAUNCH_GATE_NEXT_ACTION_RU = {
     "public_api": "Оставить публичные URL на HTTPS-домене api.greenvpn.pro.",
-    "public_site": "Проверить legal-страницы, тарифы/кнопки скачивания, безопасные формулировки и URL для ЮKassa.",
+    "public_site": "Проверить legal-страницы, тарифы/кнопки скачивания, безопасные формулировки и URL выбранного платёжного провайдера.",
     "api_vpn_endpoint_split": "Разнести публичный сайт/API и VPN endpoint по разным IP перед публичным запуском.",
     "server_catalog": "Не публиковать новые managed-серверы, пока каталог безопасен для текущего Windows-клиента.",
-    "payments": "Дождаться активного статуса самозанятого/ЮKassa и применить production-ключи только через серверный env.",
+    "payments": "Подключить Robokassa к НПД, применить production-ключи только через server-only env и пройти реальный payment/refund smoke.",
     "updates": "Собрать финальный Windows-установщик только в конце, опубликовать HTTPS-ссылку, SHA256 и rollback.",
     "windows_trust": "Получить Code Signing/Trusted Signing, подписать финальный установщик и бинарники, затем опубликовать trusted download.",
     "email": "Держать Yandex 360 SMTP рабочим для кодов входа, уведомлений и 2FA админки.",
@@ -25327,7 +26684,7 @@ def build_launch_readiness() -> dict:
             or "Внешние действия владельца сверяются отдельным чеклистом.",
             severity="warning",
             title="Внешние действия владельца",
-            next_action="Держать чеклист внешних сервисов актуальным: DNS, YooKassa, SMS, SMTP, Telegram alerts.",
+            next_action="Держать чеклист внешних сервисов актуальным: DNS, платёжный провайдер, SMTP и Telegram alerts.",
             details={
                 "pendingCodes": blocking_summary.get("pendingCodes") or [],
                 "waitingCodes": blocking_summary.get("waitingCodes") or [],
@@ -25564,7 +26921,7 @@ def build_advertising_readiness() -> dict:
             "mode": "readiness_only",
             "mobileAppPolicy": "Мобильные приложения намеренно вынесены из этого gate, пока backend, Windows-клиент, публичный сайт и админка не стабилизированы.",
             "installerTrustPolicy": "Для публичной рекламы Windows-установщик должен быть подписан через Code Signing/Trusted Signing и опубликован с HTTPS-ссылкой плюс SHA256.",
-            "paymentPolicy": "Приём денег с широкой публичной рекламы требует production YooKassa, доверенного установщика и готового контура обновления/отката.",
+            "paymentPolicy": "Приём денег с широкой публичной рекламы требует production-ready платёжного и чекового контура, доверенного установщика и готового обновления/отката.",
         },
     }
 
@@ -25580,7 +26937,7 @@ LAUNCH_CLOSURE_ACTION_SPECS = {
         "category": "public_site",
         "ownerRequired": False,
         "autonomousCodeWork": False,
-        "operatorAction": "Держать публичный сайт, юридические страницы, скачивание и публичные YooKassa URL зелёными.",
+        "operatorAction": "Держать публичный сайт, юридические страницы, скачивание и публичные URL платёжного провайдера зелёными.",
     },
     "api_vpn_endpoint_split": {
         "category": "network",
@@ -25600,7 +26957,7 @@ LAUNCH_CLOSURE_ACTION_SPECS = {
         "category": "payments",
         "ownerRequired": True,
         "autonomousCodeWork": False,
-        "ownerInput": "YOOKASSA_SHOP_ID и YOOKASSA_SECRET_KEY только через scripts\\windows\\configure_backend_env_wsl.ps1.",
+        "ownerInput": "Подтверждение партнёра НПД и Robokassa MerchantLogin/Password1/Password2/Password3 только через защищённый provider/server-only процесс.",
         "secret": True,
         "safeWithoutOwner": False,
     },
@@ -25929,7 +27286,7 @@ def owner_launch_packet_commands(setup_bundle: dict, split_plan: dict) -> list[d
                 "command": apply_command,
                 "secret": True,
                 "mutationFree": False,
-                "when": "Запускать только когда владелец готов ввести YooKassa/SMTP/SMS/Telegram секреты в терминал.",
+                "when": "Запускать только когда владелец готов ввести платёжные/SMTP/Telegram секреты в терминал.",
             }
         )
     preflight = (
@@ -25959,7 +27316,7 @@ def owner_launch_packet_commands(setup_bundle: dict, split_plan: dict) -> list[d
             ),
             "secret": False,
             "mutationFree": True,
-            "when": "Запускать после env-изменений YooKassa и перед включением автопродлений или жёсткого ограничения по сроку.",
+            "when": "Запускать после env-изменений платёжного провайдера и перед включением продаж, автопродлений или жёсткого ограничения по сроку.",
         }
     )
     commands.append(
@@ -26118,8 +27475,9 @@ def external_owner_setup_bundle() -> dict:
             {"envKey": "GREENVPN_PUBLIC_BASE_URL", "value": "https://api.greenvpn.pro"},
             {"envKey": "GREENVPN_EMAIL_PUBLIC_BASE_URL", "value": "https://api.greenvpn.pro"},
             {"envKey": "GREENVPN_API_BASE_URLS", "value": "https://api.greenvpn.pro"},
-            {"envKey": "YOOKASSA_RETURN_URL", "value": "https://api.greenvpn.pro/payment/return"},
-            {"envKey": "YOOKASSA_WEBHOOK_URL", "value": "https://api.greenvpn.pro/api/v1/billing/yookassa/webhook"},
+            {"envKey": "GREENVPN_PAYMENT_PROVIDER", "value": "robokassa"},
+            {"envKey": "ROBOKASSA_RETURN_URL", "value": "https://api.greenvpn.pro/payment/return"},
+            {"envKey": "ROBOKASSA_RESULT_URL", "value": "https://api.greenvpn.pro/api/v1/billing/robokassa/result"},
             {"envKey": "GREENVPN_AUTH_CODE_TTL_MINUTES", "value": "10"},
             {"envKey": "GREENVPN_AUTH_CODE_RESEND_COOLDOWN_SECONDS", "value": "60"},
             {"envKey": "GREENVPN_AUTH_CODE_MAX_VERIFY_ATTEMPTS", "value": "5"},
@@ -26182,7 +27540,7 @@ def external_action_specs() -> list[dict]:
                 "check_external_services_readiness.ps1 -ServerAdminSelfCheck",
             ],
             "secret": False,
-            "blocks": ["email_links", "yookassa_webhook", "updates", "public_api"],
+            "blocks": ["email_links", "payment_callback", "updates", "public_api"],
         },
         {
             "code": "email",
@@ -26216,27 +27574,41 @@ def external_action_specs() -> list[dict]:
         },
         {
             "code": "payments",
-            "title": "ЮKassa в боевом режиме",
-            "ownerAction": "Получить shop_id/secret_key, указать returnUrl/webhook URL в кабинете ЮKassa и передать ключи только в server-only env.",
-            "envKeys": ["YOOKASSA_SHOP_ID", "YOOKASSA_SECRET_KEY", "YOOKASSA_RETURN_URL", "YOOKASSA_WEBHOOK_URL"],
+            "title": "Robokassa и НПД в боевом режиме",
+            "ownerAction": "Подключить Robokassa как партнёра НПД в «Мой налог», получить MerchantLogin и три пароля, затем применить их только в server-only env.",
+            "envKeys": [
+                "GREENVPN_PAYMENT_PROVIDER",
+                "ROBOKASSA_MERCHANT_LOGIN",
+                "ROBOKASSA_PASSWORD1",
+                "ROBOKASSA_PASSWORD2",
+                "ROBOKASSA_PASSWORD3",
+                "ROBOKASSA_RETURN_URL",
+                "ROBOKASSA_RESULT_URL",
+                "GREENVPN_ROBOKASSA_NPD_PARTNER_CONFIRMED",
+            ],
             "ownerInputs": [
-                {"name": "YOOKASSA_SHOP_ID", "envKey": "YOOKASSA_SHOP_ID", "secret": False},
-                {"name": "YOOKASSA_SECRET_KEY", "envKey": "YOOKASSA_SECRET_KEY", "secret": True},
-                {"name": "Webhook URL ЮKassa", "envKey": "YOOKASSA_WEBHOOK_URL", "secret": False, "example": "https://api.greenvpn.pro/api/v1/billing/yookassa/webhook"},
-                {"name": "Return URL после оплаты", "envKey": "YOOKASSA_RETURN_URL", "secret": False, "example": "https://api.greenvpn.pro/payment/return"},
+                {"name": "Подтверждение партнёра НПД Robokassa в «Мой налог»", "envKey": "GREENVPN_ROBOKASSA_NPD_PARTNER_CONFIRMED", "secret": False},
+                {"name": "ROBOKASSA_MERCHANT_LOGIN", "envKey": "ROBOKASSA_MERCHANT_LOGIN", "secret": False},
+                {"name": "ROBOKASSA_PASSWORD1", "envKey": "ROBOKASSA_PASSWORD1", "secret": True},
+                {"name": "ROBOKASSA_PASSWORD2", "envKey": "ROBOKASSA_PASSWORD2", "secret": True},
+                {"name": "ROBOKASSA_PASSWORD3", "envKey": "ROBOKASSA_PASSWORD3", "secret": True},
+                {"name": "ResultURL Robokassa", "envKey": "ROBOKASSA_RESULT_URL", "secret": False, "example": "https://api.greenvpn.pro/api/v1/billing/robokassa/result"},
+                {"name": "Return URL после оплаты", "envKey": "ROBOKASSA_RETURN_URL", "secret": False, "example": "https://api.greenvpn.pro/payment/return"},
             ],
             "applySteps": [
-                "Запустить configure_backend_env_wsl.ps1 -ServerHost 72.56.32.197 и ответить на вопросы по ЮKassa.",
-                "В кабинете ЮKassa включить webhook-события payment.succeeded и payment.canceled.",
+                "Подтвердить переход из «Мой налог» к партнёру Robokassa только непосредственно перед передачей ИНН.",
+                "Завершить подключение магазина и «Робочеков СМЗ» в кабинете Robokassa.",
+                "Запустить configure_backend_env_wsl.ps1 отдельно для primary и fallback; на fallback денежные writer-флаги должны оставаться выключенными.",
             ],
             "verifySteps": [
                 "GET /api/v1/admin/billing/readiness",
                 "GET /api/v1/admin/billing/payment-smoke/readiness",
-                "Создавать test/production заказ только после подтверждения владельцем режима провайдера.",
-                "Проверить, что тариф активируется только после подтверждения ЮKassa.",
+                "С отдельным подтверждением владельца провести один реальный платёж и один полный возврат.",
+                "Проверить, что тариф активируется только после Invoice=Paid и OpStateExt State=100 с точной суммой/OpKey.",
+                "Проверить чек дохода и чек возврата в НПД-контуре.",
             ],
             "secret": True,
-            "blocks": ["paid_activation", "auto_renew"],
+            "blocks": ["paid_activation", "refunds", "auto_renew"],
         },
         {
             "code": "updates",
@@ -29646,7 +31018,7 @@ def on_startup() -> None:
 @app.head("/healthz")
 @app.get("/healthz")
 def healthz():
-    payment_readiness = yookassa_payment_readiness()
+    payment_readiness = payment_provider_readiness()
     payment_ready = payment_readiness["productionReady"]
     email_ready = email_confirmation_readiness()["productionReady"]
     auth_code_ready = auth_code_readiness()["productionReady"]
@@ -30178,7 +31550,7 @@ def public_landing_page():
         <li>Пользователь проверяет подключение без карты и оплаты.</li>
         <li>Перед оплатой подтверждает email, чтобы получить чек и восстановить доступ при необходимости.</li>
         <li>Выбирает подписку на 1, 3 или 6 месяцев.</li>
-        <li>Подписка активируется только после подтверждения платежа YooKassa.</li>
+        <li>Подписка активируется только после авторитетного подтверждения платёжного провайдера.</li>
       </ul>
     </section>
     <section id="support">
@@ -30293,7 +31665,7 @@ def legal_offer_page():
     <p>Владелец сервиса предоставляет пользователю доступ к приложению Green VPN и серверной инфраструктуре для защищенного и стабильного сетевого подключения в рамках выбранного тарифа.</p>
     <h2>2. Тарифы и оплата</h2>
     <p>До выбора подписки пользователю может предоставляться бесплатный доступ на условиях, показанных в приложении. Подписка на 30 дней стоит 249 ₽, на 90 дней — 649 ₽, на 180 дней — 1 099 ₽. Все варианты включают одинаковые функции сервиса и отличаются только сроком доступа.</p>
-    <p>Автопродление не включается автоматически. Оно действует только после явного согласия пользователя на сохранение способа оплаты. В конце оплаченного срока Green VPN списывает стоимость выбранного периода и продлевает доступ после подтверждения YooKassa. Пользователь может отключить автопродление в приложении до даты следующего списания.</p>
+    <p>Автопродление не включается автоматически. Оно доступно только после явного согласия пользователя и технического подключения этой возможности у платёжного провайдера. Пользователь может отключить автопродление в приложении до даты следующего списания.</p>
     <p>Если повторное списание отклонено банком или платежным провайдером, доступ не продлевается автоматически. Пользователь может оплатить новый период вручную.</p>
     <h2>3. Получение услуги</h2>
     <p>После оплаты пользователь входит в приложение, получает доступ к тарифу и может подключиться к защищенному соединению в пределах выбранных лимитов.</p>
@@ -30333,7 +31705,7 @@ def legal_privacy_page():
     <h2>Реклама в приложении</h2>
     <p>В текущей версии рекламные показы отключены. Green VPN не передает рекламным провайдерам идентификаторы устройства или сведения о подключении. Если рекламный формат будет включен в будущем, эта политика будет обновлена до начала такой обработки.</p>
     <h2>Платежи</h2>
-    <p>Платежные данные обрабатываются YooKassa или другим подключенным платежным провайдером. Green VPN получает только статус платежа, сумму, валюту и технические идентификаторы, необходимые для активации тарифа.</p>
+    <p>Платежные данные обрабатываются подключенным платёжным провайдером. Green VPN получает только статус платежа, сумму, валюту и технические идентификаторы, необходимые для активации тарифа и возврата.</p>
     <h2>Хранение и удаление</h2>
     <p>Данные аккаунта и подписки хранятся, пока аккаунт используется, а платежные и бухгалтерские сведения — в течение срока, необходимого по закону. Диагностические данные хранятся только столько, сколько требуется для поддержки и безопасности. Запрос на удаление аккаунта или уточнение данных можно направить в поддержку.</p>
     <h2>Подрядчики</h2>
@@ -31160,11 +32532,16 @@ def billing_create_order(
 ):
     user = get_user_by_token(authorization)
     order = create_billing_order_for_user(user["id"], payload)
+    payment_url = str(order.get("paymentUrl") or "").strip()
     return {
         "ok": True,
         "email": public_user_email(user),
         "order": public_billing_order_status(order),
-        "message": "Order created. Payment provider is not connected yet; activate it after payment confirmation.",
+        "message": (
+            "Заказ создан. Откройте защищённую страницу оплаты."
+            if payment_url
+            else "Заказ создан, но платёжный провайдер пока недоступен. Тариф не активирован."
+        ),
     }
 
 
@@ -31207,6 +32584,7 @@ def subscription_cancel_auto_renew(
 
 @app.post("/api/v1/billing/yookassa/webhook")
 async def billing_yookassa_webhook(request: Request):
+    require_billing_callback_primary()
     payload = await request.json()
     event = str(payload.get("event") or "")
     incoming = payload.get("object") if isinstance(payload.get("object"), dict) else {}
@@ -31252,6 +32630,92 @@ async def billing_yookassa_webhook(request: Request):
         return {"ok": True, "event": event, "orderId": order_id, **result}
 
     return {"ok": True, "ignored": True, "event": event, "orderId": order_id}
+
+
+async def robokassa_result_parameters(request: Request) -> dict[str, str]:
+    collected: dict[str, list[str]] = {}
+    for key, value in request.query_params.multi_items():
+        collected.setdefault(str(key), []).append(str(value))
+    body = await request.body()
+    if body:
+        try:
+            body_text = body.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            raise HTTPException(
+                status_code=400,
+                detail="Тело ResultURL Robokassa должно быть UTF-8.",
+            )
+        parsed = urllib.parse.parse_qs(
+            body_text,
+            keep_blank_values=True,
+            strict_parsing=False,
+        )
+        for key, values in parsed.items():
+            collected.setdefault(str(key), []).extend(str(value) for value in values)
+    result: dict[str, str] = {}
+    for key, values in collected.items():
+        unique = set(values)
+        if len(unique) != 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Повторяющиеся параметры Robokassa не совпадают.",
+            )
+        result[key] = values[0]
+    casefolded: dict[str, str] = {}
+    for key in result:
+        normalized = key.casefold()
+        previous = casefolded.get(normalized)
+        if previous is not None and previous != key:
+            raise HTTPException(
+                status_code=400,
+                detail="Параметры Robokassa с разным регистром неоднозначны.",
+            )
+        casefolded[normalized] = key
+    return result
+
+
+def _case_insensitive_parameter(parameters: dict[str, str], *names: str) -> str:
+    wanted = {name.lower() for name in names}
+    for key, value in parameters.items():
+        if key.lower() in wanted:
+            return str(value)
+    return ""
+
+
+@app.get("/api/v1/billing/robokassa/result")
+@app.post("/api/v1/billing/robokassa/result")
+async def billing_robokassa_result(request: Request):
+    require_billing_callback_primary()
+    if not robokassa_payment_configured():
+        raise HTTPException(status_code=503, detail="Robokassa не настроена.")
+    incoming = await robokassa_result_parameters(request)
+    parameters = dict(incoming)
+    parameters["OutSum"] = _case_insensitive_parameter(incoming, "OutSum")
+    parameters["InvId"] = _case_insensitive_parameter(incoming, "InvId", "InvID")
+    parameters["SignatureValue"] = _case_insensitive_parameter(
+        incoming,
+        "SignatureValue",
+    )
+    if not robokassa_result_signature_valid(parameters):
+        raise HTTPException(status_code=403, detail="Подпись Robokassa не совпадает.")
+    try:
+        inv_id = int(parameters["InvId"])
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Номер счёта Robokassa некорректен.")
+    row = get_billing_order_row_by_robokassa_inv_id(inv_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Заказ Robokassa не найден.")
+    incoming_amount = _decimal_value(parameters["OutSum"])
+    if incoming_amount is None or incoming_amount != Decimal(int(row["amount_rub"])):
+        raise HTTPException(status_code=409, detail="Сумма Robokassa не совпадает.")
+    sync_robokassa_billing_order(
+        str(row["public_id"]),
+        require_paid=True,
+    )
+    return Response(
+        content=f"OK{inv_id}",
+        media_type="text/plain",
+    )
 
 
 @app.post("/api/v1/subscription/apply")
@@ -32766,7 +34230,7 @@ def build_admin_analytics_summary() -> dict:
                 "emailVerified": users_email_verified,
             },
             "readiness": {
-                "payment": readiness_signal(yookassa_payment_readiness()),
+                "payment": readiness_signal(payment_provider_readiness()),
                 "email": readiness_signal(email_confirmation_readiness()),
                 "sms": readiness_signal(sms_confirmation_readiness()),
                 "authCode": readiness_signal(auth_code_readiness()),
@@ -33061,7 +34525,7 @@ def admin_overview(
         "runbooksCount": int(runbooks_count),
         "activeRunbooksCount": int(active_runbooks_count),
         "defaultServer": f"{WG_ENDPOINT_HOST}:{WG_ENDPOINT_PORT}",
-        "paymentReadiness": yookassa_payment_readiness(),
+        "paymentReadiness": payment_provider_readiness(),
         "emailReadiness": email_confirmation_readiness(),
         "smsReadiness": sms_confirmation_readiness(),
         "authCodeReadiness": auth_code_readiness(),
@@ -35529,7 +36993,7 @@ def admin_billing_readiness(
     authorization: Optional[str] = Header(default=None),
 ):
     require_admin(x_admin_token, authorization, "readiness.read")
-    return yookassa_payment_readiness()
+    return payment_provider_readiness()
 
 
 @app.get("/api/v1/admin/email/readiness")

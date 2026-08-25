@@ -221,6 +221,11 @@ policy_defaults = {
     "GREENVPN_FREE_TIER_SPEED_MBPS": "10",
     "GREENVPN_FREE_TIER_BURST_MBPS": "20",
     "GREENVPN_PAID_SALES_ENABLED": "0",
+    "GREENVPN_PAYMENT_PROVIDER": "robokassa",
+    "ROBOKASSA_RETURN_URL": "https://api.greenvpn.pro/payment/return",
+    "ROBOKASSA_RESULT_URL": "https://api.greenvpn.pro/api/v1/billing/robokassa/result",
+    "GREENVPN_ROBOKASSA_NPD_PARTNER_CONFIRMED": "0",
+    "GREENVPN_ROBOKASSA_RECURRING_ENABLED": "0",
     "GREENVPN_TAX_RECEIPT_MODE": "disabled",
     "GREENVPN_TAX_RECEIPT_WORKFLOW_CONFIRMED": "0",
     "GREENVPN_TAX_RECEIPT_VAT_CODE": "0",
@@ -243,6 +248,9 @@ updates = {
     "GREENVPN_PUBLIC_PRODUCT_CLIENT_MARKER": "green-vpn-public-product-v1",
     "GREENVPN_PUBLIC_PRODUCT_RELEASE_CHANNEL": "public-product",
     "GREENVPN_PUBLIC_PRODUCT_BILLING_PRIMARY": billing_primary,
+    "GREENVPN_PAID_BETA_BILLING_PRIMARY": billing_primary,
+    "GREENVPN_REFUND_BILLING_PRIMARY": billing_primary,
+    "GREENVPN_AUTO_RENEWAL_BILLING_PRIMARY": billing_primary,
     "GREENVPN_PUBLIC_PRODUCT_TRANSPORT_SERVER_IDS": (
         "nl1-awg2-canary,nl1-hysteria2-canary,nl1-vless-reality-xhttp-canary,"
         "nl1-naive-https-canary,nl2-awg2-canary,nl2-hysteria2-canary,"

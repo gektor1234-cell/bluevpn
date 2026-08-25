@@ -1,9 +1,15 @@
+import asyncio
+import base64
 import os
 import copy
+import hashlib
+import hmac
 import io
+import json
 import tempfile
 import unittest
 import urllib.error
+from contextlib import ExitStack
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from threading import Event
@@ -57,6 +63,7 @@ class PaidBetaPolicyTests(unittest.TestCase):
     def setUp(self) -> None:
         main.PAID_BETA_ENABLED = True
         main.PAID_BETA_BILLING_PRIMARY = True
+        main.PUBLIC_PRODUCT_BILLING_PRIMARY = True
         main.FREE_TIER_ENABLED = False
         main.FREE_TIER_QUOTA_ENFORCED = True
         main.FREE_TIER_MONTHLY_LIMIT_GB = 3
@@ -73,6 +80,26 @@ class PaidBetaPolicyTests(unittest.TestCase):
         main.REFUND_WORKFLOW_CONFIRMED = True
         main.REFUND_EXECUTION_ENABLED = True
         main.REFUND_BILLING_PRIMARY = True
+        main.PAYMENT_PROVIDER = "yookassa"
+        main.ROBOKASSA_MERCHANT_LOGIN = ""
+        main.ROBOKASSA_PASSWORD1 = ""
+        main.ROBOKASSA_PASSWORD2 = ""
+        main.ROBOKASSA_PASSWORD3 = ""
+        main.ROBOKASSA_INVOICE_API_BASE = (
+            "https://services.robokassa.ru/InvoiceServiceWebApi/api"
+        )
+        main.ROBOKASSA_REFUND_API_BASE = (
+            "https://services.robokassa.ru/RefundService/Refund"
+        )
+        main.ROBOKASSA_AUTH_BASE = "https://auth.robokassa.ru"
+        main.ROBOKASSA_RETURN_URL = "https://api.example.test/payment/return"
+        main.ROBOKASSA_RESULT_URL = (
+            "https://api.example.test/api/v1/billing/robokassa/result"
+        )
+        main.ROBOKASSA_SIGNATURE_ALGORITHM = "sha256"
+        main.ROBOKASSA_JWT_ALGORITHM = "HS256"
+        main.ROBOKASSA_NPD_PARTNER_CONFIRMED = False
+        main.ROBOKASSA_RECURRING_ENABLED = False
         with main.db() as conn:
             conn.execute("DELETE FROM beta_funnel_events")
             conn.execute("DELETE FROM beta_invite_redemptions")
@@ -107,6 +134,45 @@ class PaidBetaPolicyTests(unittest.TestCase):
             main.create_trial_subscription(conn, self.user_id)
             conn.commit()
         self.access_token = main.issue_token(self.user_id)
+
+    def robokassa_environment(self) -> ExitStack:
+        stack = ExitStack()
+        values = {
+            "PAYMENT_PROVIDER": "robokassa",
+            "ROBOKASSA_MERCHANT_LOGIN": "greenvpn-test",
+            "ROBOKASSA_PASSWORD1": "robokassa-password-1",
+            "ROBOKASSA_PASSWORD2": "robokassa-password-2",
+            "ROBOKASSA_PASSWORD3": "robokassa-password-3",
+            "ROBOKASSA_INVOICE_API_BASE": (
+                "https://services.robokassa.ru/InvoiceServiceWebApi/api"
+            ),
+            "ROBOKASSA_REFUND_API_BASE": (
+                "https://services.robokassa.ru/RefundService/Refund"
+            ),
+            "ROBOKASSA_AUTH_BASE": "https://auth.robokassa.ru",
+            "ROBOKASSA_RETURN_URL": "https://api.example.test/payment/return",
+            "ROBOKASSA_RESULT_URL": (
+                "https://api.example.test/api/v1/billing/robokassa/result"
+            ),
+            "ROBOKASSA_SIGNATURE_ALGORITHM": "sha256",
+            "ROBOKASSA_JWT_ALGORITHM": "HS256",
+            "ROBOKASSA_NPD_PARTNER_CONFIRMED": True,
+            "ROBOKASSA_RECURRING_ENABLED": False,
+            "PUBLIC_BASE_URL": "https://api.example.test",
+            "PUBLIC_PRODUCT_ENABLED": True,
+            "PUBLIC_PRODUCT_BILLING_PRIMARY": True,
+            "PAID_SALES_ENABLED": True,
+            "TAX_RECEIPT_MODE": "robokassa_npd",
+            "TAX_RECEIPT_WORKFLOW_CONFIRMED": True,
+            "TAX_RECEIPT_PAYMENT_SUBJECT": "service",
+            "TAX_RECEIPT_PAYMENT_MODE": "full_payment",
+            "REFUND_WORKFLOW_CONFIRMED": True,
+            "REFUND_EXECUTION_ENABLED": True,
+            "REFUND_BILLING_PRIMARY": True,
+        }
+        for name, value in values.items():
+            stack.enter_context(patch.object(main, name, value))
+        return stack
 
     def enroll_beta(self):
         return main.set_user_paid_beta_cohort(
@@ -1278,6 +1344,630 @@ class PaidBetaPolicyTests(unittest.TestCase):
             f"{order['amountRub']}.00",
         )
         self.assertEqual(order["taxReceipt"]["status"], "pending")
+
+    def test_robokassa_jwt_and_result_signature_contract(self) -> None:
+        with self.robokassa_environment():
+            payload = {
+                "MerchantLogin": main.ROBOKASSA_MERCHANT_LOGIN,
+                "InvId": 42,
+                "OutSum": 249,
+            }
+            token = main.robokassa_jwt(
+                payload,
+                f"{main.ROBOKASSA_MERCHANT_LOGIN}:{main.ROBOKASSA_PASSWORD1}",
+                main.ROBOKASSA_JWT_ALGORITHM,
+            )
+            encoded_header, encoded_payload, encoded_signature = token.split(".")
+
+            def decode_segment(value: str) -> bytes:
+                return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+            self.assertEqual(
+                json.loads(decode_segment(encoded_header)),
+                {"typ": "JWT", "alg": "HS256"},
+            )
+            self.assertEqual(json.loads(decode_segment(encoded_payload)), payload)
+            expected_signature = hmac.new(
+                (
+                    f"{main.ROBOKASSA_MERCHANT_LOGIN}:"
+                    f"{main.ROBOKASSA_PASSWORD1}"
+                ).encode("utf-8"),
+                f"{encoded_header}.{encoded_payload}".encode("ascii"),
+                hashlib.sha256,
+            ).digest()
+            self.assertEqual(decode_segment(encoded_signature), expected_signature)
+
+            signature_source = (
+                "249.00:42:robokassa-password-2:"
+                "Shp_order=ord_test:Shp_user=7"
+            )
+            parameters = {
+                "OutSum": "249.00",
+                "InvId": "42",
+                "Shp_user": "7",
+                "Shp_order": "ord_test",
+                "SignatureValue": main.robokassa_signature(signature_source),
+            }
+            self.assertTrue(main.robokassa_result_signature_valid(parameters))
+            parameters["OutSum"] = "250.00"
+            self.assertFalse(main.robokassa_result_signature_valid(parameters))
+
+    def test_payment_callbacks_are_rejected_on_fallback_before_processing(self) -> None:
+        async def receive_empty():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        def request_for(path: str) -> Request:
+            return Request(
+                {
+                    "type": "http",
+                    "method": "POST",
+                    "path": path,
+                    "query_string": b"",
+                    "headers": [],
+                },
+                receive_empty,
+            )
+
+        with (
+            patch.object(main, "PUBLIC_PRODUCT_ENABLED", True),
+            patch.object(main, "PUBLIC_PRODUCT_BILLING_PRIMARY", False),
+            patch.object(main, "PAID_BETA_BILLING_PRIMARY", True),
+            patch.object(main, "authoritative_yookassa_payment_for_webhook") as yookassa,
+            patch.object(main, "robokassa_result_parameters") as robokassa,
+        ):
+            with self.assertRaises(main.HTTPException) as yookassa_error:
+                asyncio.run(
+                    main.billing_yookassa_webhook(
+                        request_for("/api/v1/billing/yookassa/webhook")
+                    )
+                )
+            with self.assertRaises(main.HTTPException) as robokassa_error:
+                asyncio.run(
+                    main.billing_robokassa_result(
+                        request_for("/api/v1/billing/robokassa/result")
+                    )
+                )
+
+        self.assertEqual(yookassa_error.exception.status_code, 503)
+        self.assertEqual(robokassa_error.exception.status_code, 503)
+        self.assertEqual(
+            yookassa_error.exception.detail["code"],
+            "billing_callback_primary_required",
+        )
+        self.assertEqual(
+            robokassa_error.exception.detail["code"],
+            "billing_callback_primary_required",
+        )
+        yookassa.assert_not_called()
+        robokassa.assert_not_called()
+
+    def test_fallback_order_poll_never_synchronizes_or_mutates_provider_state(self) -> None:
+        with self.robokassa_environment(), patch.object(
+            main,
+            "create_robokassa_payment_for_order",
+            side_effect=lambda row, user_email: main.billing_order_status(row),
+        ):
+            pending = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(autoRenew=False),
+            )
+        with main.db() as conn:
+            conn.execute(
+                """
+                UPDATE billing_orders
+                SET provider_payment_id = ?, payment_url = ?
+                WHERE public_id = ?
+                """,
+                (
+                    "invoice-fallback-read-only",
+                    "https://auth.robokassa.ru/merchant/Invoice/fallback",
+                    pending["orderId"],
+                ),
+            )
+            conn.commit()
+
+        with (
+            self.robokassa_environment(),
+            patch.object(main, "PUBLIC_PRODUCT_ENABLED", True),
+            patch.object(main, "PUBLIC_PRODUCT_BILLING_PRIMARY", False),
+            patch.object(main, "sync_robokassa_billing_order") as sync,
+        ):
+            observed = main.get_billing_order_for_user(
+                self.user_id,
+                pending["orderId"],
+            )
+
+        self.assertEqual(observed["status"], "pending")
+        self.assertNotIn("providerPaymentId", observed)
+        sync.assert_not_called()
+
+    def test_robokassa_readiness_is_fail_closed_until_npd_and_refund_ready(self) -> None:
+        with (
+            self.robokassa_environment(),
+            patch.object(main, "ROBOKASSA_NPD_PARTNER_CONFIRMED", False),
+            patch.object(main, "ROBOKASSA_PASSWORD3", ""),
+        ):
+            readiness = main.robokassa_payment_readiness()
+
+        self.assertFalse(readiness["productionReady"])
+        failed = {check["code"] for check in readiness["checks"] if not check["ok"]}
+        self.assertIn("robokassa_npd_partner", failed)
+        self.assertIn("refund_workflow_ready", failed)
+
+        with self.robokassa_environment():
+            self.assertTrue(main.robokassa_payment_readiness()["productionReady"])
+
+    def test_robokassa_order_contains_npd_receipt_and_hides_operation_key(self) -> None:
+        requests = []
+
+        def invoice_request(path, payload):
+            requests.append((path, copy.deepcopy(payload)))
+            self.assertEqual(path, "CreateInvoice")
+            return {
+                "id": "invoice-robokassa-1",
+                "invId": payload["InvId"],
+                "url": "https://auth.robokassa.ru/merchant/Invoice/test-1",
+                "isSuccess": True,
+            }
+
+        with (
+            self.robokassa_environment(),
+            patch.object(main, "robokassa_invoice_request", side_effect=invoice_request),
+        ):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(autoRenew=False),
+            )
+
+        create_payload = next(payload for path, payload in requests if path == "CreateInvoice")
+        item = create_payload["InvoiceItems"][0]
+        self.assertEqual(create_payload["MerchantLogin"], "greenvpn-test")
+        self.assertEqual(create_payload["OutSum"], 249)
+        self.assertEqual(create_payload["AdditionalParameters"]["Email"], "beta@example.test")
+        self.assertEqual(item["Tax"], "none")
+        self.assertEqual(item["PaymentMethod"], "full_payment")
+        self.assertEqual(item["PaymentObject"], "service")
+        self.assertEqual(order["provider"], "robokassa")
+        self.assertEqual(order["taxReceipt"]["mode"], "robokassa_npd")
+        self.assertEqual(
+            order["taxReceipt"]["status"],
+            "prepared_by_robocheck_smz",
+        )
+        self.assertNotIn("providerOperationKey", order)
+        public_order = main.public_billing_order_status(order)
+        self.assertNotIn("providerOperationKey", public_order)
+        self.assertNotIn("providerPaymentId", public_order)
+
+    def test_robokassa_recovers_existing_invoice_without_duplicate_create(self) -> None:
+        paths = []
+
+        def invoice_request(path, payload):
+            paths.append(path)
+            self.assertEqual(path, "GetInvoiceInformation")
+            return {
+                "isSuccess": True,
+                "invoiceInformation": {
+                    "id": "invoice-recovered",
+                    "invId": payload["InvId"],
+                    "merchantLogin": "greenvpn-test",
+                    "outSum": 249,
+                    "invoiceStatus": "NotPaid",
+                    "invoicePaymentUrl": (
+                        "https://auth.robokassa.ru/merchant/Invoice/recovered"
+                    ),
+                },
+            }
+
+        with self.robokassa_environment(), patch.object(
+            main,
+            "create_robokassa_payment_for_order",
+            side_effect=lambda row, user_email: main.billing_order_status(row),
+        ):
+            pending = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(autoRenew=False),
+            )
+        attempted_at = main.utc_now_iso()
+        with main.db() as conn:
+            conn.execute(
+                """
+                UPDATE billing_orders
+                SET provider_create_attempted_at = ?
+                WHERE public_id = ?
+                """,
+                (attempted_at, pending["orderId"]),
+            )
+            conn.commit()
+        row = main.get_billing_order_row(pending["orderId"])
+
+        with (
+            self.robokassa_environment(),
+            patch.object(main, "robokassa_invoice_request", side_effect=invoice_request),
+        ):
+            order = main.create_robokassa_payment_for_order(
+                row,
+                user_email="beta@example.test",
+            )
+
+        self.assertEqual(paths, ["GetInvoiceInformation"])
+        self.assertEqual(order["provider"], "robokassa")
+        self.assertEqual(
+            order["paymentUrl"],
+            "https://auth.robokassa.ru/merchant/Invoice/recovered",
+        )
+
+    def test_robokassa_ambiguous_invoice_create_is_never_retried(self) -> None:
+        paths = []
+
+        def invoice_request(path, payload):
+            paths.append(path)
+            if path == "CreateInvoice":
+                raise main.HTTPException(
+                    status_code=502,
+                    detail={"code": "payment_provider_unavailable"},
+                )
+            self.assertEqual(path, "GetInvoiceInformation")
+            raise main.HTTPException(
+                status_code=502,
+                detail={"code": "payment_provider_rejected"},
+            )
+
+        with (
+            self.robokassa_environment(),
+            patch.object(main, "robokassa_invoice_request", side_effect=invoice_request),
+        ):
+            for _attempt in range(2):
+                with self.assertRaises(main.HTTPException) as pending:
+                    main.create_billing_order_for_user(
+                        self.user_id,
+                        self.public_product_payload(autoRenew=False),
+                    )
+                self.assertEqual(pending.exception.status_code, 503)
+                self.assertEqual(
+                    pending.exception.detail["code"],
+                    "payment_provider_reconciliation_pending",
+                )
+
+        self.assertEqual(
+            paths,
+            [
+                "CreateInvoice",
+                "GetInvoiceInformation",
+                "GetInvoiceInformation",
+            ],
+        )
+        with main.db() as conn:
+            row = conn.execute(
+                """
+                SELECT provider_create_attempted_at, provider_payment_id, payment_url
+                FROM billing_orders
+                WHERE user_id = ? AND status = 'pending'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (self.user_id,),
+            ).fetchone()
+        self.assertIsNotNone(row["provider_create_attempted_at"])
+        self.assertIsNone(row["provider_payment_id"])
+        self.assertIsNone(row["payment_url"])
+
+    def test_robokassa_activation_requires_authoritative_exact_operation(self) -> None:
+        def invoice_request(path, payload):
+            if path == "GetInvoiceInformation":
+                raise main.HTTPException(
+                    status_code=502,
+                    detail={"code": "payment_provider_rejected"},
+                )
+            return {
+                "id": "invoice-activation",
+                "invId": payload["InvId"],
+                "url": "https://auth.robokassa.ru/merchant/Invoice/activation",
+                "isSuccess": True,
+            }
+
+        with (
+            self.robokassa_environment(),
+            patch.object(main, "robokassa_invoice_request", side_effect=invoice_request),
+        ):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(autoRenew=False),
+            )
+            row = main.get_billing_order_row(order["orderId"])
+            invoice = {
+                "id": "invoice-activation",
+                "invId": int(row["id"]),
+                "merchantLogin": "greenvpn-test",
+                "outSum": 249,
+                "invoiceStatus": "Paid",
+            }
+            with (
+                patch.object(main, "robokassa_get_invoice", return_value=invoice),
+                patch.object(
+                    main,
+                    "robokassa_get_operation_state",
+                    return_value={
+                        "resultCode": "0",
+                        "stateCode": "5",
+                        "outSum": "249.00",
+                        "opKey": "",
+                    },
+                ),
+            ):
+                pending = main.sync_robokassa_billing_order(order["orderId"])
+            self.assertTrue(pending["providerPending"])
+            self.assertEqual(
+                main.get_billing_order_row(order["orderId"])["status"],
+                "pending",
+            )
+
+            with (
+                patch.object(main, "robokassa_get_invoice", return_value=invoice),
+                patch.object(
+                    main,
+                    "robokassa_get_operation_state",
+                    return_value={
+                        "resultCode": "0",
+                        "stateCode": "100",
+                        "outSum": "1.00",
+                        "opKey": "operation-wrong-sum",
+                    },
+                ),
+            ):
+                with self.assertRaises(main.HTTPException) as mismatch:
+                    main.sync_robokassa_billing_order(order["orderId"])
+            self.assertEqual(mismatch.exception.status_code, 409)
+            self.assertEqual(
+                main.get_billing_order_row(order["orderId"])["status"],
+                "pending",
+            )
+
+            with (
+                patch.object(main, "robokassa_get_invoice", return_value=invoice),
+                patch.object(
+                    main,
+                    "robokassa_get_operation_state",
+                    return_value={
+                        "resultCode": "0",
+                        "stateCode": "100",
+                        "outSum": "249.00",
+                        "opKey": "operation-paid-1",
+                    },
+                ),
+            ):
+                activated = main.sync_robokassa_billing_order(order["orderId"])
+
+        self.assertEqual(activated["order"]["status"], "activated")
+        stored = main.get_billing_order_row(order["orderId"])
+        self.assertEqual(stored["provider_operation_key"], "operation-paid-1")
+        self.assertEqual(
+            stored["tax_receipt_status"],
+            "submitted_by_robocheck_smz",
+        )
+
+    def test_robokassa_result_url_rejects_ambiguous_case_and_acknowledges_exact_signal(self) -> None:
+        async def receive_empty():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        ambiguous_request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/api/v1/billing/robokassa/result",
+                "query_string": b"OutSum=249.00&outsum=1.00",
+                "headers": [],
+            },
+            receive_empty,
+        )
+        with self.assertRaises(main.HTTPException) as ambiguous:
+            asyncio.run(main.robokassa_result_parameters(ambiguous_request))
+        self.assertEqual(ambiguous.exception.status_code, 400)
+
+        def invoice_request(path, payload):
+            if path == "GetInvoiceInformation":
+                raise main.HTTPException(
+                    status_code=502,
+                    detail={"code": "payment_provider_rejected"},
+                )
+            return {
+                "id": "invoice-result-url",
+                "invId": payload["InvId"],
+                "url": "https://auth.robokassa.ru/merchant/Invoice/result-url",
+                "isSuccess": True,
+            }
+
+        with (
+            self.robokassa_environment(),
+            patch.object(main, "robokassa_invoice_request", side_effect=invoice_request),
+        ):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(autoRenew=False),
+            )
+            row = main.get_billing_order_row(order["orderId"])
+            out_sum = "249.00"
+            inv_id = str(row["id"])
+            signature = main.robokassa_signature(
+                f"{out_sum}:{inv_id}:{main.ROBOKASSA_PASSWORD2}"
+            )
+            query = main.urllib.parse.urlencode(
+                {
+                    "OutSum": out_sum,
+                    "InvId": inv_id,
+                    "SignatureValue": signature,
+                }
+            ).encode("ascii")
+            request = Request(
+                {
+                    "type": "http",
+                    "method": "GET",
+                    "path": "/api/v1/billing/robokassa/result",
+                    "query_string": query,
+                    "headers": [],
+                },
+                receive_empty,
+            )
+            with patch.object(
+                main,
+                "sync_robokassa_billing_order",
+                return_value={"order": order},
+            ) as sync:
+                response = asyncio.run(main.billing_robokassa_result(request))
+
+        self.assertEqual(response.body.decode("ascii"), f"OK{inv_id}")
+        sync.assert_called_once_with(order["orderId"], require_paid=True)
+
+    def test_robokassa_full_refund_is_idempotent_and_rolls_back_entitlement(self) -> None:
+        before = main.billing_subscription_snapshot(main.get_subscription_row(self.user_id))
+
+        def invoice_request(path, payload):
+            if path == "GetInvoiceInformation":
+                raise main.HTTPException(
+                    status_code=502,
+                    detail={"code": "payment_provider_rejected"},
+                )
+            return {
+                "id": "invoice-refund",
+                "invId": payload["InvId"],
+                "url": "https://auth.robokassa.ru/merchant/Invoice/refund",
+                "isSuccess": True,
+            }
+
+        with (
+            self.robokassa_environment(),
+            patch.object(main, "robokassa_invoice_request", side_effect=invoice_request),
+        ):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(autoRenew=False),
+            )
+            main.mark_billing_order_paid_and_activate(
+                order["orderId"],
+                provider_payment_id="invoice-refund",
+            )
+            with main.db() as conn:
+                conn.execute(
+                    """
+                    UPDATE billing_orders
+                    SET provider_operation_key = 'operation-refund'
+                    WHERE public_id = ?
+                    """,
+                    (order["orderId"],),
+                )
+                conn.commit()
+            with (
+                patch.object(
+                    main,
+                    "robokassa_create_refund",
+                    return_value={
+                        "success": True,
+                        "requestId": "refund-request-1",
+                    },
+                ) as create_refund,
+                patch.object(
+                    main,
+                    "robokassa_get_refund_state",
+                    return_value={
+                        "requestId": "refund-request-1",
+                        "amount": 249,
+                        "label": "finished",
+                    },
+                ),
+            ):
+                first = main.execute_full_refund_for_order(
+                    order["orderId"],
+                    reason="Owner-approved Robokassa full refund regression",
+                )
+                second = main.execute_full_refund_for_order(
+                    order["orderId"],
+                    reason="Owner-approved Robokassa full refund regression",
+                )
+
+        self.assertEqual(create_refund.call_count, 1)
+        refund_payload = create_refund.call_args.args[0]
+        self.assertEqual(refund_payload["OpKey"], "operation-refund")
+        self.assertNotIn("RefundSum", refund_payload)
+        self.assertEqual(refund_payload["InvoiceItems"][0]["PaymentObject"], "service")
+        self.assertTrue(first["entitlementRolledBack"])
+        self.assertTrue(second["reused"])
+        self.assertFalse(second["providerCalled"])
+        refunded = main.get_billing_order_row(order["orderId"])
+        self.assertEqual(refunded["status"], "refunded")
+        self.assertEqual(refunded["refund_status"], "succeeded")
+        self.assertEqual(
+            refunded["refund_receipt_status"],
+            "submitted_by_robocheck_smz",
+        )
+        restored = main.billing_subscription_snapshot(
+            main.get_subscription_row(self.user_id)
+        )
+        self.assertEqual(restored["planCode"], before["planCode"])
+        self.assertEqual(restored["expiresAt"], before["expiresAt"])
+
+    def test_robokassa_ambiguous_refund_is_never_retried_automatically(self) -> None:
+        def invoice_request(path, payload):
+            if path == "GetInvoiceInformation":
+                raise main.HTTPException(
+                    status_code=502,
+                    detail={"code": "payment_provider_rejected"},
+                )
+            return {
+                "id": "invoice-refund-ambiguous",
+                "invId": payload["InvId"],
+                "url": "https://auth.robokassa.ru/merchant/Invoice/refund-ambiguous",
+                "isSuccess": True,
+            }
+
+        provider_error = main.HTTPException(
+            status_code=502,
+            detail={"code": "payment_provider_unavailable"},
+        )
+        with (
+            self.robokassa_environment(),
+            patch.object(main, "robokassa_invoice_request", side_effect=invoice_request),
+        ):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(autoRenew=False),
+            )
+            main.mark_billing_order_paid_and_activate(
+                order["orderId"],
+                provider_payment_id="invoice-refund-ambiguous",
+            )
+            with main.db() as conn:
+                conn.execute(
+                    """
+                    UPDATE billing_orders
+                    SET provider_operation_key = 'operation-refund-ambiguous'
+                    WHERE public_id = ?
+                    """,
+                    (order["orderId"],),
+                )
+                conn.commit()
+            with patch.object(
+                main,
+                "robokassa_create_refund",
+                side_effect=provider_error,
+            ) as create_refund:
+                with self.assertRaises(main.HTTPException):
+                    main.execute_full_refund_for_order(
+                        order["orderId"],
+                        reason="Ambiguous Robokassa refund regression test",
+                    )
+                with self.assertRaises(main.HTTPException) as repeated:
+                    main.execute_full_refund_for_order(
+                        order["orderId"],
+                        reason="Ambiguous Robokassa refund regression test",
+                    )
+
+        self.assertEqual(create_refund.call_count, 1)
+        self.assertEqual(repeated.exception.status_code, 409)
+        stored = main.get_billing_order_row(order["orderId"])
+        self.assertEqual(
+            stored["refund_status"],
+            "manual_reconciliation_required",
+        )
+        self.assertEqual(stored["status"], "activated")
 
     def test_exhausted_free_quota_blocks_bootstrap_and_new_config(self) -> None:
         self.enroll_beta()

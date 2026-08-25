@@ -487,6 +487,8 @@ for path in paths:
                         "paymentmethodid",
                         "payment_method_id",
                         "providerpaymentmethodid",
+                        "provideroperationkey",
+                        "provider_operation_key",
                     },
                 ),
             })
@@ -652,18 +654,22 @@ for path in paths:
                 "smokeCompleted": data.get("smokeCompleted"),
                 "requiresOwnerAction": data.get("requiresOwnerAction"),
                 "state": smoke_summary.get("state"),
-                "yookassaOrdersTotal": smoke_summary.get("yookassaOrdersTotal"),
+                "providerOrdersTotal": smoke_summary.get("providerOrdersTotal"),
+                "providerActivatedTotal": smoke_summary.get("providerActivatedTotal"),
                 "pendingWithPaymentUrl": smoke_summary.get("pendingWithPaymentUrl"),
                 "successfulSmokeCandidates": smoke_summary.get("successfulSmokeCandidates"),
                 "checks": len(data.get("checks") or []),
                 "steps": len(data.get("smokeSteps") or []),
-                "methodIdsExposed": "providerPaymentMethodId" in json.dumps(data),
+                "sensitiveProviderIdsExposed": any(
+                    marker in json.dumps(data)
+                    for marker in ("providerPaymentMethodId", "providerOperationKey")
+                ),
                 "policy": {
                     "noSyntheticActivation": policy.get("noSyntheticActivation"),
                     "activationSource": policy.get("activationSource"),
                 },
             })
-            if item.get("methodIdsExposed"):
+            if item.get("sensitiveProviderIdsExposed"):
                 summary["ok"] = False
         elif path.endswith("/billing/refunds/readiness"):
             refund_policy = data.get("policy") or {}

@@ -1,6 +1,6 @@
 # Green VPN External Services Checklist
 
-Последнее обновление: 2026-08-02
+Последнее обновление: 2026-08-25
 
 Этот файл нужен, чтобы внешние сервисы подключались одним коротким циклом: ты оформляешь сервис, берёшь нужные значения, передаёшь их Codex, а backend/UI уже готовы их принять. Секреты, пароли, API-ключи и токены в этот файл не писать.
 
@@ -11,11 +11,11 @@
   Упоминания ниже о production backend на `37.220.85.211` являются
   исторической setup-справкой: сейчас это NL1 VPN-узел.
 - DNS/HTTPS, Yandex 360 SMTP/email code, guest-first auth и внешний monitoring
-  production-ready. YooKassa provider integration и прежний реальный payment
-  smoke подтверждены, но коммерческий `productionPaymentReady` намеренно false,
-  пока sales/tax/refund/renewal gates выключены.
+  production-ready. Для новых продаж выбран Robokassa + «Робочеки СМЗ»;
+  коммерческий `productionPaymentReady` намеренно false до партнёрской привязки
+  НПД и нового реального payment/refund smoke.
 - Телефон/SMS исключён из продуктового контракта.
-- Android `0.3.19+2026072914` и Windows `0.3.26+3105` опубликованы и
+- Android `0.4.7+2026082401` и Windows `0.4.6+4636` опубликованы и
   проверены на обоих зеркалах. Windows остаётся `NotSigned` с принятым риском
   SmartScreen; текущий direct-download релиз этим не блокируется.
 - Необязательными внешними действиями остаются Telegram alert credentials,
@@ -26,7 +26,7 @@
 
 ## Главное Правило
 
-- В репозиторий нельзя писать пароли, токены, `admin_token`, SMTP-пароли, SMS API keys, YooKassa secret key, SSH-пароли и WireGuard private keys.
+- В репозиторий нельзя писать пароли, токены, `admin_token`, SMTP-пароли, Robokassa Password1/2/3, старый YooKassa secret key, SSH-пароли и WireGuard private keys.
 - Все реальные секреты должны попадать только в root-owned env нужного
   control plane. Не отправлять их в чат, документацию или Git.
 - Для безопасной загрузки секретов на сервер используй:
@@ -57,7 +57,7 @@ plane с проверкой fallback и rollback. VPN-узлы helper откло
 - DKIM TXT для `mail._domainkey` был добавлен, но после добавления нужно дождаться DNS propagation и проверить в Yandex 360.
 - DMARC уже добавлен и server-side readiness видит `_dmarc.greenvpn.pro` green.
 - Backend source/live server `0.9.67` уже умеет отдавать admin checklist внешних действий, хранить ручные owner statuses, показывать readiness для alerts/monitoring, держать safe publication gate для managed server catalog, показывать external endpoint probe readiness, показывать API/VPN endpoint split readiness, показывать owner launch packet, показывать payment launch safety, показывать monitoring probe plan, показывать dry-run auto-renewal readiness и dry-run subscription expiry readiness без raw payment method ids.
-- Auto-renewal и subscription expiry safe-enable signals теперь требуют clean payment smoke, не только наличие production YooKassa keys.
+- Auto-renewal и subscription expiry safe-enable signals требуют clean payment/refund smoke, а не только наличие provider keys.
 - Checklist в admin/support app теперь отдаёт safe setup bundle: apply command, readiness command, ожидаемые публичные DNS records, safe defaults и per-action `ownerInputs`/`applySteps`/`verifySteps` без секретных значений.
 - Owner packet CLI: `scripts\windows\get_owner_launch_packet.ps1`.
 
@@ -160,55 +160,38 @@ GREENVPN_EMAIL_CONFIRMATION_TTL_HOURS=24
 5. Повторная установка и вход по тому же email восстанавливают оплаченный
    доступ.
 
-## 3. Production Payments / YooKassa
+## 3. Production Payments / Robokassa + НПД
 
-Цель: пользователь нажимает `Оплатить тариф`, backend создаёт платёж в YooKassa, пользователь оплачивает, webhook подтверждает оплату, тариф активируется только после реального подтверждения.
+Канонический технический контракт находится в `docs/PAYMENTS_RU.md`.
 
-Что уже готово в коде:
+Что готово в коде:
 
-- Backend создаёт billing order.
-- Public direct tariff activation закрыт.
-- YooKassa payment creation уже есть.
-- Hosted payment return page уже есть: `https://api.greenvpn.pro/payment/return`.
-- Webhook endpoint уже есть: `https://api.greenvpn.pro/api/v1/billing/yookassa/webhook`.
-- Webhook в production mode дополнительно подтягивает платёж из YooKassa API и сверяет order id, amount и currency.
-- Client умеет открывать payment URL и автоматически опрашивать pending order.
-- Admin/backend now has dry-run auto-renewal readiness at `/api/v1/admin/billing/renewals/readiness`: it flags missing saved payment methods, pending renewal conflicts and YooKassa production blockers without charging users or exposing provider payment method ids.
-- Admin/backend now has dry-run subscription expiry readiness at `/api/v1/admin/subscriptions/expiry-readiness`: it flags expired-active rows, expiring manual subscriptions, retention contact gaps and auto-renew blockers before subscription enforcement is enabled.
-- Expired non-paid trial/support rows are backfilled to inactive on startup; paid plans are not silently changed.
+- billing order и прямая активация без провайдера закрыты;
+- Invoice API, ResultURL, авторитетная проверка Invoice + OpStateExt;
+- точная сверка суммы, `InvId`, `State=100` и `OpKey`;
+- NПД-позиции для «Робочеков СМЗ»;
+- полный guarded refund с чековой позицией и откатом прав;
+- отсутствие автоматического повтора при неопределённом CreateInvoice/CreateRefund;
+- callback принимается только billing-writer узлом;
+- клиент открывает payment URL и опрашивает pending order.
 
-Статус 2026-07-11: магазин, `shopId`, production key и реальный платёж проверены. Ключ находится только в root-owned env на обоих control-plane.
-
-Webhook в кабинете YooKassa проверен 2026-07-11:
+Публичные URL:
 
 ```text
-URL: https://api.greenvpn.pro/api/v1/billing/yookassa/webhook
-Events: payment.succeeded, payment.canceled
+Return URL: https://api.greenvpn.pro/payment/return
+Result URL: https://api.greenvpn.pro/api/v1/billing/robokassa/result
 ```
 
-Также включены `payment.waiting_for_capture`, `payment_method.active` и `refund.succeeded`.
-
-Return URL:
-
-```text
-https://api.greenvpn.pro/payment/return
-```
-
-Текущая server-only конфигурация содержит:
-
-```text
-YOOKASSA_SHOP_ID=<секрет/идентификатор магазина, только на сервере>
-YOOKASSA_SECRET_KEY=<секрет, только на сервере>
-YOOKASSA_API_BASE=https://api.yookassa.ru/v3
-YOOKASSA_RETURN_URL=https://api.greenvpn.pro/payment/return
-YOOKASSA_WEBHOOK_URL=https://api.greenvpn.pro/api/v1/billing/yookassa/webhook
-GREENVPN_PUBLIC_BASE_URL=https://api.greenvpn.pro
-```
+До включения продаж остаются внешние действия: подтвердить передачу данных
+партнёру НПД, завершить магазин/«Робочеки СМЗ», ввести MerchantLogin и
+Password1/2/3 только через server-only helper, затем с отдельным разрешением
+провести один реальный платёж и полный возврат. Автосписания остаются выключены.
 
 Официальные ссылки:
 
-- [YooKassa API Quick Start](https://yookassa.ru/developers/payment-acceptance/getting-started/quick-start)
-- [YooKassa Webhooks](https://yookassa.ru/developers/using-api/webhooks)
+- [Robokassa Invoice API](https://docs.robokassa.ru/ru/invoice-api)
+- [Robokassa ResultURL](https://docs.robokassa.ru/ru/notifications-and-redirects)
+- [Robokassa Refund API](https://docs.robokassa.ru/ru/refund-api)
 
 ## 4. Domain / DNS / HTTPS
 
@@ -232,7 +215,7 @@ TXT   @                yandex-verification:5583d6225f64e34e
 - Перед публичным запуском `api.greenvpn.pro` должен вести на HTTPS reverse proxy/API, который не использует тот же IP, что VPN endpoint.
 - VPN endpoint лучше вынести на отдельное имя, например `nl1.vpn.greenvpn.pro -> 37.220.85.211`, а будущие локации оформлять как `gb1.vpn.greenvpn.pro`, `kz1.vpn.greenvpn.pro` и так далее. Старый Timeweb Frankfurt не возвращать.
 - `greenvpn.pro` и `www.greenvpn.pro` можно держать как публичный сайт/лендинг; они тоже не должны требовать подключения к тому же IP, через который идёт VPN endpoint.
-- HTTPS на текущем backend уже включён через nginx + Let's Encrypt для `api.greenvpn.pro`; перед production YooKassa/email-required режимом всё равно проверяй `/healthz` по HTTPS.
+- HTTPS на текущем backend уже включён через nginx + Let's Encrypt для `api.greenvpn.pro`; перед production payment/email-required режимом всё равно проверяй `/healthz` и профильные readiness endpoints по HTTPS.
 - Если Windows-хост открывает сайт без VPN, но не открывает с включённым full-tunnel VPN, это ожидаемый симптом общей IP-точки API и VPN endpoint. Решение: разделить API/site IP и VPN endpoint IP.
 
 Официальные ссылки:
@@ -375,11 +358,13 @@ SMTP app password: <секрет>
 Телефон/SMS исключён из продуктового контракта. SMS provider, sender и API key
 не оформлять и не передавать.
 
-Минимальный набор для YooKassa:
+Минимальный набор для Robokassa после подключения партнёра НПД:
 
 ```text
-YOOKASSA_SHOP_ID: <значение>
-YOOKASSA_SECRET_KEY: <секрет>
+ROBOKASSA_MERCHANT_LOGIN: <значение>
+ROBOKASSA_PASSWORD1: <секрет>
+ROBOKASSA_PASSWORD2: <секрет>
+ROBOKASSA_PASSWORD3: <секрет>
 ```
 
 Минимальный набор для Telegram alerts:
@@ -425,7 +410,7 @@ Email readiness:
 wsl bash -lc "curl -fsS -H 'X-Admin-Token: <admin_token>' https://api.greenvpn.pro/api/v1/admin/email/readiness"
 ```
 
-YooKassa readiness:
+Payment readiness:
 
 ```powershell
 wsl bash -lc "curl -fsS -H 'X-Admin-Token: <admin_token>' https://api.greenvpn.pro/api/v1/admin/billing/readiness"
@@ -455,9 +440,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\blue
 
 Текущее состояние внешних сервисов:
 
-- SMTP/email-code production-ready. YooKassa provider настроен и прежний
-  реальный smoke подтверждён, но продажи выключены; секреты повторно не
-  передавать.
+- SMTP/email-code production-ready. Новый Robokassa + НПД контур готов в коде,
+  но продажи выключены до партнёрской привязки, server-only credentials и
+  нового реального payment/refund smoke.
 - Телефон/SMS не является fallback и не входит в продукт.
 - Telegram alerts остаются необязательным manual MVP без bot credentials.
 - Внешний monitoring уже имеет два probe-agent; новый VPS не требуется.

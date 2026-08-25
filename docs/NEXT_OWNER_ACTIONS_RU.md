@@ -1,6 +1,6 @@
 # Green VPN Next Owner Actions
 
-Последнее обновление: 2026-08-02 МСК
+Последнее обновление: 2026-08-25 МСК
 
 Этот файл фиксирует только действия, которые после полной автономной проверки
 действительно остались за владельцем. Старые setup-подробности ниже сохранены
@@ -14,8 +14,8 @@
 |---:|---|---|
 | 1 | Определить конечную модель `v1` | **Готово 2026-08-02:** бесплатный direct-download VPN; монетизация перенесена на следующий этап |
 | 2 | Оформить Authenticode Code Signing/Trusted Signing | **Перенесено 2026-08-02:** при текущем статусе владельца нет доступного проверенного публично доверенного маршрута выпуска; вернуться после оформления ИП/юрлица либо выбора Microsoft Store |
-| 3 | Принять legal/tax/KYC решения для продаж | Не выполнено; не относится к бесплатной `v1` |
-| 4 | Разрешить реальные денежные операции | Не разрешено; refunds и auto-renew charges выключены |
+| 3 | Принять legal/tax/KYC решения для продаж | **Частично готово:** активный НПД подтверждён, выбран Robokassa + «Робочеки СМЗ»; остаётся партнёрская привязка/договор |
+| 4 | Разрешить реальные денежные операции | Коммерческий запуск одобрен в принципе; перед конкретным реальным платежом и возвратом требуется отдельное подтверждение непосредственно в момент операции |
 | 5 | Оформить аккаунты Google Play/RuStore | Не выполнено; direct-download `v1` этим не блокируется |
 | 6 | Оформить рекламного провайдера | Не выполнено; реклама выключена и не входит в `v1` |
 | 7 | Оплатить второй резервный `dnstt`-сервер | Для текущей `v1` не требуется; только отдельное будущее решение |
@@ -25,8 +25,8 @@
 ## Что блокирует формальное закрытие текущей v1
 
 Инженерных и внешних сервисных блокеров у бесплатного direct-download релиза
-нет. Android `0.3.19+2026072914` и Windows `0.3.26+3105` опубликованы как
-optional на обоих control plane. Windows остаётся честно `NotSigned`; принятый
+нет. Android `0.4.7+2026082401` и Windows `0.4.6+4636` опубликованы как
+mandatory stable на обоих control plane. Windows остаётся честно `NotSigned`; принятый
 риск SmartScreen не блокирует direct-download. После решения по модели продукта
 остаётся пункт 9: финальная пользовательская приёмка.
 
@@ -39,8 +39,9 @@ Certum приостановил продажи и выпуск граждана�
 самостоятельно подпишет, соберёт, физически проверит и опубликует
 higher-version successor только после нового пункта 8.
 
-Для будущих платных продаж нужны пункты 3 и 4. Сейчас sales, refunds, tax
-confirmation и renewal charges безопасно выключены.
+Для платных продаж нужно завершить пункты 3 и 4. Сейчас sales, refunds и
+renewal charges безопасно выключены; включать их до реального payment/refund
+smoke нельзя.
 
 Инженерная цепочка подписи, canary, атомарной публикации на оба control plane,
 exact-download проверки и rollback уже подготовлена.
@@ -50,14 +51,14 @@ Telegram-бот, автопродление, промо, бесплатная к
 уже физически отправляются; денежные и ограничивающие функции остаются
 выключенными.
 
-Не требуют повторения до изменения соответствующего кода: прежний реальный
-платёж, email-код, восстановление аккаунта, Android/Windows tunnel smoke, SMTP,
-YooKassa, DNS/HTTPS, внешний мониторинг, публикация Android `0.3.19`, Windows
-`0.3.26` и проверка обоих зеркал.
+Не требуют повторения до изменения соответствующего кода: email-код,
+восстановление аккаунта, Android/Windows tunnel smoke, SMTP, DNS/HTTPS,
+внешний мониторинг и проверка обоих зеркал. Старый YooKassa smoke не заменяет
+обязательный новый smoke выбранного Robokassa + НПД контура.
 
 ## Главное правило
 
-- Не писать сюда реальные пароли, токены, SMTP password, `admin_token`, YooKassa secret key, SMS API key, SSH password и WireGuard private keys.
+- Не писать сюда реальные пароли, токены, SMTP password, `admin_token`, Robokassa Password1/2/3, старый YooKassa secret key, SSH password и WireGuard private keys.
 - Секреты подключаются только в root-owned env соответствующих control plane;
   текущие production-узлы: Timeweb Moscow `72.56.32.197` и RUVDS Moscow
   `176.113.81.35`. `37.220.85.211` является VPN-узлом, а не production API
@@ -127,52 +128,40 @@ readiness green, физический email-code flow и восстановле�
 email перед оплатой и отдельное восстановление подписки по email на Android и
 Windows. Повторный OTP или платёж для очередного smoke не нужен.
 
-## 4. YooKassa production
+## 4. Robokassa + НПД production
 
-Статус 2026-08-02: **provider-интеграция и прежний реальный payment smoke
-подтверждены, но продажи не разрешены**. Кабинет активен, production key
-установлен только в root-owned env обоих control plane, provider API, webhook,
-реальный платёж, чек и активация проверены. Текущий
-`productionPaymentReady=false` является ожидаемым policy state: sales,
-tax-confirmation, refund execution и renewal charges выключены. Повторный
-платёж до решения владельца о коммерческом запуске не нужен.
+Статус 2026-08-25: **активный НПД подтверждён владельцем, инженерный контур
+готов, но внешнее подключение и реальные денежные проверки не завершены**.
+`productionPaymentReady=false` является правильным fail-closed состоянием.
 
-Webhook в кабинете проверен 2026-07-11:
+Codex уже сделал без движения денег:
+
+- Invoice API, ResultURL, авторитетную проверку Invoice + OpStateExt;
+- точную сверку суммы, `InvId`, `State=100` и `OpKey`;
+- NПД-позиции для «Робочеков СМЗ»;
+- guarded full refund и откат прав;
+- защиту от дублей при неопределённом CreateInvoice/CreateRefund;
+- запрет платёжных callback на fallback;
+- server-only env helper и readiness checks.
+
+Что требует действия владельца/провайдера:
+
+1. Непосредственно перед переходом подтвердить передачу ИНН и referral-данных
+   партнёру Robokassa/оператору чеков.
+2. Завершить магазин и «Робочеки СМЗ» в кабинете Robokassa.
+3. Ввести MerchantLogin и Password1/2/3 только через защищённый env helper.
+4. Отдельно разрешить один реальный платёж и один полный возврат.
+
+Публичные URL:
 
 ```text
-URL: https://api.greenvpn.pro/api/v1/billing/yookassa/webhook
-Events: payment.succeeded, payment.canceled
+Return URL: https://api.greenvpn.pro/payment/return
+Result URL: https://api.greenvpn.pro/api/v1/billing/robokassa/result
 ```
 
-Дополнительно включены `payment.waiting_for_capture`, `payment_method.active` и `refund.succeeded`.
-
-- если YooKassa спрашивает return URL:
-
-```text
-https://api.greenvpn.pro/payment/return
-```
-
-Повторно передавать `shopId` или `secretKey` в чат не нужно. При следующей ротации ключ обновляется только через защищённый server-only процесс.
-
-Уже проверено:
-
-- YooKassa env записан только на серверы, backend перезапущен;
-- provider API и реальный order/payment/activation прошли;
-- Timeweb остаётся единственным billing writer, оплаченный результат синхронизирован на RUVDS;
-- `/api/v1/admin/billing/readiness` отвечает и подтверждает установленного
-  provider, но остаётся `productionReady=false`, пока денежные gates выключены;
-- `/api/v1/admin/billing/payment-smoke/readiness` подтверждает
-  `smokeCompleted=true`, один успешный provider-backed кандидат и отсутствие
-  synthetic activation;
-- `/api/v1/admin/billing/renewals/readiness` остаётся readiness-only:
-  `paymentSmokeReady=false`, реальное автоматическое списание выключено до
-  отдельного решения владельца и нового разрешённого smoke;
-- новые клиенты и backend используют auto-renew только как явный opt-in;
-  существующая оплаченная подписка не изменялась;
-- `BLUEVPN_ENFORCE_SUBSCRIPTION_ACCESS` остаётся выключенным; бесплатный
-  permanent-Free доступ не зависит от истечения подписки;
-- возврат и отмена реального платежа остаются owner/payment-provider gate:
-  автоматизация не должна инициировать движение денег.
+Timeweb должен оставаться единственным billing writer. На RUVDS writer-флаги
+всегда `0`. Продажи и возвраты включаются только после зелёного smoke;
+автосписания остаются отдельным будущим gate.
 
 ## 5. Telegram alerts
 
@@ -219,12 +208,9 @@ Telegram-доставка alert остаётся отдельным необяз
 
 Статус: **готово**.
 
-Android `0.3.19+2026072914` и Windows `0.3.26+3105` имеют точные
-primary/fallback bytes и серверные rollback-каталоги. Текущий Windows SHA-256:
-`1E5505E73B735A00E1C7C44BD1919F96F98EA8DC5F03497205EA39E89AAE00F6`.
-Stable и `public-product` manifest на обоих control plane возвращают
-`fileReady=true`; текущая публичная проверка манифестов и загрузок проходит
-`20/20`, public surface — `31/31`.
+Android `0.4.7+2026082401` и Windows `0.4.6+4636` являются текущими
+mandatory stable версиями по `release_contract.json`. Точные SHA/size берутся
+из актуальных primary/fallback manifests, а не копируются в эту памятку.
 
 При следующей финальной сборке значения обновляются аналогично:
 
@@ -289,8 +275,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\blue
 
 Отсутствие внешнего сервиса не должно тормозить код:
 
-- SMTP/email-code production-ready; YooKassa provider настроен и проверен,
-  однако денежные gates и продажи выключены;
+- SMTP/email-code production-ready; Robokassa + НПД готов в коде, однако
+  внешняя партнёрская привязка, payment/refund smoke и денежные gates ещё не завершены;
 - phone/SMS flow удалён из продуктового контракта;
 - если нет Telegram token, alerts остаются manual MVP;
 - rollback готов; без Windows signing холодная массовая дистрибуция остаётся

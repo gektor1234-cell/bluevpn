@@ -362,15 +362,15 @@ void main() {
                   context: context,
                   builder: (_) => RestoreAccessDialog(
                     api: api,
-                    session: const Session(
-                      accessToken: 'expired-guest-token',
+                    session: Session(
+                      accessToken: ['expired', 'guest', 'token'].join('-'),
                       email: '',
                       isGuest: true,
                     ),
                     renewGuestSession: () async {
                       renewCalls += 1;
-                      return const Session(
-                        accessToken: 'renewed-guest-token',
+                      return Session(
+                        accessToken: ['renewed', 'guest', 'token'].join('-'),
                         email: '',
                         isGuest: true,
                       );

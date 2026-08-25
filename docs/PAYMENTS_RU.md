@@ -1,118 +1,115 @@
-# Green VPN Payments RU MVP
+# Green VPN: платежи для НПД
 
-Цель: пользователь выбирает тариф в Green VPN, оплачивает его российским способом оплаты, а сервер сам активирует подписку и при необходимости продлевает её.
+Последнее обновление: 2026-08-25.
 
-## MVP сейчас
+## Текущее решение
 
-- Клиент создаёт заказ через `/api/v1/billing/orders`.
-- Заказ получает статус `pending`.
-- Если ЮKassa не настроена, backend остаётся в ручном MVP-режиме.
-- Если ЮKassa настроена, backend создаёт платёж и возвращает `paymentUrl`.
-- Webhook активирует тариф только после проверки order metadata, payment id, суммы и валюты.
-- В production-режиме webhook не доверяет входящему телу на слово: backend берёт `payment_id` из webhook и сам запрашивает платёж у ЮKassa API.
+- Владелец подтвердил действующий статус плательщика НПД (самозанятый).
+- Для новых продаж выбран `Robokassa` с чековым контуром «Робочеки СМЗ».
+- Старый контур YooKassa остаётся в коде только для совместимости и сверки старых заказов. Новые продажи на него не переключать.
+- Production-продажи, возвраты и автоматические списания остаются выключенными, пока не завершены партнёрская привязка НПД и один реальный payment/refund smoke.
+- Timeweb является единственным billing-writer. RUVDS принимает read/auth трафик, но отклоняет платёжные callback и не выполняет возвраты или автосписания.
 
-- Admin reconciliation показывает paid-not-activated, stale pending и другие несостыковки до того, как пользователь напишет в поддержку.
+## Как проходит оплата
 
-## Целевая схема
+1. Подтверждённый email создаёт billing order со статусом `pending`.
+2. Backend восстанавливает уже созданный счёт по `InvId`, если предыдущий ответ Robokassa потерялся. Повторный CreateInvoice при неопределённом результате не выполняется.
+3. Новый счёт создаётся через Robokassa Invoice API с позицией услуги и данными для «Робочеков СМЗ».
+4. Приложение открывает только HTTPS URL на домене Robokassa.
+5. ResultURL является сигналом, а не доказательством оплаты.
+6. Backend самостоятельно проверяет Invoice и OpStateExt.
+7. Тариф активируется только при точной сумме, `Invoice=Paid`, `Result=0`, `State=100` и непустом `OpKey`.
+8. Повторный ResultURL идемпотентен и не продлевает подписку второй раз.
 
-1. Пользователь выбирает тариф и опцию `Автопродление`.
-2. Backend создаёт order в BlueVPN DB.
-3. Backend создаёт платёж у провайдера, например ЮKassa.
-4. Приложение открывает платёжную ссылку или встроенный checkout.
-5. Провайдер отправляет webhook на backend.
-6. Backend получает webhook как сигнал, затем запрашивает актуальный платёж у ЮKassa API по `payment_id`.
-7. Если платёж успешен, backend активирует тариф.
-8. Если `autoRenew=true`, backend сохраняет только provider payment method id, а не данные карты.
-9. Планировщик backend заранее создаёт следующий платёж и продлевает подписку после успешного webhook.
-
-После оплаты ЮKassa может вернуть пользователя на:
+Публичные URL:
 
 ```text
-https://api.greenvpn.pro/payment/return
+Return URL: https://api.greenvpn.pro/payment/return
+Result URL: https://api.greenvpn.pro/api/v1/billing/robokassa/result
 ```
 
-Эта страница уже есть в backend. Она не активирует тариф сама, а только объясняет пользователю, что можно вернуться в Green VPN. Активация всё равно идёт через webhook и проверку payment id.
+## Возврат
 
-Клиент Green VPN автоматически проверяет pending-заказ после создания/открытия оплаты. Кнопка `Проверить оплату` остаётся запасным ручным действием.
+- Поддерживается только полный guarded refund по исходному `OpKey`.
+- Password3 хранится только в root-owned server env.
+- Неопределённый ответ CreateRefund никогда не повторяется автоматически: заказ переводится в ручную сверку.
+- Права пользователя откатываются только после авторитетного статуса `finished`.
+- В запрос передаются позиции для чека возврата «Робочеков СМЗ».
+- Неизвестный статус провайдера не считается успешным возвратом.
 
-## ЮKassa env
+## Server-only env
 
-На сервере нужно задать:
+Секретные значения нельзя писать в Git, документы, owner notes или чат.
 
-```bash
-YOOKASSA_SHOP_ID=...
-YOOKASSA_SECRET_KEY=...
-GREENVPN_PUBLIC_BASE_URL=https://api.greenvpn.pro
-YOOKASSA_RETURN_URL=https://api.greenvpn.pro/payment/return
-YOOKASSA_WEBHOOK_URL=https://api.greenvpn.pro/api/v1/billing/yookassa/webhook
+```text
+GREENVPN_PAYMENT_PROVIDER=robokassa
+ROBOKASSA_MERCHANT_LOGIN=<server-only>
+ROBOKASSA_PASSWORD1=<server-only>
+ROBOKASSA_PASSWORD2=<server-only>
+ROBOKASSA_PASSWORD3=<server-only>
+ROBOKASSA_RETURN_URL=https://api.greenvpn.pro/payment/return
+ROBOKASSA_RESULT_URL=https://api.greenvpn.pro/api/v1/billing/robokassa/result
+GREENVPN_ROBOKASSA_NPD_PARTNER_CONFIRMED=1
+GREENVPN_TAX_RECEIPT_MODE=robokassa_npd
+GREENVPN_TAX_RECEIPT_WORKFLOW_CONFIRMED=1
+GREENVPN_TAX_RECEIPT_PAYMENT_SUBJECT=service
+GREENVPN_TAX_RECEIPT_PAYMENT_MODE=full_payment
 ```
 
-Secrets вводить только через:
+До реального smoke обязательно:
+
+```text
+GREENVPN_PAID_SALES_ENABLED=0
+GREENVPN_REFUND_EXECUTION_ENABLED=0
+GREENVPN_AUTO_RENEWAL_CHARGES_ENABLED=0
+GREENVPN_ROBOKASSA_RECURRING_ENABLED=0
+```
+
+Writer-флаги на Timeweb могут быть `1` только на соответствующем этапе. На RUVDS они всегда `0`:
+
+```text
+GREENVPN_PUBLIC_PRODUCT_BILLING_PRIMARY
+GREENVPN_PAID_BETA_BILLING_PRIMARY
+GREENVPN_REFUND_BILLING_PRIMARY
+GREENVPN_AUTO_RENEWAL_BILLING_PRIMARY
+```
+
+Безопасный helper:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\bluevpn\scripts\windows\configure_backend_env_wsl.ps1 -ServerHost 72.56.32.197
 ```
 
-Если `YOOKASSA_SHOP_ID` или `YOOKASSA_SECRET_KEY` не заданы, Green VPN автоматически остаётся в ручном MVP-режиме: заказ создаётся, но `paymentUrl` пустой, а тариф активируется кнопкой `Оплата получена` в админке.
+Fallback настраивается отдельным запуском с `-ServerHost 176.113.81.35`.
 
-Webhook URL для ЮKassa:
+## Что ещё требует внешнего действия
 
-```text
-https://api.greenvpn.pro/api/v1/billing/yookassa/webhook
-```
+1. Непосредственно перед переходом подтвердить передачу ИНН и referral-данных партнёру Robokassa/оператору чеков.
+2. Завершить магазин и «Робочеки СМЗ» в кабинете Robokassa.
+3. Ввести MerchantLogin и Password1/2/3 через server-only helper.
+4. С отдельным подтверждением провести один небольшой реальный платёж.
+5. Проверить активацию, чек НПД, затем выполнить полный возврат и проверить чек возврата/откат прав.
+6. Только после зелёной сверки включить продажи на primary. Автосписания остаются отдельным будущим gate.
 
-Проверка готовности production-платежей:
+## Проверки
 
 ```text
 GET /api/v1/admin/billing/readiness
-```
-
-Проверка расхождений заказов/активаций:
-
-```text
+GET /api/v1/admin/billing/payment-smoke/readiness
+GET /api/v1/admin/billing/refunds/readiness
 GET /api/v1/admin/billing/reconciliation
 ```
-
-Проверка готовности minimal production smoke:
-
-```text
-GET /api/v1/admin/billing/payment-smoke/readiness
-```
-
-Этот endpoint не выводит секреты провайдера. Он показывает issue counts, attention orders и policy ручной активации. `failed` / `canceled` / `cancelled` order нельзя активировать через обычный `mark-paid`; нужно создать новый order или принять отдельное owner/admin решение.
-
-Backend `0.9.65` also makes auto-renewal and subscription expiry safe-enable signals depend on clean payment smoke:
-
-```text
-GET /api/v1/admin/billing/renewals/readiness
-GET /api/v1/admin/subscriptions/expiry-readiness
-```
-
-Even after production YooKassa keys are configured, these endpoints must stay unsafe until `/api/v1/admin/billing/payment-smoke/readiness` confirms provider-backed activation.
-
-Backend `0.9.66` adds a sanitized local helper for the combined check:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\check_payment_launch_safety.ps1
 ```
 
-`/healthz` также отдаёт `paymentsProductionReady`. Это `true` только когда заданы ключи ЮKassa, production HTTPS return URL, webhook URL/public base URL и HTTPS YooKassa API base.
+Готовность нельзя выводить только из `/healthz`: нужны provider readiness, точная DB-сверка, primary/fallback роли, реальный платёж, реальный возврат и чековый результат.
 
-## Рекомендуемый порядок
+## Официальные контракты Robokassa
 
-1. Оставить ручное подтверждение как fallback для тестов.
-2. Подключить ЮKassa как основной российский provider.
-3. Добавить таблицу `payment_methods` для provider ids.
-4. Добавить endpoint webhook `/api/v1/billing/yookassa/webhook`.
-5. Добавить фоновый renew job для подписок, истекающих в ближайшие сутки.
-6. Добавить реальный домен + HTTPS.
-7. Зарегистрировать webhook URL в ЮKassa.
-8. Проверить реальный `payment.succeeded` webhook на тестовом платеже.
-
-## Важно по безопасности
-
-- Не хранить номера карт, CVV и банковские данные в BlueVPN.
-- Хранить только `provider`, `providerPaymentId`, `providerPaymentMethodId`, статус и сумму.
-- Webhook должен быть идемпотентным: повторный webhook не должен повторно продлевать тариф.
-- В production-режиме не активировать тариф только по входящему webhook JSON; обязательно сверяться с ЮKassa API по `payment_id`.
-- Любое автопродление должно быть выключаемым пользователем.
+- Invoice API: https://docs.robokassa.ru/ru/invoice-api
+- ResultURL: https://docs.robokassa.ru/ru/notifications-and-redirects
+- OpStateExt: https://docs.robokassa.ru/ru/xml-interfaces
+- Refund API: https://docs.robokassa.ru/ru/refund-api
+- OpenAPI: https://docs.robokassa.ru/openapi/robokassa.yaml
