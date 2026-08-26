@@ -37,8 +37,8 @@ from pydantic import BaseModel
 
 APP_TITLE = "Green VPN Backend"
 APP_VERSION = (
-    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.158-prodamus-npd.1").strip()
-    or "0.9.158-prodamus-npd.1"
+    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.158-prodamus-npd.2").strip()
+    or "0.9.158-prodamus-npd.2"
 )
 DEFAULT_PUBLIC_API_BASE_URL = "https://api.greenvpn.pro"
 
@@ -23473,6 +23473,18 @@ def billing_payment_smoke_candidate(order: dict) -> bool:
             and order.get("providerOperationKeySaved")
             and not order.get("autoRenew")
         )
+    if provider == "prodamus":
+        tax_receipt = (
+            order.get("taxReceipt")
+            if isinstance(order.get("taxReceipt"), dict)
+            else {}
+        )
+        return bool(
+            common_ready
+            and not order.get("autoRenew")
+            and tax_receipt.get("mode") == "prodamus_npd"
+            and tax_receipt.get("status") == "submitted_by_prodamus_npd"
+        )
     return False
 
 
@@ -23534,6 +23546,43 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
         if str(order.get("status") or "").lower() in {"canceled", "cancelled", "failed"}
     ]
 
+    if provider == "prodamus":
+        manual_activation_message = (
+            "Admin mark-paid для Prodamus отклоняется; активация допускается только "
+            "после точного подписанного notification."
+        )
+        activation_confirmation_details = (
+            "Проверить, что статус заказа и подписка меняются только после точного "
+            "HMAC-подписанного notification Prodamus."
+        )
+        activation_source = (
+            "Tariff activation requires an exact HMAC-signed Prodamus notification "
+            "matching the order, amount, currency and single service product."
+        )
+        webhook_events = [
+            "payment_status=success",
+            "payment_status=order_canceled",
+            "payment_status=order_denied",
+        ]
+    else:
+        manual_activation_message = (
+            "Прямая активация тарифа выключена; admin mark-paid аудируется и должен "
+            "оставаться только ручным."
+        )
+        activation_confirmation_details = (
+            "Проверить, что статус заказа/подписка меняются только после подтверждения "
+            "провайдера через webhook или authoritative payment fetch."
+        )
+        activation_source = (
+            "Tariff activation must follow provider confirmation through webhook plus "
+            "authoritative API fetch."
+        )
+        webhook_events = (
+            ["payment.succeeded", "payment.canceled"]
+            if provider == "yookassa"
+            else ["ResultURL"]
+        )
+
     checks = [
         {
             "code": "payment_production_ready",
@@ -23559,9 +23608,7 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
             "code": "manual_activation_guard",
             "title": "Защита от ручной активации",
             "ok": True,
-            "message": (
-                "Прямая активация тарифа выключена; admin mark-paid аудируется и должен оставаться только ручным."
-            ),
+            "message": manual_activation_message,
         },
         {
             "code": "hosted_payment_url_observed",
@@ -23646,10 +23693,7 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
             "title": "Подтвердить provider-backed активацию",
             "actor": "ops",
             "status": "done" if smoke_complete else "pending",
-            "details": (
-                "Проверить, что статус заказа/подписка меняются только после подтверждения провайдера "
-                "через webhook или authoritative payment fetch."
-            ),
+            "details": activation_confirmation_details,
             "secret": False,
         },
     ]
@@ -23702,14 +23746,10 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
         "policy": {
             "noSecrets": "Provider keys must only be entered into server-side env and are never returned by this endpoint.",
             "noSyntheticActivation": "Provider smoke must not use admin mark-paid or direct subscription apply.",
-            "activationSource": "Tariff activation must follow provider confirmation through webhook plus authoritative API fetch.",
+            "activationSource": activation_source,
             "returnUrl": payment.get("returnUrl"),
             "webhookUrl": webhook_url,
-            "webhookEvents": (
-                ["payment.succeeded", "payment.canceled"]
-                if provider == "yookassa"
-                else ["ResultURL"]
-            ),
+            "webhookEvents": webhook_events,
         },
     }
 

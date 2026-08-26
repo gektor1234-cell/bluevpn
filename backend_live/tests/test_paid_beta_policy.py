@@ -1699,6 +1699,12 @@ class PaidBetaPolicyTests(unittest.TestCase):
                     self.prodamus_request(payload, signature)
                 )
             )
+            with patch.object(
+                main,
+                "public_site_readiness",
+                return_value={"productionReady": True, "summary": {}},
+            ):
+                readiness = main.billing_payment_smoke_readiness_payload()
 
         self.assertEqual(first.status_code, 200)
         self.assertEqual(second.status_code, 200)
@@ -1706,6 +1712,17 @@ class PaidBetaPolicyTests(unittest.TestCase):
         self.assertEqual(stored["status"], "activated")
         self.assertEqual(stored["provider_payment_id"], "900001")
         self.assertEqual(stored["tax_receipt_status"], "submitted_by_prodamus_npd")
+        self.assertTrue(readiness["smokeCompleted"])
+        self.assertEqual(readiness["summary"]["successfulSmokeCandidates"], 1)
+        self.assertIn("HMAC-signed Prodamus", readiness["policy"]["activationSource"])
+        self.assertEqual(
+            readiness["policy"]["webhookEvents"],
+            [
+                "payment_status=success",
+                "payment_status=order_canceled",
+                "payment_status=order_denied",
+            ],
+        )
 
     def test_prodamus_manual_full_refund_rolls_back_entitlement_idempotently(self) -> None:
         before = main.billing_subscription_snapshot(main.get_subscription_row(self.user_id))
