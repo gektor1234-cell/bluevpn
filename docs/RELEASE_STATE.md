@@ -26,6 +26,12 @@ both paid-beta backends remain unchanged, and all eight Android/Windows stable
 and paid-beta bodies retain exact SHA/size. Full evidence and rollback paths are
 in `PRODAMUS_NPD_BACKEND_DEPLOY_2026_08_26_RU.md`.
 
+The full Prodamus onboarding questionnaire was successfully submitted on
+2026-08-26. Prodamus reported an email confirmation and a typical review window
+of 1-3 business days; the email had not arrived in inbox or spam at the time of
+recording. This does not change the release gate: payform/SYS/secret, NPD
+partner confirmation, real payment/refund evidence and sales remain disabled.
+
 ## Historical Robokassa NPD Backend Deployment (2026-08-25 MSK)
 
 | Layer | Current state |

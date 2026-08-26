@@ -23,10 +23,12 @@ This is the current operational entry point. Read it together with
 - Both DBs return `quick_check=ok` and equal counts `66/66/3/99` after explicit
   sync. Strict verification passed `12/12`; all eight stable/paid-beta client
   bodies are unchanged. Email readiness remains true.
-- The short Prodamus application is submitted. The extended questionnaire is
-  blocked only on owner-entered personal/legal data. Provider approval, NPD
-  partner confirmation, one real payment/full refund and sales enablement are
-  still external gates.
+- The full Prodamus questionnaire was successfully submitted on 2026-08-26
+  with two public channels, the public offer and required verification
+  documents. Prodamus reported that an email confirmation was sent, but it had
+  not arrived in inbox or spam at the time of this handoff. The stated review
+  window is 1-3 business days. Provider approval, NPD partner confirmation,
+  one real payment/full refund and sales enablement remain external gates.
 - Exact deployment, rollback and evidence:
   `docs/PRODAMUS_NPD_BACKEND_DEPLOY_2026_08_26_RU.md`.
 
