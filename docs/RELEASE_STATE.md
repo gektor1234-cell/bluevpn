@@ -1,6 +1,32 @@
 # Green VPN Release State
 
-## Robokassa NPD Backend Deployment (2026-08-25 MSK)
+## Prodamus NPD Backend Deployment (2026-08-26 MSK)
+
+| Layer | Current state |
+|---|---|
+| Stable backend | `0.9.158-prodamus-npd.2` on fallback and primary |
+| Stable Android | unchanged: `0.4.7+2026082401`, signed, mandatory |
+| Stable Windows | unchanged: `0.4.6+4636`, `NotSigned`, mandatory |
+| Paid-beta | unchanged |
+| Payments | Prodamus selected fail-closed; sales, NPD, refunds and auto charges disabled |
+
+Backend-only deployment completed fallback first and primary second from exact
+source `445dd15967c57a879fc9bc91a61509a69b7ecec8`. Bundle SHA-256 is
+`8531A35742698233498FE27977BC4FFA8A2AA8AFA60ABB269B59C9D193C8EB77`, size
+`295414`; it contains no secrets and changes neither clients nor site.
+
+Both databases pass `quick_check` and have synchronized counts users `66`,
+subscriptions `66`, billing orders `3`, tombstones `99`. Fallback rejects
+payment callbacks before parsing. Primary is the only billing writer. Prodamus
+payform/SYS/secret and NPD confirmation are absent, therefore payment readiness
+is intentionally false. Email readiness remains true.
+
+Strict public verification passed `12/12`: both stable backends report `.2`,
+both paid-beta backends remain unchanged, and all eight Android/Windows stable
+and paid-beta bodies retain exact SHA/size. Full evidence and rollback paths are
+in `PRODAMUS_NPD_BACKEND_DEPLOY_2026_08_26_RU.md`.
+
+## Historical Robokassa NPD Backend Deployment (2026-08-25 MSK)
 
 | Layer | Current state |
 |---|---|

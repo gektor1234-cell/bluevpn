@@ -1,12 +1,36 @@
 # Green VPN Current Handoff
 
-Updated: 2026-08-25 MSK.
+Updated: 2026-08-26 MSK.
 
 This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
 `PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md`. Dated reports are evidence only.
 
-## Robokassa NPD Backend, 2026-08-25
+## Prodamus NPD Backend, 2026-08-26
+
+- Stable backend `0.9.158-prodamus-npd.2` is deployed on fallback
+  `176.113.81.35` and primary `72.56.32.197`; exact source commit is
+  `445dd15967c57a879fc9bc91a61509a69b7ecec8`.
+- Backend-only bundle is `295414` bytes, SHA-256
+  `8531A35742698233498FE27977BC4FFA8A2AA8AFA60ABB269B59C9D193C8EB77`.
+  It contains no secrets and changes neither clients nor the main site.
+- Prodamus payment-link, exact HMAC notification, idempotent activation,
+  reconciliation, manual full-refund confirmation and atomic entitlement
+  rollback are implemented. Direct admin activation is rejected.
+- Production explicitly selects Prodamus but remains fail-closed: no payform,
+  `SYS` or secret is installed; sales, NPD receipts, refunds and auto charges
+  are disabled. Fallback rejects callbacks before reading the body.
+- Both DBs return `quick_check=ok` and equal counts `66/66/3/99` after explicit
+  sync. Strict verification passed `12/12`; all eight stable/paid-beta client
+  bodies are unchanged. Email readiness remains true.
+- The short Prodamus application is submitted. The extended questionnaire is
+  blocked only on owner-entered personal/legal data. Provider approval, NPD
+  partner confirmation, one real payment/full refund and sales enablement are
+  still external gates.
+- Exact deployment, rollback and evidence:
+  `docs/PRODAMUS_NPD_BACKEND_DEPLOY_2026_08_26_RU.md`.
+
+## Historical Robokassa NPD Backend, 2026-08-25
 
 - Stable backend `0.9.157-robokassa-npd.1` is deployed on fallback
   `176.113.81.35` and primary `72.56.32.197`; exact source commit is
