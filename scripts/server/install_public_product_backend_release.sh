@@ -5,6 +5,7 @@ APPLY=0
 ROLE=""
 BUNDLE_DIR=""
 BACKEND_VERSION=""
+SELECT_PRODAMUS_FAIL_CLOSED=0
 
 APP_ROOT="/opt/bluevpn/backend"
 DATA_DIR="${APP_ROOT}/data"
@@ -26,6 +27,7 @@ Usage:
     --role timeweb|ruvds \
     --bundle-dir PATH \
     --backend-version VERSION \
+    [--select-prodamus-fail-closed] \
     [--apply]
 
 The default is a dry run. Apply mode creates a root-only
@@ -40,6 +42,7 @@ while [[ $# -gt 0 ]]; do
     --role) ROLE="${2:?missing role}"; shift 2 ;;
     --bundle-dir) BUNDLE_DIR="${2:?missing bundle dir}"; shift 2 ;;
     --backend-version) BACKEND_VERSION="${2:?missing backend version}"; shift 2 ;;
+    --select-prodamus-fail-closed) SELECT_PRODAMUS_FAIL_CLOSED=1; shift ;;
     --apply) APPLY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -77,6 +80,7 @@ echo "mode=$([[ $APPLY -eq 1 ]] && echo apply || echo dry-run)"
 echo "role=$ROLE"
 echo "backend_version=$BACKEND_VERSION"
 echo "billing_primary=$BILLING_PRIMARY"
+echo "select_prodamus_fail_closed=$SELECT_PRODAMUS_FAIL_CLOSED"
 echo "source_main_sha256=$(sha256sum "$BUNDLE_DIR/backend/app/main.py" | awk '{print $1}')"
 echo "database_source=production_only"
 
@@ -162,7 +166,8 @@ install -m 755 "$BUNDLE_DIR/ops/greenvpn_sqlite_state_sync.py" "$SYNC_STATE_SCRI
 python3 -m py_compile "$SYNC_SNAPSHOT_SCRIPT" "$SYNC_STATE_SCRIPT"
 python3 -m py_compile "$BUNDLE_DIR/ops/greenvpn_prune_operational_history.py"
 
-python3 - "$ENV_FILE" "$BETA_ENV_FILE" "$BACKEND_VERSION" "$BILLING_PRIMARY" <<'PY'
+python3 - "$ENV_FILE" "$BETA_ENV_FILE" "$BACKEND_VERSION" "$BILLING_PRIMARY" \
+  "$SELECT_PRODAMUS_FAIL_CLOSED" <<'PY'
 import os
 import pathlib
 import re
@@ -172,6 +177,7 @@ target_path = pathlib.Path(sys.argv[1])
 source_path = pathlib.Path(sys.argv[2])
 backend_version = sys.argv[3]
 billing_primary = sys.argv[4]
+select_prodamus_fail_closed = sys.argv[5] == "1"
 assignment = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
 
 transport_keys = {
@@ -221,11 +227,14 @@ policy_defaults = {
     "GREENVPN_FREE_TIER_SPEED_MBPS": "10",
     "GREENVPN_FREE_TIER_BURST_MBPS": "20",
     "GREENVPN_PAID_SALES_ENABLED": "0",
-    "GREENVPN_PAYMENT_PROVIDER": "robokassa",
-    "ROBOKASSA_RETURN_URL": "https://api.greenvpn.pro/payment/return",
-    "ROBOKASSA_RESULT_URL": "https://api.greenvpn.pro/api/v1/billing/robokassa/result",
-    "GREENVPN_ROBOKASSA_NPD_PARTNER_CONFIRMED": "0",
-    "GREENVPN_ROBOKASSA_RECURRING_ENABLED": "0",
+    "GREENVPN_PAYMENT_PROVIDER": "prodamus",
+    "PRODAMUS_RETURN_URL": "https://api.greenvpn.pro/payment/return",
+    "PRODAMUS_SUCCESS_URL": "https://api.greenvpn.pro/payment/return",
+    "PRODAMUS_NOTIFICATION_URL": "https://api.greenvpn.pro/api/v1/billing/prodamus/notification",
+    "PRODAMUS_NPD_PARTNER_CONFIRMED": "0",
+    "PRODAMUS_LIVE_MODE_CONFIRMED": "0",
+    "PRODAMUS_REFUND_SMOKE_CONFIRMED": "0",
+    "PRODAMUS_RECURRING_ENABLED": "0",
     "GREENVPN_TAX_RECEIPT_MODE": "disabled",
     "GREENVPN_TAX_RECEIPT_WORKFLOW_CONFIRMED": "0",
     "GREENVPN_TAX_RECEIPT_VAT_CODE": "0",
@@ -259,6 +268,27 @@ updates = {
         "gb1-vless-reality-xhttp-canary,gb1-naive-https-canary"
     ),
 }
+if select_prodamus_fail_closed:
+    updates.update(
+        {
+            "GREENVPN_PAYMENT_PROVIDER": "prodamus",
+            "GREENVPN_PAID_SALES_ENABLED": "0",
+            "PRODAMUS_RETURN_URL": "https://api.greenvpn.pro/payment/return",
+            "PRODAMUS_SUCCESS_URL": "https://api.greenvpn.pro/payment/return",
+            "PRODAMUS_NOTIFICATION_URL": (
+                "https://api.greenvpn.pro/api/v1/billing/prodamus/notification"
+            ),
+            "PRODAMUS_NPD_PARTNER_CONFIRMED": "0",
+            "PRODAMUS_LIVE_MODE_CONFIRMED": "0",
+            "PRODAMUS_REFUND_SMOKE_CONFIRMED": "0",
+            "PRODAMUS_RECURRING_ENABLED": "0",
+            "GREENVPN_TAX_RECEIPT_MODE": "disabled",
+            "GREENVPN_TAX_RECEIPT_WORKFLOW_CONFIRMED": "0",
+            "GREENVPN_REFUND_WORKFLOW_CONFIRMED": "0",
+            "GREENVPN_REFUND_EXECUTION_ENABLED": "0",
+            "GREENVPN_AUTO_RENEWAL_CHARGES_ENABLED": "0",
+        }
+    )
 out = []
 for raw in target_path.read_text(encoding="utf-8").splitlines():
     match = assignment.match(raw.strip())

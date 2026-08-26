@@ -1,95 +1,129 @@
-# Green VPN: платежи для НПД
+# Green VPN: Prodamus и НПД
 
-Последнее обновление: 2026-08-25.
+Последнее обновление: 2026-08-26.
 
-## Текущее решение
+Этот файл является текущим платёжным контрактом. Старые разделы про Robokassa
+и YooKassa в других документах считаются историческими и не используются для
+новых продаж.
 
-- Владелец подтвердил действующий статус плательщика НПД (самозанятый).
-- Для новых продаж выбран `Robokassa` с чековым контуром «Робочеки СМЗ».
-- Старый контур YooKassa остаётся в коде только для совместимости и сверки старых заказов. Новые продажи на него не переключать.
-- Production-продажи, возвраты и автоматические списания остаются выключенными, пока не завершены партнёрская привязка НПД и один реальный payment/refund smoke.
-- Timeweb является единственным billing-writer. RUVDS принимает read/auth трафик, но отклоняет платёжные callback и не выполняет возвраты или автосписания.
+## Семь этапов
 
-## Как проходит оплата
+| № | Этап | Текущий статус |
+|---:|---|---|
+| 1 | Подать заявку Prodamus | Короткая заявка отправлена; расширенная анкета открыта и ожидает ввода владельцем адреса регистрации, паспортных данных и принятия условий непосредственно в кабинете |
+| 2 | Получить одобрение Green VPN | Ожидается проверка и явное одобрение Prodamus; до него нельзя считать форму боевой |
+| 3 | Связать Prodamus с «Мой налог» | Заблокировано до рабочего режима формы; затем ИНН подаётся в настройках Prodamus, а запрос подтверждается владельцем в «Мой налог» |
+| 4 | Реализовать backend-адаптер | Реализован fail-closed адаптер, signed notification, идемпотентная активация, reconciliation и guarded full refund |
+| 5 | Настроить production | Скрипты и env-контракт готовы; реальные URL/ключ/SYS не устанавливаются до одобрения и остаются только в root-owned server env |
+| 6 | Реальный платёж и полный возврат | Выполняется только после этапов 2, 3 и 5: один платёж, signed notification, активация, НПД-чек, полный возврат, возвратный чек и откат прав |
+| 7 | Открыть продажи | Заблокировано до зелёного этапа 6; автопродление остаётся выключенным отдельным будущим контуром |
 
-1. Подтверждённый email создаёт billing order со статусом `pending`.
-2. Backend восстанавливает уже созданный счёт по `InvId`, если предыдущий ответ Robokassa потерялся. Повторный CreateInvoice при неопределённом результате не выполняется.
-3. Новый счёт создаётся через Robokassa Invoice API с позицией услуги и данными для «Робочеков СМЗ».
-4. Приложение открывает только HTTPS URL на домене Robokassa.
-5. ResultURL является сигналом, а не доказательством оплаты.
-6. Backend самостоятельно проверяет Invoice и OpStateExt.
-7. Тариф активируется только при точной сумме, `Invoice=Paid`, `Result=0`, `State=100` и непустом `OpKey`.
-8. Повторный ResultURL идемпотентен и не продлевает подписку второй раз.
+## Границы
 
-Публичные URL:
+- Основной billing-writer только Timeweb `72.56.32.197`.
+- Fallback `176.113.81.35` отклоняет платёжные callbacks до разбора тела и не
+  создаёт платежи, возвраты или автосписания.
+- `urlSuccess` возвращает пользователя, но не подтверждает оплату.
+- Активация разрешена только после notification с валидным `Sign` и точным
+  совпадением магазина, `SYS`, номера заказа, суммы и единственной позиции.
+- Демо-форма и демо-подпись всегда отклоняются.
+- Неопределённый результат создания ссылки не повторяется автоматически:
+  заказ уходит в reconciliation, чтобы исключить повторную оплату.
+- Ручная admin-активация Prodamus запрещена.
+- Возврат в Prodamus выполняется через кабинет. Backend принимает подтверждение
+  только после статуса «Возвращён» и наличия возвратного чека, затем одной DB-
+  транзакцией фиксирует полный возврат и откатывает права, если entitlement не
+  менялся после исходной активации.
+- Частичный возврат в этом контракте не используется.
+- Автопродление и рекуррентные платежи выключены.
+
+## Публичные URL
 
 ```text
-Return URL: https://api.greenvpn.pro/payment/return
-Result URL: https://api.greenvpn.pro/api/v1/billing/robokassa/result
+Return URL:        https://api.greenvpn.pro/payment/return
+Success URL:       https://api.greenvpn.pro/payment/return
+Notification URL: https://api.greenvpn.pro/api/v1/billing/prodamus/notification
 ```
-
-## Возврат
-
-- Поддерживается только полный guarded refund по исходному `OpKey`.
-- Password3 хранится только в root-owned server env.
-- Неопределённый ответ CreateRefund никогда не повторяется автоматически: заказ переводится в ручную сверку.
-- Права пользователя откатываются только после авторитетного статуса `finished`.
-- В запрос передаются позиции для чека возврата «Робочеков СМЗ».
-- Неизвестный статус провайдера не считается успешным возвратом.
 
 ## Server-only env
 
-Секретные значения нельзя писать в Git, документы, owner notes или чат.
+Секреты нельзя писать в Git, документы, owner notes или чат.
 
 ```text
-GREENVPN_PAYMENT_PROVIDER=robokassa
-ROBOKASSA_MERCHANT_LOGIN=<server-only>
-ROBOKASSA_PASSWORD1=<server-only>
-ROBOKASSA_PASSWORD2=<server-only>
-ROBOKASSA_PASSWORD3=<server-only>
-ROBOKASSA_RETURN_URL=https://api.greenvpn.pro/payment/return
-ROBOKASSA_RESULT_URL=https://api.greenvpn.pro/api/v1/billing/robokassa/result
-GREENVPN_ROBOKASSA_NPD_PARTNER_CONFIRMED=1
-GREENVPN_TAX_RECEIPT_MODE=robokassa_npd
+GREENVPN_PAYMENT_PROVIDER=prodamus
+PRODAMUS_PAYFORM_URL=https://<магазин>.payform.ru
+PRODAMUS_SECRET_KEY=<server-only>
+PRODAMUS_SYS=<согласованный Prodamus код>
+PRODAMUS_RETURN_URL=https://api.greenvpn.pro/payment/return
+PRODAMUS_SUCCESS_URL=https://api.greenvpn.pro/payment/return
+PRODAMUS_NOTIFICATION_URL=https://api.greenvpn.pro/api/v1/billing/prodamus/notification
+PRODAMUS_NPD_PARTNER_CONFIRMED=1
+PRODAMUS_LIVE_MODE_CONFIRMED=1
+GREENVPN_TAX_RECEIPT_MODE=prodamus_npd
 GREENVPN_TAX_RECEIPT_WORKFLOW_CONFIRMED=1
 GREENVPN_TAX_RECEIPT_PAYMENT_SUBJECT=service
 GREENVPN_TAX_RECEIPT_PAYMENT_MODE=full_payment
 ```
 
-До реального smoke обязательно:
+До успешного payment/refund smoke:
 
 ```text
 GREENVPN_PAID_SALES_ENABLED=0
-GREENVPN_REFUND_EXECUTION_ENABLED=0
+PRODAMUS_REFUND_SMOKE_CONFIRMED=0
+PRODAMUS_RECURRING_ENABLED=0
 GREENVPN_AUTO_RENEWAL_CHARGES_ENABLED=0
-GREENVPN_ROBOKASSA_RECURRING_ENABLED=0
+GREENVPN_AUTO_RENEWAL_BILLING_PRIMARY=0
 ```
 
-Writer-флаги на Timeweb могут быть `1` только на соответствующем этапе. На RUVDS они всегда `0`:
+Для контролируемого refund-smoke только на primary временно требуется готовая
+политика возврата:
 
 ```text
-GREENVPN_PUBLIC_PRODUCT_BILLING_PRIMARY
-GREENVPN_PAID_BETA_BILLING_PRIMARY
-GREENVPN_REFUND_BILLING_PRIMARY
-GREENVPN_AUTO_RENEWAL_BILLING_PRIMARY
+GREENVPN_REFUND_WORKFLOW_CONFIRMED=1
+GREENVPN_REFUND_EXECUTION_ENABLED=1
+GREENVPN_REFUND_BILLING_PRIMARY=1
 ```
 
-Безопасный helper:
+После подтверждённого полного возврата и возвратного чека:
+
+```text
+PRODAMUS_REFUND_SMOKE_CONFIRMED=1
+GREENVPN_PAID_SALES_ENABLED=1
+```
+
+На fallback writer-флаги всегда `0`.
+
+## Безопасная настройка
+
+Primary:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\bluevpn\scripts\windows\configure_backend_env_wsl.ps1 -ServerHost 72.56.32.197
 ```
 
-Fallback настраивается отдельным запуском с `-ServerHost 176.113.81.35`.
+Fallback настраивается отдельным запуском с `-ServerHost 176.113.81.35`, но
+денежные writer-флаги на нём не включаются.
 
-## Что ещё требует внешнего действия
+## Контрольный платёж и возврат
 
-1. Непосредственно перед переходом подтвердить передачу ИНН и referral-данных партнёру Robokassa/оператору чеков.
-2. Завершить магазин и «Робочеки СМЗ» в кабинете Robokassa.
-3. Ввести MerchantLogin и Password1/2/3 через server-only helper.
-4. С отдельным подтверждением провести один небольшой реальный платёж.
-5. Проверить активацию, чек НПД, затем выполнить полный возврат и проверить чек возврата/откат прав.
-6. Только после зелёной сверки включить продажи на primary. Автосписания остаются отдельным будущим gate.
+1. Убедиться, что форма в рабочем режиме и Prodamus подтверждён партнёром в
+   «Мой налог».
+2. Проверить `/api/v1/admin/billing/readiness` при закрытых публичных продажах.
+3. Через защищённый endpoint `/api/v1/admin/billing/prodamus/payment-smoke`
+   создать ровно один заказ на подтверждённого тестового пользователя.
+4. Владелец самостоятельно оплачивает ссылку. Backend не вводит банковские
+   данные, коды и не подтверждает списание.
+5. Проверить signed notification, статус `activated`, точную сумму и чек дохода
+   в НПД.
+6. В кабинете Prodamus оформить полный возврат. Дождаться статуса «Возвращён» и
+   возвратного чека.
+7. Через защищённый endpoint
+   `/api/v1/admin/billing/orders/{order_id}/prodamus-refund-confirm` передать
+   точный order ID, сумму, ID возврата и ссылку/номер чека.
+8. Проверить статус `refunded`, `refund_entitlement_status=rolled_back`, чек
+   возврата и отсутствие сохранённого способа оплаты.
+9. Только после этого включить `PRODAMUS_REFUND_SMOKE_CONFIRMED=1`, а затем
+   `GREENVPN_PAID_SALES_ENABLED=1` на primary.
 
 ## Проверки
 
@@ -104,12 +138,17 @@ GET /api/v1/admin/billing/reconciliation
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\check_payment_launch_safety.ps1
 ```
 
-Готовность нельзя выводить только из `/healthz`: нужны provider readiness, точная DB-сверка, primary/fallback роли, реальный платёж, реальный возврат и чековый результат.
+`/healthz` не доказывает готовность платежей. Нужны provider readiness,
+сверка primary/fallback, реальный signed payment, чек дохода, полный возврат,
+возвратный чек и откат прав.
 
-## Официальные контракты Robokassa
+## Официальные инструкции Prodamus
 
-- Invoice API: https://docs.robokassa.ru/ru/invoice-api
-- ResultURL: https://docs.robokassa.ru/ru/notifications-and-redirects
-- OpStateExt: https://docs.robokassa.ru/ru/xml-interfaces
-- Refund API: https://docs.robokassa.ru/ru/refund-api
-- OpenAPI: https://docs.robokassa.ru/openapi/robokassa.yaml
+- Самостоятельная интеграция и HMAC:
+  https://help.prodamus.ru/payform/integracii/rest-api/instrukcii-dlya-samostoyatelnaya-integracii-servisov
+- Уведомления об оплате:
+  https://help.prodamus.ru/payform/uvedomleniya/kak-ustroena-otpravka-uvedomlenii-ob-oplate
+- Интеграция с «Мой налог»:
+  https://help.prodamus.ru/payform/nachalo-raboty-s-prodamus/kak-samozanyatym-integrirovat-prodamus-s-prilozheniem-moi-nalog
+- Полный возврат:
+  https://help.prodamus.ru/payform/vozvraty-platezhei/sformirovat-zayavku-na-vozvrat

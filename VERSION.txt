@@ -3,7 +3,7 @@ Windows version: 0.4.6
 Android build: 2026082401
 Windows build: 4636
 Platforms: Android, Windows
-Source backend: 0.9.157-robokassa-npd.1
+Source backend: 0.9.158-prodamus-npd.1
 Status: production publishes Android 0.4.7+2026082401 and Windows 0.4.6+4636 as mandatory stable releases; isolated Fusion paid-beta remains unchanged
 Production sales: disabled
 Refund execution: disabled

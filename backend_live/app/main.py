@@ -37,8 +37,8 @@ from pydantic import BaseModel
 
 APP_TITLE = "Green VPN Backend"
 APP_VERSION = (
-    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.157-robokassa-npd.1").strip()
-    or "0.9.157-robokassa-npd.1"
+    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.158-prodamus-npd.1").strip()
+    or "0.9.158-prodamus-npd.1"
 )
 DEFAULT_PUBLIC_API_BASE_URL = "https://api.greenvpn.pro"
 
@@ -603,6 +603,39 @@ ROBOKASSA_NPD_PARTNER_CONFIRMED = environment_flag(
 )
 ROBOKASSA_RECURRING_ENABLED = environment_flag(
     "ROBOKASSA_RECURRING_ENABLED"
+)
+PRODAMUS_PAYFORM_URL = clean_base_url(
+    os.getenv("PRODAMUS_PAYFORM_URL", "")
+)
+PRODAMUS_SECRET_KEY = os.getenv("PRODAMUS_SECRET_KEY", "").strip()
+PRODAMUS_SYS = os.getenv("PRODAMUS_SYS", "").strip()
+PRODAMUS_RETURN_URL = os.getenv(
+    "PRODAMUS_RETURN_URL",
+    f"{PUBLIC_BASE_URL}/payment/return" if PUBLIC_BASE_URL else "",
+).strip()
+PRODAMUS_SUCCESS_URL = os.getenv(
+    "PRODAMUS_SUCCESS_URL",
+    f"{PUBLIC_BASE_URL}/payment/return" if PUBLIC_BASE_URL else "",
+).strip()
+PRODAMUS_NOTIFICATION_URL = os.getenv(
+    "PRODAMUS_NOTIFICATION_URL",
+    (
+        f"{PUBLIC_BASE_URL}/api/v1/billing/prodamus/notification"
+        if PUBLIC_BASE_URL
+        else ""
+    ),
+).strip()
+PRODAMUS_NPD_PARTNER_CONFIRMED = environment_flag(
+    "PRODAMUS_NPD_PARTNER_CONFIRMED"
+)
+PRODAMUS_LIVE_MODE_CONFIRMED = environment_flag(
+    "PRODAMUS_LIVE_MODE_CONFIRMED"
+)
+PRODAMUS_REFUND_SMOKE_CONFIRMED = environment_flag(
+    "PRODAMUS_REFUND_SMOKE_CONFIRMED"
+)
+PRODAMUS_RECURRING_ENABLED = environment_flag(
+    "PRODAMUS_RECURRING_ENABLED"
 )
 PAID_SALES_ENABLED = environment_flag("GREENVPN_PAID_SALES_ENABLED")
 TAX_RECEIPT_MODE = os.getenv(
@@ -1908,6 +1941,19 @@ class AdminStaleBillingOrderCancelIn(BaseModel):
 class AdminBillingRefundIn(BaseModel):
     reason: str
     confirmOrderId: str
+
+
+class AdminProdamusRefundConfirmIn(BaseModel):
+    reason: str
+    confirmOrderId: str
+    providerRefundId: str
+    receiptReference: str
+    amountRub: int
+
+
+class AdminProdamusPaymentSmokeIn(BaseModel):
+    userId: int
+    confirmUserId: int
 
 
 class AdminUserDeleteIn(BaseModel):
@@ -3594,6 +3640,12 @@ def init_db() -> None:
             "billing_orders",
             "refund_receipt_status",
             "refund_receipt_status TEXT NOT NULL DEFAULT 'not_required'",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "refund_receipt_provider_id",
+            "refund_receipt_provider_id TEXT",
         )
         ensure_column(
             conn,
@@ -19682,6 +19734,11 @@ def billing_order_status(row) -> dict:
                 if "refund_receipt_status" in row.keys()
                 else "not_required"
             ),
+            "receiptProviderId": (
+                row["refund_receipt_provider_id"]
+                if "refund_receipt_provider_id" in row.keys()
+                else None
+            ),
             "entitlementStatus": (
                 row["refund_entitlement_status"]
                 if "refund_entitlement_status" in row.keys()
@@ -19739,7 +19796,7 @@ def public_billing_order_status(order: dict) -> dict:
         public_order["refund"] = {
             key: value
             for key, value in refund.items()
-            if key not in {"providerId", "error"}
+            if key not in {"providerId", "receiptProviderId", "error"}
         }
     return public_order
 
@@ -19764,12 +19821,25 @@ def robokassa_refund_configured() -> bool:
     return bool(robokassa_payment_configured() and ROBOKASSA_PASSWORD3)
 
 
+def prodamus_payment_configured() -> bool:
+    return bool(
+        PRODAMUS_PAYFORM_URL
+        and PRODAMUS_SECRET_KEY
+        and PRODAMUS_SYS
+        and PRODAMUS_RETURN_URL
+        and PRODAMUS_SUCCESS_URL
+        and PRODAMUS_NOTIFICATION_URL
+    )
+
+
 def configured_payment_provider() -> str:
     provider = selected_payment_provider()
     if provider == "yookassa" and yookassa_configured():
         return "yookassa"
     if provider == "robokassa" and robokassa_payment_configured():
         return "robokassa"
+    if provider == "prodamus" and prodamus_payment_configured():
+        return "prodamus"
     return "manual_mvp"
 
 
@@ -20094,6 +20164,8 @@ def yookassa_effective_webhook_url() -> str:
 
 def payment_provider_return_url(provider: Optional[str] = None) -> str:
     provider_name = (provider or selected_payment_provider()).strip().lower()
+    if provider_name == "prodamus":
+        return PRODAMUS_RETURN_URL
     if provider_name == "robokassa":
         return ROBOKASSA_RETURN_URL
     if provider_name == "yookassa":
@@ -20103,6 +20175,8 @@ def payment_provider_return_url(provider: Optional[str] = None) -> str:
 
 def payment_provider_callback_url(provider: Optional[str] = None) -> str:
     provider_name = (provider or selected_payment_provider()).strip().lower()
+    if provider_name == "prodamus":
+        return PRODAMUS_NOTIFICATION_URL
     if provider_name == "robokassa":
         return ROBOKASSA_RESULT_URL
     if provider_name == "yookassa":
@@ -20115,6 +20189,7 @@ def tax_receipt_readiness(provider: Optional[str] = None) -> dict:
     expected_mode = {
         "yookassa": "yookassa_54fz",
         "robokassa": "robokassa_npd",
+        "prodamus": "prodamus_npd",
     }.get(provider_name, "")
     supported_mode = bool(expected_mode and TAX_RECEIPT_MODE == expected_mode)
     checks = [
@@ -20189,6 +20264,21 @@ def tax_receipt_readiness(provider: Optional[str] = None) -> dict:
                 ),
             }
         )
+    if provider_name == "prodamus":
+        checks.append(
+            {
+                "code": "prodamus_npd_partner_confirmed",
+                "ok": PRODAMUS_NPD_PARTNER_CONFIRMED,
+                "message": (
+                    "Prodamus подтверждён партнёром НПД в «Мой налог»."
+                    if PRODAMUS_NPD_PARTNER_CONFIRMED
+                    else (
+                        "Подключи Prodamus как партнёра в «Мой налог» и только "
+                        "после подтверждения включи PRODAMUS_NPD_PARTNER_CONFIRMED."
+                    )
+                ),
+            }
+        )
     production_ready = all(check["ok"] for check in checks)
     return {
         "ok": True,
@@ -20258,6 +20348,59 @@ def refund_execution_readiness(provider: Optional[str] = None) -> dict:
     provider_name = (provider or selected_payment_provider()).strip().lower()
     policy = refund_policy_readiness()
     tax_receipt = tax_receipt_readiness(provider_name)
+    if provider_name == "prodamus":
+        checks = [
+            {
+                "code": "refund_provider_supported",
+                "ok": True,
+                "message": (
+                    "Полный возврат Prodamus поддержан через защищённое ручное "
+                    "подтверждение после проверки кабинета провайдера."
+                ),
+            },
+            {
+                "code": "refund_policy_ready",
+                "ok": policy["productionReady"],
+                "message": (
+                    "Политика возвратов готова."
+                    if policy["productionReady"]
+                    else "Политика возвратов остаётся закрытой."
+                ),
+            },
+            {
+                "code": "prodamus_manual_refund_smoke",
+                "ok": PRODAMUS_REFUND_SMOKE_CONFIRMED,
+                "message": (
+                    "Боевой полный возврат Prodamus, чек возврата и откат прав подтверждены."
+                    if PRODAMUS_REFUND_SMOKE_CONFIRMED
+                    else (
+                        "До продаж проведи один полный возврат Prodamus, проверь чек "
+                        "возврата и откат прав, затем включи PRODAMUS_REFUND_SMOKE_CONFIRMED."
+                    )
+                ),
+            },
+            {
+                "code": "refund_receipt_workflow_ready",
+                "ok": tax_receipt["productionReady"],
+                "message": (
+                    "Чек возврата будет проверен в связке Prodamus и НПД."
+                    if tax_receipt["productionReady"]
+                    else "Чековый процесс возврата Prodamus не готов."
+                ),
+            },
+        ]
+        return {
+            "ok": True,
+            "provider": provider_name,
+            "mode": "manual_prodamus_portal_confirmation",
+            "productionReady": all(check["ok"] for check in checks),
+            "policy": policy,
+            "taxReceipt": tax_receipt,
+            "checks": checks,
+            "requiredActions": [
+                check["message"] for check in checks if not check["ok"]
+            ],
+        }
     provider_supported = provider_name in {"yookassa", "robokassa"}
     provider_keys_ready = (
         yookassa_configured()
@@ -20555,16 +20698,168 @@ def robokassa_payment_readiness() -> dict:
     }
 
 
+def prodamus_payment_readiness(
+    *,
+    require_public_sales: bool = True,
+    require_refund_smoke: bool = True,
+) -> dict:
+    payform_host = _url_host(PRODAMUS_PAYFORM_URL).lower()
+    return_host = _url_host(PRODAMUS_RETURN_URL).lower()
+    success_host = _url_host(PRODAMUS_SUCCESS_URL).lower()
+    notification_host = _url_host(PRODAMUS_NOTIFICATION_URL).lower()
+    public_host = _url_host(PUBLIC_BASE_URL).lower()
+    local_hosts = {"bluevpn.local", "localhost", "127.0.0.1"}
+    tax_receipt = tax_receipt_readiness("prodamus")
+    refunds = refund_execution_readiness("prodamus")
+    refund_gate_ready = (
+        refunds["productionReady"]
+        if require_refund_smoke
+        else bool(refunds["policy"]["productionReady"])
+        and bool(tax_receipt["productionReady"])
+    )
+    checks = []
+    if require_public_sales:
+        checks.append(
+            {
+                "code": "paid_sales_enabled",
+                "ok": PAID_SALES_ENABLED,
+                "message": (
+                    "GREENVPN_PAID_SALES_ENABLED включён."
+                    if PAID_SALES_ENABLED
+                    else "Платные продажи закрыты серверным флагом."
+                ),
+            }
+        )
+    checks.extend(
+        [
+            {
+                "code": "tax_receipt_ready",
+                "ok": tax_receipt["productionReady"],
+                "message": (
+                    "НПД-чек через Prodamus готов."
+                    if tax_receipt["productionReady"]
+                    else "НПД-чек через Prodamus не готов."
+                ),
+            },
+            {
+                "code": "refund_workflow_ready",
+                "ok": refund_gate_ready,
+                "message": (
+                    "Полный возврат, чек возврата и откат прав готовы."
+                    if refund_gate_ready
+                    else (
+                        "Платные продажи закрыты до боевого полного возврата."
+                        if require_refund_smoke
+                        else "Операционный процесс полного возврата ещё не готов к smoke."
+                    )
+                ),
+            },
+            {
+                "code": "prodamus_keys",
+                "ok": prodamus_payment_configured()
+                and len(PRODAMUS_SECRET_KEY) >= 32,
+                "message": (
+                    "URL формы, секретный ключ и SYS Prodamus настроены."
+                    if prodamus_payment_configured()
+                    and len(PRODAMUS_SECRET_KEY) >= 32
+                    else "Задай URL формы, секретный ключ и согласованный SYS Prodamus."
+                ),
+            },
+            {
+                "code": "prodamus_payform_https",
+                "ok": _is_https_url(PRODAMUS_PAYFORM_URL)
+                and payform_host.endswith(".payform.ru")
+                and payform_host != "demo.payform.ru",
+                "message": "PRODAMUS_PAYFORM_URL должен быть боевым HTTPS-поддоменом payform.ru.",
+                "value": PRODAMUS_PAYFORM_URL,
+            },
+            {
+                "code": "prodamus_sys",
+                "ok": bool(PRODAMUS_SYS) and PRODAMUS_SYS.lower() != "demo",
+                "message": "PRODAMUS_SYS должен быть согласован с поддержкой и не быть demo.",
+                "value": PRODAMUS_SYS,
+            },
+            {
+                "code": "prodamus_live_mode",
+                "ok": PRODAMUS_LIVE_MODE_CONFIRMED,
+                "message": (
+                    "Боевая платёжная форма Prodamus подтверждена."
+                    if PRODAMUS_LIVE_MODE_CONFIRMED
+                    else "Подтверди рабочий, не демонстрационный режим формы Prodamus."
+                ),
+            },
+            {
+                "code": "prodamus_npd_partner",
+                "ok": PRODAMUS_NPD_PARTNER_CONFIRMED,
+                "message": (
+                    "Партнёр НПД Prodamus подтверждён."
+                    if PRODAMUS_NPD_PARTNER_CONFIRMED
+                    else "Подтверди связь Prodamus с кабинетом «Мой налог»."
+                ),
+            },
+            {
+                "code": "return_url_https",
+                "ok": _is_https_url(PRODAMUS_RETURN_URL)
+                and return_host not in local_hosts,
+                "message": "PRODAMUS_RETURN_URL должен быть настоящим HTTPS URL.",
+                "value": PRODAMUS_RETURN_URL,
+            },
+            {
+                "code": "success_url_https",
+                "ok": _is_https_url(PRODAMUS_SUCCESS_URL)
+                and success_host not in local_hosts,
+                "message": "PRODAMUS_SUCCESS_URL должен быть настоящим HTTPS URL.",
+                "value": PRODAMUS_SUCCESS_URL,
+            },
+            {
+                "code": "notification_url_https",
+                "ok": _is_https_url(PRODAMUS_NOTIFICATION_URL)
+                and notification_host not in local_hosts
+                and bool(public_host)
+                and notification_host == public_host,
+                "message": (
+                    "PRODAMUS_NOTIFICATION_URL должен указывать на основной HTTPS origin API."
+                ),
+                "value": PRODAMUS_NOTIFICATION_URL,
+            },
+            {
+                "code": "public_base_url_https",
+                "ok": _is_https_url(PUBLIC_BASE_URL)
+                and public_host not in local_hosts,
+                "message": "Задай GREENVPN_PUBLIC_BASE_URL как боевой HTTPS origin API.",
+                "value": PUBLIC_BASE_URL,
+            },
+        ]
+    )
+    return {
+        "ok": True,
+        "provider": "prodamus",
+        "productionReady": all(check["ok"] for check in checks),
+        "webhookUrl": PRODAMUS_NOTIFICATION_URL,
+        "returnUrl": PRODAMUS_RETURN_URL,
+        "successUrl": PRODAMUS_SUCCESS_URL,
+        "payformUrl": PRODAMUS_PAYFORM_URL,
+        "paidSalesEnabled": PAID_SALES_ENABLED,
+        "taxReceipt": tax_receipt,
+        "refunds": refunds,
+        "recurringEnabled": PRODAMUS_RECURRING_ENABLED,
+        "checks": checks,
+        "requiredActions": [check["message"] for check in checks if not check["ok"]],
+    }
+
+
 def payment_provider_readiness() -> dict:
     provider = selected_payment_provider()
     if provider == "yookassa":
         return yookassa_payment_readiness()
     if provider == "robokassa":
         return robokassa_payment_readiness()
+    if provider == "prodamus":
+        return prodamus_payment_readiness()
     tax_receipt = tax_receipt_readiness(provider)
     refunds = refund_execution_readiness(provider)
     message = (
-        "GREENVPN_PAYMENT_PROVIDER должен быть yookassa или robokassa."
+        "GREENVPN_PAYMENT_PROVIDER должен быть yookassa, robokassa или prodamus."
     )
     return {
         "ok": True,
@@ -20671,11 +20966,11 @@ def paid_beta_site_readiness() -> dict:
     callback_url = payment_provider_callback_url(payment_provider)
     public_base_path = urllib.parse.urlparse(PUBLIC_BASE_URL).path.rstrip("/")
     expected_return_path = f"{public_base_path}/payment/return"
-    expected_callback_path = (
-        f"{public_base_path}/api/v1/billing/robokassa/result"
-        if payment_provider == "robokassa"
-        else f"{public_base_path}/api/v1/billing/yookassa/webhook"
-    )
+    expected_callback_path = {
+        "yookassa": f"{public_base_path}/api/v1/billing/yookassa/webhook",
+        "robokassa": f"{public_base_path}/api/v1/billing/robokassa/result",
+        "prodamus": f"{public_base_path}/api/v1/billing/prodamus/notification",
+    }.get(payment_provider, "")
     local_hosts = {"", "bluevpn.local", "localhost", "127.0.0.1"}
     legal_configured = (
         bool(LEGAL_OWNER_NAME)
@@ -20751,11 +21046,13 @@ def paid_beta_site_readiness() -> dict:
                 if payment_provider == "yookassa"
                 else "robokassa_required_urls"
                 if payment_provider == "robokassa"
+                else "prodamus_required_urls"
+                if payment_provider == "prodamus"
                 else "payment_provider_required_urls"
             ),
             "title": "URL платёжного провайдера",
             "ok": (
-                payment_provider in {"yookassa", "robokassa"}
+                payment_provider in {"yookassa", "robokassa", "prodamus"}
                 and _is_https_url(return_url)
                 and _is_https_url(callback_url)
                 and _url_host(return_url) not in local_hosts
@@ -20837,11 +21134,11 @@ def public_site_readiness() -> dict:
     local_hosts = {"", "bluevpn.local", "localhost", "127.0.0.1"}
     public_base_path = urllib.parse.urlparse(PUBLIC_BASE_URL).path.rstrip("/")
     expected_return_path = f"{public_base_path}/payment/return"
-    expected_webhook_path = (
-        f"{public_base_path}/api/v1/billing/robokassa/result"
-        if payment_provider == "robokassa"
-        else f"{public_base_path}/api/v1/billing/yookassa/webhook"
-    )
+    expected_webhook_path = {
+        "yookassa": f"{public_base_path}/api/v1/billing/yookassa/webhook",
+        "robokassa": f"{public_base_path}/api/v1/billing/robokassa/result",
+        "prodamus": f"{public_base_path}/api/v1/billing/prodamus/notification",
+    }.get(payment_provider, "")
 
     legal_configured = (
         bool(LEGAL_OWNER_NAME)
@@ -21232,6 +21529,158 @@ def robokassa_get_refund_state(request_id: str) -> dict:
     )
 
 
+def _prodamus_scalar_string(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    return str(value)
+
+
+def prodamus_canonical_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): prodamus_canonical_value(value[key])
+            for key in sorted(value, key=lambda item: str(item))
+        }
+    if isinstance(value, (list, tuple)):
+        return [prodamus_canonical_value(item) for item in value]
+    return _prodamus_scalar_string(value)
+
+
+def prodamus_signature(payload: dict, secret: Optional[str] = None) -> str:
+    secret_value = str(secret if secret is not None else PRODAMUS_SECRET_KEY)
+    canonical = prodamus_canonical_value(payload)
+    serialized = json.dumps(
+        canonical,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).replace("/", r"\/")
+    return hmac.new(
+        secret_value.encode("utf-8"),
+        serialized.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def prodamus_signature_valid(payload: dict, incoming_signature: str) -> bool:
+    incoming = str(incoming_signature or "").strip().lower()
+    if not PRODAMUS_SECRET_KEY or not re.fullmatch(r"[0-9a-f]{64}", incoming):
+        return False
+    expected = prodamus_signature(payload).lower()
+    return hmac.compare_digest(incoming, expected)
+
+
+def _prodamus_form_pairs(value: Any, prefix: str = "") -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    if isinstance(value, dict):
+        for key in sorted(value, key=lambda item: str(item)):
+            child = str(key) if not prefix else f"{prefix}[{key}]"
+            pairs.extend(_prodamus_form_pairs(value[key], child))
+        return pairs
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            child = f"{prefix}[{index}]"
+            pairs.extend(_prodamus_form_pairs(item, child))
+        return pairs
+    if not prefix:
+        raise ValueError("Prodamus form value requires a key")
+    pairs.append((prefix, _prodamus_scalar_string(value)))
+    return pairs
+
+
+def prodamus_payment_url_valid(value: str) -> bool:
+    if not _is_https_url(value):
+        return False
+    host = _url_host(value).lower()
+    return (
+        host == "payform.ru" or host.endswith(".payform.ru")
+    ) and host != "demo.payform.ru"
+
+
+def _prodamus_link_from_response(body: str) -> str:
+    stripped = str(body or "").strip()
+    if not stripped:
+        return ""
+    candidate = stripped
+    try:
+        parsed = json.loads(stripped)
+    except (TypeError, ValueError):
+        parsed = None
+    if isinstance(parsed, str):
+        candidate = parsed.strip()
+    elif isinstance(parsed, dict):
+        candidate = ""
+        for key in ("url", "link", "payment_link", "paymentUrl"):
+            value = parsed.get(key)
+            if isinstance(value, str) and value.strip():
+                candidate = value.strip()
+                break
+        if not candidate and isinstance(parsed.get("data"), dict):
+            nested = parsed["data"]
+            for key in ("url", "link", "payment_link", "paymentUrl"):
+                value = nested.get(key)
+                if isinstance(value, str) and value.strip():
+                    candidate = value.strip()
+                    break
+    return candidate if prodamus_payment_url_valid(candidate) else ""
+
+
+def prodamus_create_payment_link(payload: dict) -> str:
+    signed_payload = dict(payload)
+    signed_payload["signature"] = prodamus_signature(signed_payload)
+    data = urllib.parse.urlencode(
+        _prodamus_form_pairs(signed_payload),
+        doseq=True,
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        PRODAMUS_PAYFORM_URL.rstrip("/") + "/",
+        data=data,
+        method="POST",
+        headers={
+            "Accept": "application/json,text/plain",
+            "Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            body = response.read(65537)
+            if len(body) > 65536:
+                raise ValueError("provider response is too large")
+            payment_url = _prodamus_link_from_response(
+                body.decode("utf-8", errors="strict")
+            )
+    except urllib.error.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "payment_provider_rejected",
+                "message": "Prodamus отклонил создание платёжной ссылки.",
+                "providerStatus": int(exc.code),
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "payment_provider_unavailable",
+                "message": "Prodamus временно не сформировал платёжную ссылку.",
+                "errorType": type(exc).__name__,
+            },
+        )
+    if not payment_url:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "payment_provider_response_invalid",
+                "message": "Prodamus вернул некорректную платёжную ссылку.",
+            },
+        )
+    return payment_url
+
+
 def yookassa_http_request(
     method: str,
     path: str,
@@ -21535,6 +21984,205 @@ def robokassa_invoice_item(order: dict) -> dict:
         "PaymentMethod": "full_payment",
         "PaymentObject": "service",
     }
+
+
+def prodamus_product_for_order(order: dict) -> dict:
+    quote = order["quote"] if isinstance(order.get("quote"), dict) else {}
+    plan_name = clean_limited_text(str(quote.get("planName") or "Green VPN"), 80)
+    amount = f"{int(order['amountRub'])}.00"
+    return {
+        "sku": clean_limited_text(str(order["orderId"]), 120),
+        "name": clean_limited_text(f"Green VPN — доступ: {plan_name}", 128),
+        "price": amount,
+        "quantity": "1",
+        "type": "service",
+        "tax": {"tax_type": "0"},
+        "paymentMethod": "1",
+        "paymentObject": "4",
+    }
+
+
+def prodamus_link_payload(
+    row: sqlite3.Row,
+    *,
+    user_email: str,
+    user_phone: str = "",
+) -> dict:
+    order = billing_order_status(row)
+    payload = {
+        "order_id": order["orderId"],
+        "customer_email": clean_limited_text(user_email, 254).strip().lower(),
+        "customer_extra": clean_limited_text(
+            f"Заказ Green VPN {order['orderId']}",
+            180,
+        ),
+        "products": [prodamus_product_for_order(order)],
+        "do": "link",
+        "urlReturn": PRODAMUS_RETURN_URL,
+        "urlSuccess": PRODAMUS_SUCCESS_URL,
+        "urlNotification": PRODAMUS_NOTIFICATION_URL,
+        "sys": PRODAMUS_SYS,
+        "npd_income_type": "FROM_INDIVIDUAL",
+        "installments_disabled": "1",
+        "payments_limit": "1",
+        "type": "json",
+        "callbackType": "json",
+        "currency": "rub",
+        "_param_greenvpn_order_id": order["orderId"],
+    }
+    normalized_phone = clean_limited_text(user_phone, 40).strip()
+    if normalized_phone:
+        payload["customer_phone"] = normalized_phone
+    return payload
+
+
+def claim_prodamus_link_create(public_id: str) -> tuple[sqlite3.Row, bool]:
+    now = utc_now_iso()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        current = conn.execute(
+            "SELECT * FROM billing_orders WHERE public_id = ?",
+            (public_id,),
+        ).fetchone()
+        if current is None:
+            raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
+        if str(current["provider"] or "").strip().lower() != "prodamus":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "payment_provider_mismatch",
+                    "message": "Заказ создан для другого платёжного оператора.",
+                },
+            )
+        claimed = False
+        if str(current["status"] or "").strip().lower() == "pending":
+            cursor = conn.execute(
+                """
+                UPDATE billing_orders
+                SET provider_create_attempted_at = ?, updated_at = ?
+                WHERE public_id = ? AND status = 'pending'
+                  AND COALESCE(provider_create_attempted_at, '') = ''
+                  AND COALESCE(payment_url, '') = ''
+                """,
+                (now, now, public_id),
+            )
+            claimed = cursor.rowcount == 1
+        conn.commit()
+        current = conn.execute(
+            "SELECT * FROM billing_orders WHERE public_id = ?",
+            (public_id,),
+        ).fetchone()
+    if current is None:
+        raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
+    return current, claimed
+
+
+def persist_prodamus_payment_link(row: sqlite3.Row, payment_url: str) -> dict:
+    payment_url = str(payment_url or "").strip()
+    if not prodamus_payment_url_valid(payment_url):
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "payment_provider_response_invalid",
+                "message": "Prodamus вернул некорректную платёжную ссылку.",
+            },
+        )
+    now = utc_now_iso()
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE billing_orders
+            SET provider = 'prodamus', provider_payment_id = NULL,
+                provider_payment_method_id = NULL, provider_operation_key = NULL,
+                payment_url = ?, tax_receipt_mode = ?,
+                tax_receipt_status = 'prepared_by_prodamus_npd',
+                tax_receipt_provider_id = NULL, tax_receipt_error = NULL,
+                tax_receipt_updated_at = ?, updated_at = ?
+            WHERE public_id = ? AND status = 'pending'
+            """,
+            (
+                payment_url,
+                TAX_RECEIPT_MODE,
+                now,
+                now,
+                str(row["public_id"]),
+            ),
+        )
+        conn.commit()
+        updated = conn.execute(
+            "SELECT * FROM billing_orders WHERE public_id = ?",
+            (str(row["public_id"]),),
+        ).fetchone()
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
+    return billing_order_status(updated)
+
+
+def prodamus_link_reconciliation_pending(cause: Optional[HTTPException] = None) -> HTTPException:
+    detail: dict[str, Any] = {
+        "code": "payment_provider_reconciliation_pending",
+        "message": (
+            "Создание ссылки Prodamus уже началось. Повторная ссылка заблокирована, "
+            "чтобы исключить повторную оплату; нужна сверка в кабинете Prodamus."
+        ),
+    }
+    if cause is not None and isinstance(cause.detail, dict):
+        code = clean_limited_text(cause.detail.get("code"), 80).strip()
+        if code:
+            detail["causeCodes"] = [code]
+    return HTTPException(status_code=503, detail=detail)
+
+
+def create_prodamus_payment_for_order(
+    row: sqlite3.Row,
+    user_email: str,
+    *,
+    user_phone: str = "",
+    provider_smoke: bool = False,
+) -> dict:
+    readiness = prodamus_payment_readiness(
+        require_public_sales=not provider_smoke,
+        require_refund_smoke=not provider_smoke,
+    )
+    if not readiness["productionReady"]:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "paid_sales_not_ready",
+                "message": "Оплата Prodamus пока не прошла полный readiness-контур.",
+                "requiredActions": readiness["requiredActions"],
+            },
+        )
+    order = billing_order_status(row)
+    if order["autoRenew"]:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "recurring_payments_unavailable",
+                "message": (
+                    "Автопродление Prodamus остаётся отдельным закрытым контуром. "
+                    "Выберите разовую оплату."
+                ),
+            },
+        )
+    row, create_claimed = claim_prodamus_link_create(str(row["public_id"]))
+    order = billing_order_status(row)
+    if order["status"] != "pending":
+        return order
+    if order.get("paymentUrl"):
+        return order
+    if not create_claimed:
+        raise prodamus_link_reconciliation_pending()
+    payload = prodamus_link_payload(
+        row,
+        user_email=user_email,
+        user_phone=user_phone,
+    )
+    try:
+        payment_url = prodamus_create_payment_link(payload)
+        return persist_prodamus_payment_link(row, payment_url)
+    except HTTPException as exc:
+        raise prodamus_link_reconciliation_pending(exc) from exc
 
 
 def robokassa_payment_url_valid(value: str) -> bool:
@@ -21933,7 +22581,12 @@ def sync_robokassa_billing_order(
     )
 
 
-def create_billing_order_for_user(user_id: int, payload: TariffSelectionIn) -> dict:
+def create_billing_order_for_user(
+    user_id: int,
+    payload: TariffSelectionIn,
+    *,
+    provider_smoke: bool = False,
+) -> dict:
     user_access = get_user_access_row(int(user_id))
     if user_access is None:
         raise HTTPException(status_code=404, detail="Пользователь не найден.")
@@ -21988,7 +22641,30 @@ def create_billing_order_for_user(user_id: int, payload: TariffSelectionIn) -> d
             },
         )
 
-    ensure_paid_sales_ready(require_provider=False)
+    if provider_smoke:
+        if selected_payment_provider() != "prodamus":
+            raise HTTPException(
+                status_code=409,
+                detail="Provider-smoke разрешён только для выбранного Prodamus.",
+            )
+        smoke_readiness = prodamus_payment_readiness(
+            require_public_sales=False,
+            require_refund_smoke=False,
+        )
+        if not smoke_readiness["productionReady"]:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "payment_smoke_not_ready",
+                    "message": "Prodamus ещё не готов к изолированному боевому smoke.",
+                    "requiredActions": smoke_readiness["requiredActions"],
+                },
+            )
+    else:
+        if selected_payment_provider() == "prodamus":
+            ensure_paid_sales_ready(require_provider=True)
+        else:
+            ensure_paid_sales_ready(require_provider=False)
     normalized = normalize_tariff_selection(payload)
     quote = quote_tariff(
         normalized,
@@ -22002,8 +22678,12 @@ def create_billing_order_for_user(user_id: int, payload: TariffSelectionIn) -> d
     with db() as conn:
         if beta_request or public_product_request:
             conn.execute("BEGIN IMMEDIATE")
-        user = conn.execute("SELECT email FROM users WHERE id = ?", (user_id,)).fetchone()
+        user = conn.execute(
+            "SELECT email, phone FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
         user_email = user["email"] if user else ""
+        user_phone = user["phone"] if user and "phone" in user.keys() else ""
         row = None
         if public_product_request:
             pending_rows = conn.execute(
@@ -22016,6 +22696,9 @@ def create_billing_order_for_user(user_id: int, payload: TariffSelectionIn) -> d
                 (int(user_id),),
             ).fetchall()
             for candidate in pending_rows:
+                candidate_provider = str(candidate["provider"] or "").strip().lower()
+                if provider_smoke and candidate_provider != "prodamus":
+                    continue
                 try:
                     candidate_selection = json.loads(candidate["selection_json"] or "{}")
                 except Exception:
@@ -22168,6 +22851,21 @@ def create_billing_order_for_user(user_id: int, payload: TariffSelectionIn) -> d
                 if detail.get("code") in {
                     "recurring_payments_unavailable",
                 }:
+                    mark_billing_order_canceled(order["orderId"])
+                raise
+        return order
+    if order_provider == "prodamus" and prodamus_payment_configured():
+        if not order.get("paymentUrl") and order.get("status") == "pending":
+            try:
+                return create_prodamus_payment_for_order(
+                    row,
+                    user_email=user_email,
+                    user_phone=user_phone,
+                    provider_smoke=provider_smoke,
+                )
+            except HTTPException as exc:
+                detail = exc.detail if isinstance(exc.detail, dict) else {}
+                if detail.get("code") == "recurring_payments_unavailable":
                     mark_billing_order_canceled(order["orderId"])
                 raise
         return order
@@ -22528,6 +23226,26 @@ def billing_order_requires_attention(row, now: datetime) -> list[dict]:
                 else "Robokassa настроена, но к pending-заказу не привязан счёт или payment URL."
             ),
         )
+    if (
+        status == "pending"
+        and provider == "prodamus"
+        and prodamus_payment_configured()
+        and not payment_url
+    ):
+        add_issue(
+            (
+                "prodamus_link_reconciliation_required"
+                if provider_create_attempted_at
+                else "prodamus_payment_link_not_created"
+            ),
+            "high",
+            (
+                "Попытка создания ссылки Prodamus уже зафиксирована, но payment URL "
+                "не сохранён; повторное создание запрещено, нужна сверка в кабинете."
+                if provider_create_attempted_at
+                else "Prodamus настроен, но у pending-заказа нет payment URL."
+            ),
+        )
     if status in {"failed", "canceled", "cancelled"} and (paid_at or activated_at):
         add_issue(
             "terminal_order_has_payment_markers",
@@ -22599,7 +23317,10 @@ def cancel_stale_uncreated_billing_order(public_id: str, reason: str) -> dict:
         str(issue.get("code") or "")
         for issue in billing_order_requires_attention(row, utc_now())
     }
-    safe_issue_codes = {"stale_pending_order", "yookassa_payment_not_created"}
+    missing_payment_issue_codes = {
+        "yookassa_payment_not_created",
+        "prodamus_payment_link_not_created",
+    }
     has_payment_markers = any(
         bool(row[key])
         for key in (
@@ -22613,14 +23334,15 @@ def cancel_stale_uncreated_billing_order(public_id: str, reason: str) -> dict:
     )
     if (
         str(row["status"] or "").strip().lower() != "pending"
-        or not safe_issue_codes.issubset(issue_codes)
+        or "stale_pending_order" not in issue_codes
+        or not issue_codes.intersection(missing_payment_issue_codes)
         or has_payment_markers
     ):
         raise HTTPException(
             status_code=409,
             detail=(
                 "Безопасная отмена разрешена только для pending-заказа старше 24 часов, "
-                "для которого YooKassa-платёж не создавался и нет признаков оплаты."
+                "для которого платёжная ссылка не создавалась и нет признаков оплаты."
             ),
         )
 
@@ -24616,6 +25338,173 @@ def apply_yookassa_refund_update(
         "order": billing_order_status(get_billing_order_row(public_id)),
         "fullRefund": amount_rub == int(row["amount_rub"]),
         "entitlementRolledBack": False,
+    }
+
+
+def confirm_prodamus_full_refund(
+    public_id: str,
+    *,
+    provider_refund_id: str,
+    receipt_reference: str,
+    amount_rub: int,
+    reason: str,
+) -> dict:
+    public_id = clean_limited_text(public_id, 120).strip()
+    provider_refund_id = clean_limited_text(provider_refund_id, 160).strip()
+    receipt_reference = clean_limited_text(receipt_reference, 160).strip()
+    reason = clean_limited_text(reason, 500).strip()
+    if len(reason) < 12:
+        raise HTTPException(
+            status_code=400,
+            detail="Причина возврата должна содержать минимум 12 символов.",
+        )
+    if len(provider_refund_id) < 4 or len(receipt_reference) < 4:
+        raise HTTPException(
+            status_code=400,
+            detail="Нужны идентификатор возврата и ссылка/номер чека Prodamus.",
+        )
+    row = get_billing_order_row(public_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
+    if str(row["provider"] or "").strip().lower() != "prodamus":
+        raise HTTPException(status_code=409, detail="Заказ не принадлежит Prodamus.")
+    if int(amount_rub) != int(row["amount_rub"]):
+        raise HTTPException(status_code=409, detail="Сумма возврата Prodamus не совпадает.")
+    existing_refund_id = str(row["refund_provider_id"] or "").strip()
+    existing_receipt_id = str(
+        row["refund_receipt_provider_id"]
+        if "refund_receipt_provider_id" in row.keys()
+        else ""
+    ).strip()
+    if str(row["status"] or "").strip().lower() == "refunded":
+        if (
+            existing_refund_id == provider_refund_id
+            and existing_receipt_id == receipt_reference
+        ):
+            return {
+                "order": billing_order_status(row),
+                "fullRefund": True,
+                "entitlementRolledBack": (
+                    str(row["refund_entitlement_status"] or "").strip().lower()
+                    == "rolled_back"
+                ),
+                "reused": True,
+                "providerCalled": False,
+            }
+        raise HTTPException(
+            status_code=409,
+            detail="Заказ уже возвращён с другими реквизитами возврата.",
+        )
+    if str(row["status"] or "").strip().lower() != "activated":
+        raise HTTPException(
+            status_code=409,
+            detail="Подтвердить полный возврат можно только для активированного заказа.",
+        )
+    if not (
+        prodamus_payment_configured()
+        and PRODAMUS_LIVE_MODE_CONFIRMED
+        and PRODAMUS_NPD_PARTNER_CONFIRMED
+        and tax_receipt_readiness("prodamus")["productionReady"]
+        and refund_policy_readiness()["productionReady"]
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "refund_confirmation_not_ready",
+                "message": (
+                    "Ручное подтверждение возврата закрыто до боевой настройки "
+                    "Prodamus, НПД и политики возвратов."
+                ),
+            },
+        )
+    billing_refund_entitlement_preflight(row)
+    payment_id = str(row["provider_payment_id"] or "").strip()
+    if not payment_id:
+        raise HTTPException(status_code=409, detail="У заказа отсутствует ID платежа Prodamus.")
+    now = utc_now_iso()
+    entitlement_status = "review_required"
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        locked = conn.execute(
+            "SELECT * FROM billing_orders WHERE public_id = ?",
+            (public_id,),
+        ).fetchone()
+        if locked is None:
+            raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
+        if str(locked["status"] or "").strip().lower() != "activated":
+            raise HTTPException(
+                status_code=409,
+                detail="Состояние заказа изменилось до фиксации возврата.",
+            )
+        before = parse_billing_subscription_snapshot(
+            locked["entitlement_before_json"]
+            if "entitlement_before_json" in locked.keys()
+            else None
+        )
+        after = parse_billing_subscription_snapshot(
+            locked["entitlement_after_json"]
+            if "entitlement_after_json" in locked.keys()
+            else None
+        )
+        current = conn.execute(
+            """
+            SELECT *
+            FROM subscriptions
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (int(locked["user_id"]),),
+        ).fetchone()
+        if (
+            before is not None
+            and after is not None
+            and billing_subscription_matches_snapshot(current, after)
+        ):
+            restore_billing_subscription_snapshot(conn, before)
+            entitlement_status = "rolled_back"
+        conn.execute(
+            """
+            UPDATE billing_orders
+            SET status = 'refunded', auto_renew = 0,
+                provider_payment_method_id = NULL,
+                refund_status = 'succeeded',
+                refund_amount_rub = ?,
+                refund_provider_id = ?,
+                refund_reason = COALESCE(refund_reason, ?),
+                refund_idempotence_key = COALESCE(refund_idempotence_key, ?),
+                refund_receipt_status = 'confirmed_by_prodamus_npd',
+                refund_receipt_provider_id = ?,
+                refund_entitlement_status = ?,
+                refund_error = NULL,
+                refund_requested_at = COALESCE(refund_requested_at, ?),
+                refunded_at = COALESCE(refunded_at, ?),
+                refund_updated_at = ?, updated_at = ?
+            WHERE public_id = ? AND status = 'activated'
+            """,
+            (
+                int(amount_rub),
+                provider_refund_id,
+                reason,
+                "prodamus-manual-" + hashlib.sha256(
+                    f"{public_id}:{provider_refund_id}".encode("utf-8")
+                ).hexdigest()[:32],
+                receipt_reference,
+                entitlement_status,
+                now,
+                now,
+                now,
+                now,
+                public_id,
+            ),
+        )
+        conn.commit()
+    return {
+        "order": billing_order_status(get_billing_order_row(public_id)),
+        "fullRefund": True,
+        "entitlementRolledBack": entitlement_status == "rolled_back",
+        "reused": False,
+        "providerCalled": False,
     }
 
 
@@ -27475,9 +28364,14 @@ def external_owner_setup_bundle() -> dict:
             {"envKey": "GREENVPN_PUBLIC_BASE_URL", "value": "https://api.greenvpn.pro"},
             {"envKey": "GREENVPN_EMAIL_PUBLIC_BASE_URL", "value": "https://api.greenvpn.pro"},
             {"envKey": "GREENVPN_API_BASE_URLS", "value": "https://api.greenvpn.pro"},
-            {"envKey": "GREENVPN_PAYMENT_PROVIDER", "value": "robokassa"},
-            {"envKey": "ROBOKASSA_RETURN_URL", "value": "https://api.greenvpn.pro/payment/return"},
-            {"envKey": "ROBOKASSA_RESULT_URL", "value": "https://api.greenvpn.pro/api/v1/billing/robokassa/result"},
+            {"envKey": "GREENVPN_PAYMENT_PROVIDER", "value": "prodamus"},
+            {"envKey": "PRODAMUS_RETURN_URL", "value": "https://api.greenvpn.pro/payment/return"},
+            {"envKey": "PRODAMUS_SUCCESS_URL", "value": "https://api.greenvpn.pro/payment/return"},
+            {"envKey": "PRODAMUS_NOTIFICATION_URL", "value": "https://api.greenvpn.pro/api/v1/billing/prodamus/notification"},
+            {"envKey": "PRODAMUS_NPD_PARTNER_CONFIRMED", "value": "0"},
+            {"envKey": "PRODAMUS_LIVE_MODE_CONFIRMED", "value": "0"},
+            {"envKey": "PRODAMUS_REFUND_SMOKE_CONFIRMED", "value": "0"},
+            {"envKey": "PRODAMUS_RECURRING_ENABLED", "value": "0"},
             {"envKey": "GREENVPN_AUTH_CODE_TTL_MINUTES", "value": "10"},
             {"envKey": "GREENVPN_AUTH_CODE_RESEND_COOLDOWN_SECONDS", "value": "60"},
             {"envKey": "GREENVPN_AUTH_CODE_MAX_VERIFY_ATTEMPTS", "value": "5"},
@@ -27574,37 +28468,39 @@ def external_action_specs() -> list[dict]:
         },
         {
             "code": "payments",
-            "title": "Robokassa и НПД в боевом режиме",
-            "ownerAction": "Подключить Robokassa как партнёра НПД в «Мой налог», получить MerchantLogin и три пароля, затем применить их только в server-only env.",
+            "title": "Prodamus и НПД в боевом режиме",
+            "ownerAction": "Завершить анкету Prodamus, получить одобрение платёжной страницы, связать Prodamus с «Мой налог» и применить реквизиты только в server-only env.",
             "envKeys": [
                 "GREENVPN_PAYMENT_PROVIDER",
-                "ROBOKASSA_MERCHANT_LOGIN",
-                "ROBOKASSA_PASSWORD1",
-                "ROBOKASSA_PASSWORD2",
-                "ROBOKASSA_PASSWORD3",
-                "ROBOKASSA_RETURN_URL",
-                "ROBOKASSA_RESULT_URL",
-                "GREENVPN_ROBOKASSA_NPD_PARTNER_CONFIRMED",
+                "PRODAMUS_PAYFORM_URL",
+                "PRODAMUS_SECRET_KEY",
+                "PRODAMUS_SYS",
+                "PRODAMUS_RETURN_URL",
+                "PRODAMUS_SUCCESS_URL",
+                "PRODAMUS_NOTIFICATION_URL",
+                "PRODAMUS_NPD_PARTNER_CONFIRMED",
+                "PRODAMUS_LIVE_MODE_CONFIRMED",
+                "PRODAMUS_REFUND_SMOKE_CONFIRMED",
             ],
             "ownerInputs": [
-                {"name": "Подтверждение партнёра НПД Robokassa в «Мой налог»", "envKey": "GREENVPN_ROBOKASSA_NPD_PARTNER_CONFIRMED", "secret": False},
-                {"name": "ROBOKASSA_MERCHANT_LOGIN", "envKey": "ROBOKASSA_MERCHANT_LOGIN", "secret": False},
-                {"name": "ROBOKASSA_PASSWORD1", "envKey": "ROBOKASSA_PASSWORD1", "secret": True},
-                {"name": "ROBOKASSA_PASSWORD2", "envKey": "ROBOKASSA_PASSWORD2", "secret": True},
-                {"name": "ROBOKASSA_PASSWORD3", "envKey": "ROBOKASSA_PASSWORD3", "secret": True},
-                {"name": "ResultURL Robokassa", "envKey": "ROBOKASSA_RESULT_URL", "secret": False, "example": "https://api.greenvpn.pro/api/v1/billing/robokassa/result"},
-                {"name": "Return URL после оплаты", "envKey": "ROBOKASSA_RETURN_URL", "secret": False, "example": "https://api.greenvpn.pro/payment/return"},
+                {"name": "Боевая платёжная страница Prodamus", "envKey": "PRODAMUS_PAYFORM_URL", "secret": False, "example": "https://<магазин>.payform.ru"},
+                {"name": "Секретный ключ страницы", "envKey": "PRODAMUS_SECRET_KEY", "secret": True},
+                {"name": "SYS из инструкции Prodamus", "envKey": "PRODAMUS_SYS", "secret": False},
+                {"name": "Подтверждение партнёра Prodamus в «Мой налог»", "envKey": "PRODAMUS_NPD_PARTNER_CONFIRMED", "secret": False},
+                {"name": "Подтверждение боевого режима страницы", "envKey": "PRODAMUS_LIVE_MODE_CONFIRMED", "secret": False},
+                {"name": "Notification URL", "envKey": "PRODAMUS_NOTIFICATION_URL", "secret": False, "example": "https://api.greenvpn.pro/api/v1/billing/prodamus/notification"},
+                {"name": "Return URL после оплаты", "envKey": "PRODAMUS_RETURN_URL", "secret": False, "example": "https://api.greenvpn.pro/payment/return"},
             ],
             "applySteps": [
-                "Подтвердить переход из «Мой налог» к партнёру Robokassa только непосредственно перед передачей ИНН.",
-                "Завершить подключение магазина и «Робочеков СМЗ» в кабинете Robokassa.",
+                "Завершить анкету и дождаться явного одобрения Prodamus для Green VPN.",
+                "После выдачи рабочей страницы отправить ИНН через настройки Prodamus и подтвердить партнёра в «Мой налог».",
                 "Запустить configure_backend_env_wsl.ps1 отдельно для primary и fallback; на fallback денежные writer-флаги должны оставаться выключенными.",
             ],
             "verifySteps": [
                 "GET /api/v1/admin/billing/readiness",
                 "GET /api/v1/admin/billing/payment-smoke/readiness",
                 "С отдельным подтверждением владельца провести один реальный платёж и один полный возврат.",
-                "Проверить, что тариф активируется только после Invoice=Paid и OpStateExt State=100 с точной суммой/OpKey.",
+                "Проверить, что тариф активируется только после подписанного notification со статусом success, точным order_num, суммой и составом заказа.",
                 "Проверить чек дохода и чек возврата в НПД-контуре.",
             ],
             "secret": True,
@@ -32682,6 +33578,163 @@ def _case_insensitive_parameter(parameters: dict[str, str], *names: str) -> str:
     return ""
 
 
+def _prodamus_json_object(pairs: list[tuple[str, Any]]) -> dict:
+    result: dict[str, Any] = {}
+    casefolded: dict[str, str] = {}
+    for raw_key, value in pairs:
+        key = str(raw_key)
+        folded = key.casefold()
+        if key in result or folded in casefolded:
+            raise ValueError("duplicate or ambiguous Prodamus JSON key")
+        result[key] = value
+        casefolded[folded] = key
+    return result
+
+
+async def prodamus_notification_payload(request: Request) -> dict:
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type != "application/json":
+        raise HTTPException(
+            status_code=415,
+            detail=(
+                "Webhook Prodamus должен быть JSON; платёжная ссылка обязана "
+                "передавать callbackType=json."
+            ),
+        )
+    body = await request.body()
+    if not body or len(body) > 65536:
+        raise HTTPException(status_code=400, detail="Тело webhook Prodamus некорректно.")
+    try:
+        payload = json.loads(
+            body.decode("utf-8", errors="strict"),
+            object_pairs_hook=_prodamus_json_object,
+        )
+    except (UnicodeDecodeError, ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="JSON webhook Prodamus некорректен.")
+    if not isinstance(payload, dict) or not payload:
+        raise HTTPException(status_code=400, detail="Webhook Prodamus должен быть объектом.")
+    return payload
+
+
+def prodamus_notification_order_id(payload: dict) -> str:
+    candidates = []
+    for key in ("_param_greenvpn_order_id", "order_num"):
+        value = clean_limited_text(payload.get(key), 120).strip()
+        if value:
+            candidates.append(value)
+    provider_order_id = clean_limited_text(payload.get("order_id"), 120).strip()
+    if provider_order_id.startswith("ord_"):
+        candidates.append(provider_order_id)
+    unique = set(candidates)
+    if len(unique) != 1:
+        raise HTTPException(
+            status_code=409,
+            detail="Webhook Prodamus не содержит однозначный номер заказа Green VPN.",
+        )
+    return next(iter(unique))
+
+
+def validate_prodamus_notification_for_order(
+    row: sqlite3.Row,
+    payload: dict,
+) -> tuple[str, str]:
+    if str(row["provider"] or "").strip().lower() != "prodamus":
+        raise HTTPException(status_code=409, detail="Заказ не принадлежит Prodamus.")
+    public_id = str(row["public_id"])
+    if prodamus_notification_order_id(payload) != public_id:
+        raise HTTPException(status_code=409, detail="Номер заказа Prodamus не совпадает.")
+    provider_order_id = clean_limited_text(payload.get("order_id"), 120).strip()
+    if not provider_order_id:
+        raise HTTPException(status_code=409, detail="Prodamus не передал ID платежа.")
+    saved_provider_id = str(row["provider_payment_id"] or "").strip()
+    if saved_provider_id and provider_order_id != saved_provider_id:
+        raise HTTPException(status_code=409, detail="ID платежа Prodamus не совпадает.")
+    expected_host = _url_host(PRODAMUS_PAYFORM_URL).lower()
+    incoming_domain = clean_limited_text(payload.get("domain"), 255).strip().lower()
+    if not incoming_domain or incoming_domain != expected_host:
+        raise HTTPException(status_code=409, detail="Домен платежа Prodamus не совпадает.")
+    if incoming_domain == "demo.payform.ru" or str(payload.get("demo_mode") or "").lower() in {
+        "1",
+        "true",
+    }:
+        raise HTTPException(status_code=403, detail="Демо-платёж Prodamus отклонён.")
+    incoming_sys = clean_limited_text(payload.get("sys"), 120).strip()
+    if incoming_sys != PRODAMUS_SYS:
+        raise HTTPException(status_code=409, detail="SYS платежа Prodamus не совпадает.")
+    amount = _decimal_value(payload.get("sum"))
+    expected_amount = Decimal(int(row["amount_rub"]))
+    if amount is None or amount != expected_amount:
+        raise HTTPException(status_code=409, detail="Сумма платежа Prodamus не совпадает.")
+    currency = clean_limited_text(payload.get("currency"), 12).strip().lower()
+    if currency and currency != "rub":
+        raise HTTPException(status_code=409, detail="Валюта платежа Prodamus не совпадает.")
+    products = payload.get("products")
+    if not isinstance(products, list) or len(products) != 1 or not isinstance(products[0], dict):
+        raise HTTPException(status_code=409, detail="Корзина платежа Prodamus некорректна.")
+    order = billing_order_status(row)
+    expected_product = prodamus_product_for_order(order)
+    product = products[0]
+    product_name = clean_limited_text(product.get("name"), 128).strip()
+    product_price = _decimal_value(product.get("price"))
+    product_quantity = _decimal_value(product.get("quantity"))
+    product_sum = _decimal_value(product.get("sum"))
+    if (
+        product_name != expected_product["name"]
+        or product_price != expected_amount
+        or product_quantity != Decimal("1")
+        or (product_sum is not None and product_sum != expected_amount)
+    ):
+        raise HTTPException(status_code=409, detail="Позиция платежа Prodamus не совпадает.")
+    status = clean_limited_text(payload.get("payment_status"), 40).strip().lower()
+    return provider_order_id, status
+
+
+def apply_prodamus_notification(payload: dict) -> dict:
+    public_id = prodamus_notification_order_id(payload)
+    row = get_billing_order_row(public_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Заказ Prodamus не найден.")
+    provider_order_id, status = validate_prodamus_notification_for_order(row, payload)
+    if status == "success":
+        now = utc_now_iso()
+        with db() as conn:
+            conn.execute(
+                """
+                UPDATE billing_orders
+                SET provider_payment_id = COALESCE(provider_payment_id, ?),
+                    tax_receipt_mode = ?,
+                    tax_receipt_status = 'submitted_by_prodamus_npd',
+                    tax_receipt_provider_id = COALESCE(tax_receipt_provider_id, ?),
+                    tax_receipt_error = NULL,
+                    tax_receipt_updated_at = ?, updated_at = ?
+                WHERE public_id = ?
+                """,
+                (
+                    provider_order_id,
+                    TAX_RECEIPT_MODE,
+                    provider_order_id,
+                    now,
+                    now,
+                    public_id,
+                ),
+            )
+            conn.commit()
+        return mark_billing_order_paid_and_activate(
+            public_id,
+            provider_payment_id=provider_order_id,
+            provider_payment_method_id=None,
+        )
+    if status in {"order_canceled", "order_denied"}:
+        return mark_billing_order_canceled(
+            public_id,
+            provider_payment_id=provider_order_id,
+        )
+    raise HTTPException(
+        status_code=409,
+        detail="Статус платежа Prodamus не поддержан.",
+    )
+
+
 @app.get("/api/v1/billing/robokassa/result")
 @app.post("/api/v1/billing/robokassa/result")
 async def billing_robokassa_result(request: Request):
@@ -32715,6 +33768,22 @@ async def billing_robokassa_result(request: Request):
     return Response(
         content=f"OK{inv_id}",
         media_type="text/plain",
+    )
+
+
+@app.post("/api/v1/billing/prodamus/notification")
+async def billing_prodamus_notification(request: Request):
+    require_billing_callback_primary()
+    if not prodamus_payment_configured() or not PRODAMUS_LIVE_MODE_CONFIRMED:
+        raise HTTPException(status_code=503, detail="Prodamus не готов к боевым callback.")
+    payload = await prodamus_notification_payload(request)
+    signature = request.headers.get("sign", "")
+    if not prodamus_signature_valid(payload, signature):
+        raise HTTPException(status_code=403, detail="Подпись Prodamus не совпадает.")
+    result = apply_prodamus_notification(payload)
+    return JSONResponse(
+        content={"ok": True, **result},
+        status_code=200,
     )
 
 
@@ -37612,6 +38681,52 @@ def admin_billing_payment_smoke_readiness(
     return billing_payment_smoke_readiness_payload(limit=limit)
 
 
+@app.post("/api/v1/admin/billing/prodamus/payment-smoke")
+def admin_create_prodamus_payment_smoke(
+    payload: AdminProdamusPaymentSmokeIn,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "billing.manage", request=request)
+    if int(payload.userId) <= 0 or int(payload.confirmUserId) != int(payload.userId):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "payment_smoke_confirmation_mismatch",
+                "message": "Для smoke нужно точно повторить ID тестового пользователя.",
+            },
+        )
+    order = create_billing_order_for_user(
+        int(payload.userId),
+        TariffSelectionIn(
+            autoRenew=False,
+            clientMarker=PUBLIC_PRODUCT_CLIENT_MARKER,
+            releaseChannel=PUBLIC_PRODUCT_RELEASE_CHANNEL,
+            billingPlanCode=PUBLIC_PRODUCT_PLAN_CODE,
+        ),
+        provider_smoke=True,
+    )
+    write_admin_audit(
+        "prodamus_payment_smoke_created",
+        "billing_order",
+        str(order["orderId"]),
+        {
+            "userId": int(payload.userId),
+            "amountRub": int(order["amountRub"]),
+            "provider": order.get("provider"),
+        },
+        request=request,
+    )
+    return {
+        "ok": True,
+        "order": public_billing_order_status(order),
+        "message": (
+            "Изолированный заказ Prodamus создан; публичные продажи остались закрыты."
+        ),
+    }
+
+
 @app.get("/api/v1/admin/subscriptions/expiry-readiness")
 def admin_subscriptions_expiry_readiness(
     limit: int = 25,
@@ -37660,6 +38775,20 @@ def admin_mark_billing_order_paid(
     authorization: Optional[str] = Header(default=None),
 ):
     require_admin(x_admin_token, authorization, "billing.manage", request=request)
+    existing = get_billing_order_row(order_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
+    if str(existing["provider"] or "").strip().lower() == "prodamus":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "prodamus_signed_notification_required",
+                "message": (
+                    "Заказ Prodamus активируется только подписанным notification "
+                    "от платёжной страницы."
+                ),
+            },
+        )
     result = mark_billing_order_paid_and_activate(
         order_id,
         provider_payment_id=payload.providerPaymentId if payload else None,
@@ -37751,6 +38880,56 @@ def admin_refund_billing_order_full(
         **result,
         "order": public_billing_order_status(order),
         "refundReadiness": refund_execution_readiness(),
+        "reconciliation": billing_reconciliation_payload(),
+    }
+
+
+@app.post("/api/v1/admin/billing/orders/{order_id}/prodamus-refund-confirm")
+def admin_confirm_prodamus_refund(
+    order_id: str,
+    payload: AdminProdamusRefundConfirmIn,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "billing.manage", request=request)
+    if clean_limited_text(payload.confirmOrderId, 120).strip() != order_id:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "refund_confirmation_mismatch",
+                "message": "Для возврата нужно точно повторить идентификатор заказа.",
+            },
+        )
+    result = confirm_prodamus_full_refund(
+        order_id,
+        provider_refund_id=payload.providerRefundId,
+        receipt_reference=payload.receiptReference,
+        amount_rub=payload.amountRub,
+        reason=payload.reason,
+    )
+    order = result["order"]
+    write_admin_audit(
+        "prodamus_full_refund_confirmed",
+        "billing_order",
+        order_id,
+        {
+            "userId": order.get("userId"),
+            "amountRub": order.get("amountRub"),
+            "refundStatus": (order.get("refund") or {}).get("status"),
+            "entitlementStatus": (order.get("refund") or {}).get(
+                "entitlementStatus"
+            ),
+            "receiptStatus": (order.get("refund") or {}).get("receiptStatus"),
+            "reused": bool(result.get("reused")),
+        },
+        request=request,
+    )
+    return {
+        "ok": True,
+        **result,
+        "order": public_billing_order_status(order),
+        "refundReadiness": refund_execution_readiness("prodamus"),
         "reconciliation": billing_reconciliation_payload(),
     }
 

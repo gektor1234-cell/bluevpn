@@ -1,6 +1,10 @@
 # Green VPN External Services Checklist
 
-Последнее обновление: 2026-08-25
+Последнее обновление: 2026-08-26
+
+> Платёжный маршрут изменён с Robokassa на Prodamus. Канонический контракт,
+> fail-closed env и статус семи этапов находятся в `PAYMENTS_RU.md`; старые
+> разделы Robokassa ниже не применять.
 
 Этот файл нужен, чтобы внешние сервисы подключались одним коротким циклом: ты оформляешь сервис, берёшь нужные значения, передаёшь их Codex, а backend/UI уже готовы их принять. Секреты, пароли, API-ключи и токены в этот файл не писать.
 
@@ -11,7 +15,7 @@
   Упоминания ниже о production backend на `37.220.85.211` являются
   исторической setup-справкой: сейчас это NL1 VPN-узел.
 - DNS/HTTPS, Yandex 360 SMTP/email code, guest-first auth и внешний monitoring
-  production-ready. Для новых продаж выбран Robokassa + «Робочеки СМЗ»;
+  production-ready. Для новых продаж выбран Prodamus с интеграцией НПД;
   коммерческий `productionPaymentReady` намеренно false до партнёрской привязки
   НПД и нового реального payment/refund smoke.
 - Телефон/SMS исключён из продуктового контракта.
@@ -26,7 +30,7 @@
 
 ## Главное Правило
 
-- В репозиторий нельзя писать пароли, токены, `admin_token`, SMTP-пароли, Robokassa Password1/2/3, старый YooKassa secret key, SSH-пароли и WireGuard private keys.
+- В репозиторий нельзя писать пароли, токены, `admin_token`, SMTP-пароли, Prodamus secret key, старые платёжные секреты, SSH-пароли и WireGuard private keys.
 - Все реальные секреты должны попадать только в root-owned env нужного
   control plane. Не отправлять их в чат, документацию или Git.
 - Для безопасной загрузки секретов на сервер используй:

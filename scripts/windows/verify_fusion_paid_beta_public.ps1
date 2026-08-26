@@ -17,7 +17,7 @@ param(
     [string]$StableAndroidBuild = '2026082401',
     [string]$StableAndroidSha256 = '4BA46905702F7A42DD46F768119050FF7F36A31869A2986C0928BBC6F40E5ED2',
     [long]$StableAndroidSize = 56362397,
-    [string]$StableBackendVersion = '0.9.157-robokassa-npd.1',
+    [string]$StableBackendVersion = '0.9.158-prodamus-npd.1',
     [string]$BetaBackendVersion = '0.9.154-fusion-actions.1',
     [bool]$StableRequired = $true,
     [string]$StableMinSupportedVersion = '',

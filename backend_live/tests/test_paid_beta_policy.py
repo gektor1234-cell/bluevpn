@@ -48,6 +48,7 @@ PAID_BETA_SITE_FETCH = {
     "xRobotsTag": "noindex, nofollow, noarchive",
     "error": "",
 }
+PRODAMUS_TEST_SECRET = hashlib.sha256(b"prodamus-test-fixture").hexdigest()
 
 
 class PaidBetaPolicyTests(unittest.TestCase):
@@ -100,6 +101,18 @@ class PaidBetaPolicyTests(unittest.TestCase):
         main.ROBOKASSA_JWT_ALGORITHM = "HS256"
         main.ROBOKASSA_NPD_PARTNER_CONFIRMED = False
         main.ROBOKASSA_RECURRING_ENABLED = False
+        main.PRODAMUS_PAYFORM_URL = ""
+        main.PRODAMUS_SECRET_KEY = ""
+        main.PRODAMUS_SYS = ""
+        main.PRODAMUS_RETURN_URL = "https://api.example.test/payment/return"
+        main.PRODAMUS_SUCCESS_URL = "https://api.example.test/payment/return"
+        main.PRODAMUS_NOTIFICATION_URL = (
+            "https://api.example.test/api/v1/billing/prodamus/notification"
+        )
+        main.PRODAMUS_NPD_PARTNER_CONFIRMED = False
+        main.PRODAMUS_LIVE_MODE_CONFIRMED = False
+        main.PRODAMUS_REFUND_SMOKE_CONFIRMED = False
+        main.PRODAMUS_RECURRING_ENABLED = False
         with main.db() as conn:
             conn.execute("DELETE FROM beta_funnel_events")
             conn.execute("DELETE FROM beta_invite_redemptions")
@@ -173,6 +186,92 @@ class PaidBetaPolicyTests(unittest.TestCase):
         for name, value in values.items():
             stack.enter_context(patch.object(main, name, value))
         return stack
+
+    def prodamus_environment(self) -> ExitStack:
+        stack = ExitStack()
+        values = {
+            "PAYMENT_PROVIDER": "prodamus",
+            "PRODAMUS_PAYFORM_URL": "https://greenvpn-test.payform.ru",
+            "PRODAMUS_SECRET_KEY": PRODAMUS_TEST_SECRET,
+            "PRODAMUS_SYS": "greenvpn_custom",
+            "PRODAMUS_RETURN_URL": "https://api.example.test/payment/return",
+            "PRODAMUS_SUCCESS_URL": "https://api.example.test/payment/return",
+            "PRODAMUS_NOTIFICATION_URL": (
+                "https://api.example.test/api/v1/billing/prodamus/notification"
+            ),
+            "PRODAMUS_NPD_PARTNER_CONFIRMED": True,
+            "PRODAMUS_LIVE_MODE_CONFIRMED": True,
+            "PRODAMUS_REFUND_SMOKE_CONFIRMED": True,
+            "PRODAMUS_RECURRING_ENABLED": False,
+            "PUBLIC_BASE_URL": "https://api.example.test",
+            "PUBLIC_PRODUCT_ENABLED": True,
+            "PUBLIC_PRODUCT_BILLING_PRIMARY": True,
+            "PAID_SALES_ENABLED": True,
+            "TAX_RECEIPT_MODE": "prodamus_npd",
+            "TAX_RECEIPT_WORKFLOW_CONFIRMED": True,
+            "TAX_RECEIPT_PAYMENT_SUBJECT": "service",
+            "TAX_RECEIPT_PAYMENT_MODE": "full_payment",
+            "REFUND_WORKFLOW_CONFIRMED": True,
+            "REFUND_EXECUTION_ENABLED": True,
+            "REFUND_BILLING_PRIMARY": True,
+        }
+        for name, value in values.items():
+            stack.enter_context(patch.object(main, name, value))
+        return stack
+
+    def prodamus_request(self, payload: dict, signature: str) -> Request:
+        body = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        delivered = False
+
+        async def receive():
+            nonlocal delivered
+            if delivered:
+                return {"type": "http.request", "body": b"", "more_body": False}
+            delivered = True
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        return Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/v1/billing/prodamus/notification",
+                "query_string": b"",
+                "headers": [
+                    (b"content-type", b"application/json; charset=utf-8"),
+                    (b"sign", signature.encode("ascii")),
+                ],
+            },
+            receive,
+        )
+
+    def prodamus_success_payload(self, order: dict, provider_id: str = "900001") -> dict:
+        row = main.get_billing_order_row(order["orderId"])
+        product = main.prodamus_product_for_order(main.billing_order_status(row))
+        return {
+            "date": "2026-08-26T12:00:00+03:00",
+            "order_id": provider_id,
+            "order_num": order["orderId"],
+            "_param_greenvpn_order_id": order["orderId"],
+            "domain": "greenvpn-test.payform.ru",
+            "sum": f"{int(order['amountRub'])}.00",
+            "customer_email": "beta@example.test",
+            "sys": "greenvpn_custom",
+            "currency": "rub",
+            "products": [
+                {
+                    "name": product["name"],
+                    "price": product["price"],
+                    "quantity": "1",
+                    "sum": product["price"],
+                }
+            ],
+            "payment_status": "success",
+            "payment_status_description": "Успешная оплата",
+        }
 
     def enroll_beta(self):
         return main.set_user_paid_beta_cohort(
@@ -1345,6 +1444,349 @@ class PaidBetaPolicyTests(unittest.TestCase):
         )
         self.assertEqual(order["taxReceipt"]["status"], "pending")
 
+    def test_prodamus_hmac_contract_rejects_demo_and_untrusted_urls(self) -> None:
+        payload = {
+            "z": 2,
+            "products": [{"price": 249, "name": "Green VPN / 30"}],
+            "a": 1,
+        }
+        secret = PRODAMUS_TEST_SECRET
+        canonical = (
+            '{"a":"1","products":[{"name":"Green VPN \\/ 30",'
+            '"price":"249"}],"z":"2"}'
+        )
+        expected = hmac.new(
+            secret.encode("utf-8"),
+            canonical.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        self.assertEqual(main.prodamus_signature(payload, secret), expected)
+
+        with self.prodamus_environment():
+            self.assertTrue(main.prodamus_signature_valid(payload, expected))
+            demo_signature = main.prodamus_signature(payload, secret + "demo")
+            self.assertFalse(main.prodamus_signature_valid(payload, demo_signature))
+            self.assertTrue(main.prodamus_payment_url_valid("https://payform.ru/AbC123/"))
+            self.assertTrue(
+                main.prodamus_payment_url_valid(
+                    "https://greenvpn-test.payform.ru/payment/AbC123"
+                )
+            )
+            self.assertFalse(
+                main.prodamus_payment_url_valid("https://demo.payform.ru/AbC123/")
+            )
+            self.assertFalse(
+                main.prodamus_payment_url_valid("https://payform.ru.evil.test/AbC123/")
+            )
+
+    def test_prodamus_readiness_is_fail_closed_but_allows_isolated_smoke(self) -> None:
+        with self.prodamus_environment():
+            self.assertTrue(main.prodamus_payment_readiness()["productionReady"])
+
+        with (
+            self.prodamus_environment(),
+            patch.object(main, "PAID_SALES_ENABLED", False),
+            patch.object(main, "PRODAMUS_REFUND_SMOKE_CONFIRMED", False),
+        ):
+            public_readiness = main.prodamus_payment_readiness()
+            smoke_readiness = main.prodamus_payment_readiness(
+                require_public_sales=False,
+                require_refund_smoke=False,
+            )
+
+        self.assertFalse(public_readiness["productionReady"])
+        failed = {
+            check["code"]
+            for check in public_readiness["checks"]
+            if not check["ok"]
+        }
+        self.assertIn("paid_sales_enabled", failed)
+        self.assertIn("refund_workflow_ready", failed)
+        self.assertTrue(smoke_readiness["productionReady"])
+
+        with (
+            self.prodamus_environment(),
+            patch.object(main, "PRODAMUS_NPD_PARTNER_CONFIRMED", False),
+        ):
+            self.assertFalse(
+                main.prodamus_payment_readiness(
+                    require_public_sales=False,
+                    require_refund_smoke=False,
+                )["productionReady"]
+            )
+
+    def test_prodamus_missing_config_fails_before_order_mutation(self) -> None:
+        with (
+            self.prodamus_environment(),
+            patch.object(main, "PRODAMUS_SECRET_KEY", ""),
+        ):
+            with self.assertRaises(main.HTTPException) as not_ready:
+                main.create_billing_order_for_user(
+                    self.user_id,
+                    self.public_product_payload(autoRenew=False),
+                )
+
+        self.assertEqual(not_ready.exception.status_code, 503)
+        self.assertEqual(not_ready.exception.detail["code"], "paid_sales_not_ready")
+        with main.db() as conn:
+            order_count = conn.execute(
+                "SELECT COUNT(*) FROM billing_orders WHERE user_id = ?",
+                (self.user_id,),
+            ).fetchone()[0]
+        self.assertEqual(order_count, 0)
+
+    def test_prodamus_order_is_signed_once_and_never_duplicated(self) -> None:
+        payment_url = "https://payform.ru/AbC123/"
+        with (
+            self.prodamus_environment(),
+            patch.object(
+                main,
+                "prodamus_create_payment_link",
+                return_value=payment_url,
+            ) as create_link,
+        ):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(autoRenew=False),
+            )
+            repeated = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(autoRenew=False),
+            )
+
+        self.assertEqual(order["orderId"], repeated["orderId"])
+        self.assertEqual(order["paymentUrl"], payment_url)
+        self.assertEqual(order["provider"], "prodamus")
+        self.assertEqual(order["taxReceipt"]["mode"], "prodamus_npd")
+        self.assertEqual(order["taxReceipt"]["status"], "prepared_by_prodamus_npd")
+        create_link.assert_called_once()
+        link_payload = create_link.call_args.args[0]
+        self.assertEqual(link_payload["do"], "link")
+        self.assertEqual(link_payload["callbackType"], "json")
+        self.assertEqual(link_payload["payments_limit"], "1")
+        self.assertEqual(link_payload["installments_disabled"], "1")
+        self.assertEqual(link_payload["currency"], "rub")
+        self.assertEqual(link_payload["_param_greenvpn_order_id"], order["orderId"])
+        self.assertEqual(link_payload["products"][0]["type"], "service")
+        self.assertNotIn("signature", link_payload)
+
+    def test_prodamus_smoke_ignores_pending_order_from_other_provider(self) -> None:
+        payment_urls = [
+            "https://payform.ru/Legacy123/",
+            "https://payform.ru/Smoke456/",
+        ]
+        with (
+            self.prodamus_environment(),
+            patch.object(
+                main,
+                "prodamus_create_payment_link",
+                side_effect=payment_urls,
+            ) as create_link,
+        ):
+            legacy = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(autoRenew=False),
+            )
+            with main.db() as conn:
+                conn.execute(
+                    """
+                    UPDATE billing_orders
+                    SET provider = 'robokassa', payment_url = NULL, updated_at = ?
+                    WHERE public_id = ?
+                    """,
+                    (main.utc_now_iso(), legacy["orderId"]),
+                )
+                conn.commit()
+
+            smoke = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(autoRenew=False),
+                provider_smoke=True,
+            )
+
+        self.assertNotEqual(smoke["orderId"], legacy["orderId"])
+        self.assertEqual(smoke["provider"], "prodamus")
+        self.assertEqual(smoke["paymentUrl"], payment_urls[1])
+        self.assertEqual(create_link.call_count, 2)
+
+    def test_prodamus_ambiguous_link_creation_is_never_retried(self) -> None:
+        with (
+            self.prodamus_environment(),
+            patch.object(
+                main,
+                "prodamus_create_payment_link",
+                side_effect=main.HTTPException(
+                    status_code=502,
+                    detail={"code": "payment_provider_unavailable"},
+                ),
+            ) as create_link,
+        ):
+            for _attempt in range(2):
+                with self.assertRaises(main.HTTPException) as pending:
+                    main.create_billing_order_for_user(
+                        self.user_id,
+                        self.public_product_payload(autoRenew=False),
+                    )
+                self.assertEqual(pending.exception.status_code, 503)
+                self.assertEqual(
+                    pending.exception.detail["code"],
+                    "payment_provider_reconciliation_pending",
+                )
+
+        create_link.assert_called_once()
+        with main.db() as conn:
+            row = conn.execute(
+                """
+                SELECT provider_create_attempted_at, provider_payment_id, payment_url
+                FROM billing_orders
+                WHERE user_id = ? AND status = 'pending'
+                ORDER BY id DESC LIMIT 1
+                """,
+                (self.user_id,),
+            ).fetchone()
+        self.assertIsNotNone(row["provider_create_attempted_at"])
+        self.assertIsNone(row["provider_payment_id"])
+        self.assertIsNone(row["payment_url"])
+
+    def test_prodamus_callback_is_exact_signed_and_idempotent(self) -> None:
+        with (
+            self.prodamus_environment(),
+            patch.object(
+                main,
+                "prodamus_create_payment_link",
+                return_value="https://payform.ru/Callback123/",
+            ),
+        ):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(autoRenew=False),
+            )
+            payload = self.prodamus_success_payload(order)
+
+            with self.assertRaises(main.HTTPException) as bad_signature:
+                asyncio.run(
+                    main.billing_prodamus_notification(
+                        self.prodamus_request(payload, "0" * 64)
+                    )
+                )
+            self.assertEqual(bad_signature.exception.status_code, 403)
+            self.assertEqual(main.get_billing_order_row(order["orderId"])["status"], "pending")
+
+            wrong_amount = copy.deepcopy(payload)
+            wrong_amount["sum"] = "250.00"
+            wrong_amount["products"][0]["price"] = "250.00"
+            wrong_amount["products"][0]["sum"] = "250.00"
+            with self.assertRaises(main.HTTPException) as amount_mismatch:
+                asyncio.run(
+                    main.billing_prodamus_notification(
+                        self.prodamus_request(
+                            wrong_amount,
+                            main.prodamus_signature(wrong_amount),
+                        )
+                    )
+                )
+            self.assertEqual(amount_mismatch.exception.status_code, 409)
+            self.assertEqual(main.get_billing_order_row(order["orderId"])["status"], "pending")
+
+            signature = main.prodamus_signature(payload)
+            first = asyncio.run(
+                main.billing_prodamus_notification(
+                    self.prodamus_request(payload, signature)
+                )
+            )
+            second = asyncio.run(
+                main.billing_prodamus_notification(
+                    self.prodamus_request(payload, signature)
+                )
+            )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        stored = main.get_billing_order_row(order["orderId"])
+        self.assertEqual(stored["status"], "activated")
+        self.assertEqual(stored["provider_payment_id"], "900001")
+        self.assertEqual(stored["tax_receipt_status"], "submitted_by_prodamus_npd")
+
+    def test_prodamus_manual_full_refund_rolls_back_entitlement_idempotently(self) -> None:
+        before = main.billing_subscription_snapshot(main.get_subscription_row(self.user_id))
+        with (
+            self.prodamus_environment(),
+            patch.object(
+                main,
+                "prodamus_create_payment_link",
+                return_value="https://payform.ru/Refund123/",
+            ),
+        ):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(autoRenew=False),
+            )
+            payload = self.prodamus_success_payload(order, provider_id="900002")
+            asyncio.run(
+                main.billing_prodamus_notification(
+                    self.prodamus_request(payload, main.prodamus_signature(payload))
+                )
+            )
+            result = main.confirm_prodamus_full_refund(
+                order["orderId"],
+                provider_refund_id="refund-900002",
+                receipt_reference="npd-refund-receipt-900002",
+                amount_rub=order["amountRub"],
+                reason="Полный возврат контрольного платежа Prodamus",
+            )
+            repeated = main.confirm_prodamus_full_refund(
+                order["orderId"],
+                provider_refund_id="refund-900002",
+                receipt_reference="npd-refund-receipt-900002",
+                amount_rub=order["amountRub"],
+                reason="Полный возврат контрольного платежа Prodamus",
+            )
+
+        self.assertEqual(result["order"]["status"], "refunded")
+        self.assertTrue(result["entitlementRolledBack"])
+        self.assertTrue(repeated["reused"])
+        self.assertEqual(
+            result["order"]["refund"]["receiptStatus"],
+            "confirmed_by_prodamus_npd",
+        )
+        self.assertEqual(
+            main.billing_subscription_snapshot(main.get_subscription_row(self.user_id)),
+            before,
+        )
+        public_order = main.public_billing_order_status(result["order"])
+        self.assertNotIn("providerId", public_order["refund"])
+        self.assertNotIn("receiptProviderId", public_order["refund"])
+
+    def test_prodamus_rejects_manual_admin_activation(self) -> None:
+        with (
+            self.prodamus_environment(),
+            patch.object(
+                main,
+                "prodamus_create_payment_link",
+                return_value="https://payform.ru/NoManualActivation/",
+            ),
+            patch.object(main, "require_admin"),
+        ):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(autoRenew=False),
+            )
+            with self.assertRaises(main.HTTPException) as blocked:
+                main.admin_mark_billing_order_paid(
+                    order["orderId"],
+                    self.prodamus_request({}, ""),
+                )
+
+        self.assertEqual(blocked.exception.status_code, 409)
+        self.assertEqual(
+            blocked.exception.detail["code"],
+            "prodamus_signed_notification_required",
+        )
+        self.assertEqual(
+            main.get_billing_order_row(order["orderId"])["status"],
+            "pending",
+        )
+
     def test_robokassa_jwt_and_result_signature_contract(self) -> None:
         with self.robokassa_environment():
             payload = {
@@ -1414,6 +1856,7 @@ class PaidBetaPolicyTests(unittest.TestCase):
             patch.object(main, "PAID_BETA_BILLING_PRIMARY", True),
             patch.object(main, "authoritative_yookassa_payment_for_webhook") as yookassa,
             patch.object(main, "robokassa_result_parameters") as robokassa,
+            patch.object(main, "prodamus_notification_payload") as prodamus,
         ):
             with self.assertRaises(main.HTTPException) as yookassa_error:
                 asyncio.run(
@@ -1427,6 +1870,12 @@ class PaidBetaPolicyTests(unittest.TestCase):
                         request_for("/api/v1/billing/robokassa/result")
                     )
                 )
+            with self.assertRaises(main.HTTPException) as prodamus_error:
+                asyncio.run(
+                    main.billing_prodamus_notification(
+                        request_for("/api/v1/billing/prodamus/notification")
+                    )
+                )
 
         self.assertEqual(yookassa_error.exception.status_code, 503)
         self.assertEqual(robokassa_error.exception.status_code, 503)
@@ -1438,8 +1887,14 @@ class PaidBetaPolicyTests(unittest.TestCase):
             robokassa_error.exception.detail["code"],
             "billing_callback_primary_required",
         )
+        self.assertEqual(prodamus_error.exception.status_code, 503)
+        self.assertEqual(
+            prodamus_error.exception.detail["code"],
+            "billing_callback_primary_required",
+        )
         yookassa.assert_not_called()
         robokassa.assert_not_called()
+        prodamus.assert_not_called()
 
     def test_fallback_order_poll_never_synchronizes_or_mutates_provider_state(self) -> None:
         with self.robokassa_environment(), patch.object(
