@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import io
 import json
+import re
 import tempfile
 import unittest
 import urllib.error
@@ -78,6 +79,9 @@ class PaidBetaPolicyTests(unittest.TestCase):
         main.TAX_RECEIPT_VAT_CODE = 1
         main.TAX_RECEIPT_PAYMENT_SUBJECT = "service"
         main.TAX_RECEIPT_PAYMENT_MODE = "full_payment"
+        main.NPD_RECEIPT_MANUAL_OPERATOR_CONFIRMED = False
+        main.NPD_RECEIPT_ALLOWED_HOSTS = {"lknpd.nalog.ru"}
+        main.AUTO_RENEWAL_CHARGES_ENABLED = False
         main.REFUND_WORKFLOW_CONFIRMED = True
         main.REFUND_EXECUTION_ENABLED = True
         main.REFUND_BILLING_PRIMARY = True
@@ -123,6 +127,7 @@ class PaidBetaPolicyTests(unittest.TestCase):
             conn.execute("DELETE FROM billing_orders")
             conn.execute("DELETE FROM subscriptions")
             conn.execute("DELETE FROM tokens")
+            conn.execute("DELETE FROM email_outbox")
             conn.execute("DELETE FROM device_transport_assignments")
             conn.execute("DELETE FROM client_endpoint_assignments")
             conn.execute("DELETE FROM client_route_events")
@@ -211,6 +216,38 @@ class PaidBetaPolicyTests(unittest.TestCase):
             "TAX_RECEIPT_WORKFLOW_CONFIRMED": True,
             "TAX_RECEIPT_PAYMENT_SUBJECT": "service",
             "TAX_RECEIPT_PAYMENT_MODE": "full_payment",
+            "REFUND_WORKFLOW_CONFIRMED": True,
+            "REFUND_EXECUTION_ENABLED": True,
+            "REFUND_BILLING_PRIMARY": True,
+        }
+        for name, value in values.items():
+            stack.enter_context(patch.object(main, name, value))
+        return stack
+
+    def yookassa_manual_npd_environment(self) -> ExitStack:
+        stack = ExitStack()
+        values = {
+            "PAYMENT_PROVIDER": "yookassa",
+            "YOOKASSA_SHOP_ID": "shop",
+            "YOOKASSA_SECRET_KEY": "secret",
+            "YOOKASSA_API_BASE": "https://api.yookassa.ru/v3",
+            "YOOKASSA_RETURN_URL": "https://api.example.test/payment/return",
+            "YOOKASSA_WEBHOOK_URL": (
+                "https://api.example.test/api/v1/billing/yookassa/webhook"
+            ),
+            "PUBLIC_BASE_URL": "https://api.example.test",
+            "PUBLIC_API_BASE_URL": "https://api.example.test",
+            "EMAIL_PUBLIC_BASE_URL": "https://api.example.test",
+            "SMTP_HOST": "smtp.example.test",
+            "SMTP_FROM": "Green VPN <noreply@example.test>",
+            "SMTP_USERNAME": "",
+            "SMTP_PASSWORD": "",
+            "PAID_SALES_ENABLED": True,
+            "TAX_RECEIPT_MODE": "yookassa_npd_manual",
+            "TAX_RECEIPT_WORKFLOW_CONFIRMED": True,
+            "NPD_RECEIPT_MANUAL_OPERATOR_CONFIRMED": True,
+            "NPD_RECEIPT_ALLOWED_HOSTS": {"lknpd.nalog.ru"},
+            "AUTO_RENEWAL_CHARGES_ENABLED": False,
             "REFUND_WORKFLOW_CONFIRMED": True,
             "REFUND_EXECUTION_ENABLED": True,
             "REFUND_BILLING_PRIMARY": True,
@@ -1443,6 +1480,285 @@ class PaidBetaPolicyTests(unittest.TestCase):
             f"{order['amountRub']}.00",
         )
         self.assertEqual(order["taxReceipt"]["status"], "pending")
+
+    def test_yookassa_manual_npd_payment_waits_for_emailed_fns_receipt(self) -> None:
+        self.enroll_beta()
+        provider_payment = {
+            "id": "manual-npd-payment-1",
+            "status": "pending",
+            "paid": False,
+            "confirmation": {
+                "confirmation_url": "https://pay.example.test/manual-npd",
+            },
+        }
+        before = main.billing_subscription_snapshot(
+            main.get_subscription_row(self.user_id)
+        )
+        with (
+            self.yookassa_manual_npd_environment(),
+            patch.object(
+                main,
+                "yookassa_request",
+                return_value=provider_payment,
+            ) as request_payment,
+        ):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.beta_payload(autoRenew=True),
+            )
+            payload = request_payment.call_args.args[1]
+            self.assertNotIn("receipt", payload)
+            self.assertFalse(payload["save_payment_method"])
+            self.assertFalse(order["autoRenew"])
+
+            succeeded_payment = {
+                "id": "manual-npd-payment-1",
+                "status": "succeeded",
+                "paid": True,
+                "amount": {
+                    "value": f"{order['amountRub']}.00",
+                    "currency": "RUB",
+                },
+                "metadata": {"orderId": order["orderId"]},
+                "payment_method": {
+                    "id": "must-not-be-saved",
+                    "saved": True,
+                },
+            }
+            pending = main.apply_yookassa_payment_update(
+                order["orderId"],
+                succeeded_payment,
+            )["order"]
+
+            self.assertEqual(pending["status"], "paid_receipt_pending")
+            self.assertEqual(
+                pending["taxReceipt"]["status"],
+                "registration_required",
+            )
+            self.assertFalse(pending["autoRenew"])
+            self.assertIsNone(
+                main.get_billing_order_row(order["orderId"])[
+                    "provider_payment_method_id"
+                ]
+            )
+            self.assertEqual(
+                main.billing_subscription_snapshot(
+                    main.get_subscription_row(self.user_id)
+                ),
+                before,
+            )
+
+            receipt_url = (
+                "https://lknpd.nalog.ru/api/v1/receipt/123456789012/"
+                "manual-npd-receipt-1/print"
+            )
+            with (
+                patch.object(
+                    main,
+                    "yookassa_get_payment",
+                    return_value=succeeded_payment,
+                ),
+                patch.object(
+                    main,
+                    "send_smtp_email",
+                    side_effect=RuntimeError("smtp unavailable"),
+                ),
+            ):
+                delivery_failed = main.confirm_yookassa_npd_payment_receipt(
+                    order["orderId"],
+                    receipt_url=receipt_url,
+                    amount_rub=order["amountRub"],
+                    reason="Official My Tax receipt registered and reviewed",
+                )
+
+            self.assertEqual(
+                delivery_failed["order"]["status"],
+                "paid_receipt_pending",
+            )
+            self.assertEqual(delivery_failed["deliveryStatus"], "failed")
+            self.assertTrue(delivery_failed["activationPending"])
+            self.assertEqual(
+                main.billing_subscription_snapshot(
+                    main.get_subscription_row(self.user_id)
+                ),
+                before,
+            )
+
+            with (
+                patch.object(
+                    main,
+                    "yookassa_get_payment",
+                    return_value=succeeded_payment,
+                ),
+                patch.object(main, "send_smtp_email") as smtp,
+            ):
+                confirmed = main.confirm_yookassa_npd_payment_receipt(
+                    order["orderId"],
+                    receipt_url=receipt_url,
+                    amount_rub=order["amountRub"],
+                    reason="Official My Tax receipt registered and reviewed",
+                )
+
+            self.assertEqual(confirmed["order"]["status"], "activated")
+            self.assertEqual(confirmed["deliveryStatus"], "sent")
+            self.assertEqual(
+                confirmed["order"]["taxReceipt"]["status"],
+                "registered",
+            )
+            self.assertEqual(
+                confirmed["order"]["taxReceipt"]["deliveryStatus"],
+                "sent",
+            )
+            smtp.assert_called_once()
+
+        stored = main.get_billing_order_row(order["orderId"])
+        public_order = main.public_billing_order_status(
+            main.billing_order_status(stored)
+        )
+        smoke_order = {
+            "status": "activated",
+            "provider": "yookassa",
+            "providerPaymentIdSaved": True,
+            "providerPaymentMethodSaved": False,
+            "paymentUrlReady": True,
+            "paidAt": main.utc_now_iso(),
+            "activatedAt": main.utc_now_iso(),
+            "selection": {"billingPlanCode": main.PUBLIC_PRODUCT_PLAN_CODE},
+            "quote": {"planCode": main.PUBLIC_PRODUCT_PLAN_CODE},
+            "amountRub": main.PUBLIC_PRODUCT_PLANS[
+                main.PUBLIC_PRODUCT_PLAN_CODE
+            ]["priceRub"],
+            "autoRenew": False,
+            "taxReceipt": {
+                "mode": "yookassa_npd_manual",
+                "status": "registered",
+                "deliveryStatus": "sent",
+            },
+        }
+        self.assertTrue(main.billing_payment_smoke_candidate(smoke_order))
+        self.assertNotIn("url", public_order["taxReceipt"])
+        self.assertNotIn("deliveryError", public_order["taxReceipt"])
+        with main.db() as conn:
+            outbox = conn.execute(
+                "SELECT * FROM email_outbox ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertEqual(outbox["status"], "sent")
+        self.assertIn("lknpd.nalog.ru", outbox["body"])
+        token_match = re.search(r"/payment/receipt/([A-Za-z0-9_-]+)", outbox["body"])
+        self.assertIsNotNone(token_match)
+        response = main.npd_receipt_page(token_match.group(1))
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Открыть официальный чек ФНС", response.body.decode("utf-8"))
+
+    def test_yookassa_manual_npd_rejects_non_fns_receipt_url(self) -> None:
+        with self.yookassa_manual_npd_environment():
+            with self.assertRaises(main.HTTPException) as raised:
+                main.normalize_npd_receipt_url(
+                    "https://example.test/api/v1/receipt/fake/print"
+                )
+
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertEqual(
+            raised.exception.detail["code"],
+            "npd_receipt_url_invalid",
+        )
+
+    def test_yookassa_manual_npd_refund_waits_for_cancellation_receipt(self) -> None:
+        self.enroll_beta()
+        provider_payment = {
+            "id": "manual-npd-refund-payment",
+            "status": "pending",
+            "paid": False,
+            "confirmation": {
+                "confirmation_url": "https://pay.example.test/manual-refund",
+            },
+        }
+        with (
+            self.yookassa_manual_npd_environment(),
+            patch.object(main, "yookassa_request", return_value=provider_payment),
+        ):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.beta_payload(autoRenew=False),
+            )
+            succeeded_payment = {
+                "id": "manual-npd-refund-payment",
+                "status": "succeeded",
+                "paid": True,
+                "amount": {
+                    "value": f"{order['amountRub']}.00",
+                    "currency": "RUB",
+                },
+                "metadata": {"orderId": order["orderId"]},
+            }
+            main.apply_yookassa_payment_update(order["orderId"], succeeded_payment)
+            with (
+                patch.object(
+                    main,
+                    "yookassa_get_payment",
+                    return_value=succeeded_payment,
+                ),
+                patch.object(main, "send_smtp_email"),
+            ):
+                main.confirm_yookassa_npd_payment_receipt(
+                    order["orderId"],
+                    receipt_url=(
+                        "https://lknpd.nalog.ru/api/v1/receipt/123456789012/"
+                        "manual-npd-refund-sale/print"
+                    ),
+                    amount_rub=order["amountRub"],
+                    reason="Official sale receipt registered before refund",
+                )
+
+            refund = {
+                "id": "manual-npd-refund-1",
+                "status": "succeeded",
+                "payment_id": "manual-npd-refund-payment",
+                "amount": {
+                    "value": f"{order['amountRub']}.00",
+                    "currency": "RUB",
+                },
+            }
+            pending_refund = main.apply_yookassa_refund_update(
+                order["orderId"],
+                refund,
+            )["order"]
+            self.assertEqual(pending_refund["status"], "refund_receipt_pending")
+            self.assertEqual(pending_refund["refund"]["status"], "receipt_pending")
+            self.assertEqual(
+                pending_refund["refund"]["entitlementStatus"],
+                "rolled_back",
+            )
+
+            with (
+                patch.object(
+                    main,
+                    "yookassa_get_refund",
+                    return_value=refund,
+                ),
+                patch.object(main, "send_smtp_email") as smtp,
+            ):
+                confirmed = main.confirm_yookassa_npd_refund_receipt(
+                    order["orderId"],
+                    receipt_url=(
+                        "https://lknpd.nalog.ru/api/v1/receipt/123456789012/"
+                        "manual-npd-refund-cancellation/print"
+                    ),
+                    amount_rub=order["amountRub"],
+                    reason="Official My Tax cancellation receipt registered",
+                )
+
+            self.assertEqual(confirmed["order"]["status"], "refunded")
+            self.assertEqual(confirmed["order"]["refund"]["status"], "succeeded")
+            self.assertEqual(
+                confirmed["order"]["refund"]["receiptStatus"],
+                "cancellation_registered",
+            )
+            self.assertEqual(
+                confirmed["order"]["refund"]["receiptDeliveryStatus"],
+                "sent",
+            )
+            smtp.assert_called_once()
 
     def test_prodamus_hmac_contract_rejects_demo_and_untrusted_urls(self) -> None:
         payload = {
@@ -4345,6 +4661,9 @@ class OperationalReadinessRegressionTests(unittest.TestCase):
         main.TAX_RECEIPT_VAT_CODE = 1
         main.TAX_RECEIPT_PAYMENT_SUBJECT = "service"
         main.TAX_RECEIPT_PAYMENT_MODE = "full_payment"
+        main.NPD_RECEIPT_MANUAL_OPERATOR_CONFIRMED = False
+        main.NPD_RECEIPT_ALLOWED_HOSTS = {"lknpd.nalog.ru"}
+        main.AUTO_RENEWAL_CHARGES_ENABLED = False
         main.REFUND_WORKFLOW_CONFIRMED = True
         main.REFUND_EXECUTION_ENABLED = True
         main.REFUND_BILLING_PRIMARY = True
@@ -4355,6 +4674,7 @@ class OperationalReadinessRegressionTests(unittest.TestCase):
             conn.execute("DELETE FROM billing_orders")
             conn.execute("DELETE FROM subscriptions")
             conn.execute("DELETE FROM tokens")
+            conn.execute("DELETE FROM email_outbox")
             conn.execute("DELETE FROM devices")
             conn.execute("DELETE FROM users")
             conn.execute(

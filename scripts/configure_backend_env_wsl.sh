@@ -122,19 +122,18 @@ add_env "GREENVPN_EMAIL_PUBLIC_BASE_URL" "https://api.greenvpn.pro"
 add_env "GREENVPN_API_BASE_URLS" "https://api.greenvpn.pro"
 add_env "GREENVPN_ADMIN_CORS_ORIGINS" "*"
 add_env "GREENVPN_PUBLIC_SITE_URL" "https://api.greenvpn.pro"
-add_env "GREENVPN_PAYMENT_PROVIDER" "prodamus"
-add_env "PRODAMUS_RETURN_URL" "https://api.greenvpn.pro/payment/return"
-add_env "PRODAMUS_SUCCESS_URL" "https://api.greenvpn.pro/payment/return"
-add_env "PRODAMUS_NOTIFICATION_URL" "https://api.greenvpn.pro/api/v1/billing/prodamus/notification"
+add_env "GREENVPN_PAYMENT_PROVIDER" "yookassa"
+add_env "YOOKASSA_RETURN_URL" "https://api.greenvpn.pro/payment/return"
+add_env "YOOKASSA_WEBHOOK_URL" "https://api.greenvpn.pro/api/v1/billing/yookassa/webhook"
 add_env "GREENVPN_PAID_SALES_ENABLED" "0"
 add_env "GREENVPN_REFUND_EXECUTION_ENABLED" "0"
 add_env "GREENVPN_REFUND_BILLING_PRIMARY" "0"
 add_env "GREENVPN_AUTO_RENEWAL_CHARGES_ENABLED" "0"
 add_env "GREENVPN_AUTO_RENEWAL_BILLING_PRIMARY" "0"
-add_env "PRODAMUS_NPD_PARTNER_CONFIRMED" "0"
-add_env "PRODAMUS_LIVE_MODE_CONFIRMED" "0"
-add_env "PRODAMUS_REFUND_SMOKE_CONFIRMED" "0"
-add_env "PRODAMUS_RECURRING_ENABLED" "0"
+add_env "GREENVPN_TAX_RECEIPT_MODE" "yookassa_npd_manual"
+add_env "GREENVPN_TAX_RECEIPT_WORKFLOW_CONFIRMED" "1"
+add_env "GREENVPN_NPD_RECEIPT_MANUAL_OPERATOR_CONFIRMED" "0"
+add_env "GREENVPN_NPD_RECEIPT_ALLOWED_HOSTS" "lknpd.nalog.ru"
 
 if ask_yes_no "Configure public legal/requisites pages for the payment provider now?" "n"; then
   legal_owner_name="$(read_value "Public owner name for legal pages" "")"
@@ -180,36 +179,25 @@ echo "[Green VPN env] Direct SMS setup is skipped."
 echo "[Green VPN env] SMS.ru refused VPN traffic and SMS Aero cannot deliver honest VPN-branded messages."
 echo "[Green VPN env] Enable a phone provider only after written approval for Green VPN and a paid-beta OTP smoke."
 
-if ask_yes_no "Configure Prodamus production credentials now?" "n"; then
-  payform_url="$(read_value "PRODAMUS_PAYFORM_URL" "")"
-  if [[ -z "${payform_url}" ]]; then
-    echo "[Green VPN env] PRODAMUS_PAYFORM_URL is required; aborting without uploading changes." >&2
+if ask_yes_no "Configure YooKassa production credentials now?" "n"; then
+  yookassa_shop_id="$(read_value "YOOKASSA_SHOP_ID" "")"
+  if [[ -z "${yookassa_shop_id}" ]]; then
+    echo "[Green VPN env] YOOKASSA_SHOP_ID is required; aborting without uploading changes." >&2
     exit 1
   fi
-  prodamus_sys="$(read_value "PRODAMUS_SYS (provided by Prodamus)" "")"
-  if [[ -z "${prodamus_sys}" ]]; then
-    echo "[Green VPN env] PRODAMUS_SYS is required; aborting without uploading changes." >&2
-    exit 1
-  fi
-  prodamus_secret="$(read_required_secret "PRODAMUS_SECRET_KEY")"
-  npd_partner_confirmed="0"
-  if ask_yes_no "Is Prodamus already confirmed as an NPD partner in My Tax?" "n"; then
-    npd_partner_confirmed="1"
-  fi
-  live_mode_confirmed="0"
-  if ask_yes_no "Is the Prodamus page approved and switched to live mode?" "n"; then
-    live_mode_confirmed="1"
+  yookassa_secret="$(read_required_secret "YOOKASSA_SECRET_KEY")"
+  npd_operator_confirmed="0"
+  if ask_yes_no "Is a named operator ready to register every payment and refund in My Tax?" "n"; then
+    npd_operator_confirmed="1"
   fi
 
-  add_env "PRODAMUS_PAYFORM_URL" "${payform_url}"
-  add_env "PRODAMUS_SYS" "${prodamus_sys}"
-  add_env "PRODAMUS_SECRET_KEY" "${prodamus_secret}"
-  add_env "PRODAMUS_NPD_PARTNER_CONFIRMED" "${npd_partner_confirmed}"
-  add_env "PRODAMUS_LIVE_MODE_CONFIRMED" "${live_mode_confirmed}"
-  add_env "PRODAMUS_REFUND_SMOKE_CONFIRMED" "0"
-  add_env "PRODAMUS_RECURRING_ENABLED" "0"
-  add_env "GREENVPN_TAX_RECEIPT_MODE" "prodamus_npd"
-  add_env "GREENVPN_TAX_RECEIPT_WORKFLOW_CONFIRMED" "${npd_partner_confirmed}"
+  add_env "YOOKASSA_SHOP_ID" "${yookassa_shop_id}"
+  add_env "YOOKASSA_SECRET_KEY" "${yookassa_secret}"
+  add_env "YOOKASSA_API_BASE" "https://api.yookassa.ru/v3"
+  add_env "GREENVPN_NPD_RECEIPT_MANUAL_OPERATOR_CONFIRMED" "${npd_operator_confirmed}"
+  add_env "GREENVPN_NPD_RECEIPT_ALLOWED_HOSTS" "lknpd.nalog.ru"
+  add_env "GREENVPN_TAX_RECEIPT_MODE" "yookassa_npd_manual"
+  add_env "GREENVPN_TAX_RECEIPT_WORKFLOW_CONFIRMED" "1"
   add_env "GREENVPN_TAX_RECEIPT_PAYMENT_SUBJECT" "service"
   add_env "GREENVPN_TAX_RECEIPT_PAYMENT_MODE" "full_payment"
   add_env "GREENVPN_REFUND_WORKFLOW_CONFIRMED" "0"

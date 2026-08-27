@@ -9684,7 +9684,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           : <String, dynamic>{};
       final status = (freshOrder['status'] ?? '').toString().trim();
 
-      if (status == 'activated' || status == 'paid') {
+      if (status == 'activated') {
         await _pendingBillingOrderStore.clear();
         if (!mounted) return;
         _stopPendingBillingPolling();
@@ -9698,6 +9698,20 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         if (!mounted) return;
         if (showToast && mounted) {
           _toast(context, 'Оплата подтверждена, тариф активирован.');
+        }
+        return;
+      }
+
+      if (status == 'paid_receipt_pending') {
+        await _pendingBillingOrderStore.write(freshOrder);
+        if (!mounted) return;
+        setState(() {
+          _pendingBillingOrder = freshOrder;
+          _tariffStatus =
+              'Оплата подтверждена. Чек регистрируется в ФНС и будет отправлен на email. Тариф активируется после отправки чека.';
+        });
+        if (showToast) {
+          _toast(context, 'Оплата подтверждена. Оформляем и отправляем чек.');
         }
         return;
       }
@@ -18782,7 +18796,11 @@ class TariffPage extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const _SectionTitle('Ожидает оплаты'),
+                _SectionTitle(
+                  pendingStatus == 'paid_receipt_pending'
+                      ? 'Чек оформляется'
+                      : 'Ожидает оплаты',
+                ),
                 const SizedBox(height: 6),
                 Text(
                   'Заказ ${_shortOrderId(pendingBillingOrder!['orderId'])} • '
@@ -18793,10 +18811,11 @@ class TariffPage extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 10),
-                if ((pendingBillingOrder!['paymentUrl'] ?? '')
-                    .toString()
-                    .trim()
-                    .isNotEmpty) ...[
+                if (pendingStatus != 'paid_receipt_pending' &&
+                    (pendingBillingOrder!['paymentUrl'] ?? '')
+                        .toString()
+                        .trim()
+                        .isNotEmpty) ...[
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
@@ -18818,7 +18837,11 @@ class TariffPage extends StatelessWidget {
                         ? null
                         : () => onCheckPendingBillingOrder(),
                     icon: const Icon(Icons.refresh_rounded),
-                    label: const Text('Проверить оплату'),
+                    label: Text(
+                      pendingStatus == 'paid_receipt_pending'
+                          ? 'Проверить статус'
+                          : 'Проверить оплату',
+                    ),
                   ),
                 ),
               ],
@@ -19158,7 +19181,11 @@ class TariffPage extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const _SectionTitle('Ожидает оплаты'),
+                _SectionTitle(
+                  pendingStatus == 'paid_receipt_pending'
+                      ? 'Чек оформляется'
+                      : 'Ожидает оплаты',
+                ),
                 const SizedBox(height: 6),
                 Text(
                   'Заказ ${_shortOrderId(pendingBillingOrder!['orderId'])} • '
@@ -19169,10 +19196,11 @@ class TariffPage extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 10),
-                if ((pendingBillingOrder!['paymentUrl'] ?? '')
-                    .toString()
-                    .trim()
-                    .isNotEmpty) ...[
+                if (pendingStatus != 'paid_receipt_pending' &&
+                    (pendingBillingOrder!['paymentUrl'] ?? '')
+                        .toString()
+                        .trim()
+                        .isNotEmpty) ...[
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
@@ -19194,7 +19222,11 @@ class TariffPage extends StatelessWidget {
                         ? null
                         : () => onCheckPendingBillingOrder(),
                     icon: const Icon(Icons.refresh_rounded),
-                    label: const Text('Проверить оплату'),
+                    label: Text(
+                      pendingStatus == 'paid_receipt_pending'
+                          ? 'Проверить статус'
+                          : 'Проверить оплату',
+                    ),
                   ),
                 ),
               ],
@@ -19449,7 +19481,9 @@ class TariffPage extends StatelessWidget {
               if (hasPendingOrder) ...[
                 const Divider(height: 24),
                 Text(
-                  'Ожидает оплаты',
+                  pendingStatus == 'paid_receipt_pending'
+                      ? 'Чек оформляется'
+                      : 'Ожидает оплаты',
                   style: TextStyle(
                     color: textColor,
                     fontWeight: FontWeight.w900,
@@ -19466,10 +19500,11 @@ class TariffPage extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 10),
-                if ((pendingBillingOrder!['paymentUrl'] ?? '')
-                    .toString()
-                    .trim()
-                    .isNotEmpty) ...[
+                if (pendingStatus != 'paid_receipt_pending' &&
+                    (pendingBillingOrder!['paymentUrl'] ?? '')
+                        .toString()
+                        .trim()
+                        .isNotEmpty) ...[
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
@@ -19491,7 +19526,11 @@ class TariffPage extends StatelessWidget {
                         ? null
                         : () => onCheckPendingBillingOrder(),
                     icon: const Icon(Icons.refresh_rounded),
-                    label: const Text('Проверить оплату'),
+                    label: Text(
+                      pendingStatus == 'paid_receipt_pending'
+                          ? 'Проверить статус'
+                          : 'Проверить оплату',
+                    ),
                   ),
                 ),
               ],
@@ -20149,7 +20188,14 @@ class TariffPage extends StatelessWidget {
                         (pendingBillingOrder!['paymentUrl'] ?? '')
                             .toString()
                             .trim();
-                    final hasPaymentUrl = paymentUrl.isNotEmpty;
+                    final receiptPending =
+                        (pendingBillingOrder!['status'] ?? '')
+                            .toString()
+                            .trim()
+                            .toLowerCase() ==
+                        'paid_receipt_pending';
+                    final hasPaymentUrl =
+                        paymentUrl.isNotEmpty && !receiptPending;
                     return Container(
                       width: double.infinity,
                       padding: const EdgeInsets.all(12),
@@ -20168,7 +20214,9 @@ class TariffPage extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Ожидает оплаты',
+                            receiptPending
+                                ? 'Чек оформляется'
+                                : 'Ожидает оплаты',
                             style: TextStyle(
                               color: textColor,
                               fontWeight: FontWeight.w900,
@@ -20187,7 +20235,9 @@ class TariffPage extends StatelessWidget {
                           ),
                           const SizedBox(height: 6),
                           Text(
-                            'После оплаты можно вернуться в Green VPN. Мы проверяем статус автоматически.',
+                            receiptPending
+                                ? 'Оплата подтверждена. Тариф активируется после регистрации и отправки чека на email.'
+                                : 'После оплаты можно вернуться в Green VPN. Мы проверяем статус автоматически.',
                             style: TextStyle(
                               color: mutedColor,
                               fontWeight: FontWeight.w700,
@@ -20215,7 +20265,11 @@ class TariffPage extends StatelessWidget {
                                   ? null
                                   : () => onCheckPendingBillingOrder(),
                               icon: const Icon(Icons.refresh_rounded),
-                              label: const Text('Проверить оплату'),
+                              label: Text(
+                                receiptPending
+                                    ? 'Проверить статус'
+                                    : 'Проверить оплату',
+                              ),
                             ),
                           ),
                         ],

@@ -37,8 +37,8 @@ from pydantic import BaseModel
 
 APP_TITLE = "Green VPN Backend"
 APP_VERSION = (
-    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.158-prodamus-npd.2").strip()
-    or "0.9.158-prodamus-npd.2"
+    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.159-yookassa-npd-manual.1").strip()
+    or "0.9.159-yookassa-npd-manual.1"
 )
 DEFAULT_PUBLIC_API_BASE_URL = "https://api.greenvpn.pro"
 
@@ -659,6 +659,19 @@ TAX_RECEIPT_PAYMENT_MODE = os.getenv(
     "GREENVPN_TAX_RECEIPT_PAYMENT_MODE",
     "full_payment",
 ).strip().lower()
+NPD_RECEIPT_MANUAL_OPERATOR_CONFIRMED = environment_flag(
+    "GREENVPN_NPD_RECEIPT_MANUAL_OPERATOR_CONFIRMED"
+)
+NPD_RECEIPT_ALLOWED_HOSTS = {
+    host.strip().lower()
+    for host in split_env_list(
+        os.getenv(
+            "GREENVPN_NPD_RECEIPT_ALLOWED_HOSTS",
+            "lknpd.nalog.ru",
+        )
+    )
+    if host.strip()
+}
 REFUND_WORKFLOW_CONFIRMED = environment_flag(
     "GREENVPN_REFUND_WORKFLOW_CONFIRMED"
 )
@@ -1954,6 +1967,13 @@ class AdminProdamusRefundConfirmIn(BaseModel):
 class AdminProdamusPaymentSmokeIn(BaseModel):
     userId: int
     confirmUserId: int
+
+
+class AdminYooKassaNpdReceiptConfirmIn(BaseModel):
+    confirmOrderId: str
+    receiptUrl: str
+    amountRub: int
+    reason: str
 
 
 class AdminUserDeleteIn(BaseModel):
@@ -3590,6 +3610,36 @@ def init_db() -> None:
         ensure_column(
             conn,
             "billing_orders",
+            "tax_receipt_url",
+            "tax_receipt_url TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "tax_receipt_delivery_status",
+            "tax_receipt_delivery_status TEXT NOT NULL DEFAULT 'not_required'",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "tax_receipt_delivery_error",
+            "tax_receipt_delivery_error TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "tax_receipt_delivered_at",
+            "tax_receipt_delivered_at TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "tax_receipt_access_token_hash",
+            "tax_receipt_access_token_hash TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
             "activation_subscription_id",
             "activation_subscription_id INTEGER",
         )
@@ -3650,6 +3700,36 @@ def init_db() -> None:
         ensure_column(
             conn,
             "billing_orders",
+            "refund_receipt_url",
+            "refund_receipt_url TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "refund_receipt_delivery_status",
+            "refund_receipt_delivery_status TEXT NOT NULL DEFAULT 'not_required'",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "refund_receipt_delivery_error",
+            "refund_receipt_delivery_error TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "refund_receipt_delivered_at",
+            "refund_receipt_delivered_at TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "refund_receipt_access_token_hash",
+            "refund_receipt_access_token_hash TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
             "refund_error",
             "refund_error TEXT",
         )
@@ -3690,6 +3770,16 @@ def init_db() -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_orders_refund_provider "
             "ON billing_orders(refund_provider_id) "
             "WHERE refund_provider_id IS NOT NULL"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_orders_tax_receipt_token "
+            "ON billing_orders(tax_receipt_access_token_hash) "
+            "WHERE tax_receipt_access_token_hash IS NOT NULL"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_orders_refund_receipt_token "
+            "ON billing_orders(refund_receipt_access_token_hash) "
+            "WHERE refund_receipt_access_token_hash IS NOT NULL"
         )
 
         conn.execute(
@@ -19707,6 +19797,26 @@ def billing_order_status(row) -> dict:
                 if "tax_receipt_updated_at" in row.keys()
                 else None
             ),
+            "url": (
+                row["tax_receipt_url"]
+                if "tax_receipt_url" in row.keys()
+                else None
+            ),
+            "deliveryStatus": (
+                row["tax_receipt_delivery_status"]
+                if "tax_receipt_delivery_status" in row.keys()
+                else "not_required"
+            ),
+            "deliveryError": (
+                row["tax_receipt_delivery_error"]
+                if "tax_receipt_delivery_error" in row.keys()
+                else None
+            ),
+            "deliveredAt": (
+                row["tax_receipt_delivered_at"]
+                if "tax_receipt_delivered_at" in row.keys()
+                else None
+            ),
         },
         "refund": {
             "status": (
@@ -19737,6 +19847,26 @@ def billing_order_status(row) -> dict:
             "receiptProviderId": (
                 row["refund_receipt_provider_id"]
                 if "refund_receipt_provider_id" in row.keys()
+                else None
+            ),
+            "receiptUrl": (
+                row["refund_receipt_url"]
+                if "refund_receipt_url" in row.keys()
+                else None
+            ),
+            "receiptDeliveryStatus": (
+                row["refund_receipt_delivery_status"]
+                if "refund_receipt_delivery_status" in row.keys()
+                else "not_required"
+            ),
+            "receiptDeliveryError": (
+                row["refund_receipt_delivery_error"]
+                if "refund_receipt_delivery_error" in row.keys()
+                else None
+            ),
+            "receiptDeliveredAt": (
+                row["refund_receipt_delivered_at"]
+                if "refund_receipt_delivered_at" in row.keys()
                 else None
             ),
             "entitlementStatus": (
@@ -19789,14 +19919,21 @@ def public_billing_order_status(order: dict) -> dict:
         public_order["taxReceipt"] = {
             key: value
             for key, value in tax_receipt.items()
-            if key not in {"providerId", "error"}
+            if key not in {"providerId", "error", "url", "deliveryError"}
         }
     refund = public_order.get("refund")
     if isinstance(refund, dict):
         public_order["refund"] = {
             key: value
             for key, value in refund.items()
-            if key not in {"providerId", "receiptProviderId", "error"}
+            if key
+            not in {
+                "providerId",
+                "receiptProviderId",
+                "receiptUrl",
+                "receiptDeliveryError",
+                "error",
+            }
         }
     return public_order
 
@@ -20184,24 +20321,32 @@ def payment_provider_callback_url(provider: Optional[str] = None) -> str:
     return ""
 
 
+def yookassa_uses_manual_npd_receipts() -> bool:
+    return (
+        selected_payment_provider() == "yookassa"
+        and TAX_RECEIPT_MODE == "yookassa_npd_manual"
+    )
+
+
 def tax_receipt_readiness(provider: Optional[str] = None) -> dict:
     provider_name = (provider or selected_payment_provider()).strip().lower()
-    expected_mode = {
-        "yookassa": "yookassa_54fz",
-        "robokassa": "robokassa_npd",
-        "prodamus": "prodamus_npd",
-    }.get(provider_name, "")
-    supported_mode = bool(expected_mode and TAX_RECEIPT_MODE == expected_mode)
+    expected_modes = {
+        "yookassa": {"yookassa_54fz", "yookassa_npd_manual"},
+        "robokassa": {"robokassa_npd"},
+        "prodamus": {"prodamus_npd"},
+    }.get(provider_name, set())
+    expected_mode_text = " или ".join(sorted(expected_modes)) or "unsupported"
+    supported_mode = bool(TAX_RECEIPT_MODE in expected_modes)
     checks = [
         {
             "code": "tax_receipt_mode",
             "ok": supported_mode,
             "message": (
-                f"GREENVPN_TAX_RECEIPT_MODE={expected_mode} настроен."
+                f"GREENVPN_TAX_RECEIPT_MODE={TAX_RECEIPT_MODE} настроен."
                 if supported_mode
                 else (
                     "Платные продажи закрыты: чековый режим должен совпадать "
-                    f"с выбранным провайдером ({expected_mode or 'unsupported'})."
+                    f"с выбранным провайдером ({expected_mode_text})."
                 )
             ),
             "value": TAX_RECEIPT_MODE,
@@ -20237,7 +20382,7 @@ def tax_receipt_readiness(provider: Optional[str] = None) -> dict:
             "value": TAX_RECEIPT_PAYMENT_MODE,
         },
     ]
-    if provider_name == "yookassa":
+    if provider_name == "yookassa" and TAX_RECEIPT_MODE == "yookassa_54fz":
         checks.append(
             {
                 "code": "tax_receipt_vat_code",
@@ -20248,6 +20393,60 @@ def tax_receipt_readiness(provider: Optional[str] = None) -> dict:
                 ),
                 "value": TAX_RECEIPT_VAT_CODE,
             }
+        )
+    if provider_name == "yookassa" and TAX_RECEIPT_MODE == "yookassa_npd_manual":
+        email_readiness = email_confirmation_readiness()
+        checks.extend(
+            [
+                {
+                    "code": "npd_manual_operator_confirmed",
+                    "ok": NPD_RECEIPT_MANUAL_OPERATOR_CONFIRMED,
+                    "message": (
+                        "Назначен оператор, который регистрирует каждую оплату и "
+                        "аннулирование в «Мой налог»."
+                        if NPD_RECEIPT_MANUAL_OPERATOR_CONFIRMED
+                        else (
+                            "До продаж назначь оператора НПД: каждая успешная оплата "
+                            "и возврат должны быть зарегистрированы в «Мой налог»."
+                        )
+                    ),
+                },
+                {
+                    "code": "npd_receipt_email_delivery",
+                    "ok": bool(email_readiness["productionReady"]),
+                    "message": (
+                        "SMTP и публичная HTTPS-страница готовы для доставки чека."
+                        if email_readiness["productionReady"]
+                        else "Настрой SMTP и публичный HTTPS origin для отправки чека."
+                    ),
+                },
+                {
+                    "code": "npd_receipt_fns_host",
+                    "ok": "lknpd.nalog.ru" in NPD_RECEIPT_ALLOWED_HOSTS,
+                    "message": (
+                        "Разрешены только официальные ссылки чеков ФНС."
+                        if "lknpd.nalog.ru" in NPD_RECEIPT_ALLOWED_HOSTS
+                        else (
+                            "GREENVPN_NPD_RECEIPT_ALLOWED_HOSTS должен включать "
+                            "lknpd.nalog.ru."
+                        )
+                    ),
+                    "value": sorted(NPD_RECEIPT_ALLOWED_HOSTS),
+                },
+                {
+                    "code": "npd_manual_auto_renew_disabled",
+                    "ok": not AUTO_RENEWAL_CHARGES_ENABLED,
+                    "message": (
+                        "Автосписания выключены: ручной чек НПД нельзя выдавать "
+                        "без оператора после каждого списания."
+                        if not AUTO_RENEWAL_CHARGES_ENABLED
+                        else (
+                            "Выключи GREENVPN_AUTO_RENEWAL_CHARGES_ENABLED для "
+                            "ручного режима чеков НПД."
+                        )
+                    ),
+                },
+            ]
         )
     if provider_name == "robokassa":
         checks.append(
@@ -21833,6 +22032,116 @@ def ensure_paid_sales_ready(*, require_provider: bool = True) -> dict:
     )
 
 
+def normalize_npd_receipt_url(value: str) -> str:
+    raw = clean_limited_text(value, 1200).strip()
+    try:
+        parsed = urllib.parse.urlsplit(raw)
+        port = parsed.port
+    except Exception:
+        parsed = None
+        port = None
+    host = (parsed.hostname or "").strip().lower() if parsed else ""
+    path = parsed.path if parsed else ""
+    if (
+        parsed is None
+        or parsed.scheme.lower() != "https"
+        or not host
+        or host not in NPD_RECEIPT_ALLOWED_HOSTS
+        or parsed.username
+        or parsed.password
+        or port not in {None, 443}
+        or "/receipt/" not in path.lower()
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "npd_receipt_url_invalid",
+                "message": (
+                    "Нужна официальная HTTPS-ссылка на чек из «Мой налог» "
+                    "на домене lknpd.nalog.ru."
+                ),
+            },
+        )
+    return urllib.parse.urlunsplit(
+        ("https", parsed.netloc.lower(), parsed.path, parsed.query, "")
+    )
+
+
+def npd_receipt_reference(receipt_url: str) -> str:
+    digest = hashlib.sha256(receipt_url.encode("utf-8")).hexdigest()
+    return f"npd_{digest[:24]}"
+
+
+def npd_receipt_access_token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def npd_receipt_page_url(token: str) -> str:
+    base_url = email_effective_public_base_url().rstrip("/")
+    return f"{base_url}/payment/receipt/{urllib.parse.quote(token, safe='')}"
+
+
+def send_or_queue_npd_receipt_email(
+    row: sqlite3.Row,
+    *,
+    receipt_url: str,
+    access_token: str,
+    receipt_kind: str,
+) -> dict:
+    with db() as conn:
+        user = conn.execute(
+            "SELECT email FROM users WHERE id = ?",
+            (int(row["user_id"]),),
+        ).fetchone()
+    email = str(user["email"] or "").strip().lower() if user else ""
+    if not email or email.endswith(f"@{GUEST_EMAIL_DOMAIN}"):
+        return {"deliveryStatus": "invalid_recipient", "outboxId": None}
+
+    page_url = npd_receipt_page_url(access_token)
+    amount = int(row["amount_rub"])
+    if receipt_kind == "refund":
+        subject = "Возврат и чек Green VPN"
+        body = (
+            "Здравствуйте!\n\n"
+            f"Полный возврат по заказу {row['public_id']} подтвержден. "
+            "Доход по операции аннулирован в ФНС.\n\n"
+            f"Страница чека: {page_url}\n"
+            f"Официальная ссылка ФНС: {receipt_url}\n\n"
+            "Страницу можно открыть, сохранить или распечатать.\n"
+        )
+    else:
+        subject = "Чек Green VPN"
+        body = (
+            "Здравствуйте!\n\n"
+            f"Оплата Green VPN на сумму {amount} руб. зарегистрирована в ФНС.\n\n"
+            f"Страница чека: {page_url}\n"
+            f"Официальная ссылка ФНС: {receipt_url}\n\n"
+            "Страницу можно открыть, сохранить или распечатать.\n"
+        )
+
+    outbox_id = queue_email_outbox(
+        int(row["user_id"]),
+        email,
+        subject,
+        body,
+        "queued" if email_sender_configured() else "not_configured",
+    )
+    if not email_sender_configured():
+        return {"deliveryStatus": "not_configured", "outboxId": outbox_id}
+    try:
+        send_smtp_email(email, subject, body)
+        update_email_outbox_status(outbox_id, "sent")
+        return {"deliveryStatus": "sent", "outboxId": outbox_id}
+    except Exception as exc:
+        error = clean_limited_text(f"{type(exc).__name__}: {exc}", 500)
+        update_email_outbox_status(outbox_id, "failed", error)
+        return {
+            "deliveryStatus": "failed",
+            "deliveryError": error,
+            "outboxId": outbox_id,
+        }
+
+
 def yookassa_receipt_payload(
     *,
     user_email: str,
@@ -21903,6 +22212,7 @@ def create_yookassa_payment_for_order(row, user_email: str) -> dict:
     public_id = order["orderId"]
     amount = f"{int(order['amountRub'])}.00"
 
+    manual_npd_receipt = TAX_RECEIPT_MODE == "yookassa_npd_manual"
     payload = {
         "amount": {"value": amount, "currency": order["currency"]},
         "capture": True,
@@ -21917,14 +22227,15 @@ def create_yookassa_payment_for_order(row, user_email: str) -> dict:
             "userId": str(order["userId"]),
             "email": user_email,
         },
-        "save_payment_method": bool(order["autoRenew"]),
-        "receipt": yookassa_receipt_payload(
+        "save_payment_method": bool(order["autoRenew"] and not manual_npd_receipt),
+    }
+    if not manual_npd_receipt:
+        payload["receipt"] = yookassa_receipt_payload(
             user_email=user_email,
             description=f"Подписка Green VPN: {plan_name}",
             amount=amount,
             currency=order["currency"],
-        ),
-    }
+        )
 
     payment = yookassa_request(
         "/payments",
@@ -21940,7 +22251,11 @@ def create_yookassa_payment_for_order(row, user_email: str) -> dict:
         if payment_method.get("saved") is True
         else None
     )
-    tax_receipt_status = yookassa_receipt_registration_status(payment)
+    tax_receipt_status = (
+        "awaiting_payment"
+        if manual_npd_receipt
+        else yookassa_receipt_registration_status(payment)
+    )
 
     with db() as conn:
         conn.execute(
@@ -22666,6 +22981,8 @@ def create_billing_order_for_user(
         else:
             ensure_paid_sales_ready(require_provider=False)
     normalized = normalize_tariff_selection(payload)
+    if yookassa_uses_manual_npd_receipts():
+        normalized["autoRenew"] = False
     quote = quote_tariff(
         normalized,
         strict_promo=bool(normalized.get("promoCode")),
@@ -22780,7 +23097,11 @@ def create_billing_order_for_user(
                     None,
                     configured_payment_provider(),
                     TAX_RECEIPT_MODE,
-                    "prepared",
+                    (
+                        "awaiting_payment"
+                        if yookassa_uses_manual_npd_receipts()
+                        else "prepared"
+                    ),
                     now,
                     now,
                     now,
@@ -22918,6 +23239,14 @@ def validate_yookassa_payment_for_order(row, payment: dict) -> None:
 
 
 def update_billing_tax_receipt_from_payment(public_id: str, payment: dict) -> None:
+    row = get_billing_order_row(public_id)
+    if (
+        row is not None
+        and "tax_receipt_mode" in row.keys()
+        and str(row["tax_receipt_mode"] or "").strip().lower()
+        == "yookassa_npd_manual"
+    ):
+        return
     with db() as conn:
         conn.execute(
             """
@@ -22936,6 +23265,76 @@ def update_billing_tax_receipt_from_payment(public_id: str, payment: dict) -> No
             ),
         )
         conn.commit()
+
+
+def mark_yookassa_payment_receipt_pending(
+    public_id: str,
+    *,
+    provider_payment_id: Optional[str],
+    provider_payment_method_id: Optional[str],
+) -> dict:
+    now = utc_now_iso()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT * FROM billing_orders WHERE public_id = ?",
+            (public_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
+        status = str(row["status"] or "").strip().lower()
+        if status in {"activated", "refunded", "refund_receipt_pending"}:
+            conn.commit()
+            return {"order": billing_order_status(row), "receiptPending": False}
+        if status in {"failed", "canceled", "cancelled"}:
+            raise HTTPException(
+                status_code=409,
+                detail="Отменённый заказ нельзя перевести в ожидание чека.",
+            )
+        current_receipt_status = str(
+            row["tax_receipt_status"]
+            if "tax_receipt_status" in row.keys()
+            else ""
+        ).strip().lower()
+        next_receipt_status = (
+            current_receipt_status
+            if current_receipt_status in {"registered", "delivered"}
+            else "registration_required"
+        )
+        conn.execute(
+            """
+            UPDATE billing_orders
+            SET status = 'paid_receipt_pending',
+                auto_renew = 0,
+                provider_payment_id = COALESCE(?, provider_payment_id),
+                provider_payment_method_id = NULL,
+                paid_at = COALESCE(paid_at, ?),
+                tax_receipt_mode = 'yookassa_npd_manual',
+                tax_receipt_status = ?,
+                tax_receipt_delivery_status = CASE
+                    WHEN tax_receipt_delivery_status = 'sent' THEN 'sent'
+                    ELSE 'pending'
+                END,
+                tax_receipt_error = NULL,
+                tax_receipt_updated_at = ?,
+                updated_at = ?
+            WHERE public_id = ?
+            """,
+            (
+                provider_payment_id,
+                now,
+                next_receipt_status,
+                now,
+                now,
+                public_id,
+            ),
+        )
+        conn.commit()
+        updated = conn.execute(
+            "SELECT * FROM billing_orders WHERE public_id = ?",
+            (public_id,),
+        ).fetchone()
+    return {"order": billing_order_status(updated), "receiptPending": True}
 
 
 def mark_billing_order_canceled(public_id: str, provider_payment_id: Optional[str] = None) -> dict:
@@ -23009,6 +23408,16 @@ def apply_yookassa_payment_update(
         amount = payment.get("amount") if isinstance(payment.get("amount"), dict) else {}
         if not amount or _payment_amount_rub(payment) is None:
             raise HTTPException(status_code=409, detail="Сумма платежа YooKassa отсутствует.")
+        if (
+            "tax_receipt_mode" in row.keys()
+            and str(row["tax_receipt_mode"] or "").strip().lower()
+            == "yookassa_npd_manual"
+        ):
+            return mark_yookassa_payment_receipt_pending(
+                public_id,
+                provider_payment_id=payment_id,
+                provider_payment_method_id=payment_method_id,
+            )
         return mark_billing_order_paid_and_activate(
             public_id,
             provider_payment_id=payment_id,
@@ -23035,6 +23444,150 @@ def apply_yookassa_payment_update(
             (public_id,),
         ).fetchone()
     return {"order": billing_order_status(updated)}
+
+
+def confirm_yookassa_npd_payment_receipt(
+    public_id: str,
+    *,
+    receipt_url: str,
+    amount_rub: int,
+    reason: str,
+) -> dict:
+    public_id = clean_limited_text(public_id, 120).strip()
+    reason = clean_limited_text(reason, 500).strip()
+    if len(reason) < 12:
+        raise HTTPException(
+            status_code=400,
+            detail="Причина подтверждения чека должна содержать минимум 12 символов.",
+        )
+    normalized_url = normalize_npd_receipt_url(receipt_url)
+    row = get_billing_order_row(public_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
+    if str(row["provider"] or "").strip().lower() != "yookassa":
+        raise HTTPException(status_code=409, detail="Заказ создан не через ЮKassa.")
+    if str(row["tax_receipt_mode"] or "").strip().lower() != "yookassa_npd_manual":
+        raise HTTPException(
+            status_code=409,
+            detail="Заказ не использует ручной режим чеков НПД.",
+        )
+    if int(amount_rub) != int(row["amount_rub"]):
+        raise HTTPException(status_code=409, detail="Сумма чека не совпадает с заказом.")
+
+    existing_url = str(row["tax_receipt_url"] or "").strip()
+    delivery_status = str(row["tax_receipt_delivery_status"] or "").strip().lower()
+    order_status = str(row["status"] or "").strip().lower()
+    if existing_url == normalized_url and delivery_status == "sent":
+        activation = (
+            {"order": billing_order_status(row)}
+            if order_status == "activated"
+            else mark_billing_order_paid_and_activate(
+                public_id,
+                provider_payment_id=str(row["provider_payment_id"] or "") or None,
+                provider_payment_method_id=None,
+            )
+        )
+        return {
+            **activation,
+            "receiptRecorded": True,
+            "deliveryStatus": "sent",
+            "reused": True,
+        }
+
+    if order_status not in {"paid_receipt_pending", "paid"}:
+        raise HTTPException(
+            status_code=409,
+            detail="Чек можно подтвердить только для оплаченного заказа в ожидании чека.",
+        )
+    payment_id = str(row["provider_payment_id"] or "").strip()
+    if not payment_id:
+        raise HTTPException(
+            status_code=409,
+            detail="У заказа отсутствует идентификатор платежа ЮKassa.",
+        )
+    payment = yookassa_get_payment(payment_id)
+    validate_yookassa_payment_for_order(row, payment)
+    if (
+        str(payment.get("status") or "").strip().lower() != "succeeded"
+        or payment.get("paid") is not True
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="ЮKassa не подтверждает успешную оплату заказа.",
+        )
+
+    access_token = secrets.token_urlsafe(36)
+    token_hash = npd_receipt_access_token_hash(access_token)
+    reference = npd_receipt_reference(normalized_url)
+    now = utc_now_iso()
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE billing_orders
+            SET tax_receipt_status = 'registered',
+                tax_receipt_provider_id = ?, tax_receipt_url = ?,
+                tax_receipt_delivery_status = 'pending',
+                tax_receipt_delivery_error = NULL,
+                tax_receipt_access_token_hash = ?,
+                tax_receipt_error = NULL,
+                tax_receipt_updated_at = ?, updated_at = ?
+            WHERE public_id = ?
+            """,
+            (reference, normalized_url, token_hash, now, now, public_id),
+        )
+        conn.commit()
+    row = get_billing_order_row(public_id)
+    delivery = send_or_queue_npd_receipt_email(
+        row,
+        receipt_url=normalized_url,
+        access_token=access_token,
+        receipt_kind="payment",
+    )
+    delivered = delivery.get("deliveryStatus") == "sent"
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE billing_orders
+            SET tax_receipt_delivery_status = ?,
+                tax_receipt_delivery_error = ?,
+                tax_receipt_delivered_at = CASE
+                    WHEN ? = 1 THEN COALESCE(tax_receipt_delivered_at, ?)
+                    ELSE tax_receipt_delivered_at
+                END,
+                tax_receipt_updated_at = ?, updated_at = ?
+            WHERE public_id = ?
+            """,
+            (
+                "sent" if delivered else str(delivery.get("deliveryStatus") or "failed"),
+                None if delivered else clean_limited_text(delivery.get("deliveryError"), 500),
+                1 if delivered else 0,
+                now,
+                now,
+                now,
+                public_id,
+            ),
+        )
+        conn.commit()
+
+    if not delivered:
+        return {
+            "order": billing_order_status(get_billing_order_row(public_id)),
+            "receiptRecorded": True,
+            "deliveryStatus": delivery.get("deliveryStatus"),
+            "activationPending": True,
+            "reused": existing_url == normalized_url,
+        }
+    activation = mark_billing_order_paid_and_activate(
+        public_id,
+        provider_payment_id=payment_id,
+        provider_payment_method_id=None,
+    )
+    return {
+        **activation,
+        "receiptRecorded": True,
+        "deliveryStatus": "sent",
+        "reused": existing_url == normalized_url,
+    }
 
 
 def sync_billing_order_with_provider_for_user(user_id: int, public_id: str) -> dict:
@@ -23168,19 +23721,65 @@ def billing_order_requires_attention(row, now: datetime) -> list[dict]:
             "high",
             "Order is marked paid but tariff activation is not recorded.",
         )
-    if paid_at and status != "activated" and not activated_at:
+    if (
+        paid_at
+        and status not in {"activated", "paid_receipt_pending"}
+        and not activated_at
+    ):
         add_issue(
             "paid_at_without_activation",
             "high",
             "paid_at exists but activated_at is still empty.",
         )
+    if status == "paid_receipt_pending":
+        receipt_status = str(
+            row["tax_receipt_status"]
+            if "tax_receipt_status" in row.keys()
+            else ""
+        ).strip().lower()
+        delivery_status = str(
+            row["tax_receipt_delivery_status"]
+            if "tax_receipt_delivery_status" in row.keys()
+            else ""
+        ).strip().lower()
+        receipt_updated_at = parse_dt(
+            row["tax_receipt_updated_at"]
+            if "tax_receipt_updated_at" in row.keys()
+            else None
+        )
+        receipt_age_hours = None
+        if receipt_updated_at is not None:
+            if receipt_updated_at.tzinfo is None:
+                receipt_updated_at = receipt_updated_at.replace(tzinfo=timezone.utc)
+            receipt_age_hours = max(
+                0.0,
+                (now - receipt_updated_at).total_seconds() / 3600.0,
+            )
+        if receipt_status == "registration_required":
+            add_issue(
+                "npd_receipt_registration_required",
+                "high"
+                if receipt_age_hours is not None and receipt_age_hours >= 1
+                else "medium",
+                "Оплата подтверждена; нужно зарегистрировать чек в «Мой налог».",
+            )
+        elif delivery_status in {"failed", "not_configured", "invalid_recipient"}:
+            add_issue(
+                "npd_receipt_delivery_failed",
+                "high",
+                "Чек зарегистрирован, но не доставлен покупателю по email.",
+            )
     if status == "activated" and not activated_at:
         add_issue(
             "activated_status_without_timestamp",
             "medium",
             "Order status is activated but activated_at is empty.",
         )
-    if activated_at and status not in {"activated", "refunded"}:
+    if activated_at and status not in {
+        "activated",
+        "refunded",
+        "refund_receipt_pending",
+    }:
         add_issue(
             "activation_timestamp_status_mismatch",
             "medium",
@@ -23275,7 +23874,7 @@ def billing_order_requires_attention(row, now: datetime) -> list[dict]:
             0.0,
             (now - refund_updated_at).total_seconds() / 3600.0,
         )
-    if refund_status in {"processing", "pending", "retry_required"}:
+    if refund_status in {"processing", "pending", "retry_required", "receipt_pending"}:
         severity = (
             "high"
             if refund_status == "retry_required"
@@ -23285,7 +23884,12 @@ def billing_order_requires_attention(row, now: datetime) -> list[dict]:
         add_issue(
             f"refund_{refund_status}",
             severity,
-            "Возврат не завершён и требует сверки с платёжным провайдером.",
+            (
+                "Деньги возвращены; нужно аннулировать доход в «Мой налог» и "
+                "отправить покупателю подтверждение."
+                if refund_status == "receipt_pending"
+                else "Возврат не завершён и требует сверки с платёжным провайдером."
+            ),
         )
     if refund_status in {"succeeded", "partial_succeeded"} and refund_entitlement_status != "rolled_back":
         add_issue(
@@ -23462,6 +24066,19 @@ def billing_payment_smoke_candidate(order: dict) -> bool:
     )
     provider = str(order.get("provider") or "").strip().lower()
     if provider == "yookassa":
+        tax_receipt = (
+            order.get("taxReceipt")
+            if isinstance(order.get("taxReceipt"), dict)
+            else {}
+        )
+        if tax_receipt.get("mode") == "yookassa_npd_manual":
+            return bool(
+                common_ready
+                and not order.get("providerPaymentMethodSaved")
+                and not order.get("autoRenew")
+                and tax_receipt.get("status") == "registered"
+                and tax_receipt.get("deliveryStatus") == "sent"
+            )
         return bool(
             common_ready
             and order.get("providerPaymentMethodSaved")
@@ -24062,6 +24679,17 @@ def create_yookassa_auto_renewal_payment(
     payment_method_id: str,
     renewal_key: str,
 ) -> dict:
+    if TAX_RECEIPT_MODE == "yookassa_npd_manual":
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "npd_manual_auto_renewal_disabled",
+                "message": (
+                    "Автосписание недоступно в ручном режиме чеков НПД. "
+                    "Создай новый заказ с подтверждением покупателя."
+                ),
+            },
+        )
     ensure_paid_sales_ready()
     order = billing_order_status(row)
     quote = order["quote"] if isinstance(order["quote"], dict) else {}
@@ -25262,7 +25890,16 @@ def apply_yookassa_refund_update(
     amount_rub, _ = validate_yookassa_refund_for_order(row, refund)
     refund_id = str(refund.get("id") or "").strip() or None
     provider_status = str(refund.get("status") or "").strip().lower()
-    receipt_status = yookassa_refund_receipt_status(refund)
+    manual_npd_receipt = (
+        "tax_receipt_mode" in row.keys()
+        and str(row["tax_receipt_mode"] or "").strip().lower()
+        == "yookassa_npd_manual"
+    )
+    receipt_status = (
+        "cancellation_required"
+        if manual_npd_receipt
+        else yookassa_refund_receipt_status(refund)
+    )
     now = utc_now_iso()
 
     if provider_status == "succeeded":
@@ -25277,7 +25914,16 @@ def apply_yookassa_refund_update(
             if "entitlement_after_json" in row.keys()
             else None
         )
-        entitlement_status = "review_required"
+        existing_entitlement_status = str(
+            row["refund_entitlement_status"]
+            if "refund_entitlement_status" in row.keys()
+            else ""
+        ).strip().lower()
+        entitlement_status = (
+            "rolled_back"
+            if existing_entitlement_status == "rolled_back"
+            else "review_required"
+        )
         with db() as conn:
             conn.execute("BEGIN IMMEDIATE")
             current = conn.execute(
@@ -25291,7 +25937,8 @@ def apply_yookassa_refund_update(
                 (int(row["user_id"]),),
             ).fetchone()
             if (
-                is_full_refund
+                entitlement_status != "rolled_back"
+                and is_full_refund
                 and before is not None
                 and after is not None
                 and billing_subscription_matches_snapshot(current, after)
@@ -25301,7 +25948,11 @@ def apply_yookassa_refund_update(
             conn.execute(
                 """
                 UPDATE billing_orders
-                SET status = CASE WHEN ? = 1 THEN 'refunded' ELSE status END,
+                SET status = CASE
+                        WHEN ? = 1 AND ? = 1 THEN 'refund_receipt_pending'
+                        WHEN ? = 1 THEN 'refunded'
+                        ELSE status
+                    END,
                     auto_renew = CASE WHEN ? = 1 THEN 0 ELSE auto_renew END,
                     provider_payment_method_id = CASE
                         WHEN ? = 1 THEN NULL
@@ -25311,6 +25962,10 @@ def apply_yookassa_refund_update(
                     refund_amount_rub = ?,
                     refund_provider_id = COALESCE(?, refund_provider_id),
                     refund_receipt_status = ?,
+                    refund_receipt_delivery_status = CASE
+                        WHEN ? = 1 THEN 'pending'
+                        ELSE refund_receipt_delivery_status
+                    END,
                     refund_entitlement_status = ?,
                     refund_error = NULL,
                     refunded_at = COALESCE(refunded_at, ?),
@@ -25320,12 +25975,21 @@ def apply_yookassa_refund_update(
                 """,
                 (
                     1 if is_full_refund else 0,
+                    1 if manual_npd_receipt else 0,
                     1 if is_full_refund else 0,
                     1 if is_full_refund else 0,
-                    "succeeded" if is_full_refund else "partial_succeeded",
+                    1 if is_full_refund else 0,
+                    (
+                        "receipt_pending"
+                        if is_full_refund and manual_npd_receipt
+                        else "succeeded"
+                        if is_full_refund
+                        else "partial_succeeded"
+                    ),
                     amount_rub,
                     refund_id,
                     receipt_status,
+                    1 if manual_npd_receipt else 0,
                     entitlement_status,
                     now,
                     now,
@@ -25378,6 +26042,146 @@ def apply_yookassa_refund_update(
         "order": billing_order_status(get_billing_order_row(public_id)),
         "fullRefund": amount_rub == int(row["amount_rub"]),
         "entitlementRolledBack": False,
+    }
+
+
+def confirm_yookassa_npd_refund_receipt(
+    public_id: str,
+    *,
+    receipt_url: str,
+    amount_rub: int,
+    reason: str,
+) -> dict:
+    public_id = clean_limited_text(public_id, 120).strip()
+    reason = clean_limited_text(reason, 500).strip()
+    if len(reason) < 12:
+        raise HTTPException(
+            status_code=400,
+            detail="Причина подтверждения аннулирования должна содержать минимум 12 символов.",
+        )
+    normalized_url = normalize_npd_receipt_url(receipt_url)
+    row = get_billing_order_row(public_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Платёжный заказ не найден.")
+    if str(row["provider"] or "").strip().lower() != "yookassa":
+        raise HTTPException(status_code=409, detail="Заказ создан не через ЮKassa.")
+    if str(row["tax_receipt_mode"] or "").strip().lower() != "yookassa_npd_manual":
+        raise HTTPException(
+            status_code=409,
+            detail="Заказ не использует ручной режим чеков НПД.",
+        )
+    if int(amount_rub) != int(row["amount_rub"]):
+        raise HTTPException(
+            status_code=409,
+            detail="Сумма аннулирования чека не совпадает с полным возвратом.",
+        )
+
+    existing_url = str(row["refund_receipt_url"] or "").strip()
+    delivery_status = str(
+        row["refund_receipt_delivery_status"] or ""
+    ).strip().lower()
+    if (
+        existing_url == normalized_url
+        and delivery_status == "sent"
+        and str(row["status"] or "").strip().lower() == "refunded"
+    ):
+        return {
+            "order": billing_order_status(row),
+            "receiptRecorded": True,
+            "deliveryStatus": "sent",
+            "reused": True,
+        }
+    if str(row["refund_status"] or "").strip().lower() not in {
+        "receipt_pending",
+        "succeeded",
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail="Сначала ЮKassa должна подтвердить полный возврат.",
+        )
+    if str(row["refund_entitlement_status"] or "").strip().lower() != "rolled_back":
+        raise HTTPException(
+            status_code=409,
+            detail="Права пользователя ещё не восстановлены по снимку заказа.",
+        )
+    refund_id = str(row["refund_provider_id"] or "").strip()
+    if not refund_id:
+        raise HTTPException(
+            status_code=409,
+            detail="У заказа отсутствует идентификатор возврата ЮKassa.",
+        )
+    refund = yookassa_get_refund(refund_id)
+    provider_amount_rub, _ = validate_yookassa_refund_for_order(row, refund)
+    if (
+        str(refund.get("status") or "").strip().lower() != "succeeded"
+        or provider_amount_rub != int(row["amount_rub"])
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="ЮKassa не подтверждает полный возврат заказа.",
+        )
+
+    access_token = secrets.token_urlsafe(36)
+    token_hash = npd_receipt_access_token_hash(access_token)
+    reference = npd_receipt_reference(normalized_url)
+    now = utc_now_iso()
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE billing_orders
+            SET refund_receipt_status = 'cancellation_registered',
+                refund_receipt_provider_id = ?, refund_receipt_url = ?,
+                refund_receipt_delivery_status = 'pending',
+                refund_receipt_delivery_error = NULL,
+                refund_receipt_access_token_hash = ?,
+                refund_error = NULL,
+                refund_updated_at = ?, updated_at = ?
+            WHERE public_id = ?
+            """,
+            (reference, normalized_url, token_hash, now, now, public_id),
+        )
+        conn.commit()
+    row = get_billing_order_row(public_id)
+    delivery = send_or_queue_npd_receipt_email(
+        row,
+        receipt_url=normalized_url,
+        access_token=access_token,
+        receipt_kind="refund",
+    )
+    delivered = delivery.get("deliveryStatus") == "sent"
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE billing_orders
+            SET status = CASE WHEN ? = 1 THEN 'refunded' ELSE status END,
+                refund_status = CASE WHEN ? = 1 THEN 'succeeded' ELSE 'receipt_pending' END,
+                refund_receipt_delivery_status = ?,
+                refund_receipt_delivery_error = ?,
+                refund_receipt_delivered_at = CASE
+                    WHEN ? = 1 THEN COALESCE(refund_receipt_delivered_at, ?)
+                    ELSE refund_receipt_delivered_at
+                END,
+                refund_updated_at = ?, updated_at = ?
+            WHERE public_id = ?
+            """,
+            (
+                1 if delivered else 0,
+                1 if delivered else 0,
+                "sent" if delivered else str(delivery.get("deliveryStatus") or "failed"),
+                None if delivered else clean_limited_text(delivery.get("deliveryError"), 500),
+                1 if delivered else 0,
+                now,
+                now,
+                now,
+                public_id,
+            ),
+        )
+        conn.commit()
+    return {
+        "order": billing_order_status(get_billing_order_row(public_id)),
+        "receiptRecorded": True,
+        "deliveryStatus": delivery.get("deliveryStatus"),
+        "reused": existing_url == normalized_url,
     }
 
 
@@ -32071,6 +32875,120 @@ def windows_public_bootstrap(
         },
         "apiBaseUrls": SERVER_CATALOG_API_BASE_URLS,
     }
+
+
+@app.head("/payment/receipt/{token}", response_class=HTMLResponse)
+@app.get("/payment/receipt/{token}", response_class=HTMLResponse)
+def npd_receipt_page(token: str):
+    token = clean_limited_text(token, 160).strip()
+    if len(token) < 32:
+        raise HTTPException(status_code=404, detail="Чек не найден.")
+    token_hash = npd_receipt_access_token_hash(token)
+    with db() as conn:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM billing_orders
+            WHERE tax_receipt_access_token_hash = ?
+               OR refund_receipt_access_token_hash = ?
+            LIMIT 1
+            """,
+            (token_hash, token_hash),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Чек не найден.")
+
+    is_refund = str(
+        row["refund_receipt_access_token_hash"] or ""
+        if "refund_receipt_access_token_hash" in row.keys()
+        else ""
+    ) == token_hash
+    receipt_url = str(
+        row["refund_receipt_url"] if is_refund else row["tax_receipt_url"]
+    ).strip()
+    try:
+        receipt_url = normalize_npd_receipt_url(receipt_url)
+    except HTTPException:
+        raise HTTPException(status_code=404, detail="Чек не найден.")
+    safe_url = html.escape(receipt_url, quote=True)
+    safe_order_id = html.escape(str(row["public_id"]), quote=True)
+    amount = int(row["amount_rub"])
+    title = "Возврат Green VPN" if is_refund else "Чек Green VPN"
+    heading = "Возврат подтверждён" if is_refund else "Оплата зарегистрирована"
+    description = (
+        "Доход по операции аннулирован в ФНС."
+        if is_refund
+        else "Чек сформирован и зарегистрирован в ФНС через «Мой налог»."
+    )
+    content = f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <title>{title}</title>
+  <style>
+    :root {{ color-scheme: light; font-family: "Segoe UI", Arial, sans-serif; }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; background: #f4f7f5; color: #15211c; }}
+    main {{ width: min(680px, calc(100% - 32px)); margin: 56px auto; background: #fff;
+      border: 1px solid #cfdad4; border-radius: 8px; padding: 32px; }}
+    .brand {{ color: #08785d; font-weight: 800; }}
+    h1 {{ margin: 18px 0 10px; font-size: 30px; letter-spacing: 0; }}
+    p {{ line-height: 1.55; color: #475c52; }}
+    dl {{ display: grid; grid-template-columns: 150px 1fr; gap: 10px 18px;
+      margin: 26px 0; padding: 22px 0; border-block: 1px solid #dce5e0; }}
+    dt {{ color: #667a70; }} dd {{ margin: 0; font-weight: 700; overflow-wrap: anywhere; }}
+    .actions {{ display: flex; flex-wrap: wrap; gap: 10px; }}
+    a, button {{ min-height: 44px; border-radius: 6px; padding: 11px 16px;
+      font: inherit; font-weight: 700; cursor: pointer; }}
+    a {{ background: #08785d; color: #fff; text-decoration: none; }}
+    button {{ border: 1px solid #78958a; background: #fff; color: #15211c; }}
+    .note {{ margin-top: 22px; font-size: 14px; }}
+    @media (max-width: 520px) {{
+      main {{ margin: 20px auto; padding: 22px; }}
+      dl {{ grid-template-columns: 1fr; gap: 4px; }}
+      dd {{ margin-bottom: 10px; }}
+    }}
+    @media print {{
+      body {{ background: #fff; }} main {{ width: 100%; margin: 0; border: 0; padding: 0; }}
+      .actions {{ display: none; }}
+    }}
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand">Green VPN</div>
+    <h1>{heading}</h1>
+    <p>{description}</p>
+    <dl>
+      <dt>Заказ</dt><dd>{safe_order_id}</dd>
+      <dt>Сумма</dt><dd>{amount} руб.</dd>
+      <dt>Источник чека</dt><dd>ФНС России, «Мой налог»</dd>
+    </dl>
+    <div class="actions">
+      <a href="{safe_url}" target="_blank" rel="noopener noreferrer nofollow">Открыть официальный чек ФНС</a>
+      <button type="button" onclick="window.print()">Распечатать</button>
+    </div>
+    <p class="note">ЮKassa подтверждает оплату, а налоговый чек формируется ФНС.</p>
+  </main>
+</body>
+</html>"""
+    return HTMLResponse(
+        content=content,
+        headers={
+            "Cache-Control": "no-store",
+            "Pragma": "no-cache",
+            "Referrer-Policy": "no-referrer",
+            "X-Robots-Tag": "noindex, nofollow, noarchive",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": (
+                "default-src 'none'; style-src 'unsafe-inline'; "
+                "script-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; "
+                "form-action 'none'"
+            ),
+        },
+    )
 
 
 @app.head("/payment/return", response_class=HTMLResponse)
@@ -38920,6 +39838,100 @@ def admin_refund_billing_order_full(
         **result,
         "order": public_billing_order_status(order),
         "refundReadiness": refund_execution_readiness(),
+        "reconciliation": billing_reconciliation_payload(),
+    }
+
+
+@app.post("/api/v1/admin/billing/orders/{order_id}/npd-receipt-confirm")
+def admin_confirm_yookassa_npd_receipt(
+    order_id: str,
+    payload: AdminYooKassaNpdReceiptConfirmIn,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "billing.manage", request=request)
+    require_billing_callback_primary()
+    if clean_limited_text(payload.confirmOrderId, 120).strip() != order_id:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "receipt_confirmation_mismatch",
+                "message": "Для подтверждения чека нужно точно повторить ID заказа.",
+            },
+        )
+    result = confirm_yookassa_npd_payment_receipt(
+        order_id,
+        receipt_url=payload.receiptUrl,
+        amount_rub=payload.amountRub,
+        reason=payload.reason,
+    )
+    order = result["order"]
+    write_admin_audit(
+        "yookassa_npd_receipt_confirmed",
+        "billing_order",
+        order_id,
+        {
+            "userId": order.get("userId"),
+            "amountRub": order.get("amountRub"),
+            "reason": clean_limited_text(payload.reason, 500).strip(),
+            "deliveryStatus": result.get("deliveryStatus"),
+            "activated": order.get("status") == "activated",
+            "reused": bool(result.get("reused")),
+        },
+        request=request,
+    )
+    return {
+        "ok": True,
+        **result,
+        "order": public_billing_order_status(order),
+        "reconciliation": billing_reconciliation_payload(),
+    }
+
+
+@app.post("/api/v1/admin/billing/orders/{order_id}/npd-refund-receipt-confirm")
+def admin_confirm_yookassa_npd_refund_receipt(
+    order_id: str,
+    payload: AdminYooKassaNpdReceiptConfirmIn,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "billing.manage", request=request)
+    require_billing_callback_primary()
+    if clean_limited_text(payload.confirmOrderId, 120).strip() != order_id:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "receipt_confirmation_mismatch",
+                "message": "Для подтверждения аннулирования нужно точно повторить ID заказа.",
+            },
+        )
+    result = confirm_yookassa_npd_refund_receipt(
+        order_id,
+        receipt_url=payload.receiptUrl,
+        amount_rub=payload.amountRub,
+        reason=payload.reason,
+    )
+    order = result["order"]
+    write_admin_audit(
+        "yookassa_npd_refund_receipt_confirmed",
+        "billing_order",
+        order_id,
+        {
+            "userId": order.get("userId"),
+            "amountRub": order.get("amountRub"),
+            "reason": clean_limited_text(payload.reason, 500).strip(),
+            "deliveryStatus": result.get("deliveryStatus"),
+            "refunded": order.get("status") == "refunded",
+            "reused": bool(result.get("reused")),
+        },
+        request=request,
+    )
+    return {
+        "ok": True,
+        **result,
+        "order": public_billing_order_status(order),
         "reconciliation": billing_reconciliation_payload(),
     }
 

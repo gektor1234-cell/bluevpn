@@ -6094,6 +6094,79 @@ async function refundFullBillingOrder(orderId) {
   }
 }
 
+async function confirmNpdReceipt(orderId, receiptKind) {
+  if (!requirePermission('billing.manage', 'Подтверждение чека ФНС')) return;
+  const isRefund = receiptKind === 'refund';
+  const order = (state.loaded.orders || []).find(
+    (item) => String(item.orderId || item.id || '') === String(orderId),
+  );
+  if (!order) {
+    setNotice('Заказ не найден в текущем списке. Обнови данные и повтори.', true);
+    return;
+  }
+  const receiptUrl = window.prompt(
+    isRefund
+      ? 'Вставь официальную ссылку ФНС на аннулированный чек из «Мой налог»:'
+      : 'Вставь официальную ссылку ФНС на чек из «Мой налог»: ',
+    '',
+  );
+  if (receiptUrl === null) return;
+  const trimmedUrl = receiptUrl.trim();
+  if (!/^https:\/\/lknpd\.nalog\.ru\/.*\/receipt\//i.test(trimmedUrl)) {
+    setNotice('Нужна официальная HTTPS-ссылка на чек с lknpd.nalog.ru.', true);
+    return;
+  }
+  const reason = window.prompt(
+    isRefund
+      ? 'Причина подтверждения аннулирования для аудита:'
+      : 'Причина подтверждения чека для аудита:',
+    isRefund
+      ? 'Аннулирование зарегистрировано в «Мой налог» после полного возврата.'
+      : 'Оплата зарегистрирована в «Мой налог», официальный чек получен.',
+  );
+  if (reason === null) return;
+  if (reason.trim().length < 12) {
+    setNotice('Причина должна содержать минимум 12 символов.', true);
+    return;
+  }
+  const confirmation = window.prompt(
+    `Для подтверждения точно введи идентификатор заказа:\n${orderId}`,
+    '',
+  );
+  if (confirmation === null) return;
+  if (confirmation.trim() !== orderId) {
+    setNotice('Идентификатор заказа не совпал. Чек не сохранялся.', true);
+    return;
+  }
+  try {
+    const suffix = isRefund ? 'npd-refund-receipt-confirm' : 'npd-receipt-confirm';
+    const result = await apiPost(
+      `/api/v1/admin/billing/orders/${encodeURIComponent(orderId)}/${suffix}`,
+      {
+        confirmOrderId: confirmation.trim(),
+        receiptUrl: trimmedUrl,
+        amountRub: Number(order.amountRub || order.priceRub || 0),
+        reason: reason.trim(),
+      },
+    );
+    state.loaded.billingReconciliation = result.reconciliation || state.loaded.billingReconciliation;
+    await loadDashboardData();
+    const delivered = result.deliveryStatus === 'sent';
+    setNotice(
+      isRefund
+        ? delivered
+          ? 'Аннулирование зарегистрировано, чек отправлен покупателю, возврат завершён.'
+          : `Аннулирование сохранено, но отправка чека требует внимания: ${escapeUi(result.deliveryStatus, 'ошибка')}.`
+        : delivered
+          ? 'Чек зарегистрирован и отправлен покупателю; тариф активирован.'
+          : `Чек сохранён, но тариф останется закрыт до доставки email: ${escapeUi(result.deliveryStatus, 'ошибка')}.`,
+      !delivered,
+    );
+  } catch (error) {
+    setNotice(`Чек ФНС не подтверждён: ${error.message}`, true);
+  }
+}
+
 function renderPromoCodes() {
   const container = $('promoList');
   if (!container) return;
@@ -6206,7 +6279,20 @@ function renderOrdersTable() {
       order.status === 'activated'
       && order.provider === 'yookassa'
       && !['succeeded', 'partial_succeeded'].includes(order.refund?.status);
-    if (!canCancelSafely && !canRequestFullRefund) return '<span class="muted">—</span>';
+    const canConfirmNpdReceipt =
+      order.status === 'paid_receipt_pending'
+      && order.provider === 'yookassa'
+      && order.taxReceipt?.mode === 'yookassa_npd_manual';
+    const canConfirmNpdRefundReceipt =
+      order.status === 'refund_receipt_pending'
+      && order.provider === 'yookassa'
+      && order.taxReceipt?.mode === 'yookassa_npd_manual';
+    if (
+      !canCancelSafely
+      && !canRequestFullRefund
+      && !canConfirmNpdReceipt
+      && !canConfirmNpdRefundReceipt
+    ) return '<span class="muted">—</span>';
     if (!can('billing.manage')) return readonlyActionsHtml('billing.manage');
     const actions = [];
     if (canCancelSafely) {
@@ -6218,6 +6304,12 @@ function renderOrdersTable() {
           ? `<button class="small-button danger" type="button" data-order-refund-full="${escapeHtml(order.orderId || order.id)}">Полный возврат</button>`
           : '<button class="small-button" type="button" disabled title="Возвратный контур выключен сервером">Возврат закрыт</button>',
       );
+    }
+    if (canConfirmNpdReceipt) {
+      actions.push(`<button class="small-button" type="button" data-order-npd-receipt="${escapeHtml(order.orderId || order.id)}">Добавить чек ФНС</button>`);
+    }
+    if (canConfirmNpdRefundReceipt) {
+      actions.push(`<button class="small-button" type="button" data-order-npd-refund-receipt="${escapeHtml(order.orderId || order.id)}">Добавить аннулирование</button>`);
     }
     return actions.join(' ');
   };
@@ -6414,7 +6506,15 @@ function renderOrdersTable() {
                   : '<br><span class="muted">без акции</span>'
               }
             </td>
-            <td><span class="status-pill muted">${escapeUi(order.status)}</span></td>
+            <td>
+              <span class="status-pill muted">${escapeUi(order.status)}</span>
+              ${order.taxReceipt?.mode === 'yookassa_npd_manual'
+                ? `<br><span class="muted">чек: ${escapeUi(order.taxReceipt?.status, '—')} · email: ${escapeUi(order.taxReceipt?.deliveryStatus, '—')}</span>`
+                : ''}
+              ${order.refund?.receiptStatus
+                ? `<br><span class="muted">возврат: ${escapeUi(order.refund.receiptStatus)} · email: ${escapeUi(order.refund.receiptDeliveryStatus, '—')}</span>`
+                : ''}
+            </td>
             <td>${escapeHtml(orderPlanLabel(order))}</td>
             <td>${escapeHtml(shortDate(order.createdAt))}</td>
             <td>${orderActionHtml(order)}</td>
@@ -8310,6 +8410,16 @@ function bindEvents() {
     const refundFullOrderButton = event.target.closest('[data-order-refund-full]');
     if (refundFullOrderButton) {
       refundFullBillingOrder(refundFullOrderButton.dataset.orderRefundFull);
+      return;
+    }
+    const npdReceiptButton = event.target.closest('[data-order-npd-receipt]');
+    if (npdReceiptButton) {
+      confirmNpdReceipt(npdReceiptButton.dataset.orderNpdReceipt, 'payment');
+      return;
+    }
+    const npdRefundReceiptButton = event.target.closest('[data-order-npd-refund-receipt]');
+    if (npdRefundReceiptButton) {
+      confirmNpdReceipt(npdRefundReceiptButton.dataset.orderNpdRefundReceipt, 'refund');
       return;
     }
     const openButton = event.target.closest('[data-report-open]');

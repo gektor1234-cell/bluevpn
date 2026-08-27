@@ -1,154 +1,137 @@
-# Green VPN: Prodamus и НПД
+# Green VPN: ЮKassa и чеки НПД
 
-Последнее обновление: 2026-08-26.
+Последнее обновление: 2026-08-27.
 
-Этот файл является текущим платёжным контрактом. Старые разделы про Robokassa
-и YooKassa в других документах считаются историческими и не используются для
-новых продаж.
+Это текущий платёжный контракт Green VPN. Prodamus и Robokassa остаются в
+коде и старых evidence-документах только как исторические адаптеры и варианты
+rollback. Новые продажи должны использовать ЮKassa и чек самозанятого из
+официального сервиса ФНС «Мой налог».
 
-## Семь этапов
+## Текущий статус
 
-| № | Этап | Текущий статус |
-|---:|---|---|
-| 1 | Подать заявку Prodamus | Выполнено 2026-08-26: полная анкета с публичными каналами, офертой и обязательными документами успешно отправлена; Prodamus сообщил об отправке письма подтверждения, но на момент фиксации письмо ещё не доставлено |
-| 2 | Получить одобрение Green VPN | Ожидается email-подтверждение и проверка Prodamus, для которой кабинет указал средний срок 1–3 рабочих дня; до явного одобрения форму нельзя считать боевой |
-| 3 | Связать Prodamus с «Мой налог» | Заблокировано до рабочего режима формы; затем ИНН подаётся в настройках Prodamus, а запрос подтверждается владельцем в «Мой налог» |
-| 4 | Реализовать backend-адаптер | Реализован, протестирован и развёрнут `0.9.158-prodamus-npd.2`: signed notification, идемпотентная активация, reconciliation и guarded full refund |
-| 5 | Настроить production | Prodamus выбран на обоих production-узлах в fail-closed режиме; реальные URL/ключ/SYS не устанавливаются до одобрения и остаются только в root-owned server env |
-| 6 | Реальный платёж и полный возврат | Выполняется только после этапов 2, 3 и 5: один платёж, signed notification, активация, НПД-чек, полный возврат, возвратный чек и откат прав |
-| 7 | Открыть продажи | Заблокировано до зелёного этапа 6; автопродление остаётся выключенным отдельным будущим контуром |
+- Backend-контур `0.9.159-yookassa-npd-manual.1` реализован и покрыт
+  регрессионными тестами.
+- Оплата сама по себе больше не активирует тариф: после подтверждения ЮKassa
+  заказ получает статус `paid_receipt_pending`.
+- Тариф активируется только после регистрации дохода в «Мой налог» и успешной
+  отправки покупателю официальной ссылки на чек ФНС.
+- Полный возврат сразу откатывает права, но остаётся в статусе
+  `refund_receipt_pending`, пока чек не аннулирован в «Мой налог» и письмо не
+  доставлено.
+- Автопродление в ручном режиме НПД принудительно выключено.
+- Публичные продажи остаются закрытыми до одного реального платежа, чека,
+  полного возврата, аннулирования чека и проверки письма.
 
-## Границы
+## Почему чек отправляется по email
 
-- Основной billing-writer только Timeweb `72.56.32.197`.
-- Fallback `176.113.81.35` отклоняет платёжные callbacks до разбора тела и не
-  создаёт платежи, возвраты или автосписания.
-- `urlSuccess` возвращает пользователя, но не подтверждает оплату.
-- Активация разрешена только после notification с валидным `Sign` и точным
-  совпадением магазина, `SYS`, номера заказа, суммы и единственной позиции.
-- Демо-форма и демо-подпись всегда отклоняются.
-- Неопределённый результат создания ссылки не повторяется автоматически:
-  заказ уходит в reconciliation, чтобы исключить повторную оплату.
-- Ручная admin-активация Prodamus запрещена.
-- Возврат в Prodamus выполняется через кабинет. Backend принимает подтверждение
-  только после статуса «Возвращён» и наличия возвратного чека, затем одной DB-
-  транзакцией фиксирует полный возврат и откатывает права, если entitlement не
-  менялся после исходной активации.
-- Частичный возврат в этом контракте не используется.
-- Автопродление и рекуррентные платежи выключены.
+ФНС разрешает передать чек покупателю в электронной форме на телефон или
+email, показать QR-код либо распечатать. Источником чека остаётся «Мой налог»:
 
-## Публичные URL
+- https://npd.nalog.ru/
+- https://npd.nalog.ru/faq/
+
+Квитанция платёжного провайдера не заменяет налоговый чек. Backend Green VPN
+не рисует собственный чек: письмо и защищённая страница содержат ссылку на
+официальный чек `https://lknpd.nalog.ru/.../receipt/...`.
+
+## Продажа
+
+1. Backend создаёт платёж ЮKassa без объекта `receipt` и без сохранения способа
+   оплаты.
+2. Webhook или проверка API подтверждает точный ID заказа, сумму, валюту и
+   успешный статус ЮKassa.
+3. Заказ становится `paid_receipt_pending`; тариф ещё не активен.
+4. Оператор регистрирует доход в «Мой налог» и получает официальную ссылку ФНС.
+5. В админке оператор нажимает «Добавить чек ФНС», повторяет ID заказа, сумму и
+   вставляет ссылку.
+6. Backend повторно проверяет платёж в ЮKassa, принимает только HTTPS-домен
+   `lknpd.nalog.ru`, сохраняет односторонний токен страницы и отправляет email.
+7. Только после статуса email `sent` backend активирует тариф.
+
+Защищённый endpoint:
 
 ```text
-Return URL:        https://api.greenvpn.pro/payment/return
-Success URL:       https://api.greenvpn.pro/payment/return
-Notification URL: https://api.greenvpn.pro/api/v1/billing/prodamus/notification
+POST /api/v1/admin/billing/orders/{order_id}/npd-receipt-confirm
 ```
 
-## Server-only env
+## Полный возврат
 
-Секреты нельзя писать в Git, документы, owner notes или чат.
+1. Возврат выполняется только на основном billing-узле через API ЮKassa.
+2. После подтверждения полного возврата backend откатывает только права,
+   созданные этим заказом, и очищает автопродление.
+3. Заказ становится `refund_receipt_pending`.
+4. Оператор аннулирует исходный доход в «Мой налог» и вставляет официальную
+   ссылку на аннулирование через действие «Добавить аннулирование».
+5. Backend повторно проверяет возврат ЮKassa, отправляет письмо и только затем
+   фиксирует итоговый статус `refunded`.
+
+Защищённый endpoint:
 
 ```text
-GREENVPN_PAYMENT_PROVIDER=prodamus
-PRODAMUS_PAYFORM_URL=https://<магазин>.payform.ru
-PRODAMUS_SECRET_KEY=<server-only>
-PRODAMUS_SYS=<согласованный Prodamus код>
-PRODAMUS_RETURN_URL=https://api.greenvpn.pro/payment/return
-PRODAMUS_SUCCESS_URL=https://api.greenvpn.pro/payment/return
-PRODAMUS_NOTIFICATION_URL=https://api.greenvpn.pro/api/v1/billing/prodamus/notification
-PRODAMUS_NPD_PARTNER_CONFIRMED=1
-PRODAMUS_LIVE_MODE_CONFIRMED=1
-GREENVPN_TAX_RECEIPT_MODE=prodamus_npd
+POST /api/v1/admin/billing/orders/{order_id}/npd-refund-receipt-confirm
+```
+
+Частичные возвраты в этом контракте не используются.
+
+## Production env
+
+Секреты хранятся только в root-owned server env и никогда не попадают в Git,
+документы или логи.
+
+```text
+GREENVPN_PAYMENT_PROVIDER=yookassa
+YOOKASSA_SHOP_ID=<server-only>
+YOOKASSA_SECRET_KEY=<server-only>
+YOOKASSA_API_BASE=https://api.yookassa.ru/v3
+YOOKASSA_RETURN_URL=https://api.greenvpn.pro/payment/return
+YOOKASSA_WEBHOOK_URL=https://api.greenvpn.pro/api/v1/billing/yookassa/webhook
+
+GREENVPN_TAX_RECEIPT_MODE=yookassa_npd_manual
 GREENVPN_TAX_RECEIPT_WORKFLOW_CONFIRMED=1
-GREENVPN_TAX_RECEIPT_PAYMENT_SUBJECT=service
-GREENVPN_TAX_RECEIPT_PAYMENT_MODE=full_payment
-```
+GREENVPN_NPD_RECEIPT_ALLOWED_HOSTS=lknpd.nalog.ru
+GREENVPN_NPD_RECEIPT_MANUAL_OPERATOR_CONFIRMED=0
 
-До успешного payment/refund smoke:
-
-```text
 GREENVPN_PAID_SALES_ENABLED=0
-PRODAMUS_REFUND_SMOKE_CONFIRMED=0
-PRODAMUS_RECURRING_ENABLED=0
 GREENVPN_AUTO_RENEWAL_CHARGES_ENABLED=0
 GREENVPN_AUTO_RENEWAL_BILLING_PRIMARY=0
+GREENVPN_REFUND_WORKFLOW_CONFIRMED=0
+GREENVPN_REFUND_EXECUTION_ENABLED=0
 ```
 
-Для контролируемого refund-smoke только на primary временно требуется готовая
-политика возврата:
+`GREENVPN_NPD_RECEIPT_MANUAL_OPERATOR_CONFIRMED=1` означает не наличие кода, а
+реально назначенного человека, который обработает каждый платёж и возврат без
+задержки. Этот флаг нельзя включать формально.
 
-```text
-GREENVPN_REFUND_WORKFLOW_CONFIRMED=1
-GREENVPN_REFUND_EXECUTION_ENABLED=1
-GREENVPN_REFUND_BILLING_PRIMARY=1
-```
+Primary billing-writer: `72.56.32.197`. Fallback `176.113.81.35` принимает
+публичный трафик, но не создаёт платежи, не обрабатывает callback как writer,
+не выполняет возвраты и автосписания.
 
-После подтверждённого полного возврата и возвратного чека:
+## Контрольный платёж
 
-```text
-PRODAMUS_REFUND_SMOKE_CONFIRMED=1
-GREENVPN_PAID_SALES_ENABLED=1
-```
-
-На fallback writer-флаги всегда `0`.
-
-## Безопасная настройка
-
-Primary:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\bluevpn\scripts\windows\configure_backend_env_wsl.ps1 -ServerHost 72.56.32.197
-```
-
-Fallback настраивается отдельным запуском с `-ServerHost 176.113.81.35`, но
-денежные writer-флаги на нём не включаются.
-
-## Контрольный платёж и возврат
-
-1. Убедиться, что форма в рабочем режиме и Prodamus подтверждён партнёром в
-   «Мой налог».
-2. Проверить `/api/v1/admin/billing/readiness` при закрытых публичных продажах.
-3. Через защищённый endpoint `/api/v1/admin/billing/prodamus/payment-smoke`
-   создать ровно один заказ на подтверждённого тестового пользователя.
-4. Владелец самостоятельно оплачивает ссылку. Backend не вводит банковские
-   данные, коды и не подтверждает списание.
-5. Проверить signed notification, статус `activated`, точную сумму и чек дохода
-   в НПД.
-6. В кабинете Prodamus оформить полный возврат. Дождаться статуса «Возвращён» и
-   возвратного чека.
-7. Через защищённый endpoint
-   `/api/v1/admin/billing/orders/{order_id}/prodamus-refund-confirm` передать
-   точный order ID, сумму, ID возврата и ссылку/номер чека.
-8. Проверить статус `refunded`, `refund_entitlement_status=rolled_back`, чек
-   возврата и отсутствие сохранённого способа оплаты.
-9. Только после этого включить `PRODAMUS_REFUND_SMOKE_CONFIRMED=1`, а затем
-   `GREENVPN_PAID_SALES_ENABLED=1` на primary.
+1. Развернуть backend на fallback, затем на primary с флагом
+   `--select-yookassa-npd-manual-fail-closed`.
+2. Проверить, что продажи закрыты, provider=`yookassa`, mode=
+   `yookassa_npd_manual`, SMTP готов, автосписания выключены.
+3. Назначить оператора и включить только operator/refund-флаги на primary.
+4. Создать один заказ на подтверждённый email и оплатить его реальной картой.
+5. Проверить `paid_receipt_pending`, зарегистрировать доход в «Мой налог»,
+   сохранить ссылку и убедиться, что письмо дошло, а тариф активирован.
+6. Выполнить полный возврат, проверить откат прав, аннулировать доход в
+   «Мой налог», отправить второе письмо и получить `refunded`.
+7. Проверить reconciliation, SMTP outbox, БД, primary/fallback и отсутствие
+   сохранённого способа оплаты.
+8. Только после этого включить `GREENVPN_PAID_SALES_ENABLED=1` на primary.
 
 ## Проверки
 
 ```text
+GET /healthz
 GET /api/v1/admin/billing/readiness
 GET /api/v1/admin/billing/payment-smoke/readiness
 GET /api/v1/admin/billing/refunds/readiness
 GET /api/v1/admin/billing/reconciliation
 ```
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\check_payment_launch_safety.ps1
-```
-
-`/healthz` не доказывает готовность платежей. Нужны provider readiness,
-сверка primary/fallback, реальный signed payment, чек дохода, полный возврат,
-возвратный чек и откат прав.
-
-## Официальные инструкции Prodamus
-
-- Самостоятельная интеграция и HMAC:
-  https://help.prodamus.ru/payform/integracii/rest-api/instrukcii-dlya-samostoyatelnaya-integracii-servisov
-- Уведомления об оплате:
-  https://help.prodamus.ru/payform/uvedomleniya/kak-ustroena-otpravka-uvedomlenii-ob-oplate
-- Интеграция с «Мой налог»:
-  https://help.prodamus.ru/payform/nachalo-raboty-s-prodamus/kak-samozanyatym-integrirovat-prodamus-s-prilozheniem-moi-nalog
-- Полный возврат:
-  https://help.prodamus.ru/payform/vozvraty-platezhei/sformirovat-zayavku-na-vozvrat
+`/healthz` или HTTP 200 сами по себе не доказывают готовность продаж. Нужна вся
+цепочка: реальный платёж, чек ФНС, email, активация, полный возврат,
+аннулирование чека, откат прав и чистая сверка.

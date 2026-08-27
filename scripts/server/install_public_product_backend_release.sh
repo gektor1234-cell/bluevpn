@@ -6,6 +6,7 @@ ROLE=""
 BUNDLE_DIR=""
 BACKEND_VERSION=""
 SELECT_PRODAMUS_FAIL_CLOSED=0
+SELECT_YOOKASSA_NPD_MANUAL_FAIL_CLOSED=0
 
 APP_ROOT="/opt/bluevpn/backend"
 DATA_DIR="${APP_ROOT}/data"
@@ -27,7 +28,7 @@ Usage:
     --role timeweb|ruvds \
     --bundle-dir PATH \
     --backend-version VERSION \
-    [--select-prodamus-fail-closed] \
+    [--select-prodamus-fail-closed | --select-yookassa-npd-manual-fail-closed] \
     [--apply]
 
 The default is a dry run. Apply mode creates a root-only
@@ -43,6 +44,7 @@ while [[ $# -gt 0 ]]; do
     --bundle-dir) BUNDLE_DIR="${2:?missing bundle dir}"; shift 2 ;;
     --backend-version) BACKEND_VERSION="${2:?missing backend version}"; shift 2 ;;
     --select-prodamus-fail-closed) SELECT_PRODAMUS_FAIL_CLOSED=1; shift ;;
+    --select-yookassa-npd-manual-fail-closed) SELECT_YOOKASSA_NPD_MANUAL_FAIL_CLOSED=1; shift ;;
     --apply) APPLY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -54,6 +56,10 @@ case "$ROLE" in
   ruvds) BILLING_PRIMARY=0 ;;
   *) echo "--role must be timeweb or ruvds" >&2; exit 2 ;;
 esac
+if [[ $SELECT_PRODAMUS_FAIL_CLOSED -eq 1 && $SELECT_YOOKASSA_NPD_MANUAL_FAIL_CLOSED -eq 1 ]]; then
+  echo "Only one payment-provider fail-closed selector may be used" >&2
+  exit 2
+fi
 
 [[ "$BACKEND_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9._-]*$ ]] || {
   echo "Invalid backend version" >&2
@@ -81,6 +87,7 @@ echo "role=$ROLE"
 echo "backend_version=$BACKEND_VERSION"
 echo "billing_primary=$BILLING_PRIMARY"
 echo "select_prodamus_fail_closed=$SELECT_PRODAMUS_FAIL_CLOSED"
+echo "select_yookassa_npd_manual_fail_closed=$SELECT_YOOKASSA_NPD_MANUAL_FAIL_CLOSED"
 echo "source_main_sha256=$(sha256sum "$BUNDLE_DIR/backend/app/main.py" | awk '{print $1}')"
 echo "database_source=production_only"
 
@@ -167,7 +174,7 @@ python3 -m py_compile "$SYNC_SNAPSHOT_SCRIPT" "$SYNC_STATE_SCRIPT"
 python3 -m py_compile "$BUNDLE_DIR/ops/greenvpn_prune_operational_history.py"
 
 python3 - "$ENV_FILE" "$BETA_ENV_FILE" "$BACKEND_VERSION" "$BILLING_PRIMARY" \
-  "$SELECT_PRODAMUS_FAIL_CLOSED" <<'PY'
+  "$SELECT_PRODAMUS_FAIL_CLOSED" "$SELECT_YOOKASSA_NPD_MANUAL_FAIL_CLOSED" <<'PY'
 import os
 import pathlib
 import re
@@ -178,6 +185,7 @@ source_path = pathlib.Path(sys.argv[2])
 backend_version = sys.argv[3]
 billing_primary = sys.argv[4]
 select_prodamus_fail_closed = sys.argv[5] == "1"
+select_yookassa_npd_manual_fail_closed = sys.argv[6] == "1"
 assignment = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
 
 transport_keys = {
@@ -227,7 +235,9 @@ policy_defaults = {
     "GREENVPN_FREE_TIER_SPEED_MBPS": "10",
     "GREENVPN_FREE_TIER_BURST_MBPS": "20",
     "GREENVPN_PAID_SALES_ENABLED": "0",
-    "GREENVPN_PAYMENT_PROVIDER": "prodamus",
+    "GREENVPN_PAYMENT_PROVIDER": "yookassa",
+    "YOOKASSA_RETURN_URL": "https://api.greenvpn.pro/payment/return",
+    "YOOKASSA_WEBHOOK_URL": "https://api.greenvpn.pro/api/v1/billing/yookassa/webhook",
     "PRODAMUS_RETURN_URL": "https://api.greenvpn.pro/payment/return",
     "PRODAMUS_SUCCESS_URL": "https://api.greenvpn.pro/payment/return",
     "PRODAMUS_NOTIFICATION_URL": "https://api.greenvpn.pro/api/v1/billing/prodamus/notification",
@@ -237,6 +247,8 @@ policy_defaults = {
     "PRODAMUS_RECURRING_ENABLED": "0",
     "GREENVPN_TAX_RECEIPT_MODE": "disabled",
     "GREENVPN_TAX_RECEIPT_WORKFLOW_CONFIRMED": "0",
+    "GREENVPN_NPD_RECEIPT_MANUAL_OPERATOR_CONFIRMED": "0",
+    "GREENVPN_NPD_RECEIPT_ALLOWED_HOSTS": "lknpd.nalog.ru",
     "GREENVPN_TAX_RECEIPT_VAT_CODE": "0",
     "GREENVPN_REFUND_WORKFLOW_CONFIRMED": "0",
     "GREENVPN_REFUND_EXECUTION_ENABLED": "0",
@@ -284,6 +296,24 @@ if select_prodamus_fail_closed:
             "PRODAMUS_RECURRING_ENABLED": "0",
             "GREENVPN_TAX_RECEIPT_MODE": "disabled",
             "GREENVPN_TAX_RECEIPT_WORKFLOW_CONFIRMED": "0",
+            "GREENVPN_REFUND_WORKFLOW_CONFIRMED": "0",
+            "GREENVPN_REFUND_EXECUTION_ENABLED": "0",
+            "GREENVPN_AUTO_RENEWAL_CHARGES_ENABLED": "0",
+        }
+    )
+if select_yookassa_npd_manual_fail_closed:
+    updates.update(
+        {
+            "GREENVPN_PAYMENT_PROVIDER": "yookassa",
+            "GREENVPN_PAID_SALES_ENABLED": "0",
+            "YOOKASSA_RETURN_URL": "https://api.greenvpn.pro/payment/return",
+            "YOOKASSA_WEBHOOK_URL": (
+                "https://api.greenvpn.pro/api/v1/billing/yookassa/webhook"
+            ),
+            "GREENVPN_TAX_RECEIPT_MODE": "yookassa_npd_manual",
+            "GREENVPN_TAX_RECEIPT_WORKFLOW_CONFIRMED": "1",
+            "GREENVPN_NPD_RECEIPT_MANUAL_OPERATOR_CONFIRMED": "0",
+            "GREENVPN_NPD_RECEIPT_ALLOWED_HOSTS": "lknpd.nalog.ru",
             "GREENVPN_REFUND_WORKFLOW_CONFIRMED": "0",
             "GREENVPN_REFUND_EXECUTION_ENABLED": "0",
             "GREENVPN_AUTO_RENEWAL_CHARGES_ENABLED": "0",
