@@ -1,12 +1,47 @@
 # Green VPN Current Handoff
 
-Updated: 2026-08-26 MSK.
+Updated: 2026-08-27 MSK.
 
 This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
 `PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md`. Dated reports are evidence only.
 
-## Prodamus NPD Backend, 2026-08-26
+## YooKassa Manual NPD Backend, 2026-08-27
+
+- Stable backend `0.9.159-yookassa-npd-manual.2` is deployed on fallback
+  `176.113.81.35` and primary `72.56.32.197`; exact source commit is
+  `a955a2a0adc30f2a4b1f139c77ed574fd9e19256`.
+- Final backend-only bundle is `301964` bytes, SHA-256
+  `6098E961B783392EA9ABC7C396E4B4BF15FFB26C44CC6382EA641AB1F64D1116`.
+  It contains no secrets and changes neither clients nor the main site.
+- A successful YooKassa payment now remains `paid_receipt_pending`. Access is
+  activated only after an operator supplies an official `lknpd.nalog.ru`
+  receipt, the backend rechecks the payment, and the receipt email is sent.
+  Full refund revokes entitlement first and remains `refund_receipt_pending`
+  until the FNS cancellation receipt is emailed.
+- Production selects YooKassa and `yookassa_npd_manual`, but remains
+  fail-closed: paid sales, operator confirmation, refund execution and
+  automatic charges are disabled. Primary is the only billing writer;
+  fallback remains read-only. YooKassa and SMTP credentials are present on
+  both nodes, but no secret value was printed or copied into Git.
+- The first `.1` deployment was safely superseded after protected readiness
+  showed that an old `yookassa_54fz` payment could satisfy the new smoke gate.
+  `.2` binds smoke evidence to the currently selected provider and exact
+  receipt mode. Production now reports `successfulSmokeCandidates=0` and
+  `smokeCompleted=false`, as required before a new real smoke.
+- Both DBs return `quick_check=ok`, synchronized counts `66/66/3/99`, and
+  explicit sync completed with `success/0`. Both stable APIs report `.2`;
+  paid-beta remains `0.9.154-fusion-actions.1`. Admin static exact hashes are
+  deployed and the surface remains protected with HTTP `401`.
+- Remaining external gate: designate the real NPD operator, perform one real
+  owner-controlled payment, register and email its FNS receipt, then perform a
+  full refund, register and email the cancellation receipt, and verify the
+  entitlement rollback. Only that evidence may enable paid sales; automatic
+  charges remain a separate future gate.
+- Exact deployment, rollback and verification evidence:
+  `docs/YOOKASSA_MANUAL_NPD_BACKEND_DEPLOY_2026_08_27_RU.md`.
+
+## Historical Prodamus NPD Backend, 2026-08-26
 
 - Stable backend `0.9.158-prodamus-npd.2` is deployed on fallback
   `176.113.81.35` and primary `72.56.32.197`; exact source commit is

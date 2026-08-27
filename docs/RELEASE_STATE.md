@@ -1,6 +1,48 @@
 # Green VPN Release State
 
-## Prodamus NPD Backend Deployment (2026-08-26 MSK)
+## YooKassa Manual NPD Backend Deployment (2026-08-27 MSK)
+
+| Layer | Current state |
+|---|---|
+| Stable backend | `0.9.159-yookassa-npd-manual.2` on fallback and primary |
+| Stable Android | unchanged: `0.4.7+2026082401`, signed, mandatory |
+| Stable Windows | unchanged: `0.4.6+4636`, `NotSigned`, mandatory |
+| Paid-beta | unchanged: backend `0.9.154-fusion-actions.1` |
+| Payments | YooKassa/manual NPD deployed fail-closed; sales, operator, refunds and auto charges disabled |
+
+Backend-only deployment completed fallback first and primary second from exact
+source `a955a2a0adc30f2a4b1f139c77ed574fd9e19256`. Final bundle SHA-256 is
+`6098E961B783392EA9ABC7C396E4B4BF15FFB26C44CC6382EA641AB1F64D1116`, size
+`301964`; it contains no secrets and changes neither clients nor site.
+
+The backend now requires an official FNS receipt plus successful email delivery
+before activating a paid order. A full refund revokes entitlement immediately
+and is finalized only after the official cancellation receipt is emailed. The
+protected receipt page stores only a one-way access-token hash and redirects to
+an allowlisted `https://lknpd.nalog.ru/.../receipt/...` URL. Public order status
+does not expose receipt URLs, delivery errors or provider identifiers.
+
+The initial `.1` revision was replaced by `.2` after live protected readiness
+proved that an older `yookassa_54fz` order was still counted as a smoke
+candidate. `.2` requires the currently selected provider and exact current
+receipt mode. Current production evidence is correctly fail-closed:
+`productionPaymentReady=false`, `safeToRunSmoke=false`, `smokeCompleted=false`
+and `successfulSmokeCandidates=0`.
+
+Both databases pass `quick_check` with synchronized counts users `66`,
+subscriptions `66`, billing orders `3`, tombstones `99`; explicit sync returned
+`success/0` on both nodes. Both stable APIs report `.2`, paid-beta is unchanged,
+admin static exact hashes are deployed behind HTTP `401`, current catalogs return
+`200`, old Android catalog requests return `426`, and update manifests remain
+`200`. Local validation passed backend `211/211`, Flutter `138` with `14`
+platform skips, analyze, secret scan and release gate `0/0`.
+
+Paid sales remain closed until one real payment, official FNS receipt email,
+full YooKassa refund, official cancellation receipt email and entitlement
+rollback are all recorded. Full evidence and rollback paths are in
+`YOOKASSA_MANUAL_NPD_BACKEND_DEPLOY_2026_08_27_RU.md`.
+
+## Historical Prodamus NPD Backend Deployment (2026-08-26 MSK)
 
 | Layer | Current state |
 |---|---|
