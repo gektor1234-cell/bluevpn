@@ -37,8 +37,8 @@ from pydantic import BaseModel
 
 APP_TITLE = "Green VPN Backend"
 APP_VERSION = (
-    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.159-yookassa-npd-manual.1").strip()
-    or "0.9.159-yookassa-npd-manual.1"
+    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.159-yookassa-npd-manual.2").strip()
+    or "0.9.159-yookassa-npd-manual.2"
 )
 DEFAULT_PUBLIC_API_BASE_URL = "https://api.greenvpn.pro"
 
@@ -24065,12 +24065,16 @@ def billing_payment_smoke_candidate(order: dict) -> bool:
         and int(order.get("amountRub") or 0) == expected_amount
     )
     provider = str(order.get("provider") or "").strip().lower()
+    if provider != selected_payment_provider():
+        return False
     if provider == "yookassa":
         tax_receipt = (
             order.get("taxReceipt")
             if isinstance(order.get("taxReceipt"), dict)
             else {}
         )
+        if tax_receipt.get("mode") != TAX_RECEIPT_MODE:
+            return False
         if tax_receipt.get("mode") == "yookassa_npd_manual":
             return bool(
                 common_ready
