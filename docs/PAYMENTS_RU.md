@@ -128,6 +128,7 @@ Primary billing-writer: `72.56.32.197`. Fallback `176.113.81.35` принима�
 GET /healthz
 GET /api/v1/admin/billing/readiness
 GET /api/v1/admin/billing/payment-smoke/readiness
+POST /api/v1/admin/billing/payment-smoke
 GET /api/v1/admin/billing/refunds/readiness
 GET /api/v1/admin/billing/reconciliation
 ```

@@ -37,8 +37,8 @@ from pydantic import BaseModel
 
 APP_TITLE = "Green VPN Backend"
 APP_VERSION = (
-    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.159-yookassa-npd-manual.2").strip()
-    or "0.9.159-yookassa-npd-manual.2"
+    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.160-yookassa-smoke.1").strip()
+    or "0.9.160-yookassa-smoke.1"
 )
 DEFAULT_PUBLIC_API_BASE_URL = "https://api.greenvpn.pro"
 
@@ -1964,9 +1964,13 @@ class AdminProdamusRefundConfirmIn(BaseModel):
     amountRub: int
 
 
-class AdminProdamusPaymentSmokeIn(BaseModel):
+class AdminPaymentSmokeIn(BaseModel):
     userId: int
     confirmUserId: int
+
+
+class AdminProdamusPaymentSmokeIn(AdminPaymentSmokeIn):
+    pass
 
 
 class AdminYooKassaNpdReceiptConfirmIn(BaseModel):
@@ -20682,7 +20686,7 @@ def refund_execution_readiness(provider: Optional[str] = None) -> dict:
     }
 
 
-def yookassa_payment_readiness() -> dict:
+def yookassa_payment_readiness(*, require_public_sales: bool = True) -> dict:
     webhook_url = yookassa_effective_webhook_url()
     return_host = _url_host(YOOKASSA_RETURN_URL)
     webhook_host = _url_host(webhook_url)
@@ -20758,6 +20762,10 @@ def yookassa_payment_readiness() -> dict:
             "value": YOOKASSA_API_BASE,
         },
     ]
+    if not require_public_sales:
+        checks = [
+            check for check in checks if check["code"] != "paid_sales_enabled"
+        ]
     production_ready = all(check["ok"] for check in checks)
     return {
         "ok": True,
@@ -20775,7 +20783,7 @@ def yookassa_payment_readiness() -> dict:
     }
 
 
-def robokassa_payment_readiness() -> dict:
+def robokassa_payment_readiness(*, require_public_sales: bool = True) -> dict:
     return_host = _url_host(ROBOKASSA_RETURN_URL)
     result_host = _url_host(ROBOKASSA_RESULT_URL)
     public_host = _url_host(PUBLIC_BASE_URL)
@@ -20882,6 +20890,10 @@ def robokassa_payment_readiness() -> dict:
             },
         },
     ]
+    if not require_public_sales:
+        checks = [
+            check for check in checks if check["code"] != "paid_sales_enabled"
+        ]
     return {
         "ok": True,
         "provider": "robokassa",
@@ -21079,6 +21091,20 @@ def payment_provider_readiness() -> dict:
         ],
         "requiredActions": [message],
     }
+
+
+def payment_provider_smoke_readiness() -> dict:
+    provider = selected_payment_provider()
+    if provider == "yookassa":
+        return yookassa_payment_readiness(require_public_sales=False)
+    if provider == "robokassa":
+        return robokassa_payment_readiness(require_public_sales=False)
+    if provider == "prodamus":
+        return prodamus_payment_readiness(
+            require_public_sales=False,
+            require_refund_smoke=False,
+        )
+    return payment_provider_readiness()
 
 
 def _public_site_url_path(url: str) -> str:
@@ -22204,8 +22230,25 @@ def authoritative_yookassa_refund_for_webhook(refund: dict) -> dict:
     return yookassa_get_refund(refund_id)
 
 
-def create_yookassa_payment_for_order(row, user_email: str) -> dict:
-    ensure_paid_sales_ready()
+def create_yookassa_payment_for_order(
+    row,
+    user_email: str,
+    *,
+    provider_smoke: bool = False,
+) -> dict:
+    if provider_smoke:
+        readiness = payment_provider_smoke_readiness()
+        if selected_payment_provider() != "yookassa" or not readiness["productionReady"]:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "payment_smoke_not_ready",
+                    "message": "YooKassa ещё не готова к изолированному боевому smoke.",
+                    "requiredActions": readiness["requiredActions"],
+                },
+            )
+    else:
+        ensure_paid_sales_ready()
     order = billing_order_status(row)
     quote = order["quote"] if isinstance(order["quote"], dict) else {}
     plan_name = str(quote.get("planName") or "BlueVPN")
@@ -22641,8 +22684,17 @@ def recover_existing_robokassa_invoice(row: sqlite3.Row) -> dict:
     )
 
 
-def create_robokassa_payment_for_order(row, user_email: str) -> dict:
-    readiness = robokassa_payment_readiness()
+def create_robokassa_payment_for_order(
+    row,
+    user_email: str,
+    *,
+    provider_smoke: bool = False,
+) -> dict:
+    readiness = (
+        payment_provider_smoke_readiness()
+        if provider_smoke
+        else robokassa_payment_readiness()
+    )
     if not readiness["productionReady"]:
         raise HTTPException(
             status_code=503,
@@ -22957,21 +23009,22 @@ def create_billing_order_for_user(
         )
 
     if provider_smoke:
-        if selected_payment_provider() != "prodamus":
+        smoke_provider = selected_payment_provider()
+        if smoke_provider not in {"yookassa", "robokassa", "prodamus"}:
             raise HTTPException(
                 status_code=409,
-                detail="Provider-smoke разрешён только для выбранного Prodamus.",
+                detail="Provider-smoke не поддерживает выбранного провайдера.",
             )
-        smoke_readiness = prodamus_payment_readiness(
-            require_public_sales=False,
-            require_refund_smoke=False,
-        )
+        smoke_readiness = payment_provider_smoke_readiness()
         if not smoke_readiness["productionReady"]:
             raise HTTPException(
                 status_code=503,
                 detail={
                     "code": "payment_smoke_not_ready",
-                    "message": "Prodamus ещё не готов к изолированному боевому smoke.",
+                    "message": (
+                        f"{smoke_provider} ещё не готов к изолированному "
+                        "боевому smoke."
+                    ),
                     "requiredActions": smoke_readiness["requiredActions"],
                 },
             )
@@ -23014,7 +23067,7 @@ def create_billing_order_for_user(
             ).fetchall()
             for candidate in pending_rows:
                 candidate_provider = str(candidate["provider"] or "").strip().lower()
-                if provider_smoke and candidate_provider != "prodamus":
+                if provider_smoke and candidate_provider != selected_payment_provider():
                     continue
                 try:
                     candidate_selection = json.loads(candidate["selection_json"] or "{}")
@@ -23153,6 +23206,12 @@ def create_billing_order_for_user(
     if order_provider == "yookassa" and yookassa_configured():
         if not order.get("paymentUrl") and order.get("status") == "pending":
             try:
+                if provider_smoke:
+                    return create_yookassa_payment_for_order(
+                        row,
+                        user_email=user_email,
+                        provider_smoke=True,
+                    )
                 return create_yookassa_payment_for_order(row, user_email=user_email)
             except HTTPException as exc:
                 detail = exc.detail if isinstance(exc.detail, dict) else {}
@@ -23166,6 +23225,12 @@ def create_billing_order_for_user(
     if order_provider == "robokassa" and robokassa_payment_configured():
         if not order.get("paymentUrl") and order.get("status") == "pending":
             try:
+                if provider_smoke:
+                    return create_robokassa_payment_for_order(
+                        row,
+                        user_email=user_email,
+                        provider_smoke=True,
+                    )
                 return create_robokassa_payment_for_order(row, user_email=user_email)
             except HTTPException as exc:
                 detail = exc.detail if isinstance(exc.detail, dict) else {}
@@ -24112,7 +24177,7 @@ def billing_payment_smoke_candidate(order: dict) -> bool:
 def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
     safe_limit = max(1, min(int(limit or 10), 50))
     provider = selected_payment_provider()
-    payment = payment_provider_readiness()
+    payment = payment_provider_smoke_readiness()
     site = public_site_readiness()
     webhook_url = str(payment.get("webhookUrl") or "")
     with db() as conn:
@@ -39643,14 +39708,12 @@ def admin_billing_payment_smoke_readiness(
     return billing_payment_smoke_readiness_payload(limit=limit)
 
 
-@app.post("/api/v1/admin/billing/prodamus/payment-smoke")
-def admin_create_prodamus_payment_smoke(
-    payload: AdminProdamusPaymentSmokeIn,
+def create_admin_payment_smoke_order(
+    payload: AdminPaymentSmokeIn,
     request: Request,
-    x_admin_token: Optional[str] = Header(default=None),
-    authorization: Optional[str] = Header(default=None),
-):
-    require_admin(x_admin_token, authorization, "billing.manage", request=request)
+    *,
+    audit_event: str = "payment_smoke_created",
+) -> dict:
     if int(payload.userId) <= 0 or int(payload.confirmUserId) != int(payload.userId):
         raise HTTPException(
             status_code=400,
@@ -39670,7 +39733,7 @@ def admin_create_prodamus_payment_smoke(
         provider_smoke=True,
     )
     write_admin_audit(
-        "prodamus_payment_smoke_created",
+        audit_event,
         "billing_order",
         str(order["orderId"]),
         {
@@ -39680,13 +39743,51 @@ def admin_create_prodamus_payment_smoke(
         },
         request=request,
     )
+    provider = str(order.get("provider") or selected_payment_provider()).strip().lower()
     return {
         "ok": True,
         "order": public_billing_order_status(order),
         "message": (
-            "Изолированный заказ Prodamus создан; публичные продажи остались закрыты."
+            f"Изолированный заказ {provider} создан; публичные продажи остались закрыты."
         ),
     }
+
+
+@app.post("/api/v1/admin/billing/payment-smoke")
+def admin_create_payment_smoke(
+    payload: AdminPaymentSmokeIn,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "billing.manage", request=request)
+    return create_admin_payment_smoke_order(payload, request)
+
+
+@app.post("/api/v1/admin/billing/prodamus/payment-smoke")
+def admin_create_prodamus_payment_smoke(
+    payload: AdminProdamusPaymentSmokeIn,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "billing.manage", request=request)
+    if selected_payment_provider() != "prodamus":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "payment_provider_mismatch",
+                "message": (
+                    "Устаревший Prodamus smoke endpoint разрешён только когда "
+                    "выбран Prodamus; используй общий payment-smoke endpoint."
+                ),
+            },
+        )
+    return create_admin_payment_smoke_order(
+        payload,
+        request,
+        audit_event="prodamus_payment_smoke_created",
+    )
 
 
 @app.get("/api/v1/admin/subscriptions/expiry-readiness")

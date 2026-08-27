@@ -995,6 +995,7 @@ $requiredBackendSafetyFragments = @(
     'def apply_prodamus_notification(',
     'def confirm_prodamus_full_refund(',
     '/api/v1/billing/prodamus/notification',
+    '/api/v1/admin/billing/payment-smoke',
     '/api/v1/admin/billing/prodamus/payment-smoke',
     '/prodamus-refund-confirm',
     'ROBOKASSA_MERCHANT_LOGIN',

@@ -1651,6 +1651,91 @@ class PaidBetaPolicyTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Открыть официальный чек ФНС", response.body.decode("utf-8"))
 
+    def test_yookassa_manual_npd_provider_smoke_keeps_public_sales_closed(self) -> None:
+        provider_payment = {
+            "id": "manual-npd-smoke-payment-1",
+            "status": "pending",
+            "paid": False,
+            "confirmation": {
+                "confirmation_url": "https://pay.example.test/manual-npd-smoke",
+            },
+        }
+        with (
+            self.yookassa_manual_npd_environment(),
+            patch.object(main, "PUBLIC_PRODUCT_ENABLED", True),
+            patch.object(main, "PAID_SALES_ENABLED", False),
+            patch.object(
+                main,
+                "yookassa_request",
+                return_value=provider_payment,
+            ) as request_payment,
+        ):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(autoRenew=False),
+                provider_smoke=True,
+            )
+
+        self.assertEqual(order["provider"], "yookassa")
+        self.assertEqual(order["status"], "pending")
+        self.assertEqual(
+            order["paymentUrl"],
+            "https://pay.example.test/manual-npd-smoke",
+        )
+        self.assertFalse(order["autoRenew"])
+        self.assertEqual(order["taxReceipt"]["mode"], "yookassa_npd_manual")
+        self.assertEqual(order["taxReceipt"]["status"], "awaiting_payment")
+        request_payload = request_payment.call_args.args[1]
+        self.assertFalse(request_payload["save_payment_method"])
+        self.assertNotIn("receipt", request_payload)
+
+    def test_yookassa_manual_npd_provider_smoke_requires_operator_gate(self) -> None:
+        with (
+            self.yookassa_manual_npd_environment(),
+            patch.object(main, "PUBLIC_PRODUCT_ENABLED", True),
+            patch.object(main, "PAID_SALES_ENABLED", False),
+            patch.object(main, "NPD_RECEIPT_MANUAL_OPERATOR_CONFIRMED", False),
+            patch.object(main, "yookassa_request") as request_payment,
+        ):
+            with self.assertRaises(main.HTTPException) as raised:
+                main.create_billing_order_for_user(
+                    self.user_id,
+                    self.public_product_payload(autoRenew=False),
+                    provider_smoke=True,
+                )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail["code"],
+            "payment_smoke_not_ready",
+        )
+        request_payment.assert_not_called()
+        with main.db() as conn:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM billing_orders").fetchone()[0],
+                0,
+            )
+
+    def test_yookassa_payment_smoke_readiness_ignores_only_sales_gate(self) -> None:
+        with (
+            self.yookassa_manual_npd_environment(),
+            patch.object(main, "PAID_SALES_ENABLED", False),
+            patch.object(
+                main,
+                "public_site_readiness",
+                return_value={"productionReady": True, "summary": {}},
+            ),
+        ):
+            readiness = main.billing_payment_smoke_readiness_payload()
+
+        self.assertTrue(readiness["safeToRunSmoke"])
+        self.assertFalse(readiness["smokeCompleted"])
+        self.assertFalse(readiness["productionReady"])
+        self.assertNotIn(
+            "paid_sales_enabled",
+            [check["code"] for check in readiness["paymentReadiness"]["checks"]],
+        )
+
     def test_yookassa_manual_npd_rejects_non_fns_receipt_url(self) -> None:
         with self.yookassa_manual_npd_environment():
             with self.assertRaises(main.HTTPException) as raised:
