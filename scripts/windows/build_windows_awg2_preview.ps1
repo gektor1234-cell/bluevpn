@@ -278,6 +278,7 @@ New-Item -ItemType Directory -Force -Path $naiveDir | Out-Null
 New-Item -ItemType Directory -Force -Path $dnsttDir | Out-Null
 New-Item -ItemType Directory -Force -Path $processRouterDir | Out-Null
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\greenvpn_transport_preview_vpn_task.ps1') -Destination $toolsDir -Force
+Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\greenvpn_standby_probe.ps1') -Destination $toolsDir -Force
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\greenvpn_selective_routing.ps1') -Destination $toolsDir -Force
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\greenvpn_hysteria2_watchdog.ps1') -Destination $toolsDir -Force
 Copy-Item -LiteralPath (Join-Path $repo 'scripts\windows\greenvpn_vless_reality_watchdog.ps1') -Destination $toolsDir -Force

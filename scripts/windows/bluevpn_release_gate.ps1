@@ -3141,6 +3141,7 @@ foreach ($fragment in @(
 }
 
 foreach ($fragment in @(
+    'greenvpn_standby_probe.ps1',
     'greenvpn_selective_routing.ps1',
     "Join-Path `$toolsDir 'process-router'",
     'ProxyBridge_CLI.exe',
