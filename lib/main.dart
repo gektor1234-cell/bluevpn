@@ -4144,6 +4144,8 @@ while True:
       method: 'POST',
       path: '/api/v1/auth/checkout/email/start',
       bearerToken: accessToken,
+      preferredBaseUrl: _primaryBaseUrl(),
+      allowApiBaseFailover: false,
       payload: {'email': email},
     );
     if (!res.ok) return ApiResult.err(res.message);
@@ -4178,8 +4180,9 @@ while True:
         if (kPublicProductBuild) 'clientMarker': kPublicProductClientMarker,
         if (kPublicProductBuild) 'releaseChannel': kPublicProductReleaseChannel,
       },
-      preferredApiBaseUrl: _preferredApiBaseUrlForBearer(accessToken),
+      preferredApiBaseUrl: _primaryBaseUrl(),
       bearerToken: accessToken,
+      allowApiBaseFailover: false,
     );
   }
 
@@ -4362,7 +4365,11 @@ while True:
       path: '/api/v1/catalog/tariffs',
       queryParameters: query.isEmpty ? null : query,
     ).toString();
-    final res = await _jsonRequest(method: 'GET', path: path);
+    final res = await _jsonRequest(
+      method: 'GET',
+      path: path,
+      preferredBaseUrl: _primaryBaseUrl(),
+    );
     if (!res.ok) return ApiResult.err(res.message);
     if (res.data is! Map) {
       return const ApiResult.err('Некорректный ответ catalog/tariffs.');
@@ -4462,6 +4469,8 @@ while True:
       method: 'POST',
       path: '/api/v1/subscription/quote',
       bearerToken: accessToken,
+      preferredBaseUrl: _primaryBaseUrl(),
+      allowApiBaseFailover: false,
       payload: {
         'trafficPack': trafficPack,
         'trafficGb': trafficGb,
@@ -4593,6 +4602,8 @@ while True:
       method: 'GET',
       path: '/api/v1/billing/orders/${Uri.encodeComponent(orderId)}',
       bearerToken: accessToken,
+      preferredBaseUrl: _primaryBaseUrl(),
+      allowApiBaseFailover: false,
     );
     if (!res.ok) return ApiResult.err(res.message);
     if (res.data is! Map) {
@@ -4608,6 +4619,8 @@ while True:
       method: 'POST',
       path: '/api/v1/subscription/auto-renew/cancel',
       bearerToken: accessToken,
+      preferredBaseUrl: _primaryBaseUrl(),
+      allowApiBaseFailover: false,
     );
     if (!res.ok) return ApiResult.err(res.message);
     if (res.data is! Map) {
@@ -4855,47 +4868,48 @@ while True:
     Map<String, dynamic> payload, {
     String? preferredApiBaseUrl,
     String? bearerToken,
+    bool allowApiBaseFailover = true,
   }) async {
     try {
       await _authLog('POST $path email=${payload['email'] ?? ''}');
       unawaited(_tcpPreflight(path).then(_authLog));
       String? sessionApiBaseUrl;
-      final body = await _withHttpRetry<String>((
-        client,
-        direct,
-        resolvedBaseUrl,
-      ) async {
-        final uri = _uFor(resolvedBaseUrl, path);
-        final req = await client.postUrl(uri);
-        req.headers.contentType = ContentType.json;
-        if ((bearerToken ?? '').isNotEmpty) {
-          req.headers.set('Authorization', 'Bearer $bearerToken');
-        }
-        req.write(jsonEncode(payload));
+      final body = await _withHttpRetry<String>(
+        (client, direct, resolvedBaseUrl) async {
+          final uri = _uFor(resolvedBaseUrl, path);
+          final req = await client.postUrl(uri);
+          req.headers.contentType = ContentType.json;
+          if ((bearerToken ?? '').isNotEmpty) {
+            req.headers.set('Authorization', 'Bearer $bearerToken');
+          }
+          req.write(jsonEncode(payload));
 
-        final res = await req.close().timeout(const Duration(seconds: 8));
-        final body = await utf8
-            .decodeStream(res)
-            .timeout(const Duration(seconds: 5));
-        await _authLog(
-          'HTTP $path status=${res.statusCode} route=${direct ? 'direct' : 'system'} base=$resolvedBaseUrl',
-        );
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          final friendly = _friendlyAuthError(
-            path: path,
-            statusCode: res.statusCode,
-            body: body,
+          final res = await req.close().timeout(const Duration(seconds: 8));
+          final body = await utf8
+              .decodeStream(res)
+              .timeout(const Duration(seconds: 5));
+          await _authLog(
+            'HTTP $path status=${res.statusCode} route=${direct ? 'direct' : 'system'} base=$resolvedBaseUrl',
           );
-          throw GreenVpnHttpStatusException(
-            statusCode: res.statusCode,
-            body: body,
-            uri: uri,
-            message: friendly ?? 'Ошибка сервера (${res.statusCode}): $body',
-          );
-        }
-        sessionApiBaseUrl = _normalizeApiBaseUrl(resolvedBaseUrl);
-        return body;
-      }, preferredBaseUrl: preferredApiBaseUrl);
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            final friendly = _friendlyAuthError(
+              path: path,
+              statusCode: res.statusCode,
+              body: body,
+            );
+            throw GreenVpnHttpStatusException(
+              statusCode: res.statusCode,
+              body: body,
+              uri: uri,
+              message: friendly ?? 'Ошибка сервера (${res.statusCode}): $body',
+            );
+          }
+          sessionApiBaseUrl = _normalizeApiBaseUrl(resolvedBaseUrl);
+          return body;
+        },
+        preferredBaseUrl: preferredApiBaseUrl,
+        allowApiBaseFailover: allowApiBaseFailover,
+      );
 
       {
         final jsonMap = jsonDecode(body) as Map<String, dynamic>;
