@@ -1,8 +1,8 @@
 param(
-    [string]$OutDir = 'C:\BlueVPN_Builds\public_product_final_candidate_20260824_android_2026082401_windows_4636',
-    [string]$AppVersion = '0.4.7',
+    [string]$OutDir = 'C:\BlueVPN_Builds\public_product_final_candidate_20260828_android_2026082802_windows_4636',
+    [string]$AppVersion = '0.4.8',
     [string]$WindowsAppVersion = '0.4.6',
-    [string]$AndroidBuildNumber = '2026082401',
+    [string]$AndroidBuildNumber = '2026082802',
     [ValidateRange(0, 65535)]
     [int]$WindowsBuildNumber = 4636
 )
@@ -146,8 +146,13 @@ $manifest = [ordered]@{
         forcedDisconnectTimerEnabled = $false
         plansRub = @(249, 649, 1099)
         historicalTechnicalPaymentSmokeCompleted = $true
-        paidSalesEnabled = $false
-        taxReceiptReady = $false
+        paidSalesEnabled = $true
+        paidSalesScope = 'primary-only'
+        refundExecutionEnabled = $true
+        refundExecutionScope = 'primary-only'
+        autoRenewEnabled = $false
+        renewalMode = 'manual'
+        taxReceiptReady = $true
     }
     api = [ordered]@{
         primary = $apiBaseUrl

@@ -37,8 +37,8 @@ from pydantic import BaseModel
 
 APP_TITLE = "Green VPN Backend"
 APP_VERSION = (
-    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.162-yookassa-renewal-smoke.1").strip()
-    or "0.9.162-yookassa-renewal-smoke.1"
+    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.163-yookassa-public-sales.1").strip()
+    or "0.9.163-yookassa-public-sales.1"
 )
 DEFAULT_PUBLIC_API_BASE_URL = "https://api.greenvpn.pro"
 

@@ -1,10 +1,10 @@
 # Green VPN External Services Checklist
 
-Последнее обновление: 2026-08-26
+Последнее обновление: 2026-08-28
 
-> Платёжный маршрут изменён с Robokassa на Prodamus. Канонический контракт,
-> fail-closed env и статус семи этапов находятся в `PAYMENTS_RU.md`; старые
-> разделы Robokassa ниже не применять.
+> Текущий платёжный маршрут: YooKassa плюс ручные чеки НПД. Канонический
+> production-контракт находится в `PAYMENTS_RU.md`; старые разделы
+> Prodamus/Robokassa ниже не применять.
 
 Этот файл нужен, чтобы внешние сервисы подключались одним коротким циклом: ты оформляешь сервис, берёшь нужные значения, передаёшь их Codex, а backend/UI уже готовы их принять. Секреты, пароли, API-ключи и токены в этот файл не писать.
 
@@ -15,17 +15,17 @@
   Упоминания ниже о production backend на `37.220.85.211` являются
   исторической setup-справкой: сейчас это NL1 VPN-узел.
 - DNS/HTTPS, Yandex 360 SMTP/email code, guest-first auth и внешний monitoring
-  production-ready. Для новых продаж выбран Prodamus с интеграцией НПД;
-  коммерческий `productionPaymentReady` намеренно false до партнёрской привязки
-  НПД и нового реального payment/refund smoke.
+  production-ready. YooKassa плюс ручной НПД прошли реальный payment/refund
+  acceptance; ручные продажи/возвраты включены только на primary, fallback
+  остаётся read-only.
 - Телефон/SMS исключён из продуктового контракта.
-- Android `0.4.7+2026082401` и Windows `0.4.6+4636` опубликованы и
+- Android `0.4.8+2026082802` и Windows `0.4.6+4636` опубликованы и
   проверены на обоих зеркалах. Windows остаётся `NotSigned` с принятым риском
   SmartScreen; текущий direct-download релиз этим не блокируется.
 - Необязательными внешними действиями остаются Telegram alert credentials,
   Windows code signing и публикация в Google Play/RuStore. Rewarded provider
   не выбран, поэтому реклама выключена по решению владельца.
-- Автосписания, hard expiry, промо и реклама не включаются этой памяткой:
+- Автосписания, hard expiry, промо и реклама не включены этой памяткой:
   каждое действие требует отдельного решения владельца.
 
 ## Главное Правило
@@ -444,14 +444,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\blue
 
 Текущее состояние внешних сервисов:
 
-- SMTP/email-code production-ready. Новый Robokassa + НПД контур готов в коде,
-  но продажи выключены до партнёрской привязки, server-only credentials и
-  нового реального payment/refund smoke.
+- SMTP/email-code production-ready. YooKassa + ручной НПД прошли полный
+  payment/refund smoke; ручные продажи и возвраты включены только на primary.
 - Телефон/SMS не является fallback и не входит в продукт.
 - Telegram alerts остаются необязательным manual MVP без bot credentials.
 - Внешний monitoring уже имеет два probe-agent; новый VPS не требуется.
-- Rewarded, paid sales, refund execution, automatic renewal charges и hard
-  expiry остаются выключенными до отдельных owner-gate и smoke.
+- Rewarded, automatic renewal charges и hard expiry остаются выключенными.
+  Paid sales/refund execution разрешены только primary; fallback read-only.
 - Текущий Windows update/rollback опубликован и readiness green. Для каждого
   следующего full/required rollout backend/admin по-прежнему блокирует
   публикацию без нового пригодного rollback.

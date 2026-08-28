@@ -13,15 +13,15 @@ param(
     [string]$StableWindowsBuild = '4636',
     [string]$StableWindowsSha256 = 'EAD00F9094D1749C9FB9ECFC5ADC7322E015552F66A40BDDFBD19D3DA15111DB',
     [long]$StableWindowsSize = 52809216,
-    [string]$StableAndroidVersion = '0.4.7',
-    [string]$StableAndroidBuild = '2026082401',
-    [string]$StableAndroidSha256 = '4BA46905702F7A42DD46F768119050FF7F36A31869A2986C0928BBC6F40E5ED2',
-    [long]$StableAndroidSize = 56362397,
-    [string]$StableBackendVersion = '0.9.158-prodamus-npd.2',
+    [string]$StableAndroidVersion = '0.4.8',
+    [string]$StableAndroidBuild = '2026082802',
+    [string]$StableAndroidSha256 = '61B471ABCB0232676369FE3D59355AB4D411703E8EF408F28633279056C56DAF',
+    [long]$StableAndroidSize = 56362705,
+    [string]$StableBackendVersion = '0.9.163-yookassa-public-sales.1',
     [string]$BetaBackendVersion = '0.9.154-fusion-actions.1',
     [bool]$StableRequired = $true,
     [string]$StableMinSupportedVersion = '',
-    [string]$StableAndroidMinSupportedVersion = '0.4.7',
+    [string]$StableAndroidMinSupportedVersion = '0.4.8',
     [string]$StableWindowsMinSupportedVersion = '0.4.6',
     [bool]$BetaRequired = $false,
     [string]$BetaMinSupportedVersion = '',
@@ -63,11 +63,13 @@ $hosts = @(
         name = 'primary'
         api = 'https://api.greenvpn.pro'
         downloadHost = 'greenvpn.pro'
+        stablePaidSalesEnabled = $true
     },
     [pscustomobject]@{
         name = 'fallback'
         api = 'https://176-113-81-35.sslip.io'
         downloadHost = '176-113-81-35.sslip.io'
+        stablePaidSalesEnabled = $false
     }
 )
 $betaExpected = @{
@@ -154,13 +156,19 @@ try {
             else {
                 $StableBackendVersion
             }
+            $expectedPaidSalesEnabled = if ($channel -eq 'paid-beta') {
+                $false
+            }
+            else {
+                [bool]$hostEntry.stablePaidSalesEnabled
+            }
             $healthUrl = $hostEntry.api + $prefix + '/healthz'
             $health = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 30
             if (
                 $health.ok -ne $true -or
                 [string]$health.version -ne $expectedBackendVersion -or
                 $null -eq $health.PSObject.Properties['paidSalesEnabled'] -or
-                $health.paidSalesEnabled -ne $false
+                [bool]$health.paidSalesEnabled -ne $expectedPaidSalesEnabled
             ) {
                 throw "Backend health mismatch: $($hostEntry.name) $channel"
             }
@@ -296,7 +304,11 @@ $report = [ordered]@{
     paidBetaWindowsVersion = $BetaWindowsVersion
     paidBetaBackendVersion = $BetaBackendVersion
     stableBackendVersion = $StableBackendVersion
-    paidSalesDisabled = $true
+    stablePaidSalesPolicy = [ordered]@{
+        primary = $true
+        fallback = $false
+    }
+    paidBetaSalesDisabled = $true
     productionBackendUnchanged = $true
     stableWindowsUnchanged = $true
     stableAndroidUnchanged = $true

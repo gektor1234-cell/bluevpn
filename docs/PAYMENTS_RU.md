@@ -1,6 +1,6 @@
 # Green VPN: ЮKassa и чеки НПД
 
-Последнее обновление: 2026-08-27.
+Последнее обновление: 2026-08-28.
 
 Это текущий платёжный контракт Green VPN. Prodamus и Robokassa остаются в
 коде и старых evidence-документах только как исторические адаптеры и варианты
@@ -9,8 +9,8 @@ rollback. Новые продажи должны использовать ЮKass
 
 ## Текущий статус
 
-- Backend-контур `0.9.159-yookassa-npd-manual.2` реализован и покрыт
-  регрессионными тестами.
+- Backend-контур `0.9.163-yookassa-public-sales.1` опубликован на обоих
+  production control plane и покрыт регрессионными тестами.
 - Оплата сама по себе больше не активирует тариф: после подтверждения ЮKassa
   заказ получает статус `paid_receipt_pending`.
 - Тариф активируется только после регистрации дохода в «Мой налог» и успешной
@@ -19,8 +19,12 @@ rollback. Новые продажи должны использовать ЮKass
   `refund_receipt_pending`, пока чек не аннулирован в «Мой налог» и письмо не
   доставлено.
 - Автопродление в ручном режиме НПД принудительно выключено.
-- Публичные продажи остаются закрытыми до одного реального платежа, чека,
-  полного возврата, аннулирования чека и проверки письма.
+- Один owner-approved контрольный платёж `249 RUB` прошёл оплату, официальный
+  чек и email, полный возврат, откат прав, аннулирование чека и второй email.
+- Публичные ручные продажи и возвраты включены только на primary
+  `72.56.32.197`. Fallback остаётся read-only и держит продажи выключенными.
+- Автоматические списания выключены; приложение показывает только ручное
+  продление.
 
 ## Почему чек отправляется по email
 
@@ -89,18 +93,25 @@ YOOKASSA_WEBHOOK_URL=https://api.greenvpn.pro/api/v1/billing/yookassa/webhook
 GREENVPN_TAX_RECEIPT_MODE=yookassa_npd_manual
 GREENVPN_TAX_RECEIPT_WORKFLOW_CONFIRMED=1
 GREENVPN_NPD_RECEIPT_ALLOWED_HOSTS=lknpd.nalog.ru
-GREENVPN_NPD_RECEIPT_MANUAL_OPERATOR_CONFIRMED=0
-
-GREENVPN_PAID_SALES_ENABLED=0
 GREENVPN_AUTO_RENEWAL_CHARGES_ENABLED=0
 GREENVPN_AUTO_RENEWAL_BILLING_PRIMARY=0
-GREENVPN_REFUND_WORKFLOW_CONFIRMED=0
-GREENVPN_REFUND_EXECUTION_ENABLED=0
 ```
 
-`GREENVPN_NPD_RECEIPT_MANUAL_OPERATOR_CONFIRMED=1` означает не наличие кода, а
-реально назначенного человека, который обработает каждый платёж и возврат без
-задержки. Этот флаг нельзя включать формально.
+Только primary billing-writer использует:
+
+```text
+GREENVPN_NPD_RECEIPT_MANUAL_OPERATOR_CONFIRMED=1
+GREENVPN_PUBLIC_PRODUCT_BILLING_PRIMARY=1
+GREENVPN_PAID_SALES_ENABLED=1
+GREENVPN_REFUND_WORKFLOW_CONFIRMED=1
+GREENVPN_REFUND_EXECUTION_ENABLED=1
+GREENVPN_REFUND_BILLING_PRIMARY=1
+```
+
+Fallback держит writer/sales/refund execution flags равными `0` и не создаёт
+платежи. `GREENVPN_NPD_RECEIPT_MANUAL_OPERATOR_CONFIRMED=1` означает реально
+назначенного оператора, который обрабатывает каждый платёж и возврат; это не
+формальный readiness-флаг.
 
 Primary billing-writer: `72.56.32.197`. Fallback `176.113.81.35` принимает
 публичный трафик, но не создаёт платежи, не обрабатывает callback как writer,
@@ -108,19 +119,14 @@ Primary billing-writer: `72.56.32.197`. Fallback `176.113.81.35` принима�
 
 ## Контрольный платёж
 
-1. Развернуть backend на fallback, затем на primary с флагом
-   `--select-yookassa-npd-manual-fail-closed`.
-2. Проверить, что продажи закрыты, provider=`yookassa`, mode=
-   `yookassa_npd_manual`, SMTP готов, автосписания выключены.
-3. Назначить оператора и включить только operator/refund-флаги на primary.
-4. Создать один заказ на подтверждённый email и оплатить его реальной картой.
-5. Проверить `paid_receipt_pending`, зарегистрировать доход в «Мой налог»,
-   сохранить ссылку и убедиться, что письмо дошло, а тариф активирован.
-6. Выполнить полный возврат, проверить откат прав, аннулировать доход в
-   «Мой налог», отправить второе письмо и получить `refunded`.
-7. Проверить reconciliation, SMTP outbox, БД, primary/fallback и отсутствие
-   сохранённого способа оплаты.
-8. Только после этого включить `GREENVPN_PAID_SALES_ENABLED=1` на primary.
+Acceptance закрыт 2026-08-28 одним owner-approved заказом `249 RUB`. Получены
+итоговые состояния `refunded`, `succeeded`, `cancellation_registered`,
+`rolled_back`; reconciliation clean, email delivery successful,
+`autoRenew=false`, сохранённого способа оплаты нет.
+
+Повторять реальный платёж/возврат без изменения provider, налогового workflow
+или billing-кода не требуется. Любой новый денежный smoke остаётся отдельным
+одноразовым owner gate и не должен запускаться автоматически.
 
 ## Проверки
 

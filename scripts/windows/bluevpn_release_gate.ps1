@@ -491,16 +491,19 @@ if ($null -ne $releaseContract) {
             )
         )
         if (
-            $releaseContract.billing.paidSalesEnabled -eq $false -and
-            $releaseContract.billing.refundExecutionEnabled -eq $false -and
+            $releaseContract.billing.paidSalesEnabled -eq $true -and
+            [string]$releaseContract.billing.paidSalesScope -eq 'primary-only' -and
+            $releaseContract.billing.refundExecutionEnabled -eq $true -and
+            [string]$releaseContract.billing.refundExecutionScope -eq 'primary-only' -and
             $releaseContract.billing.autoRenewEnabled -eq $false -and
+            [string]$releaseContract.billing.renewalMode -eq 'manual' -and
             $releaseContract.billing.rewardedAdsEnabled -eq $false -and
             $publicationStateValid
         ) {
-            Add-Pass 'Release contract keeps money and ads fail-closed with a coherent owner-gated publication state'
+            Add-Pass 'Release contract enables primary-only manual sales and refunds while keeping automatic charges and ads fail-closed'
         }
         else {
-            Add-Error 'Release contract money, ads, or publication state is inconsistent'
+            Add-Error 'Release contract billing scope, renewal policy, ads, or publication state is inconsistent'
         }
 
         if (

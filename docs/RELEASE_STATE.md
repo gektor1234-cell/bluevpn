@@ -1,6 +1,38 @@
 # Green VPN Release State
 
-## YooKassa Manual NPD Backend Deployment (2026-08-27 MSK)
+## YooKassa Public Manual Sales and Android 0.4.8 Rollout (2026-08-28 MSK)
+
+| Layer | Current state |
+|---|---|
+| Stable backend | `0.9.163-yookassa-public-sales.1` on fallback and primary |
+| Stable Android | `0.4.8+2026082802`, signed, mandatory |
+| Stable Windows | unchanged: `0.4.6+4636`, `NotSigned`, mandatory |
+| Paid-beta | unchanged: backend `0.9.154-fusion-actions.1` |
+| Payments | manual YooKassa/NPD sales and refunds enabled on primary only; fallback read-only; automatic charges disabled |
+
+Exact source candidate is
+`ab85e03585dd66b73191dd2103a037fe476b6d3a`. Backend bundle is `304907`
+bytes, SHA-256
+`9E36F6610B335EC124C8662671A89247230E81C9D13E84C266399D802A4453B4`.
+Signed APK is `56362705` bytes, SHA-256
+`61B471ABCB0232676369FE3D59355AB4D411703E8EF408F28633279056C56DAF`.
+
+One owner-approved `249 RUB` payment completed the entire manual NPD cycle:
+payment, official sale receipt and email, entitlement activation, exactly one
+full refund, entitlement rollback, official cancellation receipt and email.
+Final reconciliation requires no attention; no second payment was created.
+Primary public sales are enabled, fallback and paid-beta sales remain disabled,
+and automatic renewal charges remain disabled everywhere.
+
+Android stable-only publication completed fallback first and primary second.
+Both manifests require `0.4.8`, old `0.4.7` clients receive HTTP `426`, current
+clients receive `200`, and both public downloads match the exact APK. Physical
+acceptance on the connected Android device confirmed manual renewal and an
+enabled `249 RUB` payment button while preserving the external WireGuard VPN
+owner. Full evidence and rollback paths are in
+`YOOKASSA_PUBLIC_SALES_ANDROID_0_4_8_ROLLOUT_2026_08_28_RU.md`.
+
+## Historical YooKassa Manual NPD Backend Deployment (2026-08-27 MSK)
 
 | Layer | Current state |
 |---|---|

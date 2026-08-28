@@ -1,11 +1,11 @@
-Green VPN 0.4.7
+Green VPN 0.4.8
 Windows version: 0.4.6
-Android build: 2026082401
+Android build: 2026082802
 Windows build: 4636
 Platforms: Android, Windows
-Source backend: 0.9.162-yookassa-renewal-smoke.1
-Status: production publishes Android 0.4.7+2026082401 and Windows 0.4.6+4636 as mandatory stable releases; isolated Fusion paid-beta remains unchanged
-Production sales: disabled
-Refund execution: disabled
-Auto-renew: disabled
+Source backend: 0.9.163-yookassa-public-sales.1
+Status: production publishes Android 0.4.8+2026082802 and Windows 0.4.6+4636 as mandatory stable releases; isolated Fusion paid-beta remains unchanged
+Production sales: enabled on the primary billing node only
+Refund execution: enabled on the primary billing node only
+Auto-renew: disabled; renewal is manual
 Rewarded ads: disabled
