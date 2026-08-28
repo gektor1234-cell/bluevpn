@@ -1,5 +1,35 @@
 # Green VPN Release State
 
+## Explicit Auto-Renew Consent and Android 0.4.9 Rollout (2026-08-28 MSK)
+
+| Layer | Current state |
+|---|---|
+| Stable backend | `0.9.164-autorenew-checkout.1` on fallback and primary |
+| Stable Android | `0.4.9+2026082803`, signed, mandatory |
+| Stable Windows | unchanged: `0.4.6+4636`, `NotSigned`, mandatory |
+| Paid-beta | unchanged: backend `0.9.154-fusion-actions.1` |
+| Payments | manual YooKassa/NPD sales and refunds on primary only; automatic charges disabled |
+
+Exact source is `0fdc4811b9d6bf7ef821be3c452b6894b235002f`. The
+signed APK is `56364901` bytes, SHA-256
+`B2E4D29F227853828F5942422C391F1A5B4A22F625B7B5EC5B036E1C94E857E8`.
+The backend bundle is `305051` bytes, SHA-256
+`F7A0EDEBA5C27445EA1D4E62D39B6DE5CAA7D55E1F654EE67E148D3AA0DD4F44`.
+
+The client no longer presents auto-renewal as an implicit tariff-page choice.
+When a future production contour advertises auto-renewal, checkout starts with
+an unchecked explicit-consent control and explains the amount, frequency and
+settings cancellation path. The current manual NPD contour intentionally
+advertises `autoRenew=false`; automatic charges remain disabled on both nodes.
+
+Backend deployment and mandatory Android publication completed fallback first
+and primary second. Both manifests require minimum `0.4.9`; Android `0.4.8`
+receives HTTP `426`, Android `0.4.9` receives HTTP `200`, and both public APK
+bodies match the exact candidate. Physical in-place acceptance preserved the
+external WireGuard owner and created no payment order. Strict verification
+passed `12/12`. Full evidence and rollback paths are in
+`AUTORENEW_CHECKOUT_ANDROID_0_4_9_ROLLOUT_2026_08_28_RU.md`.
+
 ## YooKassa Public Manual Sales and Android 0.4.8 Rollout (2026-08-28 MSK)
 
 | Layer | Current state |

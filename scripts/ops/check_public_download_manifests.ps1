@@ -12,16 +12,16 @@ param(
     [string]$FallbackSiteBaseUrl = "https://176-113-81-35.sslip.io",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedAndroidVersion = "0.4.8",
+    [string]$ExpectedAndroidVersion = "0.4.9",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedAndroidSha256 = "61B471ABCB0232676369FE3D59355AB4D411703E8EF408F28633279056C56DAF",
+    [string]$ExpectedAndroidSha256 = "B2E4D29F227853828F5942422C391F1A5B4A22F625B7B5EC5B036E1C94E857E8",
 
     [Parameter(Mandatory = $false)]
     [string]$ExpectedTestAndroidSha256 = "F2FF98B569C574910CEB4ED7BA18EBC33FD54013A1DD15DE808DEC69986F883D",
 
     [Parameter(Mandatory = $false)]
-    [string]$ExpectedAndroidBuildNumber = "2026082802",
+    [string]$ExpectedAndroidBuildNumber = "2026082803",
 
     [Parameter(Mandatory = $false)]
     [bool]$ExpectedAndroidRequired = $true,

@@ -8,12 +8,12 @@ This is the current operational entry point. Read it together with
 
 ## Current production, 2026-08-28
 
-- Stable backend `0.9.163-yookassa-public-sales.1` is deployed on fallback
+- Stable backend `0.9.164-autorenew-checkout.1` is deployed on fallback
   `176.113.81.35` and primary `72.56.32.197`. Exact candidate source is
-  `ab85e03585dd66b73191dd2103a037fe476b6d3a`.
-- Stable Android is signed mandatory `0.4.8+2026082802`, size `56362705`,
+  `0fdc4811b9d6bf7ef821be3c452b6894b235002f`.
+- Stable Android is signed mandatory `0.4.9+2026082803`, size `56364901`,
   SHA-256
-  `61B471ABCB0232676369FE3D59355AB4D411703E8EF408F28633279056C56DAF`.
+  `B2E4D29F227853828F5942422C391F1A5B4A22F625B7B5EC5B036E1C94E857E8`.
   Stable Windows remains mandatory `0.4.6+4636`, `NotSigned`, byte-for-byte
   unchanged. Paid-beta is unchanged.
 - One owner-approved YooKassa `249 RUB` transaction completed payment, official
@@ -22,15 +22,18 @@ This is the current operational entry point. Read it together with
   receipt URLs or customer data are stored in Git.
 - Primary is the only billing writer and has manual paid sales/refunds enabled.
   Fallback remains read-only with sales disabled. Automatic renewal charges are
-  disabled on every contour; the client presents manual renewal only.
-- Both Android manifests require minimum `0.4.8` with rollout `100%`. Android
-  `0.4.7` receives `426`; `0.4.8` and update manifests receive `200`. Exact APK
+  disabled on every contour. The client has explicit future auto-renew consent,
+  but the current manual NPD catalog advertises `autoRenew=false`.
+- Both Android manifests require minimum `0.4.9` with rollout `100%`. Android
+  `0.4.8` receives `426`; `0.4.9` and update manifests receive `200`. Exact APK
   download readback passed on both nodes.
-- Physical Android acceptance confirmed exact installed version/build, manual
-  renewal copy and an enabled payment button. The external WireGuard VPN owner
-  remained unchanged; Green VPN did not perform a network transition.
+- Physical Android acceptance confirmed exact installed version/build, enabled
+  payment UI, the settings auto-renew switch in its disabled state and the
+  absence of an implicit tariff-page renewal choice. The external WireGuard VPN
+  owner remained unchanged; Green VPN did not perform a network transition or
+  create a payment order.
 - Canonical evidence and rollback paths:
-  `docs/YOOKASSA_PUBLIC_SALES_ANDROID_0_4_8_ROLLOUT_2026_08_28_RU.md`.
+  `docs/AUTORENEW_CHECKOUT_ANDROID_0_4_9_ROLLOUT_2026_08_28_RU.md`.
 
 ## Historical YooKassa Manual NPD Backend, 2026-08-27
 
