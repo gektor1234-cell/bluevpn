@@ -4860,7 +4860,36 @@ class OperationalReadinessRegressionTests(unittest.TestCase):
         self.assertGreaterEqual(html.count('href="/download/windows"'), 2)
         self.assertGreaterEqual(html.count('href="/download/android"'), 2)
         self.assertNotIn('href="/downloads/GreenVPN_Android.apk"', html)
+        self.assertIn("Бесплатный старт", html)
+        self.assertNotIn("3 дня", html)
         self.assertIn("Платная подписка без рекламы", html)
+
+    def test_public_site_readiness_accepts_current_free_start_copy(self) -> None:
+        with (
+            patch.object(main, "PAID_BETA_ENABLED", False),
+            patch.object(main, "PUBLIC_PRODUCT_ENABLED", True),
+            patch.object(main, "PUBLIC_SITE_URL", "https://greenvpn.example.test"),
+            patch.object(main, "PUBLIC_BASE_URL", "https://api.example.test"),
+            patch.object(main, "PAYMENT_PROVIDER", "yookassa"),
+            patch.object(
+                main,
+                "YOOKASSA_RETURN_URL",
+                "https://api.example.test/payment/return",
+            ),
+            patch.object(
+                main,
+                "YOOKASSA_WEBHOOK_URL",
+                "https://api.example.test/api/v1/billing/yookassa/webhook",
+            ),
+            patch.object(main, "LEGAL_OWNER_NAME", "Test Owner"),
+            patch.object(main, "LEGAL_OWNER_INN", "123456789012"),
+            patch.object(main, "LEGAL_CONTACT_EMAIL", "support@example.test"),
+        ):
+            readiness = main.public_site_readiness()
+
+        checks = {item["code"]: item for item in readiness["checks"]}
+        self.assertTrue(checks["pricing_visible"]["ok"])
+        self.assertTrue(readiness["productionReady"])
 
     def test_admin_can_cancel_only_stale_order_without_payment_markers(self) -> None:
         order = main.create_billing_order_for_user(
