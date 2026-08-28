@@ -9,13 +9,19 @@ This is the current operational entry point. Read it together with
 ## Current production, 2026-08-28
 
 - Stable backend `0.9.164-autorenew-checkout.1` is deployed on fallback
-  `176.113.81.35` and primary `72.56.32.197`. Exact candidate source is
-  `0fdc4811b9d6bf7ef821be3c452b6894b235002f`.
-- Stable Android is signed mandatory `0.4.9+2026082803`, size `56364901`,
+  `176.113.81.35` and primary `72.56.32.197`. The Android payment-routing
+  hotfix source is `0a47e07af795a446a1f24dffa46c8ee198cac809`.
+- Stable Android is signed mandatory `0.4.10+2026082804`, size `56365761`,
   SHA-256
-  `B2E4D29F227853828F5942422C391F1A5B4A22F625B7B5EC5B036E1C94E857E8`.
+  `E12E609C38B1B05879999404E7BE0230E0111E1FB28B660EBBFF940769BACA46`.
   Stable Windows remains mandatory `0.4.6+4636`, `NotSigned`, byte-for-byte
   unchanged. Paid-beta is unchanged.
+- Android `0.4.9` could race the primary and fallback API when reading the
+  tariff catalog. The read-only fallback correctly advertised sales as
+  unavailable, so the client sometimes disabled checkout even though the
+  primary billing node was ready. All payment reads and mutations now prefer
+  or require the primary writer; a retriable catalog failure may still fall
+  back safely without enabling sales on the read-only node.
 - One owner-approved YooKassa `249 RUB` transaction completed payment, official
   NPD sale receipt/email, activation, exactly one full refund, entitlement
   rollback and official cancellation receipt/email. No payment identifiers,
@@ -24,16 +30,16 @@ This is the current operational entry point. Read it together with
   Fallback remains read-only with sales disabled. Automatic renewal charges are
   disabled on every contour. The client has explicit future auto-renew consent,
   but the current manual NPD catalog advertises `autoRenew=false`.
-- Both Android manifests require minimum `0.4.9` with rollout `100%`. Android
-  `0.4.8` receives `426`; `0.4.9` and update manifests receive `200`. Exact APK
+- Both Android manifests require minimum `0.4.10` with rollout `100%`. Android
+  `0.4.9` receives `426`; `0.4.10` and update manifests receive `200`. Exact APK
   download readback passed on both nodes.
-- Physical Android acceptance confirmed exact installed version/build, enabled
-  payment UI, the settings auto-renew switch in its disabled state and the
-  absence of an implicit tariff-page renewal choice. The external WireGuard VPN
-  owner remained unchanged; Green VPN did not perform a network transition or
-  create a payment order.
+- Physical Android acceptance confirmed exact installed version/build and an
+  enabled `Оплатить 249 ₽ за 1 месяц` button. The external WireGuard VPN owner
+  remained unchanged; Green VPN did not perform a network transition or create
+  a payment order. Strict public verification passed `12/12`; backend versions,
+  stable Windows and both paid-beta clients remained unchanged.
 - Canonical evidence and rollback paths:
-  `docs/AUTORENEW_CHECKOUT_ANDROID_0_4_9_ROLLOUT_2026_08_28_RU.md`.
+  `docs/PAYMENT_ROUTING_ANDROID_0_4_10_ROLLOUT_2026_08_28_RU.md`.
 
 ## Historical YooKassa Manual NPD Backend, 2026-08-27
 

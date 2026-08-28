@@ -4,7 +4,7 @@ Android build: 2026082804
 Windows build: 4636
 Platforms: Android, Windows
 Source backend: 0.9.164-autorenew-checkout.1
-Status: exact Android 0.4.10+2026082804 payment-routing release candidate; backend 0.9.164-autorenew-checkout.1 and Windows 0.4.6+4636 stable remain unchanged
+Status: Android 0.4.10+2026082804 payment-routing hotfix published as mandatory stable; backend 0.9.164-autorenew-checkout.1 and Windows 0.4.6+4636 stable remain unchanged
 Production sales: enabled on the primary billing node only
 Refund execution: enabled on the primary billing node only
 Auto-renew: explicit consent UI is released; automatic charges remain disabled in the manual NPD contour

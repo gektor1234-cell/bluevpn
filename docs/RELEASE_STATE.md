@@ -1,5 +1,37 @@
 # Green VPN Release State
 
+## Android Payment Routing Hotfix 0.4.10 (2026-08-28 MSK)
+
+| Layer | Current state |
+|---|---|
+| Stable backend | unchanged: `0.9.164-autorenew-checkout.1` on fallback and primary |
+| Stable Android | `0.4.10+2026082804`, signed, mandatory |
+| Stable Windows | unchanged: `0.4.6+4636`, `NotSigned`, mandatory |
+| Paid-beta | unchanged: backend `0.9.154-fusion-actions.1` |
+| Payments | available through the primary billing writer; fallback remains read-only; automatic charges disabled |
+
+Android `0.4.9` selected the fastest healthy API for the tariff catalog. The
+fallback often answered first and correctly returned its read-only policy with
+sales disabled, which made the client show `Оплата временно недоступна` despite
+the primary node being ready. Source `0a47e07af795a446a1f24dffa46c8ee198cac809`
+routes the public payment flow to the primary writer and adds a regression test
+that proves the fallback receives no payment request.
+
+The signed APK is `56365761` bytes, SHA-256
+`E12E609C38B1B05879999404E7BE0230E0111E1FB28B660EBBFF940769BACA46`.
+Two independent release builds were byte-for-byte identical. Analyze and the
+full Flutter suite passed (`140` passed, `14` intentional platform skips).
+Physical in-place acceptance on the connected phone showed an enabled
+`Оплатить 249 ₽ за 1 месяц` button while preserving the external WireGuard VPN
+owner; no payment order was created.
+
+Stable-only mandatory publication completed fallback first and primary second.
+Both manifests require `0.4.10`; old `0.4.9` clients receive HTTP `426`, current
+clients and update manifests receive `200`, and both public APK bodies match the
+exact candidate. Strict public verification passed `12/12`; DB quick checks and
+all Green VPN services/timers passed. Full evidence and rollback paths are in
+`PAYMENT_ROUTING_ANDROID_0_4_10_ROLLOUT_2026_08_28_RU.md`.
+
 ## Explicit Auto-Renew Consent and Android 0.4.9 Rollout (2026-08-28 MSK)
 
 | Layer | Current state |
