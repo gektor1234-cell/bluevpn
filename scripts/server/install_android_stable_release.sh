@@ -221,8 +221,8 @@ updates = {
     "GREENVPN_ANDROID_MIN_SUPPORTED_VERSION": min_supported_version,
     "GREENVPN_ANDROID_UPDATE_RELEASED_AT": released_at,
     "GREENVPN_ANDROID_UPDATE_CHANGELOG": (
-        f"Green VPN {version}: режим выбранных приложений, улучшенная диагностика "
-        "и обязательное безопасное обновление."
+        f"Green VPN {version}: исправлена доступность оплаты и проверка "
+        "состояния заказа через основной платёжный узел."
     ),
     "GREENVPN_ANDROID_UPDATE_ROLLOUT": "100",
 }
@@ -268,9 +268,9 @@ apk = pathlib.Path(apk_raw)
 required = 1 if required_raw == "1" else 0
 changelog = json.dumps(
     [
-        "Добавлен режим VPN только для выбранных приложений и сайтов.",
-        "Улучшена диагностика активного подключения.",
-        "Обновление приложения теперь нельзя пропустить, когда оно обязательное.",
+        "Исправлено отображение доступности оплаты.",
+        "Улучшена проверка статуса заказа и отмена автопродления.",
+        "Обновление обязательно для корректной покупки подписки.",
     ],
     ensure_ascii=False,
 )
