@@ -73,7 +73,9 @@ for relative in \
   ops/greenvpn_sqlite_snapshot_stdout.py \
   ops/greenvpn_sqlite_state_sync.py \
   ops/greenvpn_prune_operational_history.py \
-  ops/install_operational_retention_timer.sh; do
+  ops/install_operational_retention_timer.sh \
+  ops/run_subscription_expiry.py \
+  ops/install_subscription_expiry_timer.sh; do
   [[ -f "$BUNDLE_DIR/$relative" && ! -L "$BUNDLE_DIR/$relative" ]] || {
     echo "Required bundle file is missing or unsafe: $relative" >&2
     exit 2
@@ -171,7 +173,9 @@ install -m 755 "$BUNDLE_DIR/ops/greenvpn_db_sync_from_peer.sh" "$SYNC_SCRIPT"
 install -m 755 "$BUNDLE_DIR/ops/greenvpn_sqlite_snapshot_stdout.py" "$SYNC_SNAPSHOT_SCRIPT"
 install -m 755 "$BUNDLE_DIR/ops/greenvpn_sqlite_state_sync.py" "$SYNC_STATE_SCRIPT"
 python3 -m py_compile "$SYNC_SNAPSHOT_SCRIPT" "$SYNC_STATE_SCRIPT"
-python3 -m py_compile "$BUNDLE_DIR/ops/greenvpn_prune_operational_history.py"
+python3 -m py_compile \
+  "$BUNDLE_DIR/ops/greenvpn_prune_operational_history.py" \
+  "$BUNDLE_DIR/ops/run_subscription_expiry.py"
 
 python3 - "$ENV_FILE" "$BETA_ENV_FILE" "$BACKEND_VERSION" "$BILLING_PRIMARY" \
   "$SELECT_PRODAMUS_FAIL_CLOSED" "$SELECT_YOOKASSA_NPD_MANUAL_FAIL_CLOSED" <<'PY'
@@ -382,6 +386,13 @@ PY
 if [[ $sync_was_active -eq 1 ]]; then systemctl restart "$SYNC_TIMER"; fi
 bash "$BUNDLE_DIR/ops/install_operational_retention_timer.sh" \
   --source-script "$BUNDLE_DIR/ops/greenvpn_prune_operational_history.py" \
+  --apply
+bash "$BUNDLE_DIR/ops/install_subscription_expiry_timer.sh" \
+  --runner "$BUNDLE_DIR/ops/run_subscription_expiry.py" \
+  --api-base "http://127.0.0.1:8000" \
+  --token-file "/opt/bluevpn/backend/data/admin_token.txt" \
+  --unit-prefix "greenvpn-subscription-expiry" \
+  --backend-service "$SERVICE" \
   --apply
 trap - ERR
 echo "public_product_backend_status=ok"

@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "product": "Green VPN",
-  "appVersion": "0.4.10",
+  "appVersion": "0.4.11",
   "windowsAppVersion": "0.4.6",
-  "androidBuildNumber": "2026082804",
-  "windowsBuildNumber": 4636,
-  "backendVersion": "0.9.164-autorenew-checkout.1",
+  "androidBuildNumber": "2026082805",
+  "windowsBuildNumber": 4637,
+  "backendVersion": "0.9.165-subscription-lifecycle.1",
   "paidBeta": {
     "appVersion": "0.4.6-paid-beta.1",
     "windowsAppVersion": "0.4.6-paid-beta.2",
@@ -38,15 +38,15 @@
     "rewardedAdsEnabled": false
   },
   "publication": {
-    "productionPublished": true,
-    "androidProductionPublished": true,
+    "productionPublished": false,
+    "androidProductionPublished": false,
     "androidPaidBetaPublished": true,
-    "windowsProductionPublished": true,
+    "windowsProductionPublished": false,
     "windowsPaidBetaPublished": true,
     "ownerApprovalRequired": true,
     "mandatoryUpdateRequired": true,
-    "minSupportedVersion": "0.4.10",
-    "androidMinSupportedVersion": "0.4.10",
+    "minSupportedVersion": "0.4.11",
+    "androidMinSupportedVersion": "0.4.11",
     "windowsMinSupportedVersion": "0.4.6"
   }
 }

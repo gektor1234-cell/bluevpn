@@ -88,13 +88,14 @@ void main() {
     (tester) async {
       var optInCalls = 0;
       bool? requestedAutoRenew;
+      bool? renewalAcknowledged;
 
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
             body: TariffPage(
-              planName: 'Бесплатный',
-              freeTierActive: true,
+              planName: 'Green VPN - 1 month',
+              freeTierActive: false,
               selectedApps: <TariffApp>{},
               trafficPack: TrafficPack.gb20,
               trafficGb: 20,
@@ -118,12 +119,25 @@ void main() {
                   },
                 ],
               },
-              tariffQuote: null,
+              tariffQuote: const <String, dynamic>{
+                'selection': <String, dynamic>{'planCode': 'green_30d'},
+                'purchasePreview': <String, dynamic>{
+                  'kind': 'extension',
+                  'requiresAcknowledgement': true,
+                  'periodStartsAt': '2026-09-09T01:21:57Z',
+                  'periodEndsAt': '2026-10-09T01:21:57Z',
+                  'expectedSubscriptionRevision': 4,
+                  'expectedSubscriptionExpiresAt': '2026-09-09T01:21:57Z',
+                },
+              },
               tariffStatus: null,
               pendingBillingOrder: null,
               subscriptionActive: true,
               subscriptionAutoRenew: false,
+              subscriptionAccessStartsAt: '2026-08-10T01:21:57Z',
               subscriptionExpiresAt: '2026-09-09T01:21:57Z',
+              subscriptionStatus: 'active',
+              subscriptionRevision: 4,
               subscriptionMonthlyPriceRub: 249,
               publicBillingPlanCode: 'green_30d',
               tariffBusy: false,
@@ -137,8 +151,9 @@ void main() {
               onOptDedicatedIp: (_) {},
               onOptAutoRenew: (_) => optInCalls += 1,
               onCancelAutoRenew: () async => true,
-              onApplyTariff: (autoRenew) async {
+              onApplyTariff: (autoRenew, acknowledged) async {
                 requestedAutoRenew = autoRenew;
+                renewalAcknowledged = acknowledged;
               },
               onCheckPendingBillingOrder: () async {},
               onOpenPaymentUrl: (_) {},
@@ -150,6 +165,7 @@ void main() {
 
       expect(find.text('Автопродление'), findsNothing);
       expect(find.text('Продление вручную'), findsNothing);
+      expect(find.textContaining('С 09.09.2026 по 09.10.2026'), findsOneWidget);
 
       final paymentButton = find.byKey(const Key('start_payment_button'));
       await tester.scrollUntilVisible(paymentButton, 220);
@@ -158,6 +174,8 @@ void main() {
 
       final consent = find.byKey(const Key('auto_renew_checkout_consent'));
       expect(consent, findsOneWidget);
+      expect(find.text('Продление подписки'), findsOneWidget);
+      expect(find.byKey(const Key('checkout_period_preview')), findsOneWidget);
       expect(tester.widget<CheckboxListTile>(consent).value, isFalse);
       expect(requestedAutoRenew, isNull);
 
@@ -170,6 +188,7 @@ void main() {
 
       expect(optInCalls, 0);
       expect(requestedAutoRenew, isTrue);
+      expect(renewalAcknowledged, isTrue);
     },
     skip: publicProductSkip,
   );

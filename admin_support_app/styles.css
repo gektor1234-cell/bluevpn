@@ -1225,6 +1225,19 @@ td {
   min-height: 44px;
 }
 
+.subscription-actions {
+  grid-column: 1 / -1;
+  align-items: center;
+}
+
+.subscription-current-state {
+  margin-bottom: 14px;
+}
+
+.subscription-history .status-item {
+  align-items: flex-start;
+}
+
 .login-form,
 .secondary-login-panel,
 .emergency-login,

@@ -7,6 +7,7 @@ import hmac
 import io
 import json
 import re
+import sqlite3
 import tempfile
 import unittest
 import urllib.error
@@ -125,6 +126,7 @@ class PaidBetaPolicyTests(unittest.TestCase):
             conn.execute("DELETE FROM ad_challenges")
             conn.execute("DELETE FROM free_access_grants")
             conn.execute("DELETE FROM billing_orders")
+            conn.execute("DELETE FROM subscription_events")
             conn.execute("DELETE FROM subscriptions")
             conn.execute("DELETE FROM tokens")
             conn.execute("DELETE FROM email_outbox")
@@ -458,6 +460,21 @@ class PaidBetaPolicyTests(unittest.TestCase):
         }
         values.update(overrides)
         return main.TariffSelectionIn(**values)
+
+    def acknowledged_beta_renewal_payload(self):
+        response = main.subscription_quote(
+            self.beta_payload(),
+            authorization=f"Bearer {self.access_token}",
+        )
+        preview = response["purchasePreview"]
+        self.assertEqual(preview["kind"], "extension")
+        return self.beta_payload(
+            renewalAcknowledged=True,
+            expectedSubscriptionRevision=preview["expectedSubscriptionRevision"],
+            expectedSubscriptionExpiresAt=preview[
+                "expectedSubscriptionExpiresAt"
+            ],
+        )
 
     def test_beta_requires_exact_marker_and_channel(self) -> None:
         self.assertTrue(
@@ -1007,7 +1024,10 @@ class PaidBetaPolicyTests(unittest.TestCase):
         )
         self.assertFalse(main.paid_beta_offer_for_user(self.user_id)["firstPeriodEligible"])
 
-        renewal = main.create_billing_order_for_user(self.user_id, self.beta_payload())
+        renewal = main.create_billing_order_for_user(
+            self.user_id,
+            self.acknowledged_beta_renewal_payload(),
+        )
         self.assertEqual(renewal["amountRub"], 299)
         self.assertFalse(renewal["betaInviteApplied"])
 
@@ -1094,7 +1114,10 @@ class PaidBetaPolicyTests(unittest.TestCase):
         )
         first_expiry = datetime.fromisoformat(first_result["subscription"]["expiresAt"])
 
-        second = main.create_billing_order_for_user(self.user_id, self.beta_payload())
+        second = main.create_billing_order_for_user(
+            self.user_id,
+            self.acknowledged_beta_renewal_payload(),
+        )
         second_result = main.mark_billing_order_paid_and_activate(
             second["orderId"],
             provider_payment_id="test-payment-2",
@@ -1106,6 +1129,439 @@ class PaidBetaPolicyTests(unittest.TestCase):
             30 * 24 * 60 * 60,
             delta=2,
         )
+
+    def test_historical_billing_event_backfill_infers_paid_extension_period(self) -> None:
+        self.enroll_beta()
+        first = main.create_billing_order_for_user(self.user_id, self.beta_payload())
+        first_result = main.mark_billing_order_paid_and_activate(
+            first["orderId"],
+            provider_payment_id="historical-first-payment",
+        )
+        first_expiry = first_result["subscription"]["expiresAt"]
+        second = main.create_billing_order_for_user(
+            self.user_id,
+            self.acknowledged_beta_renewal_payload(),
+        )
+        second_result = main.mark_billing_order_paid_and_activate(
+            second["orderId"],
+            provider_payment_id="historical-extension-payment",
+        )
+        with main.db() as conn:
+            conn.execute(
+                "DELETE FROM subscription_events WHERE event_id = ?",
+                (f"billing:{second['orderId']}:activated",),
+            )
+            conn.execute(
+                "UPDATE billing_orders SET purchase_preview_json = NULL WHERE public_id = ?",
+                (second["orderId"],),
+            )
+            conn.commit()
+
+        result = main.backfill_subscription_events_from_billing_orders()
+        events = main.list_subscription_events_for_user(self.user_id, limit=10)
+        restored = next(
+            event for event in events if event["orderId"] == second["orderId"]
+        )
+
+        self.assertEqual(result["inserted"], 1)
+        self.assertEqual(restored["eventType"], "extended")
+        self.assertEqual(
+            datetime.fromisoformat(restored["periodStartsAt"]),
+            datetime.fromisoformat(first_expiry),
+        )
+        self.assertEqual(
+            datetime.fromisoformat(restored["periodEndsAt"]),
+            datetime.fromisoformat(second_result["subscription"]["expiresAt"]),
+        )
+
+    def test_active_subscription_requires_exact_extension_confirmation(self) -> None:
+        self.enroll_beta()
+        first = main.create_billing_order_for_user(self.user_id, self.beta_payload())
+        first_result = main.mark_billing_order_paid_and_activate(
+            first["orderId"],
+            provider_payment_id="confirmed-extension-first",
+        )
+        current_expiry = datetime.fromisoformat(
+            first_result["subscription"]["expiresAt"]
+        )
+
+        quote = main.subscription_quote(
+            self.beta_payload(),
+            authorization=f"Bearer {self.access_token}",
+        )
+        preview = quote["purchasePreview"]
+        self.assertEqual(preview["kind"], "extension")
+        self.assertTrue(preview["requiresAcknowledgement"])
+        self.assertEqual(datetime.fromisoformat(preview["periodStartsAt"]), current_expiry)
+        self.assertEqual(
+            datetime.fromisoformat(preview["periodEndsAt"]),
+            current_expiry + timedelta(days=30),
+        )
+
+        with self.assertRaises(main.HTTPException) as missing_confirmation:
+            main.create_billing_order_for_user(self.user_id, self.beta_payload())
+        self.assertEqual(
+            missing_confirmation.exception.detail["code"],
+            "renewal_confirmation_required",
+        )
+
+        stale = self.beta_payload(
+            renewalAcknowledged=True,
+            expectedSubscriptionRevision=preview["expectedSubscriptionRevision"] - 1,
+            expectedSubscriptionExpiresAt=preview[
+                "expectedSubscriptionExpiresAt"
+            ],
+        )
+        with self.assertRaises(main.HTTPException) as stale_confirmation:
+            main.create_billing_order_for_user(self.user_id, stale)
+        self.assertEqual(
+            stale_confirmation.exception.detail["code"],
+            "subscription_changed_refresh_quote",
+        )
+
+        confirmed = self.acknowledged_beta_renewal_payload()
+        renewal = main.create_billing_order_for_user(self.user_id, confirmed)
+        self.assertEqual(renewal["purchasePreview"]["kind"], "extension")
+        self.assertEqual(
+            renewal["purchasePreview"]["expectedSubscriptionRevision"],
+            preview["expectedSubscriptionRevision"],
+        )
+
+    def test_paid_access_start_backfill_prefers_activated_order(self) -> None:
+        self.enroll_beta()
+        order = main.create_billing_order_for_user(self.user_id, self.beta_payload())
+        main.mark_billing_order_paid_and_activate(
+            order["orderId"],
+            provider_payment_id="access-start-backfill-payment",
+        )
+        with main.db() as conn:
+            activated_at = conn.execute(
+                "SELECT activated_at FROM billing_orders WHERE public_id = ?",
+                (order["orderId"],),
+            ).fetchone()["activated_at"]
+            conn.execute(
+                """
+                UPDATE subscriptions
+                SET access_started_at = NULL,
+                    created_at = ?
+                WHERE user_id = ?
+                """,
+                ((main.utc_now() - timedelta(days=90)).isoformat(), self.user_id),
+            )
+            conn.commit()
+
+        main.init_db()
+
+        status = main.subscription_status(main.get_subscription_row(self.user_id))
+        self.assertEqual(
+            datetime.fromisoformat(status["accessStartsAt"]),
+            datetime.fromisoformat(activated_at),
+        )
+
+    def test_expiry_reconciliation_revokes_once_and_cleans_peers(self) -> None:
+        expired_at = (main.utc_now() - timedelta(minutes=5)).isoformat()
+        with main.db() as conn:
+            conn.execute(
+                """
+                UPDATE subscriptions
+                SET plan_code = 'green_30d', plan_name = 'Green VPN - 1 month',
+                    monthly_price_rub = 249, is_active = 1, expires_at = ?,
+                    auto_renew = 1, provider_payment_method_id = 'saved-method',
+                    peer_revocation_pending = 0
+                WHERE user_id = ?
+                """,
+                (expired_at, self.user_id),
+            )
+            conn.commit()
+
+        with patch.object(
+            main,
+            "remove_user_subscription_peers",
+            return_value={"attempted": 1, "removed": 1, "failed": 0},
+        ) as cleanup:
+            result = main.reconcile_expired_subscriptions(dry_run=False)
+
+        self.assertEqual(result["changedCount"], 1)
+        self.assertEqual(result["peerCleanup"]["removed"], 1)
+        cleanup.assert_called_once_with(self.user_id)
+        subscription = main.subscription_status(main.get_subscription_row(self.user_id))
+        self.assertFalse(subscription["storedIsActive"])
+        self.assertEqual(subscription["status"], "expired")
+        self.assertFalse(subscription["autoRenew"])
+        self.assertFalse(subscription["paymentMethodSaved"])
+        self.assertFalse(subscription["peerRevocationPending"])
+        events = main.list_subscription_events_for_user(self.user_id)
+        self.assertEqual(events[0]["eventType"], "expired")
+
+        with patch.object(
+            main,
+            "remove_user_subscription_peers",
+            return_value={"attempted": 0, "removed": 0, "failed": 0},
+        ) as second_cleanup:
+            repeated = main.reconcile_expired_subscriptions(dry_run=False)
+        self.assertEqual(repeated["candidateCount"], 0)
+        self.assertEqual(repeated["changedCount"], 0)
+        second_cleanup.assert_not_called()
+
+    def test_subscription_revocation_removes_current_and_historical_server_peers(self) -> None:
+        now = main.utc_now_iso()
+        device_uid = "subscription-revocation-device"
+        public_key = "subscription-revocation-public-key"
+        with main.db() as conn:
+            conn.execute(
+                """
+                INSERT INTO devices(
+                    user_id, device_uid, device_name, platform, app_version,
+                    client_public_key, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    self.user_id,
+                    device_uid,
+                    "Revocation device",
+                    "android",
+                    "test",
+                    public_key,
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO client_endpoint_assignments(
+                    user_id, device_uid, server_id, protocol, selected_by,
+                    assignment_reason, sticky_until_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    self.user_id,
+                    device_uid,
+                    "current-server",
+                    "wireguard_udp",
+                    "test",
+                    "revocation test",
+                    "2099-01-01T00:00:00+00:00",
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO device_transport_assignments(
+                    device_uid, transport_key, assigned_ip, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    device_uid,
+                    "amneziawg:historical-server",
+                    "10.202.0.44",
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+
+        with patch.object(
+            main,
+            "best_effort_remove_peer_from_server",
+            return_value=True,
+        ) as remove_peer:
+            result = main.remove_user_subscription_peers(self.user_id)
+
+        self.assertEqual(result, {"attempted": 2, "removed": 2, "failed": 0})
+        calls = {
+            (call.args[0], call.kwargs["device_uid"], call.kwargs["public_key"])
+            for call in remove_peer.call_args_list
+        }
+        self.assertEqual(
+            calls,
+            {
+                ("current-server", device_uid, public_key),
+                ("historical-server", device_uid, public_key),
+            },
+        )
+
+    def test_admin_grant_extend_revoke_records_history(self) -> None:
+        grant = main.grant_subscription_for_user(
+            self.user_id,
+            main.AdminSubscriptionGrantIn(
+                durationDays=30,
+                reason="support grant for regression test",
+            ),
+            actor="test-admin",
+        )
+        first_expiry = datetime.fromisoformat(grant["subscription"]["expiresAt"])
+        self.assertTrue(grant["subscription"]["isActive"])
+        self.assertEqual(grant["subscription"]["monthlyPriceRub"], 249)
+        self.assertEqual(grant["event"]["eventType"], "admin_granted")
+        with main.db() as conn:
+            conn.execute(
+                """
+                UPDATE subscriptions
+                SET auto_renew = 1, provider_payment_method_id = 'saved-method',
+                    selection_json = ?
+                WHERE user_id = ?
+                """,
+                (json.dumps({"autoRenew": True}), self.user_id),
+            )
+            conn.commit()
+
+        extension = main.grant_subscription_for_user(
+            self.user_id,
+            main.AdminSubscriptionGrantIn(
+                durationDays=30,
+                reason="support extension for regression test",
+            ),
+            actor="test-admin",
+        )
+        second_expiry = datetime.fromisoformat(
+            extension["subscription"]["expiresAt"]
+        )
+        self.assertEqual(second_expiry, first_expiry + timedelta(days=30))
+        self.assertEqual(extension["event"]["eventType"], "admin_extended")
+        self.assertTrue(extension["subscription"]["autoRenew"])
+        self.assertTrue(extension["subscription"]["paymentMethodSaved"])
+
+        with patch.object(
+            main,
+            "remove_user_subscription_peers",
+            return_value={"attempted": 1, "removed": 1, "failed": 0},
+        ):
+            revoked = main.revoke_subscription_for_user(
+                self.user_id,
+                main.AdminSubscriptionRevokeIn(
+                    reason="owner requested subscription revocation"
+                ),
+                actor="test-admin",
+            )
+        self.assertTrue(revoked["changed"])
+        self.assertFalse(revoked["subscription"]["isActive"])
+        self.assertEqual(revoked["event"]["eventType"], "admin_revoked")
+        self.assertEqual(
+            [event["eventType"] for event in main.list_subscription_events_for_user(self.user_id)[:3]],
+            ["admin_revoked", "admin_extended", "admin_granted"],
+        )
+
+    def test_admin_tariff_apply_requires_reason_and_cannot_enable_auto_renew(self) -> None:
+        payload = self.beta_payload(autoRenew=True)
+        with patch.object(main, "require_admin", return_value={"actor": "test-suite"}):
+            with self.assertRaises(main.HTTPException) as missing_reason:
+                main.admin_apply_tariff_for_user(
+                    self.user_id,
+                    payload,
+                    request=None,
+                    x_admin_token="test-token",
+                )
+        self.assertEqual(missing_reason.exception.status_code, 400)
+
+        payload.adminReason = "manual entitlement issued by support"
+        with patch.object(main, "require_admin", return_value={"actor": "test-suite"}):
+            result = main.admin_apply_tariff_for_user(
+                self.user_id,
+                payload,
+                request=None,
+                x_admin_token="test-token",
+            )
+
+        self.assertFalse(result["subscription"]["autoRenew"])
+        self.assertFalse(result["subscription"]["paymentMethodSaved"])
+        event = main.list_subscription_events_for_user(self.user_id, limit=1)[0]
+        self.assertEqual(event["source"], "admin_tariff")
+        self.assertEqual(event["reason"], "manual entitlement issued by support")
+
+    def test_expiry_reconciliation_retries_pending_peer_cleanup_before_expiry(self) -> None:
+        grant = main.grant_subscription_for_user(
+            self.user_id,
+            main.AdminSubscriptionGrantIn(
+                durationDays=30,
+                reason="prepare future subscription for peer cleanup retry",
+            ),
+            actor="test-admin",
+        )
+        with patch.object(
+            main,
+            "remove_user_subscription_peers",
+            return_value={"attempted": 1, "removed": 0, "failed": 1},
+        ):
+            main.revoke_subscription_for_user(
+                self.user_id,
+                main.AdminSubscriptionRevokeIn(
+                    reason="revoke subscription while peer endpoint is offline"
+                ),
+                actor="test-admin",
+            )
+
+        pending = main.subscription_status(main.get_subscription_row(self.user_id))
+        self.assertTrue(pending["peerRevocationPending"])
+        self.assertGreater(datetime.fromisoformat(grant["subscription"]["expiresAt"]), main.utc_now())
+
+        with patch.object(
+            main,
+            "remove_user_subscription_peers",
+            return_value={"attempted": 1, "removed": 1, "failed": 0},
+        ) as cleanup:
+            retry = main.reconcile_expired_subscriptions(dry_run=False)
+
+        self.assertEqual(retry["candidateCount"], 1)
+        self.assertEqual(retry["changedCount"], 0)
+        self.assertEqual(retry["peerCleanup"]["failed"], 0)
+        cleanup.assert_called_once_with(self.user_id)
+        resolved = main.subscription_status(main.get_subscription_row(self.user_id))
+        self.assertFalse(resolved["peerRevocationPending"])
+
+    def test_expiry_reconciliation_normalizes_offset_timestamp(self) -> None:
+        expired_at = (
+            main.utc_now() - timedelta(minutes=5)
+        ).astimezone(main.timezone(timedelta(hours=3))).isoformat()
+        with main.db() as conn:
+            conn.execute(
+                """
+                UPDATE subscriptions
+                SET plan_code = 'green_30d', monthly_price_rub = 249,
+                    is_active = 1, expires_at = ?, peer_revocation_pending = 0
+                WHERE user_id = ?
+                """,
+                (expired_at, self.user_id),
+            )
+            conn.commit()
+
+        with patch.object(
+            main,
+            "remove_user_subscription_peers",
+            return_value={"attempted": 0, "removed": 0, "failed": 0},
+        ):
+            result = main.reconcile_expired_subscriptions(dry_run=False)
+
+        self.assertEqual(result["changedCount"], 1)
+        status = main.subscription_status(main.get_subscription_row(self.user_id))
+        self.assertEqual(status["status"], "expired")
+
+    def test_expiry_event_id_is_stable_across_independent_nodes(self) -> None:
+        event_ids = []
+        for local_user_id, expiry in (
+            (17, "2030-01-01T00:00:00+00:00"),
+            (812, "2030-01-01T03:00:00+03:00"),
+        ):
+            conn = sqlite3.connect(":memory:")
+            conn.row_factory = sqlite3.Row
+            conn.execute("CREATE TABLE users(id INTEGER PRIMARY KEY, email TEXT)")
+            conn.execute(
+                "INSERT INTO users(id, email) VALUES (?, ?)",
+                (local_user_id, " Subscription.Owner@Example.COM "),
+            )
+            event_ids.append(
+                main.subscription_expiry_event_id(
+                    conn,
+                    user_id=local_user_id,
+                    expires_at=expiry,
+                )
+            )
+            conn.close()
+
+        self.assertEqual(event_ids[0], event_ids[1])
+        self.assertRegex(event_ids[0], r"^expiry:[0-9a-f]{40}$")
+        self.assertNotIn("subscription.owner", event_ids[0])
+        self.assertNotIn("2030", event_ids[0])
 
     def test_concurrent_activation_applies_subscription_once(self) -> None:
         self.enroll_beta()
@@ -4251,6 +4707,14 @@ class PaidBetaPolicyTests(unittest.TestCase):
         self.assertEqual(activated["subscription"]["periodDays"], 90)
         self.assertFalse(activated["subscription"]["autoRenew"])
         self.assertFalse(activated["subscription"]["paymentMethodSaved"])
+        self.assertEqual(
+            datetime.fromisoformat(activated["subscription"]["accessStartsAt"]),
+            datetime.fromisoformat(first["purchasePreview"]["periodStartsAt"]),
+        )
+        self.assertEqual(
+            datetime.fromisoformat(activated["subscription"]["expiresAt"]),
+            datetime.fromisoformat(first["purchasePreview"]["periodEndsAt"]),
+        )
 
     def test_beta_user_can_create_public_product_order_from_public_client(self) -> None:
         self.enroll_beta()
@@ -4698,6 +5162,146 @@ class PaidBetaPolicyTests(unittest.TestCase):
                 0,
             )
 
+    def test_public_product_allows_only_one_matching_pending_order(self) -> None:
+        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+            first = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(plan_code="green_30d", autoRenew=False),
+            )
+            repeated = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(plan_code="green_30d", autoRenew=False),
+            )
+            with self.assertRaises(main.HTTPException) as changed_plan:
+                main.create_billing_order_for_user(
+                    self.user_id,
+                    self.public_product_payload(plan_code="green_90d", autoRenew=False),
+                )
+
+        self.assertEqual(first["orderId"], repeated["orderId"])
+        self.assertEqual(changed_plan.exception.status_code, 409)
+        self.assertEqual(
+            changed_plan.exception.detail["code"],
+            "pending_order_conflict",
+        )
+        with main.db() as conn:
+            self.assertEqual(
+                conn.execute(
+                    "SELECT COUNT(*) FROM billing_orders WHERE status = 'pending'"
+                ).fetchone()[0],
+                1,
+            )
+
+    def test_public_product_does_not_reuse_pending_order_after_subscription_change(self) -> None:
+        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+            first = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(plan_code="green_30d", autoRenew=False),
+            )
+            with main.db() as conn:
+                conn.execute(
+                    "UPDATE subscriptions SET revision = revision + 1 WHERE user_id = ?",
+                    (self.user_id,),
+                )
+                conn.commit()
+            with self.assertRaises(main.HTTPException) as changed_subscription:
+                main.create_billing_order_for_user(
+                    self.user_id,
+                    self.public_product_payload(plan_code="green_30d", autoRenew=False),
+                )
+
+        self.assertEqual(changed_subscription.exception.status_code, 409)
+        self.assertEqual(
+            changed_subscription.exception.detail["code"],
+            "pending_order_conflict",
+        )
+        self.assertEqual(
+            changed_subscription.exception.detail["order"]["orderId"],
+            first["orderId"],
+        )
+
+    def test_paid_order_does_not_overwrite_subscription_changed_after_checkout(self) -> None:
+        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(plan_code="green_30d", autoRenew=False),
+            )
+            with main.db() as conn:
+                conn.execute(
+                    "UPDATE subscriptions SET revision = revision + 1 WHERE user_id = ?",
+                    (self.user_id,),
+                )
+                conn.commit()
+            with self.assertRaises(main.HTTPException) as changed_subscription:
+                main.mark_billing_order_paid_and_activate(
+                    order["orderId"],
+                    provider_payment_id="paid-after-entitlement-change",
+                )
+
+        self.assertEqual(changed_subscription.exception.status_code, 409)
+        self.assertEqual(
+            changed_subscription.exception.detail["code"],
+            "billing_order_subscription_changed",
+        )
+        self.assertNotEqual(
+            main.subscription_status(main.get_subscription_row(self.user_id))["planCode"],
+            "green_30d",
+        )
+        with main.db() as conn:
+            saved_order = conn.execute(
+                "SELECT status, provider_payment_id FROM billing_orders WHERE public_id = ?",
+                (order["orderId"],),
+            ).fetchone()
+        self.assertEqual(saved_order["status"], "paid")
+        self.assertEqual(
+            saved_order["provider_payment_id"],
+            "paid-after-entitlement-change",
+        )
+
+    def test_paid_order_rechecks_subscription_inside_activation_transaction(self) -> None:
+        with patch.object(main, "PUBLIC_PRODUCT_ENABLED", True):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(plan_code="green_30d", autoRenew=False),
+            )
+            original_apply = main.apply_tariff_for_user
+
+            def change_subscription_before_apply(*args, **kwargs):
+                with main.db() as conn:
+                    conn.execute(
+                        "UPDATE subscriptions SET revision = revision + 1 WHERE user_id = ?",
+                        (self.user_id,),
+                    )
+                    conn.commit()
+                return original_apply(*args, **kwargs)
+
+            with patch.object(
+                main,
+                "apply_tariff_for_user",
+                side_effect=change_subscription_before_apply,
+            ):
+                with self.assertRaises(main.HTTPException) as changed_subscription:
+                    main.mark_billing_order_paid_and_activate(
+                        order["orderId"],
+                        provider_payment_id="paid-during-activation-race",
+                    )
+
+        self.assertEqual(changed_subscription.exception.status_code, 409)
+        self.assertEqual(
+            changed_subscription.exception.detail["code"],
+            "billing_order_subscription_changed",
+        )
+        self.assertNotEqual(
+            main.subscription_status(main.get_subscription_row(self.user_id))["planCode"],
+            "green_30d",
+        )
+        with main.db() as conn:
+            saved_order = conn.execute(
+                "SELECT status FROM billing_orders WHERE public_id = ?",
+                (order["orderId"],),
+            ).fetchone()
+        self.assertEqual(saved_order["status"], "paid")
+
     def test_public_product_recurring_provider_rejection_cancels_order(self) -> None:
         provider_error = main.HTTPException(
             status_code=503,
@@ -5060,6 +5664,7 @@ class OperationalReadinessRegressionTests(unittest.TestCase):
             conn.execute("DELETE FROM beta_invite_redemptions")
             conn.execute("DELETE FROM beta_invites")
             conn.execute("DELETE FROM billing_orders")
+            conn.execute("DELETE FROM subscription_events")
             conn.execute("DELETE FROM subscriptions")
             conn.execute("DELETE FROM tokens")
             conn.execute("DELETE FROM email_outbox")
@@ -5474,6 +6079,10 @@ class GuestFirstAuthTests(unittest.TestCase):
                 )
                 conn.execute(
                     "DELETE FROM auth_events WHERE user_id = ?",
+                    (user_id,),
+                )
+                conn.execute(
+                    "DELETE FROM subscription_events WHERE user_id = ?",
                     (user_id,),
                 )
                 conn.execute(

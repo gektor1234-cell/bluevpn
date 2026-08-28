@@ -37,8 +37,8 @@ from pydantic import BaseModel
 
 APP_TITLE = "Green VPN Backend"
 APP_VERSION = (
-    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.164-autorenew-checkout.1").strip()
-    or "0.9.164-autorenew-checkout.1"
+    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.165-subscription-lifecycle.1").strip()
+    or "0.9.165-subscription-lifecycle.1"
 )
 DEFAULT_PUBLIC_API_BASE_URL = "https://api.greenvpn.pro"
 
@@ -300,6 +300,7 @@ REPLICATION_DELETE_KEYS: dict[str, tuple[str, ...]] = {
     "devices": ("device_uid",),
     "device_transport_assignments": ("device_uid", "transport_key"),
     "subscriptions": ("user_id",),
+    "subscription_events": ("event_id",),
     "billing_orders": ("public_id",),
     "client_endpoint_assignments": ("user_id", "device_uid"),
     "ad_challenges": ("public_id",),
@@ -1906,6 +1907,26 @@ class AdminSubscriptionIn(BaseModel):
     reason: Optional[str] = None
 
 
+class AdminSubscriptionGrantIn(BaseModel):
+    durationDays: Optional[int] = 30
+    expiresAt: Optional[str] = None
+    planCode: str = "green_30d"
+    planName: str = "Green VPN - 1 month"
+    maxDevices: int = 5
+    monthlyPriceRub: int = 249
+    reason: str
+
+
+class AdminSubscriptionRevokeIn(BaseModel):
+    reason: str
+
+
+class AdminSubscriptionExpiryRunIn(BaseModel):
+    dryRun: bool = True
+    limit: int = 100
+    reason: str = "scheduled_subscription_expiry"
+
+
 class AdminBulkUserActionIn(BaseModel):
     userIds: list[int]
     action: str
@@ -1998,6 +2019,10 @@ class TariffSelectionIn(BaseModel):
     clientMarker: Optional[str] = None
     releaseChannel: Optional[str] = None
     billingPlanCode: Optional[str] = None
+    renewalAcknowledged: bool = False
+    expectedSubscriptionRevision: Optional[int] = None
+    expectedSubscriptionExpiresAt: Optional[str] = None
+    adminReason: Optional[str] = None
 
 
 class AdminMarkOrderPaidIn(BaseModel):
@@ -3497,6 +3522,65 @@ def init_db() -> None:
             "provider_payment_method_id",
             "provider_payment_method_id TEXT",
         )
+        ensure_column(
+            conn,
+            "subscriptions",
+            "access_started_at",
+            "access_started_at TEXT",
+        )
+        ensure_column(
+            conn,
+            "subscriptions",
+            "revision",
+            "revision INTEGER NOT NULL DEFAULT 1",
+        )
+        ensure_column(
+            conn,
+            "subscriptions",
+            "peer_revocation_pending",
+            "peer_revocation_pending INTEGER NOT NULL DEFAULT 0",
+        )
+        conn.execute(
+            """
+            UPDATE subscriptions
+            SET revision = CASE WHEN revision IS NULL OR revision < 1 THEN 1 ELSE revision END
+            """
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS subscription_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT NOT NULL UNIQUE,
+                user_id INTEGER NOT NULL,
+                subscription_id INTEGER,
+                event_type TEXT NOT NULL,
+                source TEXT NOT NULL,
+                reason TEXT,
+                actor TEXT,
+                order_public_id TEXT,
+                period_starts_at TEXT,
+                period_ends_at TEXT,
+                before_json TEXT,
+                after_json TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id),
+                FOREIGN KEY(subscription_id) REFERENCES subscriptions(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_subscription_events_user_created
+            ON subscription_events(user_id, created_at DESC, id DESC)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_subscription_events_subscription_created
+            ON subscription_events(subscription_id, created_at DESC, id DESC)
+            """
+        )
 
         conn.execute(
             """
@@ -3534,6 +3618,12 @@ def init_db() -> None:
             "billing_orders",
             "provider_payment_method_id",
             "provider_payment_method_id TEXT",
+        )
+        ensure_column(
+            conn,
+            "billing_orders",
+            "purchase_preview_json",
+            "purchase_preview_json TEXT",
         )
         ensure_column(
             conn,
@@ -3786,6 +3876,25 @@ def init_db() -> None:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_orders_refund_receipt_token "
             "ON billing_orders(refund_receipt_access_token_hash) "
             "WHERE refund_receipt_access_token_hash IS NOT NULL"
+        )
+        conn.execute(
+            """
+            UPDATE subscriptions
+            SET access_started_at = COALESCE(
+                access_started_at,
+                CASE
+                    WHEN COALESCE(monthly_price_rub, 0) > 0 THEN (
+                        SELECT MIN(COALESCE(bo.activated_at, bo.paid_at))
+                        FROM billing_orders bo
+                        WHERE bo.user_id = subscriptions.user_id
+                          AND bo.status = 'activated'
+                          AND COALESCE(bo.activated_at, bo.paid_at) IS NOT NULL
+                    )
+                    ELSE NULL
+                END,
+                created_at
+            )
+            """
         )
 
         conn.execute(
@@ -4140,9 +4249,102 @@ def ensure_subscription_for_existing_users() -> None:
         conn.commit()
 
 
+def backfill_subscription_events_from_billing_orders() -> dict:
+    inserted = 0
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT bo.*
+            FROM billing_orders bo
+            LEFT JOIN subscription_events se
+              ON se.event_id = 'billing:' || bo.public_id || ':activated'
+            WHERE bo.status = 'activated'
+              AND se.id IS NULL
+            ORDER BY bo.id ASC
+            """
+        ).fetchall()
+        for row in rows:
+            activated_at = row["activated_at"] or row["paid_at"] or row["updated_at"] or row["created_at"]
+            before = parse_billing_subscription_snapshot(
+                row["entitlement_before_json"]
+                if "entitlement_before_json" in row.keys()
+                else None
+            )
+            after = parse_billing_subscription_snapshot(
+                row["entitlement_after_json"]
+                if "entitlement_after_json" in row.keys()
+                else None
+            )
+            preview = None
+            try:
+                raw_preview = (
+                    row["purchase_preview_json"]
+                    if "purchase_preview_json" in row.keys()
+                    else None
+                )
+                candidate = json.loads(raw_preview) if raw_preview else None
+                if isinstance(candidate, dict):
+                    preview = candidate
+            except Exception:
+                preview = None
+            before_expires_at = (before or {}).get("expiresAt")
+            after_expires_at = (after or {}).get("expiresAt")
+            activated_dt = parse_dt(activated_at)
+            before_expires_dt = parse_dt(before_expires_at)
+            inferred_extension = bool(
+                before
+                and before.get("isActive")
+                and activated_dt
+                and before_expires_dt
+                and before_expires_dt >= activated_dt
+            )
+            event_kind = (preview or {}).get("kind")
+            period_starts_at = (preview or {}).get("periodStartsAt")
+            if not period_starts_at:
+                period_starts_at = (
+                    before_expires_at
+                    if inferred_extension
+                    else (after or {}).get("accessStartsAt") or activated_at
+                )
+            period_ends_at = (preview or {}).get("periodEndsAt") or after_expires_at
+            subscription_id = None
+            try:
+                subscription_id = int((after or {}).get("id"))
+            except (TypeError, ValueError):
+                subscription_id = None
+            if subscription_id is not None:
+                exists = conn.execute(
+                    "SELECT 1 FROM subscriptions WHERE id = ?",
+                    (subscription_id,),
+                ).fetchone()
+                if exists is None:
+                    subscription_id = None
+            record_subscription_event(
+                conn,
+                user_id=int(row["user_id"]),
+                subscription_id=subscription_id,
+                event_type=(
+                    "extended"
+                    if event_kind == "extension" or inferred_extension
+                    else "activated"
+                ),
+                source="billing_backfill",
+                reason="historical_billing_activation",
+                order_public_id=str(row["public_id"]),
+                period_starts_at=period_starts_at,
+                period_ends_at=period_ends_at,
+                before=before,
+                after=after,
+                event_id=f"billing:{row['public_id']}:activated",
+                created_at=activated_at,
+            )
+            inserted += 1
+        conn.commit()
+    return {"inserted": inserted}
+
+
 def backfill_expired_non_paid_subscriptions() -> dict:
     now = utc_now_iso()
-    updated = 0
     safe_plan_codes = tuple(
         dict.fromkeys(
             (
@@ -4155,21 +4357,66 @@ def backfill_expired_non_paid_subscriptions() -> dict:
     )
     placeholders = ", ".join("?" for _ in safe_plan_codes)
     with db() as conn:
-        updated = conn.execute(
+        rows = conn.execute(
             f"""
-            UPDATE subscriptions
-            SET is_active = 0,
-                updated_at = ?
-            WHERE is_active = 1
+            SELECT s.*
+            FROM subscriptions s
+            WHERE s.is_active = 1
               AND expires_at IS NOT NULL
-              AND expires_at <= ?
+              AND datetime(expires_at) <= datetime(?)
               AND plan_code IN ({placeholders})
+              AND s.id = (
+                  SELECT latest.id
+                  FROM subscriptions latest
+                  WHERE latest.user_id = s.user_id
+                  ORDER BY latest.id DESC
+                  LIMIT 1
+              )
             """,
-            (now, now, *safe_plan_codes),
-        ).rowcount
+            (now, *safe_plan_codes),
+        ).fetchall()
+        for row in rows:
+            before = subscription_lifecycle_snapshot(row)
+            conn.execute(
+                """
+                UPDATE subscriptions
+                SET is_active = 0, auto_renew = 0,
+                    provider_payment_method_id = NULL,
+                    selection_json = ?, peer_revocation_pending = 1,
+                    revision = revision + 1, updated_at = ?
+                WHERE id = ? AND is_active = 1
+                """,
+                (
+                    selection_without_auto_renew(row),
+                    now,
+                    int(row["id"]),
+                ),
+            )
+            saved_row = conn.execute(
+                "SELECT * FROM subscriptions WHERE id = ?",
+                (int(row["id"]),),
+            ).fetchone()
+            after = subscription_lifecycle_snapshot(saved_row)
+            record_subscription_event(
+                conn,
+                user_id=int(row["user_id"]),
+                subscription_id=int(row["id"]),
+                event_type="expired",
+                source="startup_backfill",
+                reason="expired_non_paid_subscription_backfill",
+                period_starts_at=(before or {}).get("accessStartsAt"),
+                period_ends_at=row["expires_at"],
+                before=before,
+                after=after,
+                event_id=subscription_expiry_event_id(
+                    conn,
+                    user_id=int(row["user_id"]),
+                    expires_at=row["expires_at"],
+                ),
+            )
         conn.commit()
     return {
-        "updated": int(updated or 0),
+        "updated": len(rows),
         "safePlanCodes": list(safe_plan_codes),
     }
 
@@ -4314,10 +4561,35 @@ def get_subscription_row(user_id: int):
 
 def subscription_status(row) -> dict:
     expires_at = parse_dt(row["expires_at"]) if row else None
-    is_active = bool(row["is_active"]) if row else False
+    stored_is_active = bool(row["is_active"]) if row else False
+    is_active = stored_is_active
+    expired = False
 
     if expires_at is not None and utc_now() >= expires_at:
         is_active = False
+        expired = True
+
+    if is_active:
+        status_code = "active"
+    elif expired:
+        status_code = "expired"
+    else:
+        status_code = "inactive"
+
+    access_started_at = None
+    revision = 0
+    if row:
+        access_started_at = (
+            row["access_started_at"]
+            if "access_started_at" in row.keys()
+            else None
+        )
+        if not access_started_at and "created_at" in row.keys():
+            access_started_at = row["created_at"]
+        try:
+            revision = int(row["revision"] or 1) if "revision" in row.keys() else 1
+        except Exception:
+            revision = 1
 
     selection: Optional[dict] = None
     monthly_price_rub: Optional[int] = None
@@ -4356,7 +4628,17 @@ def subscription_status(row) -> dict:
         "planCode": row["plan_code"] if row else "none",
         "maxDevices": int(row["max_devices"]) if row else 0,
         "isActive": is_active,
+        "storedIsActive": stored_is_active,
+        "status": status_code,
+        "accessStartsAt": access_started_at,
         "expiresAt": expires_at.isoformat() if expires_at else None,
+        "revision": revision,
+        "peerRevocationPending": (
+            bool(row["peer_revocation_pending"])
+            if row and "peer_revocation_pending" in row.keys()
+            else False
+        ),
+        "serverTime": utc_now_iso(),
         "monthlyPriceRub": monthly_price_rub,
         "autoRenew": auto_renew,
         "paymentMethodSaved": payment_method_saved,
@@ -4372,6 +4654,154 @@ def subscription_status(row) -> dict:
         "fairUsePolicy": (current_quote or {}).get("fairUsePolicy"),
         "rateLimitPolicy": (current_quote or {}).get("rateLimitPolicy"),
     }
+
+
+def subscription_lifecycle_snapshot(row) -> Optional[dict]:
+    if row is None:
+        return None
+    status = subscription_status(row)
+    return {
+        "subscriptionId": int(row["id"]),
+        "userId": int(row["user_id"]),
+        "planCode": status["planCode"],
+        "planName": status["planName"],
+        "maxDevices": status["maxDevices"],
+        "storedIsActive": status["storedIsActive"],
+        "isActive": status["isActive"],
+        "status": status["status"],
+        "accessStartsAt": status["accessStartsAt"],
+        "expiresAt": status["expiresAt"],
+        "monthlyPriceRub": status["monthlyPriceRub"],
+        "autoRenew": status["autoRenew"],
+        "revision": status["revision"],
+        "peerRevocationPending": status["peerRevocationPending"],
+    }
+
+
+def record_subscription_event(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    subscription_id: Optional[int],
+    event_type: str,
+    source: str,
+    reason: Optional[str] = None,
+    actor: Optional[str] = None,
+    order_public_id: Optional[str] = None,
+    period_starts_at: Optional[str] = None,
+    period_ends_at: Optional[str] = None,
+    before: Optional[dict] = None,
+    after: Optional[dict] = None,
+    event_id: Optional[str] = None,
+    created_at: Optional[str] = None,
+) -> str:
+    clean_event_id = clean_limited_text(event_id, 160).strip()
+    if not clean_event_id:
+        clean_event_id = (
+            "subevt_"
+            + secrets.token_urlsafe(18).replace("-", "").replace("_", "")[:24]
+        )
+    now = created_at or utc_now_iso()
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO subscription_events(
+            event_id, user_id, subscription_id, event_type, source, reason,
+            actor, order_public_id, period_starts_at, period_ends_at,
+            before_json, after_json, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            clean_event_id,
+            int(user_id),
+            subscription_id,
+            clean_limited_text(event_type, 80).strip() or "updated",
+            clean_limited_text(source, 80).strip() or "backend",
+            clean_limited_text(reason, 1000).strip() or None,
+            clean_limited_text(actor, 320).strip() or None,
+            clean_limited_text(order_public_id, 160).strip() or None,
+            period_starts_at,
+            period_ends_at,
+            json.dumps(before, ensure_ascii=False, sort_keys=True)
+            if before is not None
+            else None,
+            json.dumps(after, ensure_ascii=False, sort_keys=True)
+            if after is not None
+            else None,
+            now,
+        ),
+    )
+    return clean_event_id
+
+
+def subscription_expiry_event_id(
+    conn: sqlite3.Connection,
+    *,
+    user_id: int,
+    expires_at: str,
+) -> str:
+    user_row = conn.execute(
+        "SELECT email FROM users WHERE id = ?",
+        (int(user_id),),
+    ).fetchone()
+    account_identity = (
+        str(user_row["email"]).strip().lower()
+        if user_row is not None and user_row["email"]
+        else f"local-user:{int(user_id)}"
+    )
+    parsed_expiry = parse_dt(expires_at)
+    canonical_expiry = (
+        parsed_expiry.astimezone(timezone.utc).isoformat()
+        if parsed_expiry is not None
+        else str(expires_at).strip()
+    )
+    digest = hashlib.sha256(
+        f"{account_identity}|{canonical_expiry}".encode("utf-8")
+    ).hexdigest()
+    return f"expiry:{digest[:40]}"
+
+
+def subscription_event_payload(row: sqlite3.Row) -> dict:
+    def parse_snapshot(raw: Optional[str]) -> Optional[dict]:
+        if not raw:
+            return None
+        try:
+            value = json.loads(raw)
+        except Exception:
+            return None
+        return value if isinstance(value, dict) else None
+
+    return {
+        "eventId": row["event_id"],
+        "userId": int(row["user_id"]),
+        "subscriptionId": row["subscription_id"],
+        "eventType": row["event_type"],
+        "source": row["source"],
+        "reason": row["reason"],
+        "actor": row["actor"],
+        "orderId": row["order_public_id"],
+        "periodStartsAt": row["period_starts_at"],
+        "periodEndsAt": row["period_ends_at"],
+        "before": parse_snapshot(row["before_json"]),
+        "after": parse_snapshot(row["after_json"]),
+        "createdAt": row["created_at"],
+    }
+
+
+def list_subscription_events_for_user(user_id: int, limit: int = 50) -> list[dict]:
+    safe_limit = max(1, min(int(limit or 50), 200))
+    with db() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM subscription_events
+            WHERE user_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (int(user_id), safe_limit),
+        ).fetchall()
+    return [subscription_event_payload(row) for row in rows]
 
 
 FREE_TIER_COMPAT_PLAN_CODES = {
@@ -4461,6 +4891,8 @@ def free_tier_available(user, sub: dict) -> bool:
 
 def build_free_tier_subscription(sub: Optional[dict] = None) -> dict:
     source = dict(sub or {})
+    source_status = source.get("status")
+    source_access_starts_at = source.get("accessStartsAt")
     traffic_limit_gb = (
         FREE_TIER_MONTHLY_LIMIT_GB if FREE_TIER_QUOTA_ENFORCED else None
     )
@@ -4499,6 +4931,9 @@ def build_free_tier_subscription(sub: Optional[dict] = None) -> dict:
         "planCode": FREE_TIER_PLAN_CODE,
         "maxDevices": FREE_TIER_MAX_DEVICES,
         "isActive": True,
+        "storedIsActive": True,
+        "status": "active_free",
+        "accessStartsAt": None,
         "expiresAt": None,
         "monthlyPriceRub": 0,
         "autoRenew": False,
@@ -4536,6 +4971,8 @@ def build_free_tier_subscription(sub: Optional[dict] = None) -> dict:
         "isFreeTier": True,
         "freeTier": free_tier,
         "sourcePlanCode": source.get("planCode"),
+        "sourceStatus": source_status,
+        "sourceAccessStartsAt": source_access_starts_at,
         "sourceExpiresAt": source.get("expiresAt"),
     }
 
@@ -7346,6 +7783,110 @@ def quote_tariff(selection: dict, strict_promo: bool = False) -> dict:
         },
     }
     return apply_promo_to_quote(quote, selection, strict=strict_promo)
+
+
+def subscription_purchase_preview(
+    user_id: int,
+    selection: dict,
+    quote: dict,
+    *,
+    subscription_row=None,
+    now: Optional[datetime] = None,
+) -> dict:
+    current_row = subscription_row
+    if current_row is None:
+        current_row = get_subscription_row(int(user_id))
+    current = subscription_status(current_row)
+    current_expiry = parse_dt(current.get("expiresAt"))
+    current_time = now or utc_now()
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=timezone.utc)
+    if current_expiry is not None and current_expiry.tzinfo is None:
+        current_expiry = current_expiry.replace(tzinfo=timezone.utc)
+
+    period_days = max(1, int(quote.get("periodDays") or PAID_PLAN_DAYS))
+    extending_active_paid = bool(
+        subscription_is_paid_active(current)
+        and current_expiry is not None
+        and current_expiry > current_time
+    )
+    if extending_active_paid:
+        kind = "extension"
+        period_start = current_expiry
+    else:
+        had_paid_access = bool(
+            int(current.get("monthlyPriceRub") or 0) > 0
+            and str(current.get("planCode") or "").strip().lower()
+            not in FREE_AD_PLAN_CODES
+        )
+        kind = "reactivation" if had_paid_access else "new_subscription"
+        period_start = current_time
+    period_end = period_start + timedelta(days=period_days)
+
+    return {
+        "kind": kind,
+        "requiresAcknowledgement": extending_active_paid,
+        "currentSubscription": {
+            "planCode": current.get("planCode"),
+            "planName": current.get("planName"),
+            "status": current.get("status"),
+            "isActive": current.get("isActive"),
+            "accessStartsAt": current.get("accessStartsAt"),
+            "expiresAt": current.get("expiresAt"),
+        },
+        "periodDays": period_days,
+        "periodStartsAt": period_start.isoformat(),
+        "periodEndsAt": period_end.isoformat(),
+        "amountRub": int(quote.get("monthlyPriceRub") or quote.get("priceRub") or 0),
+        "planCode": quote.get("planCode") or selection.get("planCode"),
+        "planName": quote.get("planName"),
+        "expectedSubscriptionRevision": int(current.get("revision") or 0),
+        "expectedSubscriptionExpiresAt": current.get("expiresAt"),
+        "generatedAt": current_time.isoformat(),
+    }
+
+
+def validate_subscription_purchase_confirmation(
+    payload: TariffSelectionIn,
+    preview: dict,
+) -> None:
+    if not preview.get("requiresAcknowledgement"):
+        return
+    if not payload.renewalAcknowledged:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "renewal_confirmation_required",
+                "message": (
+                    "Подписка уже действует. Подтвердите отдельное продление "
+                    "после проверки нового периода."
+                ),
+                "purchasePreview": preview,
+            },
+        )
+
+    expected_revision = preview.get("expectedSubscriptionRevision")
+    if payload.expectedSubscriptionRevision != expected_revision:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "subscription_changed_refresh_quote",
+                "message": "Срок подписки изменился. Обновите расчёт перед оплатой.",
+                "purchasePreview": preview,
+            },
+        )
+
+    expected_expiry = parse_dt(preview.get("expectedSubscriptionExpiresAt"))
+    acknowledged_expiry = parse_dt(payload.expectedSubscriptionExpiresAt)
+    if expected_expiry != acknowledged_expiry:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "subscription_changed_refresh_quote",
+                "message": "Срок подписки изменился. Обновите расчёт перед оплатой.",
+                "purchasePreview": preview,
+            },
+        )
 
 
 def require_active_subscription(user_id: int) -> dict:
@@ -19408,6 +19949,7 @@ def get_admin_user_detail(user_id: int) -> dict:
         "user": user,
         "devices": list_user_devices(user_id),
         "orders": list_billing_orders_for_user(user_id),
+        "subscriptionEvents": list_subscription_events_for_user(user_id, limit=100),
         "supportReports": list_support_reports(user_id=user_id, limit=50),
         "supportActions": list_admin_support_actions(user_id=user_id, limit=50),
         "subscription": subscription,
@@ -19503,6 +20045,7 @@ def delete_admin_user_record(user_id: int, payload: AdminUserDeleteIn) -> dict:
             "ad_challenges",
             "free_access_grants",
             "billing_orders",
+            "subscription_events",
             "subscriptions",
             "client_endpoint_assignments",
             "device_traffic_usage",
@@ -19535,7 +20078,12 @@ def delete_admin_user_record(user_id: int, payload: AdminUserDeleteIn) -> dict:
     }
 
 
-def upsert_subscription_for_user(user_id: int, payload: AdminSubscriptionIn) -> dict:
+def upsert_subscription_for_user(
+    user_id: int,
+    payload: AdminSubscriptionIn,
+    *,
+    actor: Optional[str] = None,
+) -> dict:
     if get_user_access_row(int(user_id)) is None:
         raise HTTPException(status_code=404, detail="Пользователь не найден.")
 
@@ -19552,12 +20100,17 @@ def upsert_subscription_for_user(user_id: int, payload: AdminSubscriptionIn) -> 
         if parsed_expires_at is None:
             raise HTTPException(status_code=400, detail="expiresAt содержит некорректную дату.")
         expires_at = parsed_expires_at.isoformat()
+    if payload.isActive and expires_at is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Для активной подписки обязательна дата окончания.",
+        )
 
     now = utc_now_iso()
     with db() as conn:
         current = conn.execute(
             """
-            SELECT id
+            SELECT *
             FROM subscriptions
             WHERE user_id = ?
             ORDER BY id DESC
@@ -19565,15 +20118,27 @@ def upsert_subscription_for_user(user_id: int, payload: AdminSubscriptionIn) -> 
             """,
             (user_id,),
         ).fetchone()
+        before = subscription_lifecycle_snapshot(current)
+        current_status = subscription_status(current) if current is not None else None
+        access_started_at = (
+            current_status.get("accessStartsAt")
+            if payload.isActive and current_status and current_status.get("isActive")
+            else now
+            if payload.isActive
+            else current_status.get("accessStartsAt")
+            if current_status
+            else None
+        )
 
         if current is None:
             conn.execute(
                 """
                 INSERT INTO subscriptions(
                     user_id, plan_code, plan_name, max_devices, is_active,
-                    expires_at, created_at, updated_at
+                    expires_at, created_at, updated_at, access_started_at, revision,
+                    peer_revocation_pending
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_id,
@@ -19584,14 +20149,24 @@ def upsert_subscription_for_user(user_id: int, payload: AdminSubscriptionIn) -> 
                     expires_at,
                     now,
                     now,
+                    access_started_at,
+                    1,
+                    0 if payload.isActive else 1,
                 ),
             )
+            subscription_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
         else:
             conn.execute(
                 """
                 UPDATE subscriptions
                 SET plan_code = ?, plan_name = ?, max_devices = ?, is_active = ?,
-                    expires_at = ?, updated_at = ?
+                    expires_at = ?, access_started_at = ?,
+                    auto_renew = CASE WHEN ? = 1 THEN auto_renew ELSE 0 END,
+                    provider_payment_method_id = CASE
+                        WHEN ? = 1 THEN provider_payment_method_id ELSE NULL
+                    END,
+                    peer_revocation_pending = CASE WHEN ? = 1 THEN 0 ELSE 1 END,
+                    revision = revision + 1, updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -19600,14 +20175,511 @@ def upsert_subscription_for_user(user_id: int, payload: AdminSubscriptionIn) -> 
                     payload.maxDevices,
                     1 if payload.isActive else 0,
                     expires_at,
+                    access_started_at,
+                    1 if payload.isActive else 0,
+                    1 if payload.isActive else 0,
+                    1 if payload.isActive else 0,
                     now,
                     current["id"],
                 ),
             )
+            subscription_id = int(current["id"])
+
+        saved_row = conn.execute(
+            "SELECT * FROM subscriptions WHERE id = ?",
+            (subscription_id,),
+        ).fetchone()
+        after = subscription_lifecycle_snapshot(saved_row)
+        event_type = (
+            "admin_granted"
+            if payload.isActive and not bool((before or {}).get("isActive"))
+            else "admin_revoked"
+            if not payload.isActive
+            else "admin_updated"
+        )
+        record_subscription_event(
+            conn,
+            user_id=int(user_id),
+            subscription_id=subscription_id,
+            event_type=event_type,
+            source="admin",
+            reason=payload.reason or "manual_admin_subscription_update",
+            actor=actor,
+            period_starts_at=after.get("accessStartsAt") if after else None,
+            period_ends_at=after.get("expiresAt") if after else None,
+            before=before,
+            after=after,
+        )
 
         conn.commit()
 
-    return subscription_status(get_subscription_row(user_id))
+    if not payload.isActive:
+        cleanup = remove_user_subscription_peers(int(user_id))
+        set_subscription_peer_revocation_pending(
+            int(user_id),
+            pending=bool(cleanup["failed"]),
+        )
+        saved_row = get_subscription_row(int(user_id))
+    return subscription_status(saved_row)
+
+
+def require_subscription_change_reason(value: Optional[str]) -> str:
+    reason = clean_limited_text(value, 1000).strip()
+    if len(reason) < 8:
+        raise HTTPException(
+            status_code=400,
+            detail="Причина изменения должна содержать минимум 8 символов.",
+        )
+    return reason
+
+
+def selection_without_auto_renew(row: Optional[sqlite3.Row]) -> Optional[str]:
+    if row is None or not row["selection_json"]:
+        return row["selection_json"] if row is not None else None
+    try:
+        selection = json.loads(row["selection_json"])
+    except Exception:
+        return row["selection_json"]
+    if not isinstance(selection, dict):
+        return row["selection_json"]
+    selection["autoRenew"] = False
+    return json.dumps(selection, ensure_ascii=False, sort_keys=True)
+
+
+def remove_user_subscription_peers(user_id: int) -> dict:
+    with db() as conn:
+        device_rows = conn.execute(
+            """
+            SELECT
+                d.device_uid,
+                d.client_public_key,
+                cea.server_id,
+                dta.transport_key
+            FROM devices d
+            LEFT JOIN client_endpoint_assignments cea
+              ON cea.user_id = d.user_id
+             AND cea.device_uid = d.device_uid
+            LEFT JOIN device_transport_assignments dta
+              ON dta.device_uid = d.device_uid
+            WHERE d.user_id = ? AND d.client_public_key IS NOT NULL
+            """,
+            (int(user_id),),
+        ).fetchall()
+
+    peer_targets: set[tuple[str, str, str]] = set()
+    devices_with_any_target: set[str] = set()
+    public_keys_by_device: dict[str, str] = {}
+    for device_row in device_rows:
+        device_uid = str(device_row["device_uid"] or "").strip()
+        public_key = str(device_row["client_public_key"] or "").strip()
+        if not device_uid or not public_key:
+            continue
+        public_keys_by_device[device_uid] = public_key
+        current_server_id = str(device_row["server_id"] or "").strip()
+        if current_server_id:
+            peer_targets.add((device_uid, public_key, current_server_id))
+            devices_with_any_target.add(device_uid)
+        transport_key = str(device_row["transport_key"] or "").strip()
+        if ":" in transport_key:
+            transport_server_id = transport_key.split(":", 1)[1].strip()
+            if transport_server_id:
+                peer_targets.add((device_uid, public_key, transport_server_id))
+                devices_with_any_target.add(device_uid)
+    for device_uid, public_key in public_keys_by_device.items():
+        if device_uid not in devices_with_any_target:
+            peer_targets.add((device_uid, public_key, "intelligent_smew"))
+
+    attempted = 0
+    removed = 0
+    for device_uid, public_key, server_id in sorted(peer_targets):
+        attempted += 1
+        if best_effort_remove_peer_from_server(
+            server_id,
+            device_uid=device_uid,
+            public_key=public_key,
+        ):
+            removed += 1
+    return {
+        "attempted": attempted,
+        "removed": removed,
+        "failed": max(0, attempted - removed),
+    }
+
+
+def set_subscription_peer_revocation_pending(user_id: int, *, pending: bool) -> None:
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE subscriptions
+            SET peer_revocation_pending = ?, updated_at = ?
+            WHERE id = (
+                SELECT id FROM subscriptions
+                WHERE user_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+            )
+            """,
+            (1 if pending else 0, utc_now_iso(), int(user_id)),
+        )
+        conn.commit()
+
+
+def grant_subscription_for_user(
+    user_id: int,
+    payload: AdminSubscriptionGrantIn,
+    *,
+    actor: Optional[str] = None,
+) -> dict:
+    if get_user_access_row(int(user_id)) is None:
+        raise HTTPException(status_code=404, detail="Пользователь не найден.")
+    reason = require_subscription_change_reason(payload.reason)
+    plan_code = clean_limited_text(payload.planCode, 80).strip()
+    plan_name = clean_limited_text(payload.planName, 160).strip()
+    if not plan_code or not plan_name:
+        raise HTTPException(status_code=400, detail="Код и название тарифа обязательны.")
+    if payload.maxDevices < 1 or payload.maxDevices > 100:
+        raise HTTPException(status_code=400, detail="maxDevices должен быть от 1 до 100.")
+    if payload.monthlyPriceRub < 1 or payload.monthlyPriceRub > 1_000_000:
+        raise HTTPException(status_code=400, detail="monthlyPriceRub должен быть положительным.")
+
+    now = utc_now()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        current = conn.execute(
+            """
+            SELECT * FROM subscriptions
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (int(user_id),),
+        ).fetchone()
+        before = subscription_lifecycle_snapshot(current)
+        current_status = subscription_status(current) if current is not None else None
+        current_expiry = parse_dt((current_status or {}).get("expiresAt"))
+        if current_expiry is not None and current_expiry.tzinfo is None:
+            current_expiry = current_expiry.replace(tzinfo=timezone.utc)
+        extending = bool(
+            current_status
+            and subscription_is_paid_active(current_status)
+            and current_expiry is not None
+            and current_expiry > now
+        )
+        period_start = current_expiry if extending else now
+
+        if payload.expiresAt:
+            expires_at = parse_dt(payload.expiresAt)
+            if expires_at is None:
+                raise HTTPException(status_code=400, detail="expiresAt содержит некорректную дату.")
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at <= now:
+                raise HTTPException(status_code=400, detail="Дата окончания должна быть в будущем.")
+            if extending and current_expiry is not None and expires_at <= current_expiry:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Выдача не должна сокращать активную подписку.",
+                )
+        else:
+            duration_days = int(payload.durationDays or 0)
+            if duration_days < 1 or duration_days > 3650:
+                raise HTTPException(status_code=400, detail="durationDays должен быть от 1 до 3650.")
+            expires_at = period_start + timedelta(days=duration_days)
+
+        access_started_at = (
+            current_status.get("accessStartsAt")
+            if extending and current_status
+            else now.isoformat()
+        )
+        if current is None:
+            conn.execute(
+                """
+                INSERT INTO subscriptions(
+                    user_id, plan_code, plan_name, max_devices, is_active,
+                    expires_at, created_at, updated_at, monthly_price_rub,
+                    selection_json, auto_renew, provider_payment_method_id,
+                    access_started_at, revision
+                )
+                VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, NULL, 0, NULL, ?, 1)
+                """,
+                (
+                    int(user_id),
+                    plan_code,
+                    plan_name,
+                    int(payload.maxDevices),
+                    expires_at.isoformat(),
+                    now.isoformat(),
+                    now.isoformat(),
+                    int(payload.monthlyPriceRub),
+                    access_started_at,
+                ),
+            )
+            subscription_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+        else:
+            saved_selection_json = (
+                current["selection_json"]
+                if extending
+                else selection_without_auto_renew(current)
+            )
+            conn.execute(
+                """
+                UPDATE subscriptions
+                SET plan_code = ?, plan_name = ?, max_devices = ?, is_active = 1,
+                    expires_at = ?, monthly_price_rub = ?,
+                    auto_renew = CASE WHEN ? = 1 THEN auto_renew ELSE 0 END,
+                    provider_payment_method_id = CASE
+                        WHEN ? = 1 THEN provider_payment_method_id ELSE NULL
+                    END,
+                    access_started_at = ?,
+                    selection_json = ?, peer_revocation_pending = 0,
+                    revision = revision + 1, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    plan_code,
+                    plan_name,
+                    int(payload.maxDevices),
+                    expires_at.isoformat(),
+                    int(payload.monthlyPriceRub),
+                    1 if extending else 0,
+                    1 if extending else 0,
+                    access_started_at,
+                    saved_selection_json,
+                    now.isoformat(),
+                    int(current["id"]),
+                ),
+            )
+            subscription_id = int(current["id"])
+
+        saved_row = conn.execute(
+            "SELECT * FROM subscriptions WHERE id = ?",
+            (subscription_id,),
+        ).fetchone()
+        after = subscription_lifecycle_snapshot(saved_row)
+        record_subscription_event(
+            conn,
+            user_id=int(user_id),
+            subscription_id=subscription_id,
+            event_type="admin_extended" if extending else "admin_granted",
+            source="admin",
+            reason=reason,
+            actor=actor,
+            period_starts_at=period_start.isoformat(),
+            period_ends_at=expires_at.isoformat(),
+            before=before,
+            after=after,
+        )
+        conn.commit()
+
+    return {
+        "subscription": subscription_status(saved_row),
+        "event": list_subscription_events_for_user(int(user_id), limit=1)[0],
+    }
+
+
+def revoke_subscription_for_user(
+    user_id: int,
+    payload: AdminSubscriptionRevokeIn,
+    *,
+    actor: Optional[str] = None,
+) -> dict:
+    reason = require_subscription_change_reason(payload.reason)
+    now = utc_now_iso()
+    changed = False
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        current = conn.execute(
+            """
+            SELECT * FROM subscriptions
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (int(user_id),),
+        ).fetchone()
+        if current is None:
+            raise HTTPException(status_code=404, detail="Подписка пользователя не найдена.")
+        before = subscription_lifecycle_snapshot(current)
+        if bool(current["is_active"]) or bool(current["auto_renew"]):
+            conn.execute(
+                """
+                UPDATE subscriptions
+                SET is_active = 0, auto_renew = 0,
+                    provider_payment_method_id = NULL, selection_json = ?,
+                    peer_revocation_pending = 1,
+                    revision = revision + 1, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    selection_without_auto_renew(current),
+                    now,
+                    int(current["id"]),
+                ),
+            )
+            changed = True
+        saved_row = conn.execute(
+            "SELECT * FROM subscriptions WHERE id = ?",
+            (int(current["id"]),),
+        ).fetchone()
+        after = subscription_lifecycle_snapshot(saved_row)
+        if changed:
+            record_subscription_event(
+                conn,
+                user_id=int(user_id),
+                subscription_id=int(current["id"]),
+                event_type="admin_revoked",
+                source="admin",
+                reason=reason,
+                actor=actor,
+                period_starts_at=(before or {}).get("accessStartsAt"),
+                period_ends_at=now,
+                before=before,
+                after=after,
+            )
+        conn.commit()
+
+    peer_cleanup = remove_user_subscription_peers(int(user_id))
+    set_subscription_peer_revocation_pending(
+        int(user_id),
+        pending=bool(peer_cleanup["failed"]),
+    )
+    return {
+        "changed": changed,
+        "subscription": subscription_status(get_subscription_row(int(user_id))),
+        "peerCleanup": peer_cleanup,
+        "event": (
+            list_subscription_events_for_user(int(user_id), limit=1)[0]
+            if changed
+            else None
+        ),
+    }
+
+
+def reconcile_expired_subscriptions(
+    *,
+    dry_run: bool = True,
+    limit: int = 100,
+    reason: str = "scheduled_subscription_expiry",
+) -> dict:
+    safe_limit = max(1, min(int(limit or 100), 1000))
+    clean_reason = require_subscription_change_reason(reason)
+    now = utc_now()
+    now_iso = now.isoformat()
+    with db() as conn:
+        candidates = conn.execute(
+            """
+            SELECT s.*
+            FROM subscriptions s
+            JOIN (
+                SELECT user_id, MAX(id) AS latest_subscription_id
+                FROM subscriptions
+                GROUP BY user_id
+            ) latest ON latest.latest_subscription_id = s.id
+            WHERE (
+                    s.expires_at IS NOT NULL
+                AND datetime(s.expires_at) IS NOT NULL
+                AND datetime(s.expires_at) <= datetime(?)
+                AND s.is_active = 1
+              )
+               OR s.peer_revocation_pending = 1
+            ORDER BY s.expires_at ASC, s.id ASC
+            LIMIT ?
+            """,
+            (now_iso, safe_limit),
+        ).fetchall()
+
+    candidate_payloads = [subscription_lifecycle_snapshot(row) for row in candidates]
+    if dry_run:
+        return {
+            "ok": True,
+            "dryRun": True,
+            "generatedAt": now_iso,
+            "candidateCount": len(candidates),
+            "changedCount": 0,
+            "peerCleanup": {"attempted": 0, "removed": 0, "failed": 0},
+            "candidates": candidate_payloads,
+        }
+
+    changed_user_ids: list[int] = []
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        for candidate in candidates:
+            current = conn.execute(
+                "SELECT * FROM subscriptions WHERE id = ?",
+                (int(candidate["id"]),),
+            ).fetchone()
+            if current is None:
+                continue
+            current_expiry = parse_dt(current["expires_at"])
+            if current_expiry is None:
+                continue
+            if current_expiry.tzinfo is None:
+                current_expiry = current_expiry.replace(tzinfo=timezone.utc)
+            if current_expiry > now or not bool(current["is_active"]):
+                continue
+            before = subscription_lifecycle_snapshot(current)
+            conn.execute(
+                """
+                UPDATE subscriptions
+                SET is_active = 0, auto_renew = 0,
+                    provider_payment_method_id = NULL, selection_json = ?,
+                    peer_revocation_pending = 1,
+                    revision = revision + 1, updated_at = ?
+                WHERE id = ? AND is_active = 1
+                """,
+                (
+                    selection_without_auto_renew(current),
+                    now_iso,
+                    int(current["id"]),
+                ),
+            )
+            saved_row = conn.execute(
+                "SELECT * FROM subscriptions WHERE id = ?",
+                (int(current["id"]),),
+            ).fetchone()
+            after = subscription_lifecycle_snapshot(saved_row)
+            record_subscription_event(
+                conn,
+                user_id=int(current["user_id"]),
+                subscription_id=int(current["id"]),
+                event_type="expired",
+                source="expiry_runner",
+                reason=clean_reason,
+                period_starts_at=(before or {}).get("accessStartsAt"),
+                period_ends_at=current_expiry.isoformat(),
+                before=before,
+                after=after,
+                event_id=subscription_expiry_event_id(
+                    conn,
+                    user_id=int(current["user_id"]),
+                    expires_at=current_expiry.isoformat(),
+                ),
+            )
+            changed_user_ids.append(int(current["user_id"]))
+        conn.commit()
+
+    peer_cleanup = {"attempted": 0, "removed": 0, "failed": 0}
+    # Retry cleanup for every expired candidate, including rows already marked
+    # inactive by a previous run whose network cleanup may have failed.
+    for user_id in sorted({int(row["user_id"]) for row in candidates}):
+        result = remove_user_subscription_peers(user_id)
+        set_subscription_peer_revocation_pending(
+            user_id,
+            pending=bool(result["failed"]),
+        )
+        for key in peer_cleanup:
+            peer_cleanup[key] += int(result.get(key) or 0)
+
+    return {
+        "ok": True,
+        "dryRun": False,
+        "generatedAt": now_iso,
+        "candidateCount": len(candidates),
+        "changedCount": len(changed_user_ids),
+        "changedUserIds": changed_user_ids,
+        "peerCleanup": peer_cleanup,
+        "candidates": candidate_payloads,
+    }
 
 
 def apply_tariff_for_user(
@@ -19616,6 +20688,11 @@ def apply_tariff_for_user(
     provider_payment_method_id: Optional[str] = None,
     quote_override: Optional[dict] = None,
     selection_override: Optional[dict] = None,
+    event_source: str = "admin_tariff",
+    event_reason: str = "tariff_applied",
+    event_actor: Optional[str] = None,
+    order_public_id: Optional[str] = None,
+    purchase_preview_override: Optional[dict] = None,
 ) -> dict:
     normalized = (
         dict(selection_override)
@@ -19639,9 +20716,10 @@ def apply_tariff_for_user(
     saved_payment_method_id = provider_payment_method_id if auto_renew else None
 
     with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         current = conn.execute(
             """
-            SELECT id, plan_code, expires_at
+            SELECT *
             FROM subscriptions
             WHERE user_id = ?
             ORDER BY id DESC
@@ -19649,22 +20727,85 @@ def apply_tariff_for_user(
             """,
             (user_id,),
         ).fetchone()
+        before = subscription_lifecycle_snapshot(current)
+        current_status = subscription_status(current) if current is not None else None
 
-        period_start = now
-        same_renewable_product = policy_mode == "public_product" or (
-            policy_mode == "paid_beta"
-            and current is not None
-            and str(current["plan_code"] or "").strip().lower()
-            == str(quote["planCode"] or "").strip().lower()
+        preview_kind = ""
+        preview_start = None
+        preview_end = None
+        if isinstance(purchase_preview_override, dict):
+            preview_kind = clean_limited_text(
+                purchase_preview_override.get("kind"),
+                40,
+            ).strip().lower()
+            preview_start = parse_dt(purchase_preview_override.get("periodStartsAt"))
+            preview_end = parse_dt(purchase_preview_override.get("periodEndsAt"))
+            if preview_start is None or preview_end is None or preview_end <= preview_start:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "billing_purchase_preview_invalid",
+                        "message": "Сохранённый период оплаты повреждён; активация остановлена.",
+                    },
+                )
+            expected_revision = purchase_preview_override.get(
+                "expectedSubscriptionRevision"
+            )
+            expected_expiry = parse_dt(
+                purchase_preview_override.get("expectedSubscriptionExpiresAt")
+            )
+            current_expiry = parse_dt(
+                current_status.get("expiresAt") if current_status else None
+            )
+            entitlement_changed = (
+                expected_revision is not None
+                and int(expected_revision)
+                != int((current_status or {}).get("revision") or 0)
+            ) or expected_expiry != current_expiry
+            if entitlement_changed:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "billing_order_subscription_changed",
+                        "message": (
+                            "После создания заказа подписка изменилась. Платёж "
+                            "сохранён для ручной сверки и не применён поверх новых прав."
+                        ),
+                        "orderId": order_public_id,
+                        "purchasePreview": purchase_preview_override,
+                        "currentSubscription": current_status,
+                    },
+                )
+
+        if preview_start is not None and preview_end is not None:
+            period_start = preview_start
+            expires_at = preview_end.isoformat()
+        else:
+            period_start = now
+            same_renewable_product = policy_mode == "public_product" or (
+                policy_mode == "paid_beta"
+                and current is not None
+                and str(current["plan_code"] or "").strip().lower()
+                == str(quote["planCode"] or "").strip().lower()
+            )
+            if same_renewable_product and current is not None:
+                current_expires_at = parse_dt(current["expires_at"])
+                if current_expires_at is not None:
+                    if current_expires_at.tzinfo is None:
+                        current_expires_at = current_expires_at.replace(tzinfo=timezone.utc)
+                    if current_expires_at > now:
+                        period_start = current_expires_at
+            expires_at = (period_start + timedelta(days=period_days)).isoformat()
+        extending = preview_kind == "extension" or (
+            not preview_kind and period_start > now
         )
-        if same_renewable_product and current is not None:
-            current_expires_at = parse_dt(current["expires_at"])
-            if current_expires_at is not None:
-                if current_expires_at.tzinfo is None:
-                    current_expires_at = current_expires_at.replace(tzinfo=timezone.utc)
-                if current_expires_at > now:
-                    period_start = current_expires_at
-        expires_at = (period_start + timedelta(days=period_days)).isoformat()
+        access_started_at = (
+            current_status.get("accessStartsAt")
+            if current_status
+            and subscription_is_paid_active(current_status)
+            and extending
+            else period_start.isoformat()
+        )
 
         if current is None:
             conn.execute(
@@ -19672,9 +20813,10 @@ def apply_tariff_for_user(
                 INSERT INTO subscriptions(
                     user_id, plan_code, plan_name, max_devices, is_active,
                     expires_at, created_at, updated_at, monthly_price_rub,
-                    selection_json, auto_renew, provider_payment_method_id
+                    selection_json, auto_renew, provider_payment_method_id,
+                    access_started_at, revision
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_id,
@@ -19689,15 +20831,20 @@ def apply_tariff_for_user(
                     selection_json,
                     1 if auto_renew else 0,
                     saved_payment_method_id,
+                    access_started_at,
+                    1,
                 ),
             )
+            subscription_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
         else:
             conn.execute(
                 """
                 UPDATE subscriptions
                 SET plan_code = ?, plan_name = ?, max_devices = ?, is_active = ?,
                     expires_at = ?, updated_at = ?, monthly_price_rub = ?,
-                    selection_json = ?, auto_renew = ?,
+                    selection_json = ?, auto_renew = ?, access_started_at = ?,
+                    peer_revocation_pending = 0,
+                    revision = revision + 1,
                     provider_payment_method_id = CASE
                         WHEN ? = 1 THEN COALESCE(?, provider_payment_method_id)
                         ELSE NULL
@@ -19714,14 +20861,40 @@ def apply_tariff_for_user(
                     int(quote["monthlyPriceRub"]),
                     selection_json,
                     1 if auto_renew else 0,
+                    access_started_at,
                     1 if auto_renew else 0,
                     saved_payment_method_id,
                     current["id"],
                 ),
             )
+            subscription_id = int(current["id"])
+        saved_row = conn.execute(
+            "SELECT * FROM subscriptions WHERE id = ?",
+            (subscription_id,),
+        ).fetchone()
+        after = subscription_lifecycle_snapshot(saved_row)
+        record_subscription_event(
+            conn,
+            user_id=int(user_id),
+            subscription_id=subscription_id,
+            event_type="extended" if extending else "activated",
+            source=event_source,
+            reason=event_reason,
+            actor=event_actor,
+            order_public_id=order_public_id,
+            period_starts_at=period_start.isoformat(),
+            period_ends_at=expires_at,
+            before=before,
+            after=after,
+            event_id=(
+                f"billing:{order_public_id}:activated"
+                if order_public_id
+                else None
+            ),
+        )
         conn.commit()
 
-    saved = subscription_status(get_subscription_row(user_id))
+    saved = subscription_status(saved_row)
     return {
         "selection": normalized,
         "quote": quote,
@@ -19732,6 +20905,7 @@ def apply_tariff_for_user(
 def billing_order_status(row) -> dict:
     selection = {}
     quote = {}
+    purchase_preview = None
     try:
         selection = json.loads(row["selection_json"])
     except Exception:
@@ -19740,6 +20914,17 @@ def billing_order_status(row) -> dict:
         quote = json.loads(row["quote_json"])
     except Exception:
         quote = {}
+    try:
+        raw_purchase_preview = (
+            row["purchase_preview_json"]
+            if "purchase_preview_json" in row.keys()
+            else None
+        )
+        parsed_purchase_preview = json.loads(raw_purchase_preview) if raw_purchase_preview else None
+        if isinstance(parsed_purchase_preview, dict):
+            purchase_preview = parsed_purchase_preview
+    except Exception:
+        purchase_preview = None
 
     return {
         "orderId": row["public_id"],
@@ -19779,6 +20964,7 @@ def billing_order_status(row) -> dict:
         "currency": row["currency"],
         "selection": selection,
         "quote": quote,
+        "purchasePreview": purchase_preview,
         "paymentUrl": row["payment_url"],
         "provider": row["provider"],
         "providerPaymentId": row["provider_payment_id"],
@@ -23086,6 +24272,23 @@ def create_billing_order_for_user(
     with db() as conn:
         if beta_request or public_product_request:
             conn.execute("BEGIN IMMEDIATE")
+        subscription_row = conn.execute(
+            """
+            SELECT *
+            FROM subscriptions
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (int(user_id),),
+        ).fetchone()
+        purchase_preview = subscription_purchase_preview(
+            int(user_id),
+            normalized,
+            quote,
+            subscription_row=subscription_row,
+        )
+        validate_subscription_purchase_confirmation(payload, purchase_preview)
         user = conn.execute(
             "SELECT email, phone FROM users WHERE id = ?",
             (user_id,),
@@ -23111,6 +24314,19 @@ def create_billing_order_for_user(
                     candidate_selection = json.loads(candidate["selection_json"] or "{}")
                 except Exception:
                     candidate_selection = {}
+                try:
+                    raw_candidate_preview = (
+                        candidate["purchase_preview_json"]
+                        if "purchase_preview_json" in candidate.keys()
+                        else None
+                    )
+                    candidate_preview = (
+                        json.loads(raw_candidate_preview)
+                        if raw_candidate_preview
+                        else None
+                    )
+                except Exception:
+                    candidate_preview = None
                 candidate_kind = str(
                     candidate["order_kind"]
                     if "order_kind" in candidate.keys()
@@ -23121,16 +24337,38 @@ def create_billing_order_for_user(
                     if manual_npd_auto_renew_smoke
                     else "manual"
                 )
-                if (
+                same_public_order = (
                     candidate_selection.get("policyMode") == "public_product"
                     and candidate_selection.get("planCode") == normalized.get("planCode")
                     and bool(candidate["auto_renew"])
                     == bool(normalized.get("autoRenew"))
                     and candidate_kind == expected_kind
-                ):
+                )
+                same_subscription_state = bool(
+                    isinstance(candidate_preview, dict)
+                    and candidate_preview.get("expectedSubscriptionRevision")
+                    == purchase_preview.get("expectedSubscriptionRevision")
+                    and candidate_preview.get("expectedSubscriptionExpiresAt")
+                    == purchase_preview.get("expectedSubscriptionExpiresAt")
+                )
+                if same_public_order and same_subscription_state:
                     row = candidate
                     reused_existing_order = True
                     break
+                if candidate_selection.get("policyMode") == "public_product":
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "code": "pending_order_conflict",
+                            "message": (
+                                "У вас уже есть незавершённый заказ. "
+                                "Завершите или отмените его перед новой оплатой."
+                            ),
+                            "order": public_billing_order_status(
+                                billing_order_status(candidate)
+                            ),
+                        },
+                    )
 
         redemption = (
             get_paid_beta_redemption_offer_row(conn, int(user_id))
@@ -23172,18 +24410,30 @@ def create_billing_order_for_user(
                 beta_invite_public_id = str(redemption["invite_public_id"])
 
         if row is None:
+            purchase_preview = subscription_purchase_preview(
+                int(user_id),
+                normalized,
+                quote,
+                subscription_row=subscription_row,
+            )
+            validate_subscription_purchase_confirmation(payload, purchase_preview)
             selection_json = json.dumps(normalized, ensure_ascii=False)
             quote_json = json.dumps(quote, ensure_ascii=False)
+            purchase_preview_json = json.dumps(
+                purchase_preview,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
             conn.execute(
                 """
                 INSERT INTO billing_orders(
                     public_id, user_id, status, auto_renew, amount_rub, currency,
-                    selection_json, quote_json, promo_code, discount_rub,
+                    selection_json, quote_json, purchase_preview_json, promo_code, discount_rub,
                     original_amount_rub, beta_invite_public_id, payment_url, provider,
                     tax_receipt_mode, tax_receipt_status, tax_receipt_updated_at,
                     order_kind, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     public_id,
@@ -23194,6 +24444,7 @@ def create_billing_order_for_user(
                     "RUB",
                     selection_json,
                     quote_json,
+                    purchase_preview_json,
                     normalized.get("promoCode") or None,
                     int(quote.get("discountRub") or 0),
                     int(quote.get("originalMonthlyPriceRub") or quote["monthlyPriceRub"]),
@@ -25030,6 +26281,13 @@ def create_auto_renewal_order(subscription_id: int) -> dict:
             raise HTTPException(status_code=500, detail="Subscription selection is invalid.")
         selection["autoRenew"] = True
         quote = quote_tariff(selection)
+        purchase_preview = subscription_purchase_preview(
+            int(subscription["user_id"]),
+            selection,
+            quote,
+            subscription_row=subscription,
+            now=now,
+        )
         renewal_key = f"subscription:{int(subscription['id'])}:expires:{subscription['expires_at']}"
         existing = conn.execute(
             "SELECT * FROM billing_orders WHERE renewal_key = ?",
@@ -25049,13 +26307,13 @@ def create_auto_renewal_order(subscription_id: int) -> dict:
             """
             INSERT INTO billing_orders(
                 public_id, user_id, status, auto_renew, amount_rub, currency,
-                selection_json, quote_json, promo_code, discount_rub,
+                selection_json, quote_json, purchase_preview_json, promo_code, discount_rub,
                 original_amount_rub, payment_url, provider,
                 provider_payment_method_id, created_at, updated_at,
                 order_kind, renewal_key, tax_receipt_mode,
                 tax_receipt_status, tax_receipt_updated_at
             )
-            VALUES (?, ?, 'pending', 1, ?, 'RUB', ?, ?, NULL, 0, ?, NULL,
+            VALUES (?, ?, 'pending', 1, ?, 'RUB', ?, ?, ?, NULL, 0, ?, NULL,
                     'yookassa', ?, ?, ?, 'auto_renewal', ?, ?, 'prepared', ?)
             """,
             (
@@ -25064,6 +26322,7 @@ def create_auto_renewal_order(subscription_id: int) -> dict:
                 int(quote["monthlyPriceRub"]),
                 json.dumps(selection, ensure_ascii=False),
                 json.dumps(quote, ensure_ascii=False),
+                json.dumps(purchase_preview, ensure_ascii=False, sort_keys=True),
                 int(quote["monthlyPriceRub"]),
                 payment_method_id,
                 now_iso,
@@ -25610,6 +26869,8 @@ def list_billing_orders_for_user(
 
 def cancel_auto_renew_for_user(user_id: int) -> dict:
     row = get_subscription_row(user_id)
+    if not bool(row["auto_renew"]) and not bool(row["provider_payment_method_id"]):
+        return subscription_status(row)
     selection = {}
     if row and row["selection_json"]:
         try:
@@ -25626,20 +26887,39 @@ def cancel_auto_renew_for_user(user_id: int) -> dict:
         selection_json = row["selection_json"] if row else None
 
     with db() as conn:
+        before = subscription_lifecycle_snapshot(row)
         conn.execute(
             """
             UPDATE subscriptions
             SET auto_renew = 0,
                 provider_payment_method_id = NULL,
                 selection_json = ?,
+                revision = revision + 1,
                 updated_at = ?
             WHERE id = ?
             """,
             (selection_json, utc_now_iso(), row["id"]),
         )
+        saved_row = conn.execute(
+            "SELECT * FROM subscriptions WHERE id = ?",
+            (int(row["id"]),),
+        ).fetchone()
+        after = subscription_lifecycle_snapshot(saved_row)
+        record_subscription_event(
+            conn,
+            user_id=int(user_id),
+            subscription_id=int(row["id"]),
+            event_type="auto_renew_canceled",
+            source="client",
+            reason="user_disabled_auto_renew",
+            period_starts_at=(after or {}).get("accessStartsAt"),
+            period_ends_at=(after or {}).get("expiresAt"),
+            before=before,
+            after=after,
+        )
         conn.commit()
 
-    return subscription_status(get_subscription_row(user_id))
+    return subscription_status(saved_row)
 
 
 def billing_subscription_snapshot(row: Optional[sqlite3.Row]) -> Optional[dict]:
@@ -25709,7 +26989,11 @@ def billing_subscription_matches_snapshot(
             else None
         ),
     }
-    return all(comparable.get(key) == snapshot.get(key) for key in comparable)
+    return all(
+        comparable.get(key) == snapshot.get(key)
+        for key in comparable
+        if key in snapshot
+    )
 
 
 def billing_refund_entitlement_preflight(row: sqlite3.Row) -> dict:
@@ -25770,7 +27054,8 @@ def restore_billing_subscription_snapshot(
         UPDATE subscriptions
         SET plan_code = ?, plan_name = ?, max_devices = ?, is_active = ?,
             expires_at = ?, monthly_price_rub = ?, selection_json = ?,
-            auto_renew = ?, provider_payment_method_id = ?, updated_at = ?
+            auto_renew = ?, provider_payment_method_id = ?,
+            revision = revision + 1, updated_at = ?
         WHERE id = ? AND user_id = ?
         """,
         (
@@ -25827,6 +27112,17 @@ def mark_billing_order_paid_and_activate(
         order_quote = json.loads(initial_row["quote_json"])
     except Exception:
         order_quote = {}
+    try:
+        raw_purchase_preview = (
+            initial_row["purchase_preview_json"]
+            if "purchase_preview_json" in initial_row.keys()
+            else None
+        )
+        purchase_preview = json.loads(raw_purchase_preview) if raw_purchase_preview else None
+        if not isinstance(purchase_preview, dict):
+            purchase_preview = None
+    except Exception:
+        purchase_preview = None
 
     payload = TariffSelectionIn(
         trafficPack=str(selection.get("trafficPack") or "gb20"),
@@ -25882,6 +27178,58 @@ def mark_billing_order_paid_and_activate(
                 status_code=409,
                 detail="Ошибочный или отменённый платёжный заказ нельзя активировать вручную.",
             )
+        if purchase_preview is not None:
+            current_subscription = conn.execute(
+                """
+                SELECT * FROM subscriptions
+                WHERE user_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (int(row["user_id"]),),
+            ).fetchone()
+            current_status = subscription_status(current_subscription)
+            expected_revision = purchase_preview.get("expectedSubscriptionRevision")
+            expected_expiry = parse_dt(
+                purchase_preview.get("expectedSubscriptionExpiresAt")
+            )
+            current_expiry = parse_dt(current_status.get("expiresAt"))
+            entitlement_changed = (
+                expected_revision is not None
+                and int(expected_revision) != int(current_status.get("revision") or 0)
+            ) or expected_expiry != current_expiry
+            if entitlement_changed:
+                conn.execute(
+                    """
+                    UPDATE billing_orders
+                    SET status = 'paid',
+                        provider_payment_id = COALESCE(?, provider_payment_id),
+                        provider_payment_method_id = COALESCE(?, provider_payment_method_id),
+                        paid_at = COALESCE(paid_at, ?), updated_at = ?
+                    WHERE public_id = ?
+                    """,
+                    (
+                        provider_payment_id,
+                        provider_payment_method_id,
+                        now,
+                        now,
+                        public_id,
+                    ),
+                )
+                conn.commit()
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "billing_order_subscription_changed",
+                        "message": (
+                            "После создания заказа подписка изменилась. Платёж сохранён "
+                            "для ручной сверки и не применён поверх новых прав."
+                        ),
+                        "orderId": public_id,
+                        "purchasePreview": purchase_preview,
+                        "currentSubscription": current_status,
+                    },
+                )
         conn.execute(
             """
             UPDATE billing_orders
@@ -25914,6 +27262,10 @@ def mark_billing_order_paid_and_activate(
             provider_payment_method_id=effective_payment_method_id,
             quote_override=order_quote if isinstance(order_quote, dict) and order_quote else None,
             selection_override=selection,
+            event_source="billing_payment",
+            event_reason="provider_payment_confirmed",
+            order_public_id=public_id,
+            purchase_preview_override=purchase_preview,
         )
     except Exception:
         with db() as conn:
@@ -32962,6 +34314,7 @@ def on_startup() -> None:
     backfill_expired_non_paid_subscriptions()
     migrate_stable_trials_to_free()
     ensure_subscription_for_existing_users()
+    backfill_subscription_events_from_billing_orders()
     ADMIN_TOKEN = ensure_admin_token()
 
 
@@ -34525,6 +35878,12 @@ def subscription_me(authorization: Optional[str] = Header(default=None)):
         "paidBeta": user_is_paid_beta_cohort(user),
         "betaOffer": beta_offer,
         "publicOffer": None,
+        "subscription": sub,
+        "paidSubscription": raw_sub,
+        "recentSubscriptionEvents": list_subscription_events_for_user(
+            int(user["id"]),
+            limit=10,
+        ),
     }
 
 
@@ -34536,11 +35895,24 @@ def subscription_quote(
     normalized = normalize_tariff_selection(payload)
     quote = quote_tariff(normalized)
     beta_offer = None
-    if normalized.get("policyMode") == "paid_beta" and authorization:
+    purchase_preview = None
+    user = None
+    if authorization:
         user = get_user_by_token(authorization)
+        purchase_preview = subscription_purchase_preview(
+            int(user["id"]),
+            normalized,
+            quote,
+        )
+    if normalized.get("policyMode") == "paid_beta" and user is not None:
         beta_offer = paid_beta_offer_for_user(int(user["id"]))
         if beta_offer.get("firstPeriodEligible"):
             quote = apply_paid_beta_invite_offer_to_quote(quote)
+            purchase_preview = subscription_purchase_preview(
+                int(user["id"]),
+                normalized,
+                quote,
+            )
     return {
         "ok": True,
         "catalog": build_tariff_catalog(
@@ -34550,6 +35922,7 @@ def subscription_quote(
         "quote": quote,
         "betaOffer": beta_offer,
         "publicOffer": None,
+        "purchasePreview": purchase_preview,
     }
 
 
@@ -39945,6 +41318,35 @@ def admin_subscriptions_expiry_readiness(
     return subscription_expiry_readiness_payload(limit=limit)
 
 
+@app.post("/api/v1/admin/subscriptions/expiry/run")
+def admin_run_subscription_expiry(
+    payload: AdminSubscriptionExpiryRunIn,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "billing.manage", request=request)
+    result = reconcile_expired_subscriptions(
+        dry_run=bool(payload.dryRun),
+        limit=int(payload.limit),
+        reason=payload.reason,
+    )
+    write_admin_audit(
+        "subscription_expiry_run",
+        "subscription",
+        "batch",
+        {
+            "dryRun": bool(payload.dryRun),
+            "candidateCount": result.get("candidateCount"),
+            "changedCount": result.get("changedCount"),
+            "peerCleanup": result.get("peerCleanup"),
+            "reason": clean_limited_text(payload.reason, 1000).strip(),
+        },
+        request=request,
+    )
+    return result
+
+
 @app.post("/api/v1/admin/subscriptions/{subscription_id}/expiry-review")
 def admin_subscription_expiry_review(
     subscription_id: int,
@@ -40305,10 +41707,12 @@ def admin_set_subscription(
     authorization: Optional[str] = Header(default=None),
 ):
     require_admin(x_admin_token, authorization, "billing.manage", request=request)
-    reason = clean_limited_text(payload.reason, 500).strip()
-    if payload.reason is not None and len(reason) < 8:
-        raise HTTPException(status_code=400, detail="Причина изменения должна содержать минимум 8 символов.")
-    subscription = upsert_subscription_for_user(user_id, payload)
+    reason = require_subscription_change_reason(payload.reason)
+    subscription = upsert_subscription_for_user(
+        user_id,
+        payload,
+        actor=admin_actor_from_context(request),
+    )
     write_admin_audit(
         "subscription_updated",
         "user",
@@ -40319,7 +41723,7 @@ def admin_set_subscription(
             "maxDevices": payload.maxDevices,
             "isActive": payload.isActive,
             "expiresAt": payload.expiresAt,
-            "reason": reason or "manual_admin_subscription_update",
+            "reason": reason,
         },
         request=request,
     )
@@ -40328,6 +41732,83 @@ def admin_set_subscription(
         "userId": user_id,
         "subscription": subscription,
     }
+
+
+@app.get("/api/v1/admin/users/{user_id}/subscription-history")
+def admin_get_subscription_history(
+    user_id: int,
+    limit: int = 100,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "billing.read")
+    if get_user_access_row(int(user_id)) is None:
+        raise HTTPException(status_code=404, detail="Пользователь не найден.")
+    return {
+        "ok": True,
+        "userId": int(user_id),
+        "subscription": subscription_status(get_subscription_row(int(user_id))),
+        "events": list_subscription_events_for_user(int(user_id), limit=limit),
+    }
+
+
+@app.post("/api/v1/admin/users/{user_id}/subscription/grant")
+def admin_grant_subscription(
+    user_id: int,
+    payload: AdminSubscriptionGrantIn,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "billing.manage", request=request)
+    result = grant_subscription_for_user(
+        int(user_id),
+        payload,
+        actor=admin_actor_from_context(request),
+    )
+    write_admin_audit(
+        "subscription_granted",
+        "user",
+        str(user_id),
+        {
+            "durationDays": payload.durationDays,
+            "expiresAt": payload.expiresAt,
+            "planCode": payload.planCode,
+            "maxDevices": payload.maxDevices,
+            "monthlyPriceRub": payload.monthlyPriceRub,
+            "reason": require_subscription_change_reason(payload.reason),
+        },
+        request=request,
+    )
+    return {"ok": True, "userId": int(user_id), **result}
+
+
+@app.post("/api/v1/admin/users/{user_id}/subscription/revoke")
+def admin_revoke_subscription(
+    user_id: int,
+    payload: AdminSubscriptionRevokeIn,
+    request: Request,
+    x_admin_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+):
+    require_admin(x_admin_token, authorization, "billing.manage", request=request)
+    result = revoke_subscription_for_user(
+        int(user_id),
+        payload,
+        actor=admin_actor_from_context(request),
+    )
+    write_admin_audit(
+        "subscription_revoked",
+        "user",
+        str(user_id),
+        {
+            "reason": require_subscription_change_reason(payload.reason),
+            "changed": result.get("changed"),
+            "peerCleanup": result.get("peerCleanup"),
+        },
+        request=request,
+    )
+    return {"ok": True, "userId": int(user_id), **result}
 
 
 @app.post("/api/v1/admin/users/{user_id}/paid-beta")
@@ -40374,7 +41855,17 @@ def admin_apply_tariff_for_user(
     authorization: Optional[str] = Header(default=None),
 ):
     require_admin(x_admin_token, authorization, "billing.manage", request=request)
-    result = apply_tariff_for_user(user_id, payload)
+    reason = require_subscription_change_reason(payload.adminReason)
+    normalized = normalize_tariff_selection(payload)
+    normalized["autoRenew"] = False
+    result = apply_tariff_for_user(
+        user_id,
+        payload,
+        selection_override=normalized,
+        event_source="admin_tariff",
+        event_reason=reason,
+        event_actor=admin_actor_from_context(request),
+    )
     write_admin_audit(
         "tariff_applied",
         "user",
@@ -40384,7 +41875,8 @@ def admin_apply_tariff_for_user(
             "trafficGb": payload.trafficGb,
             "unlimitedApps": payload.unlimitedApps,
             "devices": payload.devices,
-            "autoRenew": payload.autoRenew,
+            "autoRenew": False,
+            "reason": reason,
         },
         request=request,
     )

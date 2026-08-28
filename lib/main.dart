@@ -4506,6 +4506,9 @@ while True:
     required int devices,
     required bool dedicatedIp,
     required bool autoRenew,
+    required bool renewalAcknowledged,
+    int? expectedSubscriptionRevision,
+    String? expectedSubscriptionExpiresAt,
   }) async {
     final usesFixedBillingPlan =
         billingPlanCode != null && billingPlanCode.trim().isNotEmpty;
@@ -4522,6 +4525,9 @@ while True:
         'devices': devices,
         'dedicatedIp': dedicatedIp,
         'autoRenew': autoRenew,
+        'renewalAcknowledged': renewalAcknowledged,
+        'expectedSubscriptionRevision': ?expectedSubscriptionRevision,
+        'expectedSubscriptionExpiresAt': ?expectedSubscriptionExpiresAt,
         'billingPlanCode': ?billingPlanCode,
         if (kPublicProductBuild ||
             (kPaidBetaCustomerUi && usesFixedBillingPlan))
@@ -5214,6 +5220,7 @@ while True:
     required String planName,
     required int maxDevices,
     required bool isActive,
+    required String reason,
     String? expiresAt,
   }) async {
     final payload = <String, dynamic>{
@@ -5221,6 +5228,7 @@ while True:
       'planName': planName,
       'maxDevices': maxDevices,
       'isActive': isActive,
+      'reason': reason.trim(),
     };
     if (expiresAt != null && expiresAt.trim().isNotEmpty) {
       payload['expiresAt'] = expiresAt.trim();
@@ -5247,6 +5255,7 @@ while True:
     required List<String> unlimitedApps,
     required int devices,
     required bool dedicatedIp,
+    required String reason,
   }) async {
     final res = await _jsonRequest(
       method: 'POST',
@@ -5258,6 +5267,8 @@ while True:
         'unlimitedApps': unlimitedApps,
         'devices': devices,
         'dedicatedIp': dedicatedIp,
+        'autoRenew': false,
+        'adminReason': reason.trim(),
       },
     );
     if (!res.ok) return ApiResult.err(res.message);
@@ -7756,14 +7767,19 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   String _lastSuccessfulRouteProtocol = '';
   DateTime? _lastSuccessfulRouteAt;
   bool _subscriptionActive = false;
+  bool _paidSubscriptionActive = false;
   bool _subscriptionEntitlementResolved = false;
   String _subscriptionPlanCode = 'base';
+  String? _paidSubscriptionPlanName;
+  String _paidSubscriptionStatus = 'inactive';
   bool _freeTierActive = false;
   Map<String, dynamic> _trafficUsage = <String, dynamic>{};
   int _subscriptionMaxDevices = kPaidBetaBuild ? 2 : 1;
   bool _subscriptionAutoRenew = false;
   bool _paymentMethodSaved = false;
+  String? _subscriptionAccessStartsAt;
   String? _subscriptionExpiresAt;
+  int _subscriptionRevision = 0;
   int? _subscriptionMonthlyPriceRub;
   bool _vpnTapCooldown = false;
   bool _pendingBillingCheckRunning = false;
@@ -9092,6 +9108,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     if (subscription is Map) {
       sub = Map<String, dynamic>.from(subscription);
     }
+    final paidSubscriptionRaw = profile['paidSubscription'];
+    final paidSub = paidSubscriptionRaw is Map
+        ? Map<String, dynamic>.from(paidSubscriptionRaw)
+        : null;
+    final lifecycleSub = paidSub ?? sub;
 
     _freeTierActive = greenVpnIsFreeTierSubscription(
       profile,
@@ -9103,15 +9124,31 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     final planCodeRaw = profile['planCode'] ?? sub?['planCode'];
     final nextPlanCode = (planCodeRaw ?? '').toString().trim().toLowerCase();
     _subscriptionPlanCode = nextPlanCode.isEmpty ? 'base' : nextPlanCode;
-    final expiresRaw = profile['expiresAt'] ?? sub?['expiresAt'];
+    _paidSubscriptionActive = lifecycleSub?['isActive'] == true;
+    final paidPlanName = (lifecycleSub?['planName'] ?? '').toString().trim();
+    _paidSubscriptionPlanName = paidPlanName.isEmpty ? null : paidPlanName;
+    final paidStatus = (lifecycleSub?['status'] ?? '').toString().trim();
+    _paidSubscriptionStatus = paidStatus.isEmpty
+        ? (_paidSubscriptionActive ? 'active' : 'inactive')
+        : paidStatus;
+    final accessStartsRaw = lifecycleSub?['accessStartsAt'];
+    final accessStarts = accessStartsRaw == null
+        ? ''
+        : accessStartsRaw.toString().trim();
+    _subscriptionAccessStartsAt = accessStarts.isEmpty ? null : accessStarts;
+    final expiresRaw = lifecycleSub?['expiresAt'];
     final expires = expiresRaw == null ? '' : expiresRaw.toString().trim();
     _subscriptionExpiresAt = expires.isEmpty ? null : expires;
+    final revisionRaw = lifecycleSub?['revision'];
+    _subscriptionRevision = revisionRaw is num
+        ? revisionRaw.toInt()
+        : int.tryParse((revisionRaw ?? '').toString()) ?? 0;
 
-    final monthlyRaw = profile['monthlyPriceRub'] ?? sub?['monthlyPriceRub'];
+    final monthlyRaw = lifecycleSub?['monthlyPriceRub'];
     _subscriptionMonthlyPriceRub = monthlyRaw is num
         ? monthlyRaw.toInt()
         : int.tryParse((monthlyRaw ?? '').toString());
-    final maxDevicesRaw = profile['maxDevices'] ?? sub?['maxDevices'];
+    final maxDevicesRaw = lifecycleSub?['maxDevices'];
     final parsedMaxDevices = maxDevicesRaw is num
         ? maxDevicesRaw.toInt()
         : int.tryParse((maxDevicesRaw ?? '').toString());
@@ -9119,10 +9156,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       _subscriptionMaxDevices = parsedMaxDevices;
     }
 
-    final autoRenewRaw = profile['autoRenew'] ?? sub?['autoRenew'];
+    final autoRenewRaw = lifecycleSub?['autoRenew'];
     _subscriptionAutoRenew = autoRenewRaw == true;
-    final paymentMethodRaw =
-        profile['paymentMethodSaved'] ?? sub?['paymentMethodSaved'];
+    final paymentMethodRaw = lifecycleSub?['paymentMethodSaved'];
     _paymentMethodSaved = paymentMethodRaw == true;
 
     final rawTrafficUsage = trafficUsage ?? profile['trafficUsage'];
@@ -9414,7 +9450,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _createTariffOrderOnServer({required bool autoRenew}) async {
+  Future<void> _createTariffOrderOnServer({
+    required bool autoRenew,
+    required bool renewalAcknowledged,
+  }) async {
     if (kIsWeb) return;
     if (kTrialOnlyNoAdsBuild && !kPaidBetaBuild) {
       setState(() {
@@ -9454,6 +9493,19 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       );
       final usesFixedBillingPlans =
           kPublicProductBuild || fixedPlanCodes.isNotEmpty;
+      final purchasePreviewRaw = _tariffQuote?['purchasePreview'];
+      final purchasePreview = purchasePreviewRaw is Map
+          ? Map<String, dynamic>.from(purchasePreviewRaw)
+          : const <String, dynamic>{};
+      final expectedRevisionRaw =
+          purchasePreview['expectedSubscriptionRevision'];
+      final expectedRevision = expectedRevisionRaw is num
+          ? expectedRevisionRaw.toInt()
+          : int.tryParse((expectedRevisionRaw ?? '').toString());
+      final expectedExpiry =
+          (purchasePreview['expectedSubscriptionExpiresAt'] ?? '')
+              .toString()
+              .trim();
       final res = await _api.createBillingOrder(
         accessToken: paymentSession.accessToken,
         billingPlanCode: usesFixedBillingPlans
@@ -9470,6 +9522,14 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         devices: devices,
         dedicatedIp: optDedicatedIp,
         autoRenew: autoRenew,
+        renewalAcknowledged: renewalAcknowledged,
+        expectedSubscriptionRevision: renewalAcknowledged
+            ? expectedRevision
+            : null,
+        expectedSubscriptionExpiresAt:
+            renewalAcknowledged && expectedExpiry.isNotEmpty
+            ? expectedExpiry
+            : null,
       );
 
       if (!mounted) return;
@@ -9477,6 +9537,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         final text = res.message ?? 'Не удалось создать заказ на оплату.';
         setState(() => _tariffStatus = text);
         _toast(context, text);
+        await _refreshTariffServerState(showToast: false);
+        if (mounted) setState(() => _tariffStatus = text);
         return;
       }
 
@@ -9484,6 +9546,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       final orderMap = order is Map ? Map<String, dynamic>.from(order) : null;
       final selection = orderMap?['selection'];
       final quote = orderMap?['quote'];
+      final orderPreview = orderMap?['purchasePreview'];
 
       if (selection is Map) {
         _applyTariffSelectionFromServer(Map<String, dynamic>.from(selection));
@@ -9494,6 +9557,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           if (selection is Map)
             'selection': Map<String, dynamic>.from(selection),
           if (quote is Map) 'quote': Map<String, dynamic>.from(quote),
+          if (orderPreview is Map)
+            'purchasePreview': Map<String, dynamic>.from(orderPreview),
           'order': ?orderMap,
         };
         if (orderMap != null) {
@@ -16179,7 +16244,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
 
     return TariffPage(
-      planName: planName,
+      planName: _paidSubscriptionPlanName ?? planName,
       freeTierActive: _freeTierActive,
       trafficUsage: _trafficUsage,
       isGuest: widget.session.isGuest,
@@ -16196,21 +16261,32 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       tariffQuote: _tariffQuote,
       tariffStatus: _tariffStatus,
       pendingBillingOrder: _pendingBillingOrder,
-      subscriptionActive: _subscriptionActive,
+      subscriptionActive: _paidSubscriptionActive,
       subscriptionAutoRenew: _subscriptionAutoRenew,
       subscriptionMaxDevices: _subscriptionMaxDevices,
+      subscriptionAccessStartsAt: _subscriptionAccessStartsAt,
       subscriptionExpiresAt: _subscriptionExpiresAt,
+      subscriptionStatus: _paidSubscriptionStatus,
+      subscriptionRevision: _subscriptionRevision,
       subscriptionMonthlyPriceRub: _subscriptionMonthlyPriceRub,
       publicBillingPlanCode: _publicBillingPlanCode,
       tariffBusy: _tariffBusy,
       onClaimPaidBetaInvite: () => changedAsync(_claimPaidBetaInvite),
-      onApplyTariff: (autoRenew) =>
-          changedAsync(() => _createTariffOrderOnServer(autoRenew: autoRenew)),
+      onApplyTariff: (autoRenew, renewalAcknowledged) => changedAsync(
+        () => _createTariffOrderOnServer(
+          autoRenew: autoRenew,
+          renewalAcknowledged: renewalAcknowledged,
+        ),
+      ),
       onCheckPendingBillingOrder: () =>
           changedAsync(() => _checkPendingBillingOrder(showToast: true)),
       onOpenPaymentUrl: _openPaymentUrl,
       onPublicBillingPlanChanged: (code) => changed(() {
-        setState(() => _publicBillingPlanCode = code);
+        setState(() {
+          _publicBillingPlanCode = code;
+          _tariffQuote = null;
+          _tariffBusy = true;
+        });
         _scheduleTariffRefresh();
       }),
       onToggleApp: (app) => changed(() {
@@ -18170,7 +18246,10 @@ class TariffPage extends StatelessWidget {
   final bool subscriptionActive;
   final bool subscriptionAutoRenew;
   final int subscriptionMaxDevices;
+  final String? subscriptionAccessStartsAt;
   final String? subscriptionExpiresAt;
+  final String subscriptionStatus;
+  final int subscriptionRevision;
   final int? subscriptionMonthlyPriceRub;
   final String publicBillingPlanCode;
   final bool tariffBusy;
@@ -18185,7 +18264,8 @@ class TariffPage extends StatelessWidget {
   final void Function(bool) onOptDedicatedIp;
   final void Function(bool) onOptAutoRenew;
   final Future<bool> Function() onCancelAutoRenew;
-  final Future<void> Function(bool autoRenew) onApplyTariff;
+  final Future<void> Function(bool autoRenew, bool renewalAcknowledged)
+  onApplyTariff;
   final Future<void> Function() onClaimPaidBetaInvite;
   final Future<void> Function() onCheckPendingBillingOrder;
   final void Function(String url) onOpenPaymentUrl;
@@ -18213,7 +18293,10 @@ class TariffPage extends StatelessWidget {
     required this.subscriptionActive,
     this.subscriptionAutoRenew = false,
     this.subscriptionMaxDevices = 1,
+    this.subscriptionAccessStartsAt,
     required this.subscriptionExpiresAt,
+    this.subscriptionStatus = 'inactive',
+    this.subscriptionRevision = 0,
     required this.subscriptionMonthlyPriceRub,
     required this.publicBillingPlanCode,
     required this.tariffBusy,
@@ -18270,22 +18353,25 @@ class TariffPage extends StatelessWidget {
     required int periodDays,
     required String periodTitle,
     required bool autoRenewAvailable,
+    bool? initialAutoRenew,
   }) async {
-    if (subscriptionAutoRenew) {
-      await onApplyTariff(true);
-      return;
-    }
-    if (!autoRenewAvailable) {
-      await onApplyTariff(false);
-      return;
-    }
-
-    var autoRenewConsent = false;
+    final previewRaw = tariffQuote?['purchasePreview'];
+    final preview = previewRaw is Map
+        ? Map<String, dynamic>.from(previewRaw)
+        : const <String, dynamic>{};
+    final previewKind = (preview['kind'] ?? '').toString().trim().toLowerCase();
+    final requiresAcknowledgement = preview['requiresAcknowledgement'] == true;
+    final periodStartsAt = (preview['periodStartsAt'] ?? '').toString().trim();
+    final periodEndsAt = (preview['periodEndsAt'] ?? '').toString().trim();
+    final isExtension = previewKind == 'extension' && requiresAcknowledgement;
+    var autoRenewConsent = initialAutoRenew ?? subscriptionAutoRenew;
     final confirmedAutoRenew = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (dialogContext, setDialogState) => AlertDialog(
-          title: const Text('Подтверждение оплаты'),
+          title: Text(
+            isExtension ? 'Продление подписки' : 'Подтверждение оплаты',
+          ),
           content: SizedBox(
             width: 440,
             child: Column(
@@ -18296,24 +18382,65 @@ class TariffPage extends StatelessWidget {
                   'К оплате: $priceRub ₽ за $periodTitle.',
                   style: const TextStyle(fontWeight: FontWeight.w800),
                 ),
+                if (subscriptionActive && subscriptionExpiresAt != null) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    'Текущий доступ действует до '
+                    '${_formatCompactDate(subscriptionExpiresAt!)}.',
+                  ),
+                ],
+                if (periodStartsAt.isNotEmpty && periodEndsAt.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    '${isExtension ? 'Следующий' : 'Оплачиваемый'} период: '
+                    'с ${_formatCompactDate(periodStartsAt)} '
+                    'по ${_formatCompactDate(periodEndsAt)}.',
+                    key: const Key('checkout_period_preview'),
+                    style: const TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                ],
+                if (requiresAcknowledgement) ...[
+                  const SizedBox(height: 10),
+                  const Text(
+                    'Оплата не заменит текущий период: новый срок начнётся '
+                    'после его окончания.',
+                  ),
+                ],
                 const SizedBox(height: 12),
-                CheckboxListTile(
-                  key: const Key('auto_renew_checkout_consent'),
-                  contentPadding: EdgeInsets.zero,
-                  controlAffinity: ListTileControlAffinity.leading,
-                  value: autoRenewConsent,
-                  onChanged: (value) =>
-                      setDialogState(() => autoRenewConsent = value == true),
-                  title: const Text(
-                    'Подключить автопродление',
-                    style: TextStyle(fontWeight: FontWeight.w900),
+                if (subscriptionAutoRenew)
+                  const ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.autorenew_rounded),
+                    title: Text(
+                      'Автопродление уже включено',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                    subtitle: Text(
+                      'Ручная оплата добавит отдельный следующий период. '
+                      'Автопродление можно отключить в настройках.',
+                    ),
+                  )
+                else if (autoRenewAvailable)
+                  CheckboxListTile(
+                    key: const Key('auto_renew_checkout_consent'),
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    value: autoRenewConsent,
+                    onChanged: (value) =>
+                        setDialogState(() => autoRenewConsent = value == true),
+                    title: const Text(
+                      'Подключить автопродление',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                    subtitle: Text(
+                      'Сохранить способ оплаты и списывать $priceRub ₽ каждые '
+                      '$periodDays дней. Отключить можно в настройках.',
+                    ),
+                  )
+                else
+                  const Text(
+                    'Автопродление для этого способа оплаты недоступно.',
                   ),
-                  subtitle: Text(
-                    'Сохранить способ оплаты и списывать $priceRub ₽ каждые '
-                    '$periodDays дней. Отключить можно в Настройки → '
-                    'Автопродление.',
-                  ),
-                ),
               ],
             ),
           ),
@@ -18333,7 +18460,7 @@ class TariffPage extends StatelessWidget {
       ),
     );
     if (confirmedAutoRenew == null) return;
-    await onApplyTariff(confirmedAutoRenew);
+    await onApplyTariff(confirmedAutoRenew, requiresAcknowledgement);
   }
 
   int _basePriceForGb(double gb) {
@@ -18410,6 +18537,7 @@ class TariffPage extends StatelessWidget {
     final code = planName.trim().toLowerCase();
     if (!subscriptionActive) return false;
     if (kPaidBetaBuild && code.contains('trial')) return false;
+    if ((subscriptionMonthlyPriceRub ?? 0) <= 0) return false;
     return code.isNotEmpty &&
         code != 'base' &&
         code != 'trial' &&
@@ -18417,8 +18545,9 @@ class TariffPage extends StatelessWidget {
   }
 
   bool get _hadPaidPlanBefore {
-    if (freeTierActive) return false;
     final code = planName.trim().toLowerCase();
+    if ((subscriptionMonthlyPriceRub ?? 0) <= 0) return false;
+    if (code.contains('trial')) return false;
     return code.isNotEmpty &&
         code != 'base' &&
         code != 'trial' &&
@@ -18438,14 +18567,14 @@ class TariffPage extends StatelessWidget {
         : planName;
     if (_hasPaidPlan) {
       final price = subscriptionMonthlyPriceRub;
-      final priceText = price == null ? '' : ' • $price ₽/мес';
-      final expiresText = subscriptionExpiresAt == null
-          ? ''
-          : ' • до ${_formatCompactDate(subscriptionExpiresAt!)}';
-      return '$displayedPlanName$priceText$expiresText';
+      final priceText = price == null ? '' : ' • $price ₽ за период';
+      return '$displayedPlanName$priceText';
     }
     if (_hadPaidPlanBefore) {
-      return '$displayedPlanName закончился. Можно продлить или выбрать другой набор.';
+      final ended = subscriptionExpiresAt == null
+          ? ''
+          : ' ${_formatCompactDate(subscriptionExpiresAt!)}';
+      return '$displayedPlanName завершён$ended. Можно оформить новый период.';
     }
     return 'Активного платного тарифа пока нет.';
   }
@@ -18695,6 +18824,34 @@ class TariffPage extends StatelessWidget {
       effectiveSelectedPlanCode,
       selectedDays,
     );
+    final purchasePreviewRaw = tariffQuote?['purchasePreview'];
+    final purchasePreview = purchasePreviewRaw is Map
+        ? Map<String, dynamic>.from(purchasePreviewRaw)
+        : const <String, dynamic>{};
+    final purchaseKind = (purchasePreview['kind'] ?? '')
+        .toString()
+        .trim()
+        .toLowerCase();
+    final previewStartsAt = (purchasePreview['periodStartsAt'] ?? '')
+        .toString()
+        .trim();
+    final previewEndsAt = (purchasePreview['periodEndsAt'] ?? '')
+        .toString()
+        .trim();
+    final purchaseAction = switch (purchaseKind) {
+      'extension' => 'Продлить',
+      'reactivation' => 'Возобновить',
+      _ => 'Оплатить',
+    };
+    final quoteSelectionRaw = tariffQuote?['selection'];
+    final quoteSelection = quoteSelectionRaw is Map
+        ? Map<String, dynamic>.from(quoteSelectionRaw)
+        : const <String, dynamic>{};
+    final quotePlanCode = (quoteSelection['planCode'] ?? '').toString().trim();
+    final exactQuoteReady =
+        quotePlanCode == effectiveSelectedPlanCode &&
+        previewStartsAt.isNotEmpty &&
+        previewEndsAt.isNotEmpty;
     final pendingStatus = (pendingBillingOrder?['status'] ?? '')
         .toString()
         .trim()
@@ -18707,10 +18864,12 @@ class TariffPage extends StatelessWidget {
           'cancelled',
           'failed',
         }.contains(pendingStatus);
-    final currentPlan = isGuest || freeTierActive
+    final currentPlan = isGuest
         ? 'Бесплатный тариф'
         : _hasPaidPlan
         ? _currentPlanText()
+        : freeTierActive
+        ? 'Бесплатный тариф'
         : subscriptionActive
         ? 'Пробный период активен'
         : 'Пробный период завершён';
@@ -18825,9 +18984,60 @@ class TariffPage extends StatelessWidget {
                   fontSize: 18,
                 ),
               ),
+              if (_hasPaidPlan &&
+                  subscriptionAccessStartsAt != null &&
+                  subscriptionExpiresAt != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Оплаченный доступ: с '
+                  '${_formatCompactDate(subscriptionAccessStartsAt!)} по '
+                  '${_formatCompactDate(subscriptionExpiresAt!)}.',
+                  key: const Key('active_subscription_period'),
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+              if (_hasPaidPlan && subscriptionAutoRenew) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Автопродление включено.',
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+              if (!_hasPaidPlan &&
+                  _hadPaidPlanBefore &&
+                  subscriptionStatus == 'expired' &&
+                  subscriptionExpiresAt != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Последний оплаченный период завершился '
+                  '${_formatCompactDate(subscriptionExpiresAt!)}.',
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ] else if (!_hasPaidPlan &&
+                  _hadPaidPlanBefore &&
+                  subscriptionStatus == 'inactive') ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Платная подписка отключена.',
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
               if (!isGuest &&
                   !freeTierActive &&
                   !_hasPaidPlan &&
+                  !_hadPaidPlanBefore &&
                   subscriptionExpiresAt != null) ...[
                 const SizedBox(height: 6),
                 Text(
@@ -18855,6 +19065,36 @@ class TariffPage extends StatelessWidget {
               for (var index = 0; index < plans.length; index++) ...[
                 planOption(plans[index]),
                 if (index != plans.length - 1) const SizedBox(height: 8),
+              ],
+              if (previewStartsAt.isNotEmpty && previewEndsAt.isNotEmpty) ...[
+                const Divider(height: 28),
+                Text(
+                  purchaseKind == 'extension'
+                      ? 'Следующий оплачиваемый период'
+                      : 'Оплачиваемый период',
+                  style: TextStyle(
+                    color: mutedColor,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  'С ${_formatCompactDate(previewStartsAt)} по '
+                  '${_formatCompactDate(previewEndsAt)} • $selectedPrice ₽',
+                  key: const Key('tariff_period_preview'),
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+                if (purchaseKind == 'extension') ...[
+                  const SizedBox(height: 5),
+                  Text(
+                    'Текущая подписка не изменится: этот срок добавится после неё.',
+                    style: TextStyle(
+                      color: mutedColor,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
               ],
               const SizedBox(height: 14),
               Wrap(
@@ -18955,7 +19195,11 @@ class TariffPage extends StatelessWidget {
           width: double.infinity,
           child: ElevatedButton.icon(
             key: const Key('start_payment_button'),
-            onPressed: tariffBusy || hasPendingOrder || !paidSalesAvailable
+            onPressed:
+                tariffBusy ||
+                    hasPendingOrder ||
+                    !paidSalesAvailable ||
+                    !exactQuoteReady
                 ? null
                 : () => unawaited(
                     _confirmPublicCheckout(
@@ -18974,8 +19218,10 @@ class TariffPage extends StatelessWidget {
                   )
                 : const Icon(Icons.payment_rounded),
             label: Text(
-              paidSalesAvailable
-                  ? 'Оплатить $selectedPrice ₽ за $selectedPeriodTitle'
+              paidSalesAvailable && exactQuoteReady
+                  ? '$purchaseAction $selectedPeriodTitle за $selectedPrice ₽'
+                  : paidSalesAvailable
+                  ? 'Обновляем срок подписки...'
                   : 'Оплата временно недоступна',
               style: const TextStyle(fontWeight: FontWeight.w900),
             ),
@@ -19340,7 +19586,16 @@ class TariffPage extends StatelessWidget {
           child: ElevatedButton.icon(
             onPressed: tariffBusy || hasPendingOrder
                 ? null
-                : () => onApplyTariff(optAutoRenew),
+                : () => unawaited(
+                    _confirmPublicCheckout(
+                      context,
+                      priceRub: price,
+                      periodDays: 30,
+                      periodTitle: '30 дней',
+                      autoRenewAvailable: true,
+                      initialAutoRenew: optAutoRenew,
+                    ),
+                  ),
             icon: tariffBusy
                 ? const SizedBox(
                     width: 16,
@@ -19645,7 +19900,16 @@ class TariffPage extends StatelessWidget {
                 child: ElevatedButton.icon(
                   onPressed: tariffBusy || hasPendingOrder
                       ? null
-                      : () => onApplyTariff(optAutoRenew),
+                      : () => unawaited(
+                          _confirmPublicCheckout(
+                            context,
+                            priceRub: price,
+                            periodDays: 30,
+                            periodTitle: '30 дней',
+                            autoRenewAvailable: false,
+                            initialAutoRenew: false,
+                          ),
+                        ),
                   icon: tariffBusy
                       ? const SizedBox(
                           width: 16,
@@ -20400,7 +20664,16 @@ class TariffPage extends StatelessWidget {
                 child: ElevatedButton.icon(
                   onPressed: tariffBusy
                       ? null
-                      : () => onApplyTariff(optAutoRenew),
+                      : () => unawaited(
+                          _confirmPublicCheckout(
+                            context,
+                            priceRub: price,
+                            periodDays: 30,
+                            periodTitle: '30 дней',
+                            autoRenewAvailable: true,
+                            initialAutoRenew: optAutoRenew,
+                          ),
+                        ),
                   icon: tariffBusy
                       ? const SizedBox(
                           width: 16,
@@ -22058,6 +22331,7 @@ class _BackendAdminUserPageState extends State<BackendAdminUserPage> {
   final Set<String> _unlimitedAppCodes = <String>{};
   int? _monthlyPriceRub;
   String? _expiresAt;
+  final _reasonCtl = TextEditingController();
 
   @override
   void initState() {
@@ -22078,6 +22352,19 @@ class _BackendAdminUserPageState extends State<BackendAdminUserPage> {
     _loadDevices();
     unawaited(_loadTariffCatalog());
     unawaited(_refreshQuote());
+  }
+
+  @override
+  void dispose() {
+    _reasonCtl.dispose();
+    super.dispose();
+  }
+
+  String? _adminReason() {
+    final reason = _reasonCtl.text.trim();
+    if (reason.length >= 8) return reason;
+    setState(() => _status = 'Укажите причину изменения: минимум 8 символов.');
+    return null;
   }
 
   void _toast(String text) {
@@ -22250,6 +22537,8 @@ class _BackendAdminUserPageState extends State<BackendAdminUserPage> {
 
   Future<void> _saveSubscription() async {
     if (_userId <= 0) return;
+    final reason = _adminReason();
+    if (reason == null) return;
     setState(() => _busy = true);
     try {
       final res = await widget.api.adminSetSubscription(
@@ -22259,6 +22548,8 @@ class _BackendAdminUserPageState extends State<BackendAdminUserPage> {
         planName: _planName,
         maxDevices: _maxDevices.clamp(1, 100),
         isActive: _isActive,
+        expiresAt: _expiresAt,
+        reason: reason,
       );
       if (!mounted) return;
       setState(() {
@@ -22273,6 +22564,8 @@ class _BackendAdminUserPageState extends State<BackendAdminUserPage> {
 
   Future<void> _applyTariffForUser() async {
     if (_userId <= 0) return;
+    final reason = _adminReason();
+    if (reason == null) return;
     setState(() => _busy = true);
     try {
       final res = await widget.api.adminApplyTariff(
@@ -22283,6 +22576,7 @@ class _BackendAdminUserPageState extends State<BackendAdminUserPage> {
         unlimitedApps: _unlimitedAppCodes.toList(),
         devices: _maxDevices.clamp(1, 5),
         dedicatedIp: _dedicatedIp,
+        reason: reason,
       );
       if (!mounted) return;
       if (!res.ok || res.data == null) {
@@ -22543,6 +22837,16 @@ class _BackendAdminUserPageState extends State<BackendAdminUserPage> {
                             },
                     );
                   }).toList(),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _reasonCtl,
+                  minLines: 1,
+                  maxLines: 2,
+                  decoration: const InputDecoration(
+                    labelText: 'Причина изменения',
+                    hintText: 'Например: продление по обращению пользователя',
+                  ),
                 ),
                 const SizedBox(height: 12),
                 Row(

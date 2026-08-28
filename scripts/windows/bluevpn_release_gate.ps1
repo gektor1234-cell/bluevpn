@@ -506,17 +506,31 @@ if ($null -ne $releaseContract) {
             Add-Error 'Release contract billing scope, renewal policy, ads, or publication state is inconsistent'
         }
 
-        if (
-            $releaseContract.publication.productionPublished -eq $true -and
+        $mandatoryVersionsMatch = (
             $releaseContract.publication.mandatoryUpdateRequired -eq $true -and
             [string]$releaseContract.publication.minSupportedVersion -eq $appVersion -and
             [string]$releaseContract.publication.androidMinSupportedVersion -eq $appVersion -and
             [string]$releaseContract.publication.windowsMinSupportedVersion -eq $windowsAppVersion
+        )
+        if (
+            $releaseContract.publication.productionPublished -eq $true -and
+            $releaseContract.publication.androidProductionPublished -eq $true -and
+            $releaseContract.publication.windowsProductionPublished -eq $true -and
+            $mandatoryVersionsMatch
         ) {
             Add-Pass 'Published production contract requires the exact current app version'
         }
+        elseif (
+            $releaseContract.publication.productionPublished -eq $false -and
+            $releaseContract.publication.androidProductionPublished -eq $false -and
+            $releaseContract.publication.windowsProductionPublished -eq $false -and
+            $releaseContract.publication.ownerApprovalRequired -eq $true -and
+            $mandatoryVersionsMatch
+        ) {
+            Add-Pass 'Unpublished candidate contract keeps exact mandatory versions behind owner approval'
+        }
         else {
-            Add-Error 'Published production mandatory-update contract is incomplete or inconsistent'
+            Add-Error 'Production or candidate mandatory-update contract is incomplete or inconsistent'
         }
     }
 }
@@ -818,6 +832,10 @@ $requiredBackendFragments = @(
     '@app.get("/api/v1/billing/orders")',
     '@app.get("/api/v1/billing/orders/{order_id}")',
     '@app.post("/api/v1/subscription/auto-renew/cancel")',
+    '@app.post("/api/v1/admin/subscriptions/expiry/run")',
+    '@app.get("/api/v1/admin/users/{user_id}/subscription-history")',
+    '@app.post("/api/v1/admin/users/{user_id}/subscription/grant")',
+    '@app.post("/api/v1/admin/users/{user_id}/subscription/revoke")',
     '@app.get("/api/v1/admin/launch/advertising-readiness")',
     '@app.get("/api/v1/admin/billing/readiness")',
     '@app.post("/api/v1/admin/billing/orders/{order_id}/cancel-stale")',
@@ -1024,6 +1042,12 @@ $requiredBackendSafetyFragments = @(
     '"pricingModel": "fixed_term_plans"',
     'GREENVPN_AUTO_RENEWAL_CHARGES_ENABLED',
     'def execute_due_auto_renewals(',
+    'CREATE TABLE IF NOT EXISTS subscription_events',
+    'def subscription_purchase_preview(',
+    'renewal_confirmation_required',
+    'subscription_changed_refresh_quote',
+    'def reconcile_expired_subscriptions(',
+    'peer_revocation_pending',
     'GREENVPN_REFUND_EXECUTION_ENABLED',
     'GREENVPN_REFUND_BILLING_PRIMARY',
     'def execute_full_refund_for_order(',

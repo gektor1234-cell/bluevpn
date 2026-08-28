@@ -7805,32 +7805,66 @@ function renderUserPaymentSummary(subscription = {}, orders = []) {
   `;
 }
 
+function subscriptionEventTitle(eventType) {
+  const titles = {
+    activated: 'Подписка активирована',
+    extended: 'Подписка продлена',
+    expired: 'Срок подписки истёк',
+    admin_granted: 'Подписка выдана администратором',
+    admin_extended: 'Подписка продлена администратором',
+    admin_revoked: 'Подписка отозвана администратором',
+    admin_updated: 'Условия подписки изменены',
+    auto_renew_canceled: 'Автопродление отключено',
+  };
+  return titles[eventType] || eventType || 'Изменение подписки';
+}
+
+function renderSubscriptionEvents(events = []) {
+  if (!events.length) return '<p class="muted">История подписки пока пуста.</p>';
+  return `
+    <div class="status-list subscription-history">
+      ${events.map((event) => `
+        <div class="status-item">
+          <div>
+            <strong>${escapeHtml(subscriptionEventTitle(event.eventType))}</strong>
+            <span>${escapeHtml(shortDate(event.createdAt))}</span>
+          </div>
+          <div class="detail-meta">
+            <span>Период: ${escapeHtml(shortDate(event.periodStartsAt))} - ${escapeHtml(shortDate(event.periodEndsAt))}</span>
+            <span>Источник: ${escapeHtml(event.source || 'backend')}</span>
+            <span>Причина: ${escapeHtml(event.reason || 'не указана')}</span>
+            ${event.orderId ? `<span>Заказ: ${escapeHtml(event.orderId)}</span>` : ''}
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
 function renderUserSubscriptionEditor(user, subscription = {}) {
   const canManageBilling = can('billing.manage');
   return `
     <section class="detail-card">
       <p class="eyebrow">Доступ и тариф</p>
-      <h3>Ручное управление подпиской</h3>
+      <h3>${escapeHtml(subscription.planName || 'Платной подписки нет')}</h3>
+      <div class="detail-meta subscription-current-state">
+        <span>Статус: ${escapeHtml(subscription.status || (subscription.isActive ? 'active' : 'inactive'))}</span>
+        <span>Начало доступа: ${escapeHtml(shortDate(subscription.accessStartsAt))}</span>
+        <span>Окончание доступа: ${escapeHtml(shortDate(subscription.expiresAt))}</span>
+        <span>Версия состояния: ${escapeHtml(subscription.revision || 0)}</span>
+      </div>
       <div class="subscription-editor">
         <label>
-          Код тарифа
-          <input id="userPlanCodeInput" type="text" value="${escapeHtml(subscription.planCode || 'none')}" ${canManageBilling ? '' : 'disabled'}>
-        </label>
-        <label>
-          Название
-          <input id="userPlanNameInput" type="text" value="${escapeHtml(subscription.planName || 'Без подписки')}" ${canManageBilling ? '' : 'disabled'}>
+          Срок выдачи, дней
+          <input id="userSubscriptionDurationInput" type="number" min="1" max="3650" value="30" ${canManageBilling ? '' : 'disabled'}>
         </label>
         <label>
           Лимит устройств
-          <input id="userMaxDevicesInput" type="number" min="1" max="100" value="${escapeHtml(subscription.maxDevices || 1)}" ${canManageBilling ? '' : 'disabled'}>
+          <input id="userMaxDevicesInput" type="number" min="1" max="100" value="${escapeHtml(subscription.maxDevices || 5)}" ${canManageBilling ? '' : 'disabled'}>
         </label>
         <label>
-          Действует до
-          <input id="userSubscriptionExpiresInput" type="datetime-local" value="${escapeHtml(promoDateTimeValue(subscription.expiresAt))}" ${canManageBilling ? '' : 'disabled'}>
-        </label>
-        <label class="checkbox-line">
-          <input id="userSubscriptionActiveInput" type="checkbox" ${subscription.isActive ? 'checked' : ''} ${canManageBilling ? '' : 'disabled'}>
-          Подписка активна
+          Учётная цена, ₽
+          <input id="userSubscriptionPriceInput" type="number" min="1" max="1000000" value="${escapeHtml(subscription.monthlyPriceRub || 249)}" ${canManageBilling ? '' : 'disabled'}>
         </label>
         <label class="checkbox-line">
           <input id="userPaidBetaInput" type="checkbox" ${user.paidBeta ? 'checked' : ''} ${canManageBilling ? '' : 'disabled'}>
@@ -7840,11 +7874,19 @@ function renderUserSubscriptionEditor(user, subscription = {}) {
           Причина для журнала
           <input id="userSubscriptionReasonInput" type="text" placeholder="Например: продление по обращению" ${canManageBilling ? '' : 'disabled'}>
         </label>
-        <button class="primary-button" type="button" data-user-save-subscription="${escapeHtml(user.id)}" ${canManageBilling ? '' : 'disabled'}>
-          Сохранить доступ
-        </button>
+        <div class="row-actions left subscription-actions">
+          <button class="primary-button" type="button" data-user-grant-subscription="${escapeHtml(user.id)}" ${canManageBilling ? '' : 'disabled'}>
+            Выдать или продлить
+          </button>
+          <button class="small-button danger" type="button" data-user-revoke-subscription="${escapeHtml(user.id)}" ${canManageBilling ? '' : 'disabled'}>
+            Отозвать подписку
+          </button>
+          <button class="small-button" type="button" data-user-save-paid-beta="${escapeHtml(user.id)}" ${canManageBilling ? '' : 'disabled'}>
+            Сохранить тестовый контур
+          </button>
+        </div>
       </div>
-      <p class="muted compact-note">Изменение тарифа не совершает платёж и не раскрывает данные карты.</p>
+      <p class="muted compact-note">Выдача продлевает действующий оплаченный срок, а отзыв сразу снимает платные права и удаляет активные VPN peer-записи. Платёж при этом не создаётся.</p>
     </section>
   `;
 }
@@ -7907,6 +7949,10 @@ async function openUser(userId) {
         ${renderUserPaymentSummary(subscription, response.orders || [])}
       </div>
       ${renderUserSubscriptionEditor(user, subscription)}
+      <section>
+        <p class="eyebrow">История подписки</p>
+        ${renderSubscriptionEvents(response.subscriptionEvents || [])}
+      </section>
       ${renderUserOperatorActions(user, response.devices || [])}
       <section>
         <p class="eyebrow">Устройства</p>
@@ -7934,50 +7980,88 @@ async function openUser(userId) {
   }
 }
 
-async function saveUserSubscription(userId) {
-  if (!requirePermission('billing.manage', 'Изменение подписки')) return;
+function validateSubscriptionReason() {
   const reason = $('userSubscriptionReasonInput')?.value?.trim() || '';
-  const planCode = $('userPlanCodeInput')?.value?.trim() || '';
-  const planName = $('userPlanNameInput')?.value?.trim() || '';
+  if (reason.length < 8) {
+    setNotice('Укажи понятную причину изменения: минимум 8 символов.', true);
+    return null;
+  }
+  return reason;
+}
+
+async function grantUserSubscription(userId) {
+  if (!requirePermission('billing.manage', 'Выдача подписки')) return;
+  const reason = validateSubscriptionReason();
+  if (!reason) return;
+  const durationDays = Number($('userSubscriptionDurationInput')?.value || 0);
   const maxDevices = Number($('userMaxDevicesInput')?.value || 0);
-  const expiresAt = promoDateTimeToIso($('userSubscriptionExpiresInput')?.value || '');
-  if (!planCode || !planName) {
-    setNotice('Заполни код и название тарифа.', true);
+  const monthlyPriceRub = Number($('userSubscriptionPriceInput')?.value || 0);
+  if (!Number.isInteger(durationDays) || durationDays < 1 || durationDays > 3650) {
+    setNotice('Срок выдачи должен быть от 1 до 3650 дней.', true);
     return;
   }
   if (!Number.isInteger(maxDevices) || maxDevices < 1 || maxDevices > 100) {
     setNotice('Лимит устройств должен быть от 1 до 100.', true);
     return;
   }
-  if (reason.length < 8) {
-    setNotice('Укажи понятную причину изменения: минимум 8 символов.', true);
+  if (!Number.isInteger(monthlyPriceRub) || monthlyPriceRub < 1) {
+    setNotice('Учётная цена должна быть положительной.', true);
     return;
   }
-  const paidBeta = Boolean($('userPaidBetaInput')?.checked);
-  const wasPaidBeta = Boolean(state.activeUserDetail?.user?.paidBeta);
-  const confirmed = window.confirm('Сохранить новые условия доступа? Действие попадёт в аудит.');
-  if (!confirmed) return;
+  if (!window.confirm(`Выдать или продлить подписку на ${durationDays} дней?`)) return;
   try {
-    await apiPost(`/api/v1/admin/users/${encodeURIComponent(userId)}/subscription`, {
-      planCode,
-      planName,
+    await apiPost(`/api/v1/admin/users/${encodeURIComponent(userId)}/subscription/grant`, {
+      durationDays,
+      planCode: 'green_30d',
+      planName: 'Green VPN - 1 месяц',
       maxDevices,
-      isActive: Boolean($('userSubscriptionActiveInput')?.checked),
-      expiresAt,
+      monthlyPriceRub,
       reason,
     });
-    if (paidBeta !== wasPaidBeta) {
-      await apiPost(`/api/v1/admin/users/${encodeURIComponent(userId)}/paid-beta`, {
-        enabled: paidBeta,
-        source: 'admin_console',
-        reason,
-      });
-    }
     await openUser(userId);
     await loadDashboardData();
-    setNotice('Доступ и тариф обновлены.');
+    setNotice('Подписка выдана или продлена.');
   } catch (error) {
-    setNotice(`Не удалось обновить подписку: ${error.message}`, true);
+    setNotice(`Не удалось выдать подписку: ${error.message}`, true);
+  }
+}
+
+async function revokeUserSubscription(userId) {
+  if (!requirePermission('billing.manage', 'Отзыв подписки')) return;
+  const reason = validateSubscriptionReason();
+  if (!reason) return;
+  if (!window.confirm('Отозвать платную подписку и удалить активные VPN peer-записи?')) return;
+  try {
+    await apiPost(`/api/v1/admin/users/${encodeURIComponent(userId)}/subscription/revoke`, { reason });
+    await openUser(userId);
+    await loadDashboardData();
+    setNotice('Подписка отозвана.');
+  } catch (error) {
+    setNotice(`Не удалось отозвать подписку: ${error.message}`, true);
+  }
+}
+
+async function saveUserPaidBeta(userId) {
+  if (!requirePermission('billing.manage', 'Изменение тестового контура')) return;
+  const reason = validateSubscriptionReason();
+  if (!reason) return;
+  const paidBeta = Boolean($('userPaidBetaInput')?.checked);
+  const wasPaidBeta = Boolean(state.activeUserDetail?.user?.paidBeta);
+  if (paidBeta === wasPaidBeta) {
+    setNotice('Доступ к тестовому контуру не изменился.');
+    return;
+  }
+  try {
+    await apiPost(`/api/v1/admin/users/${encodeURIComponent(userId)}/paid-beta`, {
+      enabled: paidBeta,
+      source: 'admin_console',
+      reason,
+    });
+    await openUser(userId);
+    await loadDashboardData();
+    setNotice('Доступ к тестовому контуру обновлён.');
+  } catch (error) {
+    setNotice(`Не удалось обновить тестовый контур: ${error.message}`, true);
   }
 }
 
@@ -8527,9 +8611,19 @@ function bindEvents() {
       deleteUserRecord(userDeleteButton.dataset.userDelete);
       return;
     }
-    const userSaveSubscriptionButton = event.target.closest('[data-user-save-subscription]');
-    if (userSaveSubscriptionButton) {
-      saveUserSubscription(userSaveSubscriptionButton.dataset.userSaveSubscription);
+    const userGrantSubscriptionButton = event.target.closest('[data-user-grant-subscription]');
+    if (userGrantSubscriptionButton) {
+      grantUserSubscription(userGrantSubscriptionButton.dataset.userGrantSubscription);
+      return;
+    }
+    const userRevokeSubscriptionButton = event.target.closest('[data-user-revoke-subscription]');
+    if (userRevokeSubscriptionButton) {
+      revokeUserSubscription(userRevokeSubscriptionButton.dataset.userRevokeSubscription);
+      return;
+    }
+    const userSavePaidBetaButton = event.target.closest('[data-user-save-paid-beta]');
+    if (userSavePaidBetaButton) {
+      saveUserPaidBeta(userSavePaidBetaButton.dataset.userSavePaidBeta);
       return;
     }
     const userOpenBillingButton = event.target.closest('[data-user-open-billing]');

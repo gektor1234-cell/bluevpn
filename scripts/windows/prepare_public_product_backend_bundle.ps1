@@ -39,6 +39,8 @@ $requiredSources = @(
     'scripts\ops\greenvpn_sqlite_state_sync.py',
     'scripts\ops\greenvpn_prune_operational_history.py',
     'scripts\ops\install_operational_retention_timer.sh',
+    'scripts\ops\run_subscription_expiry.py',
+    'scripts\ops\install_subscription_expiry_timer.sh',
     'scripts\server\install_public_product_backend_release.sh',
     'scripts\server\promote_yookassa_manual_npd_public_sales.sh'
 )
@@ -59,7 +61,9 @@ foreach ($name in @(
     'greenvpn_sqlite_snapshot_stdout.py',
     'greenvpn_sqlite_state_sync.py',
     'greenvpn_prune_operational_history.py',
-    'install_operational_retention_timer.sh'
+    'install_operational_retention_timer.sh',
+    'run_subscription_expiry.py',
+    'install_subscription_expiry_timer.sh'
 )) {
     Copy-Item -LiteralPath (Join-Path $repo "scripts\ops\$name") `
         -Destination (Join-Path $stage "ops\$name")
@@ -75,7 +79,8 @@ python -m py_compile `
     (Join-Path $stage 'backend\app\main.py') `
     (Join-Path $stage 'ops\greenvpn_sqlite_snapshot_stdout.py') `
     (Join-Path $stage 'ops\greenvpn_sqlite_state_sync.py') `
-    (Join-Path $stage 'ops\greenvpn_prune_operational_history.py')
+    (Join-Path $stage 'ops\greenvpn_prune_operational_history.py') `
+    (Join-Path $stage 'ops\run_subscription_expiry.py')
 if ($LASTEXITCODE -ne 0) {
     throw 'Python validation failed for public-product backend bundle.'
 }
@@ -92,6 +97,7 @@ else {
 foreach ($relative in @(
     'scripts/ops/greenvpn_db_sync_from_peer.sh',
     'scripts/ops/install_operational_retention_timer.sh',
+    'scripts/ops/install_subscription_expiry_timer.sh',
     'scripts/server/install_public_product_backend_release.sh',
     'scripts/server/promote_yookassa_manual_npd_public_sales.sh'
 )) {

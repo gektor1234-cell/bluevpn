@@ -267,6 +267,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\gekto\projects\blue
 - `POST /api/v1/admin/devices/{device_uid}/disable`
 - `POST /api/v1/admin/devices/{device_uid}/enable`
 - `POST /api/v1/admin/users/{user_id}/subscription`
+- `GET /api/v1/admin/users/{user_id}/subscription-history`
+- `POST /api/v1/admin/users/{user_id}/subscription/grant`
+- `POST /api/v1/admin/users/{user_id}/subscription/revoke`
+- `GET /api/v1/admin/subscriptions/expiry-readiness`
+- `POST /api/v1/admin/subscriptions/expiry/run`
 - `GET /api/v1/me/devices`
 
 ## Что хранится на сервере
@@ -304,10 +309,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\bluevpn_ad
 
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\bluevpn_admin_api.ps1 -Action EnableDevice -DeviceUid win_xxx
 
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\bluevpn_admin_api.ps1 -Action SetSubscription -UserId 7 -PlanCode base -PlanName Base -MaxDevices 2 -IsActive $true
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\bluevpn_admin_api.ps1 -Action SubscriptionHistory -UserId 7
 
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\bluevpn_admin_api.ps1 -Action ApplyTariff -UserId 7 -TrafficPack gb20 -TrafficGb 20 -UnlimitedApps telegram,youtube -MaxDevices 2 -DedicatedIp $false
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\bluevpn_admin_api.ps1 -Action GrantSubscription -UserId 7 -DurationDays 30 -Reason "support grant approved by owner"
+
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\bluevpn_admin_api.ps1 -Action RevokeSubscription -UserId 7 -Reason "owner requested access revocation"
 ```
+
+Для обычной выдачи и отзыва используйте только `GrantSubscription` и
+`RevokeSubscription`. Они не сокращают действующий оплаченный период, не включают
+автопродление, удаляют VPN peer при отзыве и записывают полную историю. Причина
+минимум из 8 символов обязательна. `SetSubscription` и `ApplyTariff` сохранены
+для совместимости и аварийных операций; `ApplyTariff` также требует причину и
+всегда применяет `autoRenew=false`.
 
 ## Added in v0.4.x
 

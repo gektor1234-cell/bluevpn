@@ -24,6 +24,7 @@ NATURAL_KEYS: dict[str, tuple[str, ...]] = {
     "devices": ("device_uid",),
     "device_transport_assignments": ("device_uid", "transport_key"),
     "subscriptions": ("user_id",),
+    "subscription_events": ("event_id",),
     "billing_orders": ("public_id",),
     "client_endpoint_assignments": ("user_id", "device_uid"),
     "device_traffic_usage": ("device_uid", "server_id", "period_key"),
@@ -73,6 +74,7 @@ NEVER_UPDATE_TABLES = {
     "admin_audit_log",
     "admin_support_actions",
     "subscription_expiry_reviews",
+    "subscription_events",
     "beta_funnel_events",
 }
 CHANGE_COLUMNS = (
@@ -106,6 +108,7 @@ UNIQUE_CONFLICT_KEYS: dict[str, tuple[str, ...]] = {
     "device_transport_assignments": ("transport_key", "assigned_ip"),
 }
 DELETE_TABLE_ORDER = (
+    "subscription_events",
     "support_report_comments",
     "beta_funnel_events",
     "beta_invite_redemptions",
@@ -130,6 +133,7 @@ DELETE_TABLE_ORDER = (
 ACCOUNT_DELETE_TABLES = (
     "admin_support_actions",
     "subscription_expiry_reviews",
+    "subscription_events",
     "beta_funnel_events",
     "beta_invite_redemptions",
     "promo_redemptions",

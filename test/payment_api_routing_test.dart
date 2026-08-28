@@ -98,13 +98,13 @@ void main() {
     expect(catalog.data?['paidSalesEnabled'], isTrue);
 
     final emailStart = await api.startCheckoutEmail(
-      accessToken: 'guest-token',
+      accessToken: 'test-only-guest-token',
       email: 'buyer@example.test',
     );
     expect(emailStart.ok, isTrue);
 
     final emailVerify = await api.verifyCheckoutEmail(
-      accessToken: 'guest-token',
+      accessToken: 'test-only-guest-token',
       email: 'buyer@example.test',
       code: '123456',
     );
@@ -131,6 +131,7 @@ void main() {
       devices: 1,
       dedicatedIp: false,
       autoRenew: true,
+      renewalAcknowledged: false,
     );
     expect(order.ok, isTrue);
 

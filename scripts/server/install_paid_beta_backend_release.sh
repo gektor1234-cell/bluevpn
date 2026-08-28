@@ -62,6 +62,8 @@ required=(
   ops/greenvpn_sqlite_state_sync.py
   ops/greenvpn_prune_operational_history.py
   ops/install_operational_retention_timer.sh
+  ops/run_subscription_expiry.py
+  ops/install_subscription_expiry_timer.sh
   backend-release-manifest.json
 )
 for relative in "${required[@]}"; do
@@ -200,13 +202,16 @@ install -m 755 "$BUNDLE_DIR/ops/greenvpn_sqlite_snapshot_stdout.py" "$RELEASE_DI
 install -m 755 "$BUNDLE_DIR/ops/greenvpn_sqlite_state_sync.py" "$RELEASE_DIR/ops/greenvpn_sqlite_state_sync.py"
 install -m 755 "$BUNDLE_DIR/ops/greenvpn_prune_operational_history.py" "$RELEASE_DIR/ops/greenvpn_prune_operational_history.py"
 install -m 755 "$BUNDLE_DIR/ops/install_operational_retention_timer.sh" "$RELEASE_DIR/ops/install_operational_retention_timer.sh"
+install -m 755 "$BUNDLE_DIR/ops/run_subscription_expiry.py" "$RELEASE_DIR/ops/run_subscription_expiry.py"
+install -m 755 "$BUNDLE_DIR/ops/install_subscription_expiry_timer.sh" "$RELEASE_DIR/ops/install_subscription_expiry_timer.sh"
 cp -a "$BUNDLE_DIR/backend-release-manifest.json" "$RELEASE_DIR/backend-release-manifest.json"
 
 python3 -m py_compile \
   "$RELEASE_DIR/backend/app/main.py" \
   "$RELEASE_DIR/ops/greenvpn_sqlite_snapshot_stdout.py" \
   "$RELEASE_DIR/ops/greenvpn_sqlite_state_sync.py" \
-  "$RELEASE_DIR/ops/greenvpn_prune_operational_history.py"
+  "$RELEASE_DIR/ops/greenvpn_prune_operational_history.py" \
+  "$RELEASE_DIR/ops/run_subscription_expiry.py"
 "$VENV_DIR/bin/pip" install --disable-pip-version-check -r "$RELEASE_DIR/backend/requirements.txt" >/dev/null
 
 python3 - "$ENV_FILE" "$BACKEND_VERSION" "$ROLE" "$NODE_ID_BASE" <<'PY'
@@ -283,8 +288,15 @@ if [[ $sync_was_active -eq 1 && $LEAVE_SYNC_STOPPED -eq 0 ]]; then
   systemctl restart "$SYNC_TIMER"
 fi
 
-systemctl is-active --quiet bluevpn-backend.service
-curl -fsS --max-time 5 http://127.0.0.1:8000/healthz >/dev/null
+systemctl is-active --quiet "$SERVICE"
+curl -fsS --max-time 5 http://127.0.0.1:8010/healthz >/dev/null
+bash "$RELEASE_DIR/ops/install_subscription_expiry_timer.sh" \
+  --runner "$RELEASE_DIR/ops/run_subscription_expiry.py" \
+  --api-base "http://127.0.0.1:8010" \
+  --token-file "/opt/bluevpn-paid-beta/data/admin_token.txt" \
+  --unit-prefix "greenvpn-paid-beta-subscription-expiry" \
+  --backend-service "$SERVICE" \
+  --apply
 
 trap - ERR
 echo "backend_release_status=ok"

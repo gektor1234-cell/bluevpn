@@ -1,10 +1,10 @@
-Green VPN 0.4.10
+Green VPN 0.4.11
 Windows version: 0.4.6
-Android build: 2026082804
-Windows build: 4636
+Android build: 2026082805
+Windows build: 4637
 Platforms: Android, Windows
-Source backend: 0.9.164-autorenew-checkout.1
-Status: Android 0.4.10+2026082804 payment-routing hotfix published as mandatory stable; backend 0.9.164-autorenew-checkout.1 and Windows 0.4.6+4636 stable remain unchanged
+Source backend: 0.9.165-subscription-lifecycle.1
+Status: exact Android 0.4.11+2026082805, Windows 0.4.6+4637, and backend subscription-lifecycle release candidate; production remains unchanged
 Production sales: enabled on the primary billing node only
 Refund execution: enabled on the primary billing node only
 Auto-renew: explicit consent UI is released; automatic charges remain disabled in the manual NPD contour
