@@ -53,7 +53,7 @@ void main() {
           onOptDedicatedIp: (_) {},
           onOptAutoRenew: (_) {},
           onCancelAutoRenew: () async => true,
-          onApplyTariff: () async {},
+          onApplyTariff: (_) async {},
           onCheckPendingBillingOrder: () async {},
           onOpenPaymentUrl: (_) {},
           onPublicBillingPlanChanged: (_) {},
@@ -137,7 +137,7 @@ void main() {
           onOptDedicatedIp: (_) {},
           onOptAutoRenew: (_) {},
           onCancelAutoRenew: () async => true,
-          onApplyTariff: () async {},
+          onApplyTariff: (_) async {},
           onCheckPendingBillingOrder: () async {},
           onOpenPaymentUrl: (_) {},
           onPublicBillingPlanChanged: (_) {},
@@ -301,16 +301,14 @@ void main() {
     );
   });
 
-  testWidgets('manual NPD catalog does not offer unavailable auto-renew', (
-    tester,
-  ) async {
-    await pumpAt(tester, const Size(390, 844), fixedPlansTariffApp());
+  testWidgets(
+    'manual NPD catalog keeps renewal controls out of plan selection',
+    (tester) async {
+      await pumpAt(tester, const Size(390, 844), fixedPlansTariffApp());
 
-    expect(find.text('Автопродление'), findsNothing);
-    expect(find.text('Продление вручную'), findsOneWidget);
-    expect(
-      find.textContaining('только после вашего подтверждения'),
-      findsOneWidget,
-    );
-  });
+      expect(find.text('Автопродление'), findsNothing);
+      expect(find.text('Продление вручную'), findsNothing);
+      expect(find.byKey(const Key('start_payment_button')), findsOneWidget);
+    },
+  );
 }

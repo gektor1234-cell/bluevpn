@@ -14,6 +14,7 @@ void main() {
     'settings exposes one auto-renew entry and opens its own page',
     (tester) async {
       var cancelCalls = 0;
+      var tariffCalls = 0;
 
       await tester.pumpWidget(
         MaterialApp(
@@ -32,7 +33,7 @@ void main() {
               hasPaidEntitlement: true,
               subscriptionAutoRenew: true,
               paymentMethodSaved: true,
-              onOpenTariff: () {},
+              onOpenTariff: () => tariffCalls += 1,
               onCancelAutoRenew: () async {
                 cancelCalls += 1;
                 return true;
@@ -61,30 +62,39 @@ void main() {
 
       expect(find.byType(AutoRenewSettingsPage), findsOneWidget);
       expect(find.text('Карта привязана'), findsOneWidget);
-      expect(find.text('Отключить автопродление'), findsOneWidget);
+      expect(
+        find.byKey(const Key('auto_renew_settings_switch')),
+        findsOneWidget,
+      );
 
-      await tester.tap(find.text('Отключить автопродление'));
+      await tester.tap(find.byKey(const Key('auto_renew_settings_switch')));
       await tester.pumpAndSettle();
 
       expect(cancelCalls, 1);
       expect(find.text('Отключено'), findsOneWidget);
       expect(find.text('Карта не привязана'), findsOneWidget);
-      expect(find.text('Отключить автопродление'), findsNothing);
+
+      await tester.tap(find.byKey(const Key('auto_renew_settings_switch')));
+      await tester.pumpAndSettle();
+
+      expect(tariffCalls, 1);
+      expect(find.byType(AutoRenewSettingsPage), findsNothing);
     },
     skip: publicProductSkip,
   );
 
   testWidgets(
-    'tariff switch cancels active auto-renew instead of changing local choice',
+    'tariff keeps auto-renew out of the plan list and asks at checkout',
     (tester) async {
-      var cancelCalls = 0;
       var optInCalls = 0;
+      bool? requestedAutoRenew;
 
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
             body: TariffPage(
-              planName: 'Green VPN — 1 месяц',
+              planName: 'Бесплатный',
+              freeTierActive: true,
               selectedApps: <TariffApp>{},
               trafficPack: TrafficPack.gb20,
               trafficGb: 20,
@@ -92,13 +102,27 @@ void main() {
               optNoAds: true,
               optSmartRouting: true,
               optDedicatedIp: false,
-              optAutoRenew: true,
-              tariffCatalog: null,
+              optAutoRenew: false,
+              tariffCatalog: const <String, dynamic>{
+                'paidSalesEnabled': true,
+                'paymentsProductionReady': true,
+                'autoRenew': true,
+                'plans': <Map<String, dynamic>>[
+                  {
+                    'code': 'green_30d',
+                    'title': '1 месяц',
+                    'periodDays': 30,
+                    'priceRub': 249,
+                    'effectiveMonthlyRub': 249,
+                    'discountPercent': 0,
+                  },
+                ],
+              },
               tariffQuote: null,
               tariffStatus: null,
               pendingBillingOrder: null,
               subscriptionActive: true,
-              subscriptionAutoRenew: true,
+              subscriptionAutoRenew: false,
               subscriptionExpiresAt: '2026-09-09T01:21:57Z',
               subscriptionMonthlyPriceRub: 249,
               publicBillingPlanCode: 'green_30d',
@@ -112,11 +136,10 @@ void main() {
               onOptSmartRouting: (_) {},
               onOptDedicatedIp: (_) {},
               onOptAutoRenew: (_) => optInCalls += 1,
-              onCancelAutoRenew: () async {
-                cancelCalls += 1;
-                return true;
+              onCancelAutoRenew: () async => true,
+              onApplyTariff: (autoRenew) async {
+                requestedAutoRenew = autoRenew;
               },
-              onApplyTariff: () async {},
               onCheckPendingBillingOrder: () async {},
               onOpenPaymentUrl: (_) {},
               onPublicBillingPlanChanged: (_) {},
@@ -125,17 +148,28 @@ void main() {
         ),
       );
 
-      expect(find.text('Автопродление'), findsOneWidget);
-      expect(
-        find.textContaining('Выключение сразу отменит будущие списания'),
-        findsOneWidget,
-      );
+      expect(find.text('Автопродление'), findsNothing);
+      expect(find.text('Продление вручную'), findsNothing);
 
-      await tester.tap(find.byType(Switch));
+      final paymentButton = find.byKey(const Key('start_payment_button'));
+      await tester.scrollUntilVisible(paymentButton, 220);
+      await tester.tap(paymentButton);
+      await tester.pumpAndSettle();
+
+      final consent = find.byKey(const Key('auto_renew_checkout_consent'));
+      expect(consent, findsOneWidget);
+      expect(tester.widget<CheckboxListTile>(consent).value, isFalse);
+      expect(requestedAutoRenew, isNull);
+
+      await tester.tap(consent);
       await tester.pump();
+      expect(tester.widget<CheckboxListTile>(consent).value, isTrue);
 
-      expect(cancelCalls, 1);
+      await tester.tap(find.byKey(const Key('confirm_payment_button')));
+      await tester.pumpAndSettle();
+
       expect(optInCalls, 0);
+      expect(requestedAutoRenew, isTrue);
     },
     skip: publicProductSkip,
   );

@@ -3469,6 +3469,39 @@ class PaidBetaPolicyTests(unittest.TestCase):
             )
         )
 
+    def test_public_product_catalog_offers_auto_renew_only_after_all_gates(self) -> None:
+        with (
+            patch.object(main, "PUBLIC_PRODUCT_ENABLED", True),
+            patch.object(main, "AUTO_RENEWAL_CHARGES_ENABLED", True),
+            patch.object(main, "AUTO_RENEWAL_BILLING_PRIMARY", True),
+            patch.object(main, "TAX_RECEIPT_MODE", "yookassa_receipt"),
+            patch.object(main, "selected_payment_provider", return_value="yookassa"),
+            patch.object(
+                main,
+                "payment_provider_readiness",
+                return_value={"productionReady": True},
+            ),
+        ):
+            catalog = main.build_public_product_tariff_catalog()
+
+        self.assertTrue(catalog["autoRenew"])
+
+        with (
+            patch.object(main, "PUBLIC_PRODUCT_ENABLED", True),
+            patch.object(main, "AUTO_RENEWAL_CHARGES_ENABLED", True),
+            patch.object(main, "AUTO_RENEWAL_BILLING_PRIMARY", True),
+            patch.object(main, "TAX_RECEIPT_MODE", "yookassa_npd_manual"),
+            patch.object(main, "selected_payment_provider", return_value="yookassa"),
+            patch.object(
+                main,
+                "payment_provider_readiness",
+                return_value={"productionReady": True},
+            ),
+        ):
+            manual_npd_catalog = main.build_public_product_tariff_catalog()
+
+        self.assertFalse(manual_npd_catalog["autoRenew"])
+
     def test_missing_promo_campaign_is_safe_when_no_risky_promo_is_active(self) -> None:
         with main.db() as conn:
             conn.execute("DELETE FROM promo_codes")

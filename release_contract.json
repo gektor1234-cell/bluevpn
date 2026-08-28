@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "product": "Green VPN",
-  "appVersion": "0.4.8",
+  "appVersion": "0.4.9",
   "windowsAppVersion": "0.4.6",
-  "androidBuildNumber": "2026082802",
+  "androidBuildNumber": "2026082803",
   "windowsBuildNumber": 4636,
-  "backendVersion": "0.9.163-yookassa-public-sales.1",
+  "backendVersion": "0.9.164-autorenew-checkout.1",
   "paidBeta": {
     "appVersion": "0.4.6-paid-beta.1",
     "windowsAppVersion": "0.4.6-paid-beta.2",
@@ -38,15 +38,15 @@
     "rewardedAdsEnabled": false
   },
   "publication": {
-    "productionPublished": true,
-    "androidProductionPublished": true,
+    "productionPublished": false,
+    "androidProductionPublished": false,
     "androidPaidBetaPublished": true,
     "windowsProductionPublished": true,
     "windowsPaidBetaPublished": true,
     "ownerApprovalRequired": true,
     "mandatoryUpdateRequired": true,
-    "minSupportedVersion": "0.4.8",
-    "androidMinSupportedVersion": "0.4.8",
+    "minSupportedVersion": "0.4.9",
+    "androidMinSupportedVersion": "0.4.9",
     "windowsMinSupportedVersion": "0.4.6"
   }
 }

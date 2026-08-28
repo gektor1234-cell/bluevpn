@@ -37,8 +37,8 @@ from pydantic import BaseModel
 
 APP_TITLE = "Green VPN Backend"
 APP_VERSION = (
-    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.163-yookassa-public-sales.1").strip()
-    or "0.9.163-yookassa-public-sales.1"
+    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.164-autorenew-checkout.1").strip()
+    or "0.9.164-autorenew-checkout.1"
 )
 DEFAULT_PUBLIC_API_BASE_URL = "https://api.greenvpn.pro"
 
@@ -6301,6 +6301,13 @@ def build_public_product_tariff_catalog() -> dict:
     tax_receipt = tax_receipt_readiness()
     refunds = refund_execution_readiness()
     payments = payment_provider_readiness()
+    auto_renew_available = bool(
+        selected_payment_provider() == "yookassa"
+        and payments["productionReady"]
+        and AUTO_RENEWAL_CHARGES_ENABLED
+        and AUTO_RENEWAL_BILLING_PRIMARY
+        and TAX_RECEIPT_MODE != "yookassa_npd_manual"
+    )
     return {
         "policyVersion": PUBLIC_PRODUCT_POLICY_VERSION,
         "pricingModel": "fixed_term_plans",
@@ -6342,7 +6349,7 @@ def build_public_product_tariff_catalog() -> dict:
             for code, plan in PUBLIC_PRODUCT_PLANS.items()
         ],
         "includedDevices": PUBLIC_PRODUCT_INCLUDED_DEVICES,
-        "autoRenew": False,
+        "autoRenew": auto_renew_available,
         "adsEnabled": False,
         "includedFeatures": ["vpn_access", "social_routing", "no_ads"],
         "notes": [

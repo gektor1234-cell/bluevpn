@@ -9400,7 +9400,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _createTariffOrderOnServer() async {
+  Future<void> _createTariffOrderOnServer({required bool autoRenew}) async {
     if (kIsWeb) return;
     if (kTrialOnlyNoAdsBuild && !kPaidBetaBuild) {
       setState(() {
@@ -9455,7 +9455,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         unlimitedApps: _selectedTariffAppCodes(),
         devices: devices,
         dedicatedIp: optDedicatedIp,
-        autoRenew: optAutoRenew,
+        autoRenew: autoRenew,
       );
 
       if (!mounted) return;
@@ -16190,7 +16190,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       publicBillingPlanCode: _publicBillingPlanCode,
       tariffBusy: _tariffBusy,
       onClaimPaidBetaInvite: () => changedAsync(_claimPaidBetaInvite),
-      onApplyTariff: () => changedAsync(_createTariffOrderOnServer),
+      onApplyTariff: (autoRenew) =>
+          changedAsync(() => _createTariffOrderOnServer(autoRenew: autoRenew)),
       onCheckPendingBillingOrder: () =>
           changedAsync(() => _checkPendingBillingOrder(showToast: true)),
       onOpenPaymentUrl: _openPaymentUrl,
@@ -18170,7 +18171,7 @@ class TariffPage extends StatelessWidget {
   final void Function(bool) onOptDedicatedIp;
   final void Function(bool) onOptAutoRenew;
   final Future<bool> Function() onCancelAutoRenew;
-  final Future<void> Function() onApplyTariff;
+  final Future<void> Function(bool autoRenew) onApplyTariff;
   final Future<void> Function() onClaimPaidBetaInvite;
   final Future<void> Function() onCheckPendingBillingOrder;
   final void Function(String url) onOpenPaymentUrl;
@@ -18247,6 +18248,78 @@ class TariffPage extends StatelessWidget {
         ),
       ],
     );
+  }
+
+  Future<void> _confirmPublicCheckout(
+    BuildContext context, {
+    required int priceRub,
+    required int periodDays,
+    required String periodTitle,
+    required bool autoRenewAvailable,
+  }) async {
+    if (subscriptionAutoRenew) {
+      await onApplyTariff(true);
+      return;
+    }
+    if (!autoRenewAvailable) {
+      await onApplyTariff(false);
+      return;
+    }
+
+    var autoRenewConsent = false;
+    final confirmedAutoRenew = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: const Text('Подтверждение оплаты'),
+          content: SizedBox(
+            width: 440,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'К оплате: $priceRub ₽ за $periodTitle.',
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 12),
+                CheckboxListTile(
+                  key: const Key('auto_renew_checkout_consent'),
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  value: autoRenewConsent,
+                  onChanged: (value) =>
+                      setDialogState(() => autoRenewConsent = value == true),
+                  title: const Text(
+                    'Подключить автопродление',
+                    style: TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                  subtitle: Text(
+                    'Сохранить способ оплаты и списывать $priceRub ₽ каждые '
+                    '$periodDays дней. Отключить можно в Настройки → '
+                    'Автопродление.',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Отмена'),
+            ),
+            ElevatedButton(
+              key: const Key('confirm_payment_button'),
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(autoRenewConsent),
+              child: const Text('Перейти к оплате'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmedAutoRenew == null) return;
+    await onApplyTariff(confirmedAutoRenew);
   }
 
   int _basePriceForGb(double gb) {
@@ -18786,43 +18859,6 @@ class TariffPage extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 10),
-              if (subscriptionAutoRenew || autoRenewAvailable)
-                SwitchListTile.adaptive(
-                  contentPadding: EdgeInsets.zero,
-                  value: subscriptionAutoRenew || optAutoRenew,
-                  onChanged: tariffBusy || hasPendingOrder
-                      ? null
-                      : (value) {
-                          if (!value && subscriptionAutoRenew) {
-                            unawaited(onCancelAutoRenew());
-                            return;
-                          }
-                          onOptAutoRenew(value);
-                        },
-                  title: const Text(
-                    'Автопродление',
-                    style: TextStyle(fontWeight: FontWeight.w900),
-                  ),
-                  subtitle: Text(
-                    subscriptionAutoRenew
-                        ? 'Автопродление активно. Выключение сразу отменит будущие списания.'
-                        : 'Включится после успешной оплаты выбранного срока.',
-                  ),
-                  secondary: const Icon(Icons.autorenew_rounded),
-                )
-              else
-                const ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.event_repeat_rounded),
-                  title: Text(
-                    'Продление вручную',
-                    style: TextStyle(fontWeight: FontWeight.w900),
-                  ),
-                  subtitle: Text(
-                    'Следующий период оплачивается только после вашего подтверждения.',
-                  ),
-                ),
             ],
           ),
         ),
@@ -18907,7 +18943,15 @@ class TariffPage extends StatelessWidget {
             key: const Key('start_payment_button'),
             onPressed: tariffBusy || hasPendingOrder || !paidSalesAvailable
                 ? null
-                : () => onApplyTariff(),
+                : () => unawaited(
+                    _confirmPublicCheckout(
+                      context,
+                      priceRub: selectedPrice,
+                      periodDays: selectedDays,
+                      periodTitle: selectedPeriodTitle,
+                      autoRenewAvailable: autoRenewAvailable,
+                    ),
+                  ),
             icon: tariffBusy
                 ? const SizedBox(
                     width: 16,
@@ -19282,7 +19326,7 @@ class TariffPage extends StatelessWidget {
           child: ElevatedButton.icon(
             onPressed: tariffBusy || hasPendingOrder
                 ? null
-                : () => onApplyTariff(),
+                : () => onApplyTariff(optAutoRenew),
             icon: tariffBusy
                 ? const SizedBox(
                     width: 16,
@@ -19587,7 +19631,7 @@ class TariffPage extends StatelessWidget {
                 child: ElevatedButton.icon(
                   onPressed: tariffBusy || hasPendingOrder
                       ? null
-                      : () => onApplyTariff(),
+                      : () => onApplyTariff(optAutoRenew),
                   icon: tariffBusy
                       ? const SizedBox(
                           width: 16,
@@ -20340,7 +20384,9 @@ class TariffPage extends StatelessWidget {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
-                  onPressed: tariffBusy ? null : () => onApplyTariff(),
+                  onPressed: tariffBusy
+                      ? null
+                      : () => onApplyTariff(optAutoRenew),
                   icon: tariffBusy
                       ? const SizedBox(
                           width: 16,
@@ -20438,6 +20484,10 @@ class SettingsPage extends StatelessWidget {
         builder: (_) => AutoRenewSettingsPage(
           autoRenewEnabled: subscriptionAutoRenew,
           paymentMethodSaved: paymentMethodSaved,
+          onEnableAutoRenew: () {
+            Navigator.of(context).pop();
+            onOpenTariff();
+          },
           onCancelAutoRenew: onCancelAutoRenew,
         ),
       ),
@@ -20665,12 +20715,14 @@ class SettingsPage extends StatelessWidget {
 class AutoRenewSettingsPage extends StatefulWidget {
   final bool autoRenewEnabled;
   final bool paymentMethodSaved;
+  final VoidCallback onEnableAutoRenew;
   final Future<bool> Function() onCancelAutoRenew;
 
   const AutoRenewSettingsPage({
     super.key,
     required this.autoRenewEnabled,
     required this.paymentMethodSaved,
+    required this.onEnableAutoRenew,
     required this.onCancelAutoRenew,
   });
 
@@ -20738,50 +20790,40 @@ class _AutoRenewSettingsPageState extends State<AutoRenewSettingsPage> {
               padding: const EdgeInsets.all(16),
               children: [
                 _Card(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: _autoRenewEnabled
-                              ? kBrandPrimary.withValues(alpha: 0.12)
-                              : textColor.withValues(alpha: 0.06),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Icon(
-                          Icons.autorenew_rounded,
-                          color: _autoRenewEnabled ? kBrandPrimary : mutedColor,
-                        ),
+                  child: SwitchListTile.adaptive(
+                    key: const Key('auto_renew_settings_switch'),
+                    contentPadding: EdgeInsets.zero,
+                    value: _autoRenewEnabled,
+                    onChanged: _busy
+                        ? null
+                        : (enabled) {
+                            if (enabled) {
+                              widget.onEnableAutoRenew();
+                            } else {
+                              unawaited(_cancelAutoRenew());
+                            }
+                          },
+                    secondary: Icon(
+                      Icons.autorenew_rounded,
+                      color: _autoRenewEnabled ? kBrandPrimary : mutedColor,
+                    ),
+                    title: Text(
+                      _autoRenewEnabled ? 'Включено' : 'Отключено',
+                      style: TextStyle(
+                        color: textColor,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              _autoRenewEnabled ? 'Включено' : 'Отключено',
-                              style: TextStyle(
-                                color: textColor,
-                                fontSize: 18,
-                                fontWeight: FontWeight.w900,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              _autoRenewEnabled
-                                  ? 'Подписка продлевается автоматически.'
-                                  : 'Автоматических списаний не будет.',
-                              style: TextStyle(
-                                color: mutedColor,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ],
-                        ),
+                    ),
+                    subtitle: Text(
+                      _autoRenewEnabled
+                          ? 'Подписка продлевается автоматически.'
+                          : 'Включение подтверждается при следующей оплате.',
+                      style: TextStyle(
+                        color: mutedColor,
+                        fontWeight: FontWeight.w700,
                       ),
-                    ],
+                    ),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -20813,31 +20855,6 @@ class _AutoRenewSettingsPageState extends State<AutoRenewSettingsPage> {
                           ),
                         ],
                       ),
-                      if (_autoRenewEnabled) ...[
-                        const SizedBox(height: 16),
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: kBrandDanger,
-                              side: BorderSide(
-                                color: kBrandDanger.withValues(alpha: 0.55),
-                              ),
-                            ),
-                            onPressed: _busy ? null : _cancelAutoRenew,
-                            icon: _busy
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                : const Icon(Icons.link_off_rounded),
-                            label: const Text('Отключить автопродление'),
-                          ),
-                        ),
-                      ],
                       if (_status != null) ...[
                         const SizedBox(height: 12),
                         Text(
