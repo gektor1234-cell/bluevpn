@@ -18556,6 +18556,7 @@ class TariffPage extends StatelessWidget {
     final paidSalesAvailable =
         tariffCatalog?['paidSalesEnabled'] == true &&
         tariffCatalog?['paymentsProductionReady'] == true;
+    final autoRenewAvailable = tariffCatalog?['autoRenew'] == true;
     final checkoutMessage = (tariffCatalog?['checkoutMessage'] ?? '')
         .toString()
         .trim();
@@ -18786,29 +18787,42 @@ class TariffPage extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 10),
-              SwitchListTile.adaptive(
-                contentPadding: EdgeInsets.zero,
-                value: subscriptionAutoRenew || optAutoRenew,
-                onChanged: tariffBusy || hasPendingOrder
-                    ? null
-                    : (value) {
-                        if (!value && subscriptionAutoRenew) {
-                          unawaited(onCancelAutoRenew());
-                          return;
-                        }
-                        onOptAutoRenew(value);
-                      },
-                title: const Text(
-                  'Автопродление',
-                  style: TextStyle(fontWeight: FontWeight.w900),
+              if (subscriptionAutoRenew || autoRenewAvailable)
+                SwitchListTile.adaptive(
+                  contentPadding: EdgeInsets.zero,
+                  value: subscriptionAutoRenew || optAutoRenew,
+                  onChanged: tariffBusy || hasPendingOrder
+                      ? null
+                      : (value) {
+                          if (!value && subscriptionAutoRenew) {
+                            unawaited(onCancelAutoRenew());
+                            return;
+                          }
+                          onOptAutoRenew(value);
+                        },
+                  title: const Text(
+                    'Автопродление',
+                    style: TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                  subtitle: Text(
+                    subscriptionAutoRenew
+                        ? 'Автопродление активно. Выключение сразу отменит будущие списания.'
+                        : 'Включится после успешной оплаты выбранного срока.',
+                  ),
+                  secondary: const Icon(Icons.autorenew_rounded),
+                )
+              else
+                const ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.event_repeat_rounded),
+                  title: Text(
+                    'Продление вручную',
+                    style: TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                  subtitle: Text(
+                    'Следующий период оплачивается только после вашего подтверждения.',
+                  ),
                 ),
-                subtitle: Text(
-                  subscriptionAutoRenew
-                      ? 'Автопродление активно. Выключение сразу отменит будущие списания.'
-                      : 'Включится после успешной оплаты выбранного срока.',
-                ),
-                secondary: const Icon(Icons.autorenew_rounded),
-              ),
             ],
           ),
         ),

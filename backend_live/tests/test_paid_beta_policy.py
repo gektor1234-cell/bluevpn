@@ -1651,6 +1651,41 @@ class PaidBetaPolicyTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Открыть официальный чек ФНС", response.body.decode("utf-8"))
 
+    def test_completed_manual_npd_refund_remains_payment_smoke_evidence(self) -> None:
+        amount_rub = main.PUBLIC_PRODUCT_PLANS[main.PUBLIC_PRODUCT_PLAN_CODE][
+            "priceRub"
+        ]
+        smoke_order = {
+            "status": "refunded",
+            "provider": "yookassa",
+            "providerPaymentIdSaved": True,
+            "providerPaymentMethodSaved": False,
+            "paymentUrlReady": True,
+            "paidAt": main.utc_now_iso(),
+            "activatedAt": main.utc_now_iso(),
+            "selection": {"billingPlanCode": main.PUBLIC_PRODUCT_PLAN_CODE},
+            "quote": {"planCode": main.PUBLIC_PRODUCT_PLAN_CODE},
+            "amountRub": amount_rub,
+            "autoRenew": False,
+            "orderKind": main.PAYMENT_SMOKE_AUTO_RENEW_ORDER_KIND,
+            "taxReceipt": {
+                "mode": "yookassa_npd_manual",
+                "status": "registered",
+                "deliveryStatus": "sent",
+            },
+            "refund": {
+                "status": "succeeded",
+                "amountRub": amount_rub,
+                "receiptStatus": "cancellation_registered",
+                "receiptDeliveryStatus": "sent",
+                "entitlementStatus": "rolled_back",
+            },
+        }
+        with patch.object(main, "TAX_RECEIPT_MODE", "yookassa_npd_manual"):
+            self.assertTrue(main.billing_payment_smoke_candidate(smoke_order))
+            smoke_order["refund"]["receiptDeliveryStatus"] = "pending"
+            self.assertFalse(main.billing_payment_smoke_candidate(smoke_order))
+
     def test_yookassa_manual_npd_provider_smoke_keeps_public_sales_closed(self) -> None:
         provider_payment = {
             "id": "manual-npd-smoke-payment-1",

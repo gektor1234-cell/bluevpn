@@ -24197,15 +24197,28 @@ def billing_payment_smoke_candidate(order: dict) -> bool:
     ).strip().lower()
     expected_plan = PUBLIC_PRODUCT_PLANS.get(PUBLIC_PRODUCT_PLAN_CODE) or {}
     expected_amount = int(expected_plan.get("priceRub") or 0)
-    common_ready = bool(
-        order.get("status") == "activated"
-        and order.get("providerPaymentIdSaved")
+    payment_evidence_ready = bool(
+        order.get("providerPaymentIdSaved")
         and order.get("paymentUrlReady")
         and order.get("paidAt")
         and order.get("activatedAt")
         and plan_code == PUBLIC_PRODUCT_PLAN_CODE
         and int(order.get("amountRub") or 0) == expected_amount
     )
+    activated_ready = bool(
+        order.get("status") == "activated" and payment_evidence_ready
+    )
+    refund = order.get("refund") if isinstance(order.get("refund"), dict) else {}
+    refunded_ready = bool(
+        order.get("status") == "refunded"
+        and payment_evidence_ready
+        and refund.get("status") == "succeeded"
+        and int(refund.get("amountRub") or 0) == expected_amount
+        and refund.get("receiptStatus") == "cancellation_registered"
+        and refund.get("receiptDeliveryStatus") == "sent"
+        and refund.get("entitlementStatus") == "rolled_back"
+    )
+    common_ready = activated_ready or refunded_ready
     provider = str(order.get("provider") or "").strip().lower()
     if provider != selected_payment_provider():
         return False
@@ -24221,6 +24234,13 @@ def billing_payment_smoke_candidate(order: dict) -> bool:
             auto_renew_smoke = (
                 order.get("orderKind") == PAYMENT_SMOKE_AUTO_RENEW_ORDER_KIND
             )
+            if refunded_ready:
+                return bool(
+                    tax_receipt.get("status") == "registered"
+                    and tax_receipt.get("deliveryStatus") == "sent"
+                    and not order.get("providerPaymentMethodSaved")
+                    and not order.get("autoRenew")
+                )
             return bool(
                 common_ready
                 and tax_receipt.get("status") == "registered"
@@ -24309,7 +24329,13 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
         and order.get("paymentUrlReady")
     ]
     successful_orders = [
-        order for order in activated_orders if billing_payment_smoke_candidate(order)
+        order for order in recent_orders if billing_payment_smoke_candidate(order)
+    ]
+    activated_successful_orders = [
+        order for order in successful_orders if order.get("status") == "activated"
+    ]
+    completed_refund_orders = [
+        order for order in successful_orders if order.get("status") == "refunded"
     ]
     pending_orders_with_url = [
         order
@@ -24389,10 +24415,12 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
         {
             "code": "hosted_payment_url_observed",
             "title": "Платёжная ссылка получена",
-            "ok": bool(pending_orders_with_url or activated_orders),
+            "ok": bool(
+                pending_orders_with_url or activated_orders or completed_refund_orders
+            ),
             "message": (
                 f"Хотя бы один заказ {provider} получил hosted payment URL."
-                if pending_orders_with_url or activated_orders
+                if pending_orders_with_url or activated_orders or completed_refund_orders
                 else "Создать минимальный заказ после настройки провайдера и подтверждения владельца."
             ),
         },
@@ -24401,7 +24429,11 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
             "title": "Актуальный provider-backed payment-smoke",
             "ok": bool(successful_orders),
             "message": (
-                "Тариф 249 ₽ активирован с провайдерским подтверждением и возвратным идентификатором."
+                (
+                    "Платёж 249 ₽, активация, полный возврат, откат доступа и чеки НПД подтверждены."
+                    if completed_refund_orders
+                    else "Тариф 249 ₽ активирован с провайдерским подтверждением и возвратным идентификатором."
+                )
                 if successful_orders
                 else (
                     "Провести платёж 249 ₽ и проверить provider confirmation, "
@@ -24446,7 +24478,11 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
             "code": "create_minimal_order",
             "title": "Создать минимальный заказ с подтверждением владельца",
             "actor": "owner_or_ops",
-            "status": "pending" if safe_to_run_smoke else "blocked",
+            "status": (
+                "done"
+                if smoke_complete
+                else ("pending" if safe_to_run_smoke else "blocked")
+            ),
             "details": (
                 "Использовать тестовый аккаунт владельца и минимальный практичный платный тариф. "
                 "Не использовать admin mark-paid для provider-smoke."
@@ -24457,7 +24493,11 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
             "code": "open_hosted_payment_url",
             "title": f"Открыть hosted payment URL {provider}",
             "actor": "owner",
-            "status": "done" if pending_orders_with_url or activated_orders else "pending",
+            "status": (
+                "done"
+                if pending_orders_with_url or activated_orders or completed_refund_orders
+                else "pending"
+            ),
             "details": (
                 "Заказ должен оставаться pending до авторитетного подтверждения провайдера; "
                 "Green VPN не должен активировать тариф только по локальному return."
@@ -24506,8 +24546,12 @@ def billing_payment_smoke_readiness_payload(limit: int = 10) -> dict:
             "providerActivatedTotal": int(provider_activated_total),
             "recentProviderOrders": len(recent_orders),
             "pendingWithPaymentUrl": len(pending_orders_with_url),
-            "activatedLegacyOrIncomplete": len(activated_orders) - len(successful_orders),
+            "activatedLegacyOrIncomplete": max(
+                0,
+                len(activated_orders) - len(activated_successful_orders),
+            ),
             "successfulSmokeCandidates": len(successful_orders),
+            "completedRefundSmokeCandidates": len(completed_refund_orders),
             "canceledOrFailedRecent": len(canceled_orders),
         },
         "paymentReadiness": payment,

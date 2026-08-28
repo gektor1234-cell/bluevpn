@@ -67,6 +67,7 @@ void main() {
     bool freeTierActive = true,
     String? subscriptionExpiresAt,
     bool paidSalesEnabled = true,
+    bool autoRenewAvailable = false,
   }) {
     return MaterialApp(
       home: Scaffold(
@@ -87,6 +88,7 @@ void main() {
           tariffCatalog: <String, dynamic>{
             'paidSalesEnabled': paidSalesEnabled,
             'paymentsProductionReady': paidSalesEnabled,
+            'autoRenew': autoRenewAvailable,
             'checkoutMessage': paidSalesEnabled
                 ? 'Оплата доступна.'
                 : 'Оплата временно недоступна. Бесплатный тариф продолжает работать.',
@@ -296,6 +298,19 @@ void main() {
         'Оплата временно недоступна. Бесплатный тариф продолжает работать.',
       ),
       findsWidgets,
+    );
+  });
+
+  testWidgets('manual NPD catalog does not offer unavailable auto-renew', (
+    tester,
+  ) async {
+    await pumpAt(tester, const Size(390, 844), fixedPlansTariffApp());
+
+    expect(find.text('Автопродление'), findsNothing);
+    expect(find.text('Продление вручную'), findsOneWidget);
+    expect(
+      find.textContaining('только после вашего подтверждения'),
+      findsOneWidget,
     );
   });
 }

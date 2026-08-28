@@ -39,7 +39,8 @@ $requiredSources = @(
     'scripts\ops\greenvpn_sqlite_state_sync.py',
     'scripts\ops\greenvpn_prune_operational_history.py',
     'scripts\ops\install_operational_retention_timer.sh',
-    'scripts\server\install_public_product_backend_release.sh'
+    'scripts\server\install_public_product_backend_release.sh',
+    'scripts\server\promote_yookassa_manual_npd_public_sales.sh'
 )
 foreach ($relative in $requiredSources) {
     if (-not (Test-Path -LiteralPath (Join-Path $repo $relative) -PathType Leaf)) {
@@ -66,6 +67,9 @@ foreach ($name in @(
 Copy-Item -LiteralPath `
     (Join-Path $repo 'scripts\server\install_public_product_backend_release.sh') `
     -Destination (Join-Path $stage 'install.sh')
+Copy-Item -LiteralPath `
+    (Join-Path $repo 'scripts\server\promote_yookassa_manual_npd_public_sales.sh') `
+    -Destination (Join-Path $stage 'promote-public-sales.sh')
 
 python -m py_compile `
     (Join-Path $stage 'backend\app\main.py') `
@@ -88,7 +92,8 @@ else {
 foreach ($relative in @(
     'scripts/ops/greenvpn_db_sync_from_peer.sh',
     'scripts/ops/install_operational_retention_timer.sh',
-    'scripts/server/install_public_product_backend_release.sh'
+    'scripts/server/install_public_product_backend_release.sh',
+    'scripts/server/promote_yookassa_manual_npd_public_sales.sh'
 )) {
     & $bash -n (Join-Path $repo $relative)
     if ($LASTEXITCODE -ne 0) {

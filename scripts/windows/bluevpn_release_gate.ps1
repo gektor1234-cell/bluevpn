@@ -75,6 +75,7 @@ $trustedWindowsFinalizerPath = Join-Path $ProjectRoot "scripts\windows\finalize_
 $windowsPublicReleaseInstallerPath = Join-Path $ProjectRoot "scripts\server\install_windows_public_product_release.sh"
 $windowsStableReleaseInstallerPath = Join-Path $ProjectRoot "scripts\server\install_windows_stable_release.sh"
 $androidStableReleaseInstallerPath = Join-Path $ProjectRoot "scripts\server\install_android_stable_release.sh"
+$yookassaPublicSalesPromotionPath = Join-Path $ProjectRoot "scripts\server\promote_yookassa_manual_npd_public_sales.sh"
 $servicePath = Join-Path $ProjectRoot "windows\green_vpn_service\main.cpp"
 $runnerPath = Join-Path $ProjectRoot "windows\runner\flutter_window.cpp"
 $runnerMainPath = Join-Path $ProjectRoot "windows\runner\main.cpp"
@@ -243,6 +244,7 @@ $trustedWindowsFinalizer = Read-Text $trustedWindowsFinalizerPath
 $windowsPublicReleaseInstaller = Read-Text $windowsPublicReleaseInstallerPath
 $windowsStableReleaseInstaller = Read-Text $windowsStableReleaseInstallerPath
 $androidStableReleaseInstaller = Read-Text $androidStableReleaseInstallerPath
+$yookassaPublicSalesPromotion = Read-Text $yookassaPublicSalesPromotionPath
 $serviceSource = Read-Text $servicePath
 $doctorScript = Read-Text $doctorPath
 $networkProtectionScript = Read-Text $networkProtectionPath
@@ -4091,6 +4093,42 @@ if (Test-Path -LiteralPath $androidStableReleaseInstallerPath) {
     }
     else {
         Add-Error 'Android stable-only publication Bash parser check failed'
+    }
+}
+
+$yookassaPublicSalesChecks = [ordered]@{
+    'YooKassa public sales promotion is smoke-gated' = @(
+        $yookassaPublicSalesPromotion,
+        'completedRefundSmokeCandidates',
+        'billing/reconciliation',
+        'GREENVPN_PAID_SALES_ENABLED',
+        'GREENVPN_AUTO_RENEWAL_CHARGES_ENABLED',
+        'rollback_on_error'
+    )
+}
+foreach ($check in $yookassaPublicSalesChecks.GetEnumerator()) {
+    $source = [string]$check.Value[0]
+    $missing = @(
+        $check.Value[1..($check.Value.Count - 1)] |
+            Where-Object { -not $source.Contains([string]$_) }
+    )
+    if ($missing.Count -eq 0) {
+        Add-Pass "$($check.Key) markers present"
+    }
+    else {
+        Add-Error "$($check.Key) missing marker(s): $($missing -join ', ')"
+    }
+}
+
+if (Test-Path -LiteralPath $yookassaPublicSalesPromotionPath) {
+    $gitBash = Join-Path $env:ProgramFiles 'Git\bin\bash.exe'
+    $bashCommand = if (Test-Path -LiteralPath $gitBash) { $gitBash } else { 'bash' }
+    & $bashCommand -n $yookassaPublicSalesPromotionPath
+    if ($LASTEXITCODE -eq 0) {
+        Add-Pass 'YooKassa public sales promotion Bash parser check passed'
+    }
+    else {
+        Add-Error 'YooKassa public sales promotion Bash parser check failed'
     }
 }
 
