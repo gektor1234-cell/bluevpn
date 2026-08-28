@@ -16183,6 +16183,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       tariffStatus: _tariffStatus,
       pendingBillingOrder: _pendingBillingOrder,
       subscriptionActive: _subscriptionActive,
+      subscriptionAutoRenew: _subscriptionAutoRenew,
       subscriptionMaxDevices: _subscriptionMaxDevices,
       subscriptionExpiresAt: _subscriptionExpiresAt,
       subscriptionMonthlyPriceRub: _subscriptionMonthlyPriceRub,
@@ -16236,6 +16237,15 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         _schedulePrefsSave();
         _scheduleTariffRefresh();
       }),
+      onCancelAutoRenew: () async {
+        final pending = _cancelAutoRenew();
+        refresh?.call();
+        try {
+          return await pending;
+        } finally {
+          refresh?.call();
+        }
+      },
       onOptAutoRenew: (value) => changed(() {
         setState(() => optAutoRenew = value);
         _schedulePrefsSave();
@@ -18143,6 +18153,7 @@ class TariffPage extends StatelessWidget {
   final String? tariffStatus;
   final Map<String, dynamic>? pendingBillingOrder;
   final bool subscriptionActive;
+  final bool subscriptionAutoRenew;
   final int subscriptionMaxDevices;
   final String? subscriptionExpiresAt;
   final int? subscriptionMonthlyPriceRub;
@@ -18158,6 +18169,7 @@ class TariffPage extends StatelessWidget {
   final void Function(bool) onOptSmartRouting;
   final void Function(bool) onOptDedicatedIp;
   final void Function(bool) onOptAutoRenew;
+  final Future<bool> Function() onCancelAutoRenew;
   final Future<void> Function() onApplyTariff;
   final Future<void> Function() onClaimPaidBetaInvite;
   final Future<void> Function() onCheckPendingBillingOrder;
@@ -18184,6 +18196,7 @@ class TariffPage extends StatelessWidget {
     required this.tariffStatus,
     required this.pendingBillingOrder,
     required this.subscriptionActive,
+    this.subscriptionAutoRenew = false,
     this.subscriptionMaxDevices = 1,
     required this.subscriptionExpiresAt,
     required this.subscriptionMonthlyPriceRub,
@@ -18198,6 +18211,7 @@ class TariffPage extends StatelessWidget {
     required this.onOptSmartRouting,
     required this.onOptDedicatedIp,
     required this.onOptAutoRenew,
+    required this.onCancelAutoRenew,
     required this.onApplyTariff,
     required this.onCheckPendingBillingOrder,
     required this.onOpenPaymentUrl,
@@ -18774,16 +18788,24 @@ class TariffPage extends StatelessWidget {
               const SizedBox(height: 10),
               SwitchListTile.adaptive(
                 contentPadding: EdgeInsets.zero,
-                value: optAutoRenew,
+                value: subscriptionAutoRenew || optAutoRenew,
                 onChanged: tariffBusy || hasPendingOrder
                     ? null
-                    : onOptAutoRenew,
+                    : (value) {
+                        if (!value && subscriptionAutoRenew) {
+                          unawaited(onCancelAutoRenew());
+                          return;
+                        }
+                        onOptAutoRenew(value);
+                      },
                 title: const Text(
                   'Автопродление',
                   style: TextStyle(fontWeight: FontWeight.w900),
                 ),
-                subtitle: const Text(
-                  'Автоматически продлим выбранный срок. Можно отключить.',
+                subtitle: Text(
+                  subscriptionAutoRenew
+                      ? 'Автопродление активно. Выключение сразу отменит будущие списания.'
+                      : 'Включится после успешной оплаты выбранного срока.',
                 ),
                 secondary: const Icon(Icons.autorenew_rounded),
               ),

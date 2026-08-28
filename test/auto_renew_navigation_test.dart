@@ -75,8 +75,11 @@ void main() {
   );
 
   testWidgets(
-    'tariff keeps purchase opt-in but has no active-subscription cancel action',
+    'tariff switch cancels active auto-renew instead of changing local choice',
     (tester) async {
+      var cancelCalls = 0;
+      var optInCalls = 0;
+
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
@@ -95,6 +98,7 @@ void main() {
               tariffStatus: null,
               pendingBillingOrder: null,
               subscriptionActive: true,
+              subscriptionAutoRenew: true,
               subscriptionExpiresAt: '2026-09-09T01:21:57Z',
               subscriptionMonthlyPriceRub: 249,
               publicBillingPlanCode: 'green_30d',
@@ -107,7 +111,11 @@ void main() {
               onOptNoAds: (_) {},
               onOptSmartRouting: (_) {},
               onOptDedicatedIp: (_) {},
-              onOptAutoRenew: (_) {},
+              onOptAutoRenew: (_) => optInCalls += 1,
+              onCancelAutoRenew: () async {
+                cancelCalls += 1;
+                return true;
+              },
               onApplyTariff: () async {},
               onCheckPendingBillingOrder: () async {},
               onOpenPaymentUrl: (_) {},
@@ -118,7 +126,16 @@ void main() {
       );
 
       expect(find.text('Автопродление'), findsOneWidget);
-      expect(find.text('Отключить автопродление'), findsNothing);
+      expect(
+        find.textContaining('Выключение сразу отменит будущие списания'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byType(Switch));
+      await tester.pump();
+
+      expect(cancelCalls, 1);
+      expect(optInCalls, 0);
     },
     skip: publicProductSkip,
   );
