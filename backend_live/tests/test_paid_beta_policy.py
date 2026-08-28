@@ -1683,11 +1683,207 @@ class PaidBetaPolicyTests(unittest.TestCase):
             "https://pay.example.test/manual-npd-smoke",
         )
         self.assertFalse(order["autoRenew"])
+        self.assertEqual(order["orderKind"], "manual")
         self.assertEqual(order["taxReceipt"]["mode"], "yookassa_npd_manual")
         self.assertEqual(order["taxReceipt"]["status"], "awaiting_payment")
         request_payload = request_payment.call_args.args[1]
         self.assertFalse(request_payload["save_payment_method"])
         self.assertNotIn("receipt", request_payload)
+
+    def test_yookassa_manual_npd_auto_renew_smoke_enrolls_then_cancels(self) -> None:
+        provider_payment = {
+            "id": "manual-npd-auto-renew-smoke-payment-1",
+            "status": "pending",
+            "paid": False,
+            "confirmation": {
+                "confirmation_url": "https://pay.example.test/manual-npd-auto-renew",
+            },
+        }
+        with (
+            self.yookassa_manual_npd_environment(),
+            patch.object(main, "PUBLIC_PRODUCT_ENABLED", True),
+            patch.object(main, "PAID_SALES_ENABLED", False),
+            patch.object(
+                main,
+                "yookassa_request",
+                return_value=provider_payment,
+            ) as request_payment,
+        ):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(autoRenew=True),
+                provider_smoke=True,
+                smoke_auto_renew_opt_in=True,
+            )
+
+            request_payload = request_payment.call_args.args[1]
+            self.assertTrue(request_payload["save_payment_method"])
+            self.assertNotIn("receipt", request_payload)
+            self.assertTrue(order["autoRenew"])
+            self.assertEqual(
+                order["orderKind"],
+                main.PAYMENT_SMOKE_AUTO_RENEW_ORDER_KIND,
+            )
+
+            succeeded_payment = {
+                "id": "manual-npd-auto-renew-smoke-payment-1",
+                "status": "succeeded",
+                "paid": True,
+                "refundable": True,
+                "amount": {"value": "249.00", "currency": "RUB"},
+                "metadata": {"orderId": order["orderId"]},
+                "payment_method": {
+                    "id": "manual-npd-saved-method-1",
+                    "saved": True,
+                },
+            }
+            pending = main.apply_yookassa_payment_update(
+                order["orderId"],
+                succeeded_payment,
+            )["order"]
+            self.assertEqual(pending["status"], "paid_receipt_pending")
+            self.assertTrue(pending["autoRenew"])
+            self.assertEqual(
+                main.get_billing_order_row(order["orderId"])[
+                    "provider_payment_method_id"
+                ],
+                "manual-npd-saved-method-1",
+            )
+
+            receipt_url = (
+                "https://lknpd.nalog.ru/api/v1/receipt/123456789012/"
+                "manual-npd-auto-renew-smoke/print"
+            )
+            with (
+                patch.object(
+                    main,
+                    "yookassa_get_payment",
+                    return_value=succeeded_payment,
+                ),
+                patch.object(main, "send_smtp_email"),
+            ):
+                confirmed = main.confirm_yookassa_npd_payment_receipt(
+                    order["orderId"],
+                    receipt_url=receipt_url,
+                    amount_rub=249,
+                    reason="Official My Tax auto-renew smoke receipt reviewed",
+                )
+
+            self.assertEqual(confirmed["order"]["status"], "activated")
+            self.assertTrue(confirmed["subscription"]["autoRenew"])
+            self.assertTrue(confirmed["subscription"]["paymentMethodSaved"])
+            smoke_snapshot = main.billing_payment_smoke_order_snapshot(
+                main.get_billing_order_row(order["orderId"])
+            )
+            self.assertTrue(main.billing_payment_smoke_candidate(smoke_snapshot))
+
+            canceled = main.cancel_auto_renew_for_user(self.user_id)
+            self.assertFalse(canceled["autoRenew"])
+            self.assertFalse(canceled["paymentMethodSaved"])
+            main.billing_refund_entitlement_preflight(
+                main.get_billing_order_row(order["orderId"])
+            )
+            with self.assertRaises(main.HTTPException) as raised:
+                main.create_yookassa_auto_renewal_payment(
+                    main.get_billing_order_row(order["orderId"]),
+                    "beta@example.test",
+                    int(main.get_subscription_row(self.user_id)["id"]),
+                    "manual-npd-saved-method-1",
+                    "manual-npd-auto-renew-smoke-key",
+                )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail["code"],
+            "npd_manual_auto_renewal_disabled",
+        )
+
+    def test_admin_payment_smoke_forwards_explicit_auto_renew_opt_in(self) -> None:
+        payload = main.AdminPaymentSmokeIn(
+            userId=self.user_id,
+            confirmUserId=self.user_id,
+            testAutoRenewOptIn=True,
+        )
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/api/v1/admin/billing/payment-smoke",
+                "query_string": b"",
+                "headers": [],
+            }
+        )
+        fake_order = {
+            "orderId": "ord_admin_auto_renew_smoke",
+            "amountRub": 249,
+            "provider": "yookassa",
+        }
+        with (
+            patch.object(
+                main,
+                "create_billing_order_for_user",
+                return_value=fake_order,
+            ) as create_order,
+            patch.object(main, "write_admin_audit") as audit,
+            patch.object(
+                main,
+                "public_billing_order_status",
+                side_effect=lambda order: order,
+            ),
+        ):
+            result = main.create_admin_payment_smoke_order(payload, request)
+
+        args, kwargs = create_order.call_args
+        self.assertEqual(args[0], self.user_id)
+        self.assertTrue(args[1].autoRenew)
+        self.assertTrue(kwargs["provider_smoke"])
+        self.assertTrue(kwargs["smoke_auto_renew_opt_in"])
+        self.assertTrue(audit.call_args.args[3]["testAutoRenewOptIn"])
+        self.assertTrue(result["ok"])
+
+    def test_yookassa_auto_renew_smoke_fails_closed_without_saved_method(self) -> None:
+        provider_payment = {
+            "id": "manual-npd-unsaved-method-payment",
+            "status": "pending",
+            "paid": False,
+            "confirmation": {
+                "confirmation_url": "https://pay.example.test/unsaved-method",
+            },
+        }
+        with (
+            self.yookassa_manual_npd_environment(),
+            patch.object(main, "PUBLIC_PRODUCT_ENABLED", True),
+            patch.object(main, "PAID_SALES_ENABLED", False),
+            patch.object(main, "yookassa_request", return_value=provider_payment),
+        ):
+            order = main.create_billing_order_for_user(
+                self.user_id,
+                self.public_product_payload(autoRenew=True),
+                provider_smoke=True,
+                smoke_auto_renew_opt_in=True,
+            )
+            succeeded_without_saved_method = {
+                "id": "manual-npd-unsaved-method-payment",
+                "status": "succeeded",
+                "paid": True,
+                "amount": {"value": "249.00", "currency": "RUB"},
+                "metadata": {"orderId": order["orderId"]},
+                "payment_method": {
+                    "id": "method-not-saved",
+                    "saved": False,
+                },
+            }
+            pending = main.apply_yookassa_payment_update(
+                order["orderId"],
+                succeeded_without_saved_method,
+            )["order"]
+
+        self.assertFalse(pending["autoRenew"])
+        self.assertIsNone(
+            main.get_billing_order_row(order["orderId"])[
+                "provider_payment_method_id"
+            ]
+        )
 
     def test_yookassa_manual_npd_provider_smoke_requires_operator_gate(self) -> None:
         with (

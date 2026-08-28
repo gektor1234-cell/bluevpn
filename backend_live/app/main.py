@@ -37,8 +37,8 @@ from pydantic import BaseModel
 
 APP_TITLE = "Green VPN Backend"
 APP_VERSION = (
-    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.161-yookassa-smoke.1").strip()
-    or "0.9.161-yookassa-smoke.1"
+    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.162-yookassa-renewal-smoke.1").strip()
+    or "0.9.162-yookassa-renewal-smoke.1"
 )
 DEFAULT_PUBLIC_API_BASE_URL = "https://api.greenvpn.pro"
 
@@ -394,6 +394,7 @@ PUBLIC_PRODUCT_PRICE_RUB = 249
 PUBLIC_PRODUCT_INCLUDED_DEVICES = 5
 PUBLIC_PRODUCT_MAX_DEVICES = 5
 PUBLIC_PRODUCT_PERIOD_DAYS = 30
+PAYMENT_SMOKE_AUTO_RENEW_ORDER_KIND = "payment_smoke_auto_renew"
 PUBLIC_PRODUCT_TRANSPORT_SERVER_IDS = {
     item.strip()
     for item in split_env_list(
@@ -1967,6 +1968,7 @@ class AdminProdamusRefundConfirmIn(BaseModel):
 class AdminPaymentSmokeIn(BaseModel):
     userId: int
     confirmUserId: int
+    testAutoRenewOptIn: bool = False
 
 
 class AdminProdamusPaymentSmokeIn(AdminPaymentSmokeIn):
@@ -22256,6 +22258,12 @@ def create_yookassa_payment_for_order(
     amount = f"{int(order['amountRub'])}.00"
 
     manual_npd_receipt = TAX_RECEIPT_MODE == "yookassa_npd_manual"
+    manual_npd_auto_renew_smoke = bool(
+        provider_smoke
+        and manual_npd_receipt
+        and order.get("orderKind") == PAYMENT_SMOKE_AUTO_RENEW_ORDER_KIND
+        and order.get("autoRenew")
+    )
     payload = {
         "amount": {"value": amount, "currency": order["currency"]},
         "capture": True,
@@ -22270,7 +22278,10 @@ def create_yookassa_payment_for_order(
             "userId": str(order["userId"]),
             "email": user_email,
         },
-        "save_payment_method": bool(order["autoRenew"] and not manual_npd_receipt),
+        "save_payment_method": bool(
+            order["autoRenew"]
+            and (not manual_npd_receipt or manual_npd_auto_renew_smoke)
+        ),
     }
     if not manual_npd_receipt:
         payload["receipt"] = yookassa_receipt_payload(
@@ -22953,6 +22964,7 @@ def create_billing_order_for_user(
     payload: TariffSelectionIn,
     *,
     provider_smoke: bool = False,
+    smoke_auto_renew_opt_in: bool = False,
 ) -> dict:
     user_access = get_user_access_row(int(user_id))
     if user_access is None:
@@ -23034,8 +23046,27 @@ def create_billing_order_for_user(
         else:
             ensure_paid_sales_ready(require_provider=False)
     normalized = normalize_tariff_selection(payload)
-    if yookassa_uses_manual_npd_receipts():
+    manual_npd_auto_renew_smoke = bool(
+        provider_smoke
+        and smoke_auto_renew_opt_in
+        and selected_payment_provider() == "yookassa"
+        and yookassa_uses_manual_npd_receipts()
+    )
+    if smoke_auto_renew_opt_in and not manual_npd_auto_renew_smoke:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "payment_smoke_auto_renew_unsupported",
+                "message": (
+                    "Проверка подключения автопродления разрешена только для "
+                    "изолированного YooKassa smoke в ручном режиме чеков НПД."
+                ),
+            },
+        )
+    if yookassa_uses_manual_npd_receipts() and not manual_npd_auto_renew_smoke:
         normalized["autoRenew"] = False
+    elif manual_npd_auto_renew_smoke:
+        normalized["autoRenew"] = True
     quote = quote_tariff(
         normalized,
         strict_promo=bool(normalized.get("promoCode")),
@@ -23073,9 +23104,22 @@ def create_billing_order_for_user(
                     candidate_selection = json.loads(candidate["selection_json"] or "{}")
                 except Exception:
                     candidate_selection = {}
+                candidate_kind = str(
+                    candidate["order_kind"]
+                    if "order_kind" in candidate.keys()
+                    else "manual"
+                ).strip().lower()
+                expected_kind = (
+                    PAYMENT_SMOKE_AUTO_RENEW_ORDER_KIND
+                    if manual_npd_auto_renew_smoke
+                    else "manual"
+                )
                 if (
                     candidate_selection.get("policyMode") == "public_product"
                     and candidate_selection.get("planCode") == normalized.get("planCode")
+                    and bool(candidate["auto_renew"])
+                    == bool(normalized.get("autoRenew"))
+                    and candidate_kind == expected_kind
                 ):
                     row = candidate
                     reused_existing_order = True
@@ -23130,9 +23174,9 @@ def create_billing_order_for_user(
                     selection_json, quote_json, promo_code, discount_rub,
                     original_amount_rub, beta_invite_public_id, payment_url, provider,
                     tax_receipt_mode, tax_receipt_status, tax_receipt_updated_at,
-                    created_at, updated_at
+                    order_kind, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     public_id,
@@ -23156,6 +23200,11 @@ def create_billing_order_for_user(
                         else "prepared"
                     ),
                     now,
+                    (
+                        PAYMENT_SMOKE_AUTO_RENEW_ORDER_KIND
+                        if manual_npd_auto_renew_smoke
+                        else "manual"
+                    ),
                     now,
                     now,
                 ),
@@ -23366,13 +23415,38 @@ def mark_yookassa_payment_receipt_pending(
             if current_receipt_status in {"registered", "delivered"}
             else "registration_required"
         )
+        existing_payment_method_id = str(
+            (
+                row["provider_payment_method_id"]
+                if "provider_payment_method_id" in row.keys()
+                else ""
+            )
+            or ""
+        ).strip()
+        effective_payment_method_id = (
+            str(provider_payment_method_id or "").strip()
+            or existing_payment_method_id
+            or None
+        )
+        preserve_auto_renew_enrollment = bool(
+            str(row["provider"] or "").strip().lower() == "yookassa"
+            and str(row["tax_receipt_mode"] or "").strip().lower()
+            == "yookassa_npd_manual"
+            and str(row["order_kind"] or "").strip().lower()
+            == PAYMENT_SMOKE_AUTO_RENEW_ORDER_KIND
+            and bool(row["auto_renew"])
+            and effective_payment_method_id
+        )
         conn.execute(
             """
             UPDATE billing_orders
             SET status = 'paid_receipt_pending',
-                auto_renew = 0,
+                auto_renew = CASE WHEN ? = 1 THEN auto_renew ELSE 0 END,
                 provider_payment_id = COALESCE(?, provider_payment_id),
-                provider_payment_method_id = NULL,
+                provider_payment_method_id = CASE
+                    WHEN ? = 1 THEN ?
+                    ELSE NULL
+                END,
                 paid_at = COALESCE(paid_at, ?),
                 tax_receipt_mode = 'yookassa_npd_manual',
                 tax_receipt_status = ?,
@@ -23386,7 +23460,10 @@ def mark_yookassa_payment_receipt_pending(
             WHERE public_id = ?
             """,
             (
+                1 if preserve_auto_renew_enrollment else 0,
                 provider_payment_id,
+                1 if preserve_auto_renew_enrollment else 0,
+                effective_payment_method_id,
                 now,
                 next_receipt_status,
                 now,
@@ -24141,12 +24218,25 @@ def billing_payment_smoke_candidate(order: dict) -> bool:
         if tax_receipt.get("mode") != TAX_RECEIPT_MODE:
             return False
         if tax_receipt.get("mode") == "yookassa_npd_manual":
+            auto_renew_smoke = (
+                order.get("orderKind") == PAYMENT_SMOKE_AUTO_RENEW_ORDER_KIND
+            )
             return bool(
                 common_ready
-                and not order.get("providerPaymentMethodSaved")
-                and not order.get("autoRenew")
                 and tax_receipt.get("status") == "registered"
                 and tax_receipt.get("deliveryStatus") == "sent"
+                and (
+                    (
+                        auto_renew_smoke
+                        and order.get("providerPaymentMethodSaved")
+                        and order.get("autoRenew")
+                    )
+                    or (
+                        not auto_renew_smoke
+                        and not order.get("providerPaymentMethodSaved")
+                        and not order.get("autoRenew")
+                    )
+                )
             )
         return bool(
             common_ready
@@ -39722,15 +39812,17 @@ def create_admin_payment_smoke_order(
                 "message": "Для smoke нужно точно повторить ID тестового пользователя.",
             },
         )
+    test_auto_renew_opt_in = bool(payload.testAutoRenewOptIn)
     order = create_billing_order_for_user(
         int(payload.userId),
         TariffSelectionIn(
-            autoRenew=False,
+            autoRenew=test_auto_renew_opt_in,
             clientMarker=PUBLIC_PRODUCT_CLIENT_MARKER,
             releaseChannel=PUBLIC_PRODUCT_RELEASE_CHANNEL,
             billingPlanCode=PUBLIC_PRODUCT_PLAN_CODE,
         ),
         provider_smoke=True,
+        smoke_auto_renew_opt_in=test_auto_renew_opt_in,
     )
     write_admin_audit(
         audit_event,
@@ -39740,6 +39832,7 @@ def create_admin_payment_smoke_order(
             "userId": int(payload.userId),
             "amountRub": int(order["amountRub"]),
             "provider": order.get("provider"),
+            "testAutoRenewOptIn": test_auto_renew_opt_in,
         },
         request=request,
     )
@@ -39748,7 +39841,8 @@ def create_admin_payment_smoke_order(
         "ok": True,
         "order": public_billing_order_status(order),
         "message": (
-            f"Изолированный заказ {provider} создан; публичные продажи остались закрыты."
+            f"Изолированный заказ {provider} создан; публичные продажи и "
+            "автоматические списания остались закрыты."
         ),
     }
 
