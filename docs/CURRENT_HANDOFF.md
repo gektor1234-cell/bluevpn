@@ -6,6 +6,36 @@ This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
 `PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md`. Dated reports are evidence only.
 
+## Local fixed-term subscription candidate, 2026-08-28
+
+- Source `270a7fa8f6989ebe90be32fa1ddde78f51de2843` implements strict paid
+  start/end periods, revision-bound extension quotes, duplicate-purchase
+  protection, append-only history, immediate logical expiry, durable peer
+  revocation, and reasoned admin grant/revoke. It is pushed and was built from
+  a clean worktree.
+- Android candidate `0.4.11+2026082805` is production-signed, size `56274061`,
+  SHA-256
+  `26F8D1D38085FFDC2F47777A0EE369938E5EEBB0C9EE8C9C3AF516D4769B6451`.
+- Windows candidate `0.4.6+4637` is an unsigned ZIP, size `54278122`, SHA-256
+  `E51330F9A3DA8FE882782EC71FFCCA0142AB69ED558EDE6789A14877A32F65AE`.
+  The final ZIP includes `app/tools/greenvpn_standby_probe.ps1`.
+- Backend candidate `0.9.165-subscription-lifecycle.1` is size `315136`,
+  SHA-256
+  `145FFEA587ADB39CD291EA71A86D96B3A142253D0B77A76B86CAF236524084FC`.
+- Backend tests passed `234/234`; Flutter passed analyze, `140` default tests
+  with `14` intentional skips, and `142` public-product tests with `12`
+  intentional skips. Release gate is warnings `0`, errors `0`; parser and secret
+  checks passed.
+- Exact paths and the lifecycle contract are in
+  `docs/SUBSCRIPTION_LIFECYCLE_2026_08_28_RU.md`. The first client root without
+  `_v2` is retained as rejected packaging evidence because it omitted the
+  standby probe.
+- This is local candidate evidence only. No client was installed, no real
+  payment or automatic charge was run, and no production node, manifest,
+  download or VPN state was changed. Physical active/free-account acceptance
+  and an explicitly authorized guarded production deployment remain separate
+  gates.
+
 ## Current production, 2026-08-28
 
 - Stable backend `0.9.164-autorenew-checkout.1` is deployed on fallback

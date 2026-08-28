@@ -2,7 +2,8 @@
 
 Дата: 2026-08-28 MSK.
 
-Статус: реализовано и проверено в source candidate, в production не опубликовано.
+Статус: реализовано, проверено и собрано в точные локальные candidate artifacts;
+в production не опубликовано.
 
 ## Контракт продукта
 
@@ -99,10 +100,42 @@ Admin web показывает status/start/end/revision, историю и от
 - Release gate после candidate version bump: warnings `0`, errors `0`.
 - Repository secret scan с untracked candidate-файлами: passed.
 
+## Точные локальные артефакты
+
+Исходный commit кандидата: `270a7fa8f6989ebe90be32fa1ddde78f51de2843`.
+Основная реализация находится в commit
+`e7580d33ec080882a9e53fb0c9960735a6be5020`; следующий commit исправляет только
+состав Windows-пакета и release gate для обязательного standby probe.
+
+- Android `0.4.11+2026082805`, production-signed:
+  `C:\BlueVPN_Builds\public_product_final_candidate_20260828_android_2026082805_windows_4637_v2\GreenVPN_Android_0.4.11_final_candidate_2026082805.apk`;
+  size `56274061`; SHA-256
+  `26F8D1D38085FFDC2F47777A0EE369938E5EEBB0C9EE8C9C3AF516D4769B6451`.
+- Windows `0.4.6+4637`, unsigned ZIP:
+  `C:\BlueVPN_Builds\public_product_final_candidate_20260828_android_2026082805_windows_4637_v2\windows\GreenVPN_Windows_0.4.6_final_candidate.zip`;
+  size `54278122`; SHA-256
+  `E51330F9A3DA8FE882782EC71FFCCA0142AB69ED558EDE6789A14877A32F65AE`.
+- Backend `0.9.165-subscription-lifecycle.1`:
+  `C:\BlueVPN_Builds\subscription_lifecycle_20260828_backend_v3\public-product-backend-subscription-lifecycle-20260828-r3.tar.gz`;
+  size `315136`; SHA-256
+  `145FFEA587ADB39CD291EA71A86D96B3A142253D0B77A76B86CAF236524084FC`.
+
+Итоговый client manifest находится рядом с APK. Независимая проверка повторно
+сверила размеры и SHA-256 обоих клиентских артефактов. Android проходит APK v2
+signature verification и 16 KB native alignment. Windows ZIP содержит
+`app/tools/greenvpn_standby_probe.ps1`; release gate завершился с warnings `0`
+и errors `0`.
+
+Первый root без суффикса `_v2` отклонён fail-closed: в ZIP отсутствовал standby
+probe. Он сохранён как evidence неуспешной упаковки и не является кандидатом.
+Повторная сборка выполнялась из чистого commit и завершилась успешно.
+
 ## Граница готовности
 
-Этот документ подтверждает source implementation и локальные проверки, но не
-production rollout. До публикации нужны точные Android/Windows/backend artifacts,
-физическая проверка аккаунта с активной подпиской и аккаунта без неё, затем
-отдельно разрешённый fallback-first/primary-second deploy с backup и rollback.
-Реальный платёж и автоматическое списание в этой работе не выполнялись.
+Этот документ подтверждает source implementation, локальные проверки и точные
+Android/Windows/backend candidate artifacts, но не production rollout. До
+публикации остаются физическая проверка аккаунта с активной подпиской и аккаунта
+без неё, а затем отдельно разрешённый fallback-first/primary-second deploy с
+backup и rollback. Реальный платёж, автоматическое списание, установка на
+пользовательское устройство и изменение production в этой работе не
+выполнялись.

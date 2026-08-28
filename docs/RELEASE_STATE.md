@@ -1,5 +1,47 @@
 # Green VPN Release State
 
+## Fixed-Term Subscription Lifecycle Candidate (2026-08-28 MSK)
+
+| Layer | Candidate state |
+|---|---|
+| Backend | `0.9.165-subscription-lifecycle.1`, local bundle only |
+| Android | `0.4.11+2026082805`, signed local candidate |
+| Windows | `0.4.6+4637`, unsigned local ZIP candidate |
+| Production | unchanged; no publication or network transition |
+
+Source `270a7fa8f6989ebe90be32fa1ddde78f51de2843` makes the backend the
+authoritative clock for paid access. It records exact paid start/end instants,
+requires a revision-bound preview before extension, prevents ambiguous pending
+orders, keeps stale paid callbacks out of current entitlement, expires access
+logically at the deadline, and persists activation, extension, expiry, grant
+and revoke history. A five-minute systemd job durably deactivates expired rows
+and revokes known peers with retry-safe cross-node events.
+
+Android and Windows now distinguish active, expired and free access, display
+the current period, and use separate pay/resume/extend actions. Extending an
+active subscription shows the exact next period and requires explicit
+confirmation. Admin web and the PowerShell helper expose history plus
+reason-required grant/revoke operations; neither operation enables automatic
+charging.
+
+Exact artifacts:
+
+- Android size `56274061`, SHA-256
+  `26F8D1D38085FFDC2F47777A0EE369938E5EEBB0C9EE8C9C3AF516D4769B6451`;
+- Windows size `54278122`, SHA-256
+  `E51330F9A3DA8FE882782EC71FFCCA0142AB69ED558EDE6789A14877A32F65AE`;
+- backend size `315136`, SHA-256
+  `145FFEA587ADB39CD291EA71A86D96B3A142253D0B77A76B86CAF236524084FC`.
+
+The first client package root was rejected because the Windows ZIP omitted the
+standby probe. Packaging and the fail-closed gate were corrected; the clean
+`_v2` build contains the probe and passed with warnings `0`, errors `0`.
+Backend tests passed `234/234`; Flutter passed analyze, `140` default tests and
+`142` public-product tests, with only intentional platform skips. Independent
+hash/size readback matched the final manifest. Full evidence and remaining
+physical/deployment gates are in
+`SUBSCRIPTION_LIFECYCLE_2026_08_28_RU.md`.
+
 ## Android Payment Routing Hotfix 0.4.10 (2026-08-28 MSK)
 
 | Layer | Current state |
