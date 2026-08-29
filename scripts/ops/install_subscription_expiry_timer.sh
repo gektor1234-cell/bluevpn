@@ -2,6 +2,7 @@
 set -euo pipefail
 
 APPLY=0
+DEFER_START=0
 RUNNER=""
 API_BASE="http://127.0.0.1:8000"
 TOKEN_FILE="/opt/bluevpn/backend/data/admin_token.txt"
@@ -12,6 +13,7 @@ LIMIT=100
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --apply) APPLY=1; shift ;;
+    --defer-start) DEFER_START=1; shift ;;
     --runner) RUNNER="${2:?missing runner}"; shift 2 ;;
     --api-base) API_BASE="${2:?missing api base}"; shift 2 ;;
     --token-file) TOKEN_FILE="${2:?missing token file}"; shift 2 ;;
@@ -50,6 +52,7 @@ echo "api_base=$API_BASE"
 echo "unit_prefix=$UNIT_PREFIX"
 echo "backend_service=${BACKEND_SERVICE:-none}"
 echo "token_file=$TOKEN_FILE"
+echo "start_mode=$([[ $DEFER_START -eq 1 ]] && echo deferred || echo enabled)"
 
 [[ $APPLY -eq 1 ]] || exit 0
 [[ $EUID -eq 0 ]] || { echo "apply mode requires root" >&2; exit 1; }
@@ -97,5 +100,10 @@ EOF
 
 chmod 0644 "$SERVICE_FILE" "$TIMER_FILE"
 systemctl daemon-reload
-systemctl enable --now "${UNIT_PREFIX}.timer"
-systemctl is-active "${UNIT_PREFIX}.timer"
+if [[ $DEFER_START -eq 1 ]]; then
+  systemctl disable --now "${UNIT_PREFIX}.timer" >/dev/null 2>&1 || true
+  echo "timer_status=deferred"
+else
+  systemctl enable --now "${UNIT_PREFIX}.timer"
+  systemctl is-active "${UNIT_PREFIX}.timer"
+fi

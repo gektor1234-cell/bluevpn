@@ -7,6 +7,7 @@ BUNDLE_DIR=""
 BACKEND_VERSION=""
 SELECT_PRODAMUS_FAIL_CLOSED=0
 SELECT_YOOKASSA_NPD_MANUAL_FAIL_CLOSED=0
+DEFER_SUBSCRIPTION_EXPIRY=0
 
 APP_ROOT="/opt/bluevpn/backend"
 DATA_DIR="${APP_ROOT}/data"
@@ -29,6 +30,7 @@ Usage:
     --bundle-dir PATH \
     --backend-version VERSION \
     [--select-prodamus-fail-closed | --select-yookassa-npd-manual-fail-closed] \
+    [--defer-subscription-expiry] \
     [--apply]
 
 The default is a dry run. Apply mode creates a root-only
@@ -45,6 +47,7 @@ while [[ $# -gt 0 ]]; do
     --backend-version) BACKEND_VERSION="${2:?missing backend version}"; shift 2 ;;
     --select-prodamus-fail-closed) SELECT_PRODAMUS_FAIL_CLOSED=1; shift ;;
     --select-yookassa-npd-manual-fail-closed) SELECT_YOOKASSA_NPD_MANUAL_FAIL_CLOSED=1; shift ;;
+    --defer-subscription-expiry) DEFER_SUBSCRIPTION_EXPIRY=1; shift ;;
     --apply) APPLY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -90,6 +93,7 @@ echo "backend_version=$BACKEND_VERSION"
 echo "billing_primary=$BILLING_PRIMARY"
 echo "select_prodamus_fail_closed=$SELECT_PRODAMUS_FAIL_CLOSED"
 echo "select_yookassa_npd_manual_fail_closed=$SELECT_YOOKASSA_NPD_MANUAL_FAIL_CLOSED"
+echo "subscription_expiry_start=$([[ $DEFER_SUBSCRIPTION_EXPIRY -eq 1 ]] && echo deferred || echo enabled)"
 echo "source_main_sha256=$(sha256sum "$BUNDLE_DIR/backend/app/main.py" | awk '{print $1}')"
 echo "database_source=production_only"
 
@@ -387,13 +391,19 @@ if [[ $sync_was_active -eq 1 ]]; then systemctl restart "$SYNC_TIMER"; fi
 bash "$BUNDLE_DIR/ops/install_operational_retention_timer.sh" \
   --source-script "$BUNDLE_DIR/ops/greenvpn_prune_operational_history.py" \
   --apply
-bash "$BUNDLE_DIR/ops/install_subscription_expiry_timer.sh" \
-  --runner "$BUNDLE_DIR/ops/run_subscription_expiry.py" \
-  --api-base "http://127.0.0.1:8000" \
-  --token-file "/opt/bluevpn/backend/data/admin_token.txt" \
-  --unit-prefix "greenvpn-subscription-expiry" \
-  --backend-service "$SERVICE" \
+expiry_timer_args=(
+  --runner "$BUNDLE_DIR/ops/run_subscription_expiry.py"
+  --api-base "http://127.0.0.1:8000"
+  --token-file "/opt/bluevpn/backend/data/admin_token.txt"
+  --unit-prefix "greenvpn-subscription-expiry"
+  --backend-service "$SERVICE"
   --apply
+)
+if [[ $DEFER_SUBSCRIPTION_EXPIRY -eq 1 ]]; then
+  expiry_timer_args+=(--defer-start)
+fi
+bash "$BUNDLE_DIR/ops/install_subscription_expiry_timer.sh" \
+  "${expiry_timer_args[@]}"
 trap - ERR
 echo "public_product_backend_status=ok"
 echo "backup_dir=$backup_dir"
