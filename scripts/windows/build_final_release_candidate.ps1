@@ -41,6 +41,8 @@ $apiFallbackBaseUrls = 'https://176-113-81-35.sslip.io'
     -EnableNaiveHttpsPreview `
     -EnableDnsttPreview `
     -PublicProductCandidate `
+    -EnableFusionUi `
+    -PrepareFusionProductionPromotionCandidate `
     -Awg2PreviewApplicationId $androidPackage `
     -Awg2PreviewAppLabel 'Green VPN' `
     -Awg2PreviewAppVersion $AppVersion `

@@ -9,6 +9,8 @@ param(
     [switch]$EnableNaiveHttpsPreview,
     [switch]$EnableDnsttPreview,
     [switch]$PublicProductCandidate,
+    [switch]$EnableFusionUi,
+    [switch]$PrepareFusionProductionPromotionCandidate,
     [string]$Awg2PreviewApplicationId = "pro.greenvpn.app.transportpreview",
     [string]$Awg2PreviewAppLabel = "Green VPN Transport Preview",
     [string]$Awg2PreviewAppVersion = "0.2.45-vless-transport-preview.1",
@@ -44,6 +46,15 @@ $env:GREENVPN_ANDROID_HYSTERIA2_PREVIEW_ENABLED = if ($EnableHysteria2Preview) {
 $env:GREENVPN_ANDROID_VLESS_REALITY_PREVIEW_ENABLED = if ($EnableVlessRealityPreview) { 'true' } else { 'false' }
 $env:GREENVPN_ANDROID_NAIVE_HTTPS_PREVIEW_ENABLED = if ($EnableNaiveHttpsPreview) { 'true' } else { 'false' }
 $env:GREENVPN_ANDROID_DNSTT_PREVIEW_ENABLED = if ($EnableDnsttPreview) { 'true' } else { 'false' }
+if ($EnableFusionUi -and -not $PublicProductCandidate) {
+    throw 'Fusion UI is allowed here only for an isolated public-product candidate.'
+}
+if ($EnableFusionUi -and -not $PrepareFusionProductionPromotionCandidate) {
+    throw 'Fusion candidate build requires PrepareFusionProductionPromotionCandidate.'
+}
+if ($PrepareFusionProductionPromotionCandidate -and -not $EnableFusionUi) {
+    throw 'Fusion production promotion gate requires EnableFusionUi=true.'
+}
 if ($EnableAwg2Preview -or $EnableHysteria2Preview -or $EnableVlessRealityPreview -or $EnableNaiveHttpsPreview -or $EnableDnsttPreview) {
     if (-not $PublicProductCandidate -and -not $Awg2PreviewAppVersion.ToLowerInvariant().Contains('preview')) {
         throw 'Transport preview app version must contain the preview marker.'
@@ -265,6 +276,8 @@ if ($Mode -eq "debug" -or $Mode -eq "both") {
         }
     }
     $debugArgs += "--dart-define=GREENVPN_PUBLIC_PRODUCT_BUILD=$publicProductBuildDefine"
+    $debugArgs += "--dart-define=GREENVPN_FUSION_UI_ENABLED=$($EnableFusionUi.ToString().ToLowerInvariant())"
+    $debugArgs += "--dart-define=GREENVPN_FUSION_PRODUCTION_PROMOTION_CANDIDATE=$($PrepareFusionProductionPromotionCandidate.IsPresent.ToString().ToLowerInvariant())"
     flutter @debugArgs | Out-Host
     if ($LASTEXITCODE -ne 0) {
         throw "Flutter debug APK build failed with exit code $LASTEXITCODE."
@@ -337,6 +350,8 @@ if ($Mode -eq "release" -or $Mode -eq "both") {
         }
     }
     $releaseArgs += "--dart-define=GREENVPN_PUBLIC_PRODUCT_BUILD=$publicProductBuildDefine"
+    $releaseArgs += "--dart-define=GREENVPN_FUSION_UI_ENABLED=$($EnableFusionUi.ToString().ToLowerInvariant())"
+    $releaseArgs += "--dart-define=GREENVPN_FUSION_PRODUCTION_PROMOTION_CANDIDATE=$($PrepareFusionProductionPromotionCandidate.IsPresent.ToString().ToLowerInvariant())"
     $previousGreenVpnAppVersion = $env:GREENVPN_APP_VERSION
     try {
         $env:GREENVPN_APP_VERSION = $releaseAppVersion
