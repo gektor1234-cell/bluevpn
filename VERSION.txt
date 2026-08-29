@@ -4,7 +4,7 @@ Android build: 2026082901
 Windows build: 4637
 Platforms: Android, Windows
 Source backend: 0.9.165-subscription-lifecycle.2
-Status: exact Android 0.4.11+2026082901, Windows 0.4.6+4637, and backend subscription-lifecycle release candidate; production remains unchanged
+Status: Android 0.4.11+2026082901 is published as the mandatory stable release; backend 0.9.165-subscription-lifecycle.2 is live; Windows 0.4.6+4637 remains an unsigned unpublished candidate
 Production sales: enabled on the primary billing node only
 Refund execution: enabled on the primary billing node only
 Auto-renew: explicit consent UI is released; automatic charges remain disabled in the manual NPD contour

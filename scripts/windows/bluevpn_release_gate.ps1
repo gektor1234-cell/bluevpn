@@ -529,6 +529,17 @@ if ($null -ne $releaseContract) {
         ) {
             Add-Pass 'Unpublished candidate contract keeps exact mandatory versions behind owner approval'
         }
+        elseif (
+            $releaseContract.publication.productionPublished -eq $false -and
+            (
+                $releaseContract.publication.androidProductionPublished -eq $true -xor
+                $releaseContract.publication.windowsProductionPublished -eq $true
+            ) -and
+            $releaseContract.publication.ownerApprovalRequired -eq $true -and
+            $mandatoryVersionsMatch
+        ) {
+            Add-Pass 'Partially published production contract keeps the remaining platform behind owner approval'
+        }
         else {
             Add-Error 'Production or candidate mandatory-update contract is incomplete or inconsistent'
         }

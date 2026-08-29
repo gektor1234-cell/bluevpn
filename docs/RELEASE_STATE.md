@@ -1,6 +1,38 @@
 # Green VPN Release State
 
-## Fixed-Term Subscription Lifecycle Candidate (2026-08-28 MSK)
+## Android Subscription Lifecycle 0.4.11 (2026-08-29 MSK)
+
+| Layer | Current state |
+|---|---|
+| Stable backend | `0.9.165-subscription-lifecycle.2` on fallback and primary |
+| Stable Android | `0.4.11+2026082901`, signed, mandatory |
+| Stable Windows | unchanged: `0.4.6+4636`, `NotSigned`, mandatory |
+| Windows lifecycle candidate | `0.4.6+4637`, unsigned and unpublished |
+| Paid-beta | unchanged: backend `0.9.154-fusion-actions.1` |
+| Automatic charges | disabled in the manual NPD contour |
+
+Source `50691989c6c2a2abe53b38ff4cb7d1e51eb87584` closes the final client race:
+after email restore, a guest purchase quote is invalidated and replaced with an
+authenticated extension quote. An active paid account therefore cannot pay for
+an overlapping current month. It sees the exact current period, next period and
+extension price; free access sees a normal new-purchase period.
+
+The signed APK is `56371965` bytes, SHA-256
+`2E32B2807BDD3C2F4168C56140B535F383BB1F463F6E82F2FEF705F5C01BBB13`.
+Independent `_v3` and `_v4` builds are byte-identical, signature and 16 KB
+checks passed, Flutter analyze is clean, the default suite passed `141` tests
+with `15` intentional skips, and the release gate is `0/0`.
+
+Physical paid/free acceptance passed on `SM-A530F` without a payment or Green
+VPN network transition. Mandatory stable publication completed fallback first
+and primary second with rollback backups. Android `0.4.10` now receives HTTP
+`426`; `0.4.11` and update manifests receive `200`; both downloads match the
+candidate. Strict public verification passed `12/12`. Both databases pass
+`quick_check`, have identical lifecycle/release summaries, and both expiry and
+sync timers have a successful latest run. Full evidence is in
+`SUBSCRIPTION_LIFECYCLE_ANDROID_0_4_11_ROLLOUT_2026_08_29_RU.md`.
+
+## Historical Fixed-Term Subscription Lifecycle Candidate (2026-08-28 MSK)
 
 | Layer | Candidate state |
 |---|---|

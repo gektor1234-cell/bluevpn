@@ -2,8 +2,10 @@
 
 Дата: 2026-08-28 MSK.
 
-Статус: реализовано, проверено и собрано в точные локальные candidate artifacts;
-в production не опубликовано.
+Статус: реализовано и проверено. Backend
+`0.9.165-subscription-lifecycle.2` и обязательный Android
+`0.4.11+2026082901` опубликованы 2026-08-29; Windows `0.4.6+4637` остаётся
+неподписанным локальным кандидатом.
 
 ## Контракт продукта
 
@@ -130,12 +132,17 @@ signature verification и 16 KB native alignment. Windows ZIP содержит
 probe. Он сохранён как evidence неуспешной упаковки и не является кандидатом.
 Повторная сборка выполнялась из чистого commit и завершилась успешно.
 
-## Граница готовности
+## Production rollout 2026-08-29
 
-Этот документ подтверждает source implementation, локальные проверки и точные
-Android/Windows/backend candidate artifacts, но не production rollout. До
-публикации остаются физическая проверка аккаунта с активной подпиской и аккаунта
-без неё, а затем отдельно разрешённый fallback-first/primary-second deploy с
-backup и rollback. Реальный платёж, автоматическое списание, установка на
-пользовательское устройство и изменение production в этой работе не
-выполнялись.
+Физические paid/free сценарии Android пройдены, stale quote после email-входа
+исправлен commit `50691989c6c2a2abe53b38ff4cb7d1e51eb87584`. Точный signed APK
+`0.4.11+2026082901` опубликован fallback-first/primary-second как обязательное
+обновление с `minSupportedVersion=0.4.11`. Оба production runtime, БД, sync и
+expiry timer проверены после публикации.
+
+Каноническая запись точных APK/SHA, физических evidence, rollback и runtime:
+`SUBSCRIPTION_LIFECYCLE_ANDROID_0_4_11_ROLLOUT_2026_08_29_RU.md`.
+
+Реальный платёж и автоматическое списание не выполнялись. Auto-renew остаётся
+выключенным в manual NPD-контуре. Windows `0.4.6+4637` остаётся локальным
+неподписанным кандидатом и в production не публиковался.

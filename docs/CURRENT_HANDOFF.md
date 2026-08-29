@@ -1,12 +1,37 @@
 # Green VPN Current Handoff
 
-Updated: 2026-08-28 MSK.
+Updated: 2026-08-29 MSK.
 
 This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
 `PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md`. Dated reports are evidence only.
 
-## Local fixed-term subscription candidate, 2026-08-28
+## Current production: Android lifecycle 0.4.11, 2026-08-29
+
+- Source `50691989c6c2a2abe53b38ff4cb7d1e51eb87584` fixes the final stale-quote
+  race after email restore and is pushed.
+- Stable Android is mandatory `0.4.11+2026082901`, signed, size `56371965`,
+  SHA-256
+  `2E32B2807BDD3C2F4168C56140B535F383BB1F463F6E82F2FEF705F5C01BBB13`.
+  Two independent builds are byte-identical.
+- Backend is `0.9.165-subscription-lifecycle.2` on fallback and primary. Stable
+  Windows remains the published `0.4.6+4636`; unsigned lifecycle candidate
+  `0.4.6+4637` remains unpublished. Paid-beta is unchanged.
+- Physical paid/free Android acceptance passed. Active paid access shows its
+  current period and an exact non-overlapping next period; free access shows a
+  fresh purchase period. No payment order or network transition was created.
+- Stable publication completed fallback first and primary second. Both nodes
+  require minimum Android `0.4.11`; `0.4.10` receives `426`, current clients and
+  update manifests receive `200`; both public APK bodies match exact SHA/size.
+- Post-release strict verification passed `12/12`. Both production databases
+  return `quick_check=ok` and identical lifecycle/release summaries. Expiry and
+  DB-sync timers are enabled; their latest services returned `success/0`; failed
+  units are `0`.
+- Automatic charges remain disabled. No real payment was needed or performed.
+- Exact evidence and rollback paths:
+  `docs/SUBSCRIPTION_LIFECYCLE_ANDROID_0_4_11_ROLLOUT_2026_08_29_RU.md`.
+
+## Historical local fixed-term subscription candidate, 2026-08-28
 
 - Source `270a7fa8f6989ebe90be32fa1ddde78f51de2843` implements strict paid
   start/end periods, revision-bound extension quotes, duplicate-purchase
