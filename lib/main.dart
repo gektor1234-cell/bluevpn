@@ -7781,6 +7781,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   String? _subscriptionExpiresAt;
   int _subscriptionRevision = 0;
   int? _subscriptionMonthlyPriceRub;
+  int _tariffRefreshGeneration = 0;
   bool _vpnTapCooldown = false;
   bool _pendingBillingCheckRunning = false;
   String? _vpnBusyStage;
@@ -8375,6 +8376,13 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         : widget.session.emailVerified
         ? 'Почта подтверждена.'
         : 'Почта пока не подтверждена.';
+    _tariffQuote = null;
+    _tariffStatus = null;
+    unawaited(_syncTariffFromServerSilently());
+    unawaited(_refreshTariffServerState(showToast: false));
+    if (!widget.session.isGuest) {
+      unawaited(_refreshEmailStatus(showToast: false));
+    }
   }
 
   @override
@@ -9283,9 +9291,13 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _refreshTariffServerState({required bool showToast}) async {
+  Future<void> _refreshTariffServerState({
+    required bool showToast,
+    String? accessToken,
+  }) async {
     if (kIsWeb) return;
-    if (widget.session.accessToken == 'dev-token') {
+    final requestAccessToken = accessToken ?? widget.session.accessToken;
+    if (requestAccessToken == 'dev-token') {
       if (mounted) {
         setState(() {
           _tariffCatalog = null;
@@ -9296,6 +9308,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       return;
     }
 
+    final requestGeneration = ++_tariffRefreshGeneration;
     if (mounted) setState(() => _tariffBusy = true);
     try {
       final catalogRes = await _api.fetchTariffCatalog();
@@ -9305,7 +9318,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       final usesFixedBillingPlans =
           kPublicProductBuild || fixedPlanCodes.isNotEmpty;
       final quoteRes = await _api.quoteTariff(
-        accessToken: widget.session.accessToken,
+        accessToken: requestAccessToken,
         billingPlanCode: usesFixedBillingPlans
             ? greenVpnNormalizePublicBillingPlanCode(
                 _publicBillingPlanCode,
@@ -9321,7 +9334,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         dedicatedIp: optDedicatedIp,
       );
 
-      if (!mounted) return;
+      if (!mounted || requestGeneration != _tariffRefreshGeneration) return;
 
       if (!catalogRes.ok || catalogRes.data == null) {
         setState(
@@ -9360,7 +9373,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         _toast(context, _tariffStatus!);
       }
     } finally {
-      if (mounted) setState(() => _tariffBusy = false);
+      if (mounted && requestGeneration == _tariffRefreshGeneration) {
+        setState(() => _tariffBusy = false);
+      }
     }
   }
 
@@ -9641,6 +9656,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       });
       await _reconcileSubscriptionEntitlements();
       if (!mounted) return null;
+      await _refreshTariffServerState(
+        showToast: false,
+        accessToken: session.accessToken,
+      );
+      if (!mounted) return null;
       if (_hasPaidSubscriptionEntitlement) {
         _toast(context, 'Доступ по этому email восстановлен.');
         return null;
@@ -9702,6 +9722,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       _applySubscriptionUiState(data, subscription);
     });
     await _reconcileSubscriptionEntitlements();
+    if (!mounted) return;
+    await _refreshTariffServerState(
+      showToast: false,
+      accessToken: session.accessToken,
+    );
     if (!mounted) return;
 
     _toast(
@@ -18850,8 +18875,11 @@ class TariffPage extends StatelessWidget {
     final quotePlanCode = (quoteSelection['planCode'] ?? '').toString().trim();
     final exactQuoteReady =
         quotePlanCode == effectiveSelectedPlanCode &&
-        previewStartsAt.isNotEmpty &&
-        previewEndsAt.isNotEmpty;
+        greenVpnPurchasePreviewMatchesSubscription(
+          purchasePreview: purchasePreview,
+          hasActivePaidSubscription: _hasPaidPlan,
+          subscriptionExpiresAt: subscriptionExpiresAt,
+        );
     final pendingStatus = (pendingBillingOrder?['status'] ?? '')
         .toString()
         .trim()
@@ -19066,7 +19094,7 @@ class TariffPage extends StatelessWidget {
                 planOption(plans[index]),
                 if (index != plans.length - 1) const SizedBox(height: 8),
               ],
-              if (previewStartsAt.isNotEmpty && previewEndsAt.isNotEmpty) ...[
+              if (exactQuoteReady) ...[
                 const Divider(height: 28),
                 Text(
                   purchaseKind == 'extension'

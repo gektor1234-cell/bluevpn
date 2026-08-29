@@ -146,6 +146,37 @@ void main() {
     );
   });
 
+  test('active paid access accepts only an exact sequential extension', () {
+    const currentExpiry = '2026-09-09T01:21:57Z';
+    expect(
+      greenVpnPurchasePreviewMatchesSubscription(
+        purchasePreview: const {
+          'kind': 'extension',
+          'requiresAcknowledgement': true,
+          'periodStartsAt': currentExpiry,
+          'periodEndsAt': '2026-10-09T01:21:57Z',
+          'expectedSubscriptionExpiresAt': currentExpiry,
+        },
+        hasActivePaidSubscription: true,
+        subscriptionExpiresAt: currentExpiry,
+      ),
+      isTrue,
+    );
+    expect(
+      greenVpnPurchasePreviewMatchesSubscription(
+        purchasePreview: const {
+          'kind': 'new_subscription',
+          'requiresAcknowledgement': false,
+          'periodStartsAt': '2026-08-29T01:21:57Z',
+          'periodEndsAt': '2026-09-28T01:21:57Z',
+        },
+        hasActivePaidSubscription: true,
+        subscriptionExpiresAt: currentExpiry,
+      ),
+      isFalse,
+    );
+  });
+
   test('ordinary plan names remain readable', () {
     expect(greenVpnPublicPlanTitle('Premium'), 'Premium');
     expect(greenVpnPublicPlanTitle('Base'), 'Базовый');

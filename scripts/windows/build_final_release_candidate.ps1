@@ -1,8 +1,8 @@
 param(
-    [string]$OutDir = 'C:\BlueVPN_Builds\public_product_final_candidate_20260828_android_2026082805_windows_4637',
+    [string]$OutDir = 'C:\BlueVPN_Builds\public_product_final_candidate_20260829_android_2026082901_windows_4637',
     [string]$AppVersion = '0.4.11',
     [string]$WindowsAppVersion = '0.4.6',
-    [string]$AndroidBuildNumber = '2026082805',
+    [string]$AndroidBuildNumber = '2026082901',
     [ValidateRange(0, 65535)]
     [int]$WindowsBuildNumber = 4637
 )

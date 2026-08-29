@@ -193,6 +193,87 @@ void main() {
     skip: publicProductSkip,
   );
 
+  testWidgets(
+    'active paid tariff blocks a stale new-subscription quote',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TariffPage(
+              planName: 'Green VPN - 1 month',
+              freeTierActive: false,
+              selectedApps: <TariffApp>{},
+              trafficPack: TrafficPack.gb20,
+              trafficGb: 20,
+              devices: 1,
+              optNoAds: true,
+              optSmartRouting: true,
+              optDedicatedIp: false,
+              optAutoRenew: false,
+              tariffCatalog: const <String, dynamic>{
+                'paidSalesEnabled': true,
+                'paymentsProductionReady': true,
+                'autoRenew': true,
+                'plans': <Map<String, dynamic>>[
+                  {
+                    'code': 'green_30d',
+                    'title': '1 month',
+                    'periodDays': 30,
+                    'priceRub': 249,
+                    'effectiveMonthlyRub': 249,
+                    'discountPercent': 0,
+                  },
+                ],
+              },
+              tariffQuote: const <String, dynamic>{
+                'selection': <String, dynamic>{'planCode': 'green_30d'},
+                'purchasePreview': <String, dynamic>{
+                  'kind': 'new_subscription',
+                  'requiresAcknowledgement': false,
+                  'periodStartsAt': '2026-08-29T01:21:57Z',
+                  'periodEndsAt': '2026-09-28T01:21:57Z',
+                },
+              },
+              tariffStatus: null,
+              pendingBillingOrder: null,
+              subscriptionActive: true,
+              subscriptionAutoRenew: false,
+              subscriptionAccessStartsAt: '2026-08-10T01:21:57Z',
+              subscriptionExpiresAt: '2026-09-09T01:21:57Z',
+              subscriptionStatus: 'active',
+              subscriptionRevision: 4,
+              subscriptionMonthlyPriceRub: 249,
+              publicBillingPlanCode: 'green_30d',
+              tariffBusy: false,
+              onClaimPaidBetaInvite: () async {},
+              onToggleApp: (_) {},
+              onTrafficChanged: (_) {},
+              onTrafficGbChanged: (_) {},
+              onDevicesChanged: (_) {},
+              onOptNoAds: (_) {},
+              onOptSmartRouting: (_) {},
+              onOptDedicatedIp: (_) {},
+              onOptAutoRenew: (_) {},
+              onCancelAutoRenew: () async => true,
+              onApplyTariff: (_, _) async {},
+              onCheckPendingBillingOrder: () async {},
+              onOpenPaymentUrl: (_) {},
+              onPublicBillingPlanChanged: (_) {},
+            ),
+          ),
+        ),
+      );
+
+      final paymentButton = find.byKey(const Key('start_payment_button'));
+      await tester.scrollUntilVisible(paymentButton, 220);
+
+      expect(find.byKey(const Key('tariff_period_preview')), findsNothing);
+      expect(find.text('Обновляем срок подписки...'), findsOneWidget);
+      expect(tester.widget<ElevatedButton>(paymentButton).onPressed, isNull);
+    },
+    skip: publicProductSkip,
+  );
+
   testWidgets('guest account settings expose a dedicated restore action', (
     tester,
   ) async {

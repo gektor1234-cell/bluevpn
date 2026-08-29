@@ -203,6 +203,37 @@ String greenVpnPublicBillingPeriodTitle(String rawPlanCode, int periodDays) {
   return '$periodDays дней';
 }
 
+bool greenVpnPurchasePreviewMatchesSubscription({
+  required Map<String, dynamic> purchasePreview,
+  required bool hasActivePaidSubscription,
+  String? subscriptionExpiresAt,
+}) {
+  final startsAt = DateTime.tryParse(
+    (purchasePreview['periodStartsAt'] ?? '').toString().trim(),
+  )?.toUtc();
+  final endsAt = DateTime.tryParse(
+    (purchasePreview['periodEndsAt'] ?? '').toString().trim(),
+  )?.toUtc();
+  if (startsAt == null || endsAt == null || !endsAt.isAfter(startsAt)) {
+    return false;
+  }
+  if (!hasActivePaidSubscription) return true;
+
+  final currentExpiry = DateTime.tryParse(
+    (subscriptionExpiresAt ?? '').trim(),
+  )?.toUtc();
+  final expectedExpiry = DateTime.tryParse(
+    (purchasePreview['expectedSubscriptionExpiresAt'] ?? '').toString().trim(),
+  )?.toUtc();
+  return (purchasePreview['kind'] ?? '').toString().trim().toLowerCase() ==
+          'extension' &&
+      purchasePreview['requiresAcknowledgement'] == true &&
+      currentExpiry != null &&
+      expectedExpiry != null &&
+      startsAt == currentExpiry &&
+      expectedExpiry == currentExpiry;
+}
+
 String greenVpnNormalizePublicBillingPlanCode(
   String rawCode, {
   Iterable<String> availableCodes = greenVpnFixedPublicBillingPlanCodes,
