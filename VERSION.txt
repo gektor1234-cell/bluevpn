@@ -3,7 +3,7 @@ Windows version: 0.4.6
 Android build: 2026082805
 Windows build: 4637
 Platforms: Android, Windows
-Source backend: 0.9.165-subscription-lifecycle.1
+Source backend: 0.9.165-subscription-lifecycle.2
 Status: exact Android 0.4.11+2026082805, Windows 0.4.6+4637, and backend subscription-lifecycle release candidate; production remains unchanged
 Production sales: enabled on the primary billing node only
 Refund execution: enabled on the primary billing node only

@@ -1381,6 +1381,90 @@ class PaidBetaPolicyTests(unittest.TestCase):
             },
         )
 
+    def test_subscription_revocation_skips_non_peer_transport_target(self) -> None:
+        now = main.utc_now_iso()
+        device_uid = "subscription-non-peer-transport-device"
+        public_key = "subscription-non-peer-transport-public-key"
+        with main.db() as conn:
+            conn.execute(
+                """
+                INSERT INTO devices(
+                    user_id, device_uid, device_name, platform, app_version,
+                    client_public_key, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    self.user_id,
+                    device_uid,
+                    "Mixed transport device",
+                    "android",
+                    "test",
+                    public_key,
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO client_endpoint_assignments(
+                    user_id, device_uid, server_id, protocol, selected_by,
+                    assignment_reason, sticky_until_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    self.user_id,
+                    device_uid,
+                    "known-naive-server",
+                    "naive_https",
+                    "test",
+                    "non-peer target regression",
+                    "2099-01-01T00:00:00+00:00",
+                    now,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO device_transport_assignments(
+                    device_uid, transport_key, assigned_ip, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    device_uid,
+                    "amneziawg:historical-awg-server",
+                    "10.202.0.45",
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+
+        def catalog_row(server_id: str):
+            if server_id == "known-naive-server":
+                return {"client_config_profile": "static_naive_https_canary"}
+            return None
+
+        with (
+            patch.object(
+                main,
+                "get_managed_server_catalog_row_by_server_id",
+                side_effect=catalog_row,
+            ),
+            patch.object(
+                main,
+                "best_effort_remove_peer_from_server",
+                return_value=True,
+            ) as remove_peer,
+        ):
+            result = main.remove_user_subscription_peers(self.user_id)
+
+        self.assertEqual(result, {"attempted": 1, "removed": 1, "failed": 0})
+        remove_peer.assert_called_once_with(
+            "historical-awg-server",
+            device_uid=device_uid,
+            public_key=public_key,
+        )
+
     def test_admin_grant_extend_revoke_records_history(self) -> None:
         grant = main.grant_subscription_for_user(
             self.user_id,

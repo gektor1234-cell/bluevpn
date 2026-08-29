@@ -5,7 +5,7 @@
   "windowsAppVersion": "0.4.6",
   "androidBuildNumber": "2026082805",
   "windowsBuildNumber": 4637,
-  "backendVersion": "0.9.165-subscription-lifecycle.1",
+  "backendVersion": "0.9.165-subscription-lifecycle.2",
   "paidBeta": {
     "appVersion": "0.4.6-paid-beta.1",
     "windowsAppVersion": "0.4.6-paid-beta.2",

@@ -37,8 +37,8 @@ from pydantic import BaseModel
 
 APP_TITLE = "Green VPN Backend"
 APP_VERSION = (
-    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.165-subscription-lifecycle.1").strip()
-    or "0.9.165-subscription-lifecycle.1"
+    os.getenv("GREENVPN_BACKEND_VERSION", "0.9.165-subscription-lifecycle.2").strip()
+    or "0.9.165-subscription-lifecycle.2"
 )
 DEFAULT_PUBLIC_API_BASE_URL = "https://api.greenvpn.pro"
 
@@ -20254,6 +20254,7 @@ def remove_user_subscription_peers(user_id: int) -> dict:
                 d.device_uid,
                 d.client_public_key,
                 cea.server_id,
+                cea.protocol AS endpoint_protocol,
                 dta.transport_key
             FROM devices d
             LEFT JOIN client_endpoint_assignments cea
@@ -20267,7 +20268,7 @@ def remove_user_subscription_peers(user_id: int) -> dict:
         ).fetchall()
 
     peer_targets: set[tuple[str, str, str]] = set()
-    devices_with_any_target: set[str] = set()
+    devices_with_recorded_assignment: set[str] = set()
     public_keys_by_device: dict[str, str] = {}
     for device_row in device_rows:
         device_uid = str(device_row["device_uid"] or "").strip()
@@ -20277,16 +20278,24 @@ def remove_user_subscription_peers(user_id: int) -> dict:
         public_keys_by_device[device_uid] = public_key
         current_server_id = str(device_row["server_id"] or "").strip()
         if current_server_id:
-            peer_targets.add((device_uid, public_key, current_server_id))
-            devices_with_any_target.add(device_uid)
+            devices_with_recorded_assignment.add(device_uid)
+            if subscription_peer_target_supported(
+                current_server_id,
+                protocol=device_row["endpoint_protocol"],
+            ):
+                peer_targets.add((device_uid, public_key, current_server_id))
         transport_key = str(device_row["transport_key"] or "").strip()
         if ":" in transport_key:
-            transport_server_id = transport_key.split(":", 1)[1].strip()
-            if transport_server_id:
+            transport_protocol, transport_server_id = transport_key.split(":", 1)
+            transport_server_id = transport_server_id.strip()
+            devices_with_recorded_assignment.add(device_uid)
+            if transport_server_id and subscription_peer_target_supported(
+                transport_server_id,
+                protocol=transport_protocol,
+            ):
                 peer_targets.add((device_uid, public_key, transport_server_id))
-                devices_with_any_target.add(device_uid)
     for device_uid, public_key in public_keys_by_device.items():
-        if device_uid not in devices_with_any_target:
+        if device_uid not in devices_with_recorded_assignment:
             peer_targets.add((device_uid, public_key, "intelligent_smew"))
 
     attempted = 0
@@ -28973,6 +28982,37 @@ def get_managed_server_catalog_row_by_server_id(server_id: str) -> Optional[sqli
             "SELECT * FROM server_catalog_entries WHERE server_id = ?",
             (server_id,),
         ).fetchone()
+
+
+SUBSCRIPTION_PEER_PROTOCOLS = {
+    "amneziawg",
+    "amneziawg2",
+    "awg",
+    "awg2",
+    "wireguard",
+    "wireguard_udp",
+}
+SUBSCRIPTION_PEER_PROFILES = {
+    "builtin_wg0",
+    "remote_ssh_awg2",
+    "remote_ssh_wg0",
+}
+
+
+def subscription_peer_target_supported(
+    server_id: str,
+    *,
+    protocol: Optional[str] = None,
+) -> bool:
+    normalized_server_id = str(server_id or "").strip()
+    if normalized_server_id in {"current_wg0", "intelligent_smew"}:
+        return True
+    row = get_managed_server_catalog_row_by_server_id(normalized_server_id)
+    if row is not None:
+        profile = str(row["client_config_profile"] or "").strip().lower()
+        return profile in SUBSCRIPTION_PEER_PROFILES
+    normalized_protocol = str(protocol or "").strip().lower()
+    return normalized_protocol in SUBSCRIPTION_PEER_PROTOCOLS
 
 
 def best_effort_remove_peer_from_server(
