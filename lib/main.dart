@@ -12,6 +12,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'runtime_config.dart';
+import 'services/android_connection_operation_policy.dart';
 import 'services/fusion_connection_status_policy.dart';
 import 'services/product_display_policy.dart';
 import 'services/route_failure_cooldown.dart';
@@ -149,6 +150,9 @@ const String kApiFallbackBaseUrls = String.fromEnvironment(
 const String kBuildMarker = 'bluevpn-safety-runtime-20260428-2355';
 const MethodChannel kAndroidPlatformChannel = MethodChannel(
   'green_vpn/android_vpn',
+);
+const EventChannel kAndroidConnectionEvents = EventChannel(
+  'green_vpn/android_connection_events',
 );
 const MethodChannel kWindowsWindowChannel = MethodChannel(
   'green_vpn/windows_window',
@@ -7732,6 +7736,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   Timer? _windowsRuntimeFailoverTimer;
   Timer? _windowsRouteMaintenanceTimer;
   Timer? _windowsStatusReconciliationTimer;
+  Timer? _androidStatusReconciliationTimer;
+  Timer? _androidConnectionEventDebounce;
   Timer? _vpnPauseTimer;
   Timer? _connectionUiTimer;
   int _androidPauseResumePollCount = 0;
@@ -7750,6 +7756,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       <String, GreenVpnStandbyRouteProof>{};
   final Map<String, DateTime> _windowsStandbyRetryAfter = <String, DateTime>{};
   int _vpnStatusSyncEpoch = 0;
+  StreamSubscription<dynamic>? _androidConnectionEventsSubscription;
+  Map<String, dynamic>? _pendingAndroidConnectionSnapshot;
+  String _androidManagedConnectionState = 'idle';
+  bool _androidManagedOperationPending = false;
   bool _prefsLoaded = false;
   WireGuardInstallState? _wireGuardState;
   bool _wireGuardBusy = false;
@@ -8032,6 +8042,179 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
   String _connectionRouteKey(ServerLocation? route) {
     return greenVpnConnectionRouteKey(route);
+  }
+
+  Map<String, dynamic> _dynamicMap(Object? raw) {
+    if (raw is Map<String, dynamic>) return raw;
+    if (raw is Map) {
+      return raw.map((key, value) => MapEntry('$key', value));
+    }
+    return const <String, dynamic>{};
+  }
+
+  Future<Map<String, dynamic>> _readAndroidManagedConnectionStatus() async {
+    if (kIsWeb || !Platform.isAndroid) return const <String, dynamic>{};
+    try {
+      final raw = await kAndroidPlatformChannel.invokeMethod<Object?>(
+        'managedConnectionStatus',
+      );
+      return _dynamicMap(raw);
+    } catch (error) {
+      await appendBlueVpnClientLog(
+        'android managed connection status failed error=$error',
+      );
+      return const <String, dynamic>{};
+    }
+  }
+
+  void _queueAndroidConnectionEvent(Object? raw) {
+    if (!mounted) return;
+    final snapshot = _dynamicMap(raw);
+    if (snapshot.isEmpty) return;
+    _pendingAndroidConnectionSnapshot = snapshot;
+    _androidConnectionEventDebounce?.cancel();
+    _androidConnectionEventDebounce = Timer(
+      const Duration(milliseconds: 140),
+      () => unawaited(_processAndroidConnectionEvent()),
+    );
+  }
+
+  Future<void> _processAndroidConnectionEvent() async {
+    final snapshot = _pendingAndroidConnectionSnapshot;
+    _pendingAndroidConnectionSnapshot = null;
+    if (!mounted || snapshot == null) return;
+    await _applyAndroidManagedConnectionSnapshot(
+      snapshot,
+      source: 'event',
+      emitUserFeedback: true,
+    );
+    if (!mounted) return;
+    await _syncVpnStatus(source: 'android_managed_event');
+  }
+
+  Future<void> _applyAndroidManagedConnectionSnapshot(
+    Map<String, dynamic> snapshot, {
+    required String source,
+    bool emitUserFeedback = false,
+  }) async {
+    if (!mounted || snapshot.isEmpty) return;
+    final ui = greenVpnAndroidConnectionUiState(snapshot);
+    final previousState = _androidManagedConnectionState;
+    final wasManagedPending = _androidManagedOperationPending;
+    final changed = previousState != ui.state || wasManagedPending != ui.busy;
+    setState(() {
+      _androidManagedConnectionState = ui.state;
+      _androidManagedOperationPending = ui.busy;
+      if (ui.busy) {
+        vpnBusy = true;
+        _vpnBusyStage = ui.stage;
+        _vpnBusyHint = ui.hint;
+      } else if (wasManagedPending) {
+        vpnBusy = false;
+        _vpnBusyStage = null;
+        if (!_vpnTapCooldown) _vpnBusyHint = null;
+      }
+    });
+    if (changed) {
+      await appendBlueVpnClientLog(
+        'android managed state source=$source previous=$previousState state=${ui.state} desired=${ui.desired} busy=${ui.busy} reason=${snapshot['lastReason'] ?? ''} error=${snapshot['lastError'] ?? ''}',
+      );
+    }
+    if (!emitUserFeedback || previousState == ui.state || !mounted) return;
+    if (ui.state == 'monitoring' && wasManagedPending) {
+      _toast(context, 'VPN включён.');
+    } else if (ui.state == 'disconnected' && previousState == 'disconnecting') {
+      _toast(context, 'VPN выключен.');
+    } else if (ui.state == 'competing_vpn_active') {
+      _toast(
+        context,
+        'Включён другой VPN. Green VPN остановлен и не будет восстанавливаться сам.',
+      );
+    } else if (ui.state == 'permission_denied') {
+      _toast(
+        context,
+        'Android не выдал разрешение на VPN. Повтори подключение и подтверди системный запрос.',
+      );
+    }
+  }
+
+  Future<bool> _requestAndroidManagedFullConnect() async {
+    final deviceId = await _ensureDeviceId();
+    if (!mounted) return false;
+    if (deviceId == null || deviceId.length < 8) {
+      _toast(context, 'Не удалось подготовить это устройство для подключения.');
+      return false;
+    }
+    final requestedServerId = selectedServer.isAuto ? '' : selectedServer.id;
+    try {
+      final raw = await kAndroidPlatformChannel.invokeMethod<Object?>(
+        'requestManagedConnect',
+        <String, Object?>{'serverId': requestedServerId, 'mode': 'full'},
+      );
+      final response = _dynamicMap(raw);
+      await _applyAndroidManagedConnectionSnapshot(
+        response,
+        source: 'request_connect',
+      );
+      final accepted = response['ok'] == true;
+      await appendBlueVpnClientLog(
+        'android managed connect accepted=$accepted operation=${response['operationId'] ?? ''} server=$requestedServerId state=${response['state'] ?? ''}',
+      );
+      if (!accepted && mounted) {
+        _toast(context, 'Android не смог запустить подключение.');
+      }
+      return accepted;
+    } catch (error) {
+      await appendBlueVpnClientLog(
+        'android managed connect request failed error=$error',
+      );
+      if (mounted) _toast(context, 'Android VPN не ответил: $error');
+      return false;
+    }
+  }
+
+  Future<bool> _requestAndroidManagedDisconnect() async {
+    try {
+      final raw = await kAndroidPlatformChannel.invokeMethod<Object?>(
+        'requestManagedDisconnect',
+      );
+      final response = _dynamicMap(raw);
+      await _applyAndroidManagedConnectionSnapshot(
+        response,
+        source: 'request_disconnect',
+      );
+      final accepted = response['ok'] == true;
+      await appendBlueVpnClientLog(
+        'android managed disconnect accepted=$accepted operation=${response['operationId'] ?? ''} state=${response['state'] ?? ''}',
+      );
+      if (!accepted && mounted) {
+        _toast(context, 'Android не смог начать отключение VPN.');
+      }
+      return accepted;
+    } catch (error) {
+      await appendBlueVpnClientLog(
+        'android managed disconnect request failed error=$error',
+      );
+      if (mounted) _toast(context, 'Android VPN не выключился: $error');
+      return false;
+    }
+  }
+
+  Future<void> _waitForAndroidManagedDisconnect({
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    while (mounted && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      final snapshot = await _readAndroidManagedConnectionStatus();
+      await _applyAndroidManagedConnectionSnapshot(
+        snapshot,
+        source: 'disconnect_wait',
+      );
+      final ui = greenVpnAndroidConnectionUiState(snapshot);
+      if (!ui.busy) break;
+    }
+    if (mounted) await _syncVpnStatus(source: 'android_disconnect_complete');
   }
 
   Future<ServerLocation?> _resolveAndroidConnectedRoute() async {
@@ -8349,6 +8532,28 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         },
       );
     }
+    if (!kIsWeb && Platform.isAndroid) {
+      _androidConnectionEventsSubscription = kAndroidConnectionEvents
+          .receiveBroadcastStream()
+          .listen(
+            _queueAndroidConnectionEvent,
+            onError: (Object error, StackTrace stackTrace) {
+              unawaited(
+                appendBlueVpnClientLog(
+                  'android managed event stream error=$error',
+                ),
+              );
+            },
+          );
+      _androidStatusReconciliationTimer = Timer.periodic(
+        const Duration(seconds: 4),
+        (_) {
+          if (mounted && _prefsLoaded) {
+            unawaited(_syncVpnStatus(source: 'android_periodic'));
+          }
+        },
+      );
+    }
     unawaited(_restoreFreeAdSessionTimer());
     _ensureProvisionedConfigSilently();
     _syncPlanSilently();
@@ -8407,53 +8612,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       await _syncVpnStatus(source: 'app_resume');
       return;
     }
-    if (vpnBusy) return;
-    final wasEnabledBeforeResume = vpnEnabled;
-    try {
-      final status = await WireGuardAndroidBackend.statusSnapshot(
-        tunnelName: kTunnelName,
-      );
-      final connected = _androidStatusLooksLikeOwnTunnel(status);
-      final systemVpnActive = status['systemVpnActive'] == true;
-      final externalVpnActive = _androidStatusLooksLikeExternalVpn(status);
-      await appendBlueVpnClientLog(
-        'android resume vpn status connected=$connected systemVpnActive=$systemVpnActive externalVpnActive=$externalVpnActive wasEnabled=$wasEnabledBeforeResume state=${status['state'] ?? ""} status=$status',
-      );
-      if (connected) {
-        final activeRoute = await _resolveAndroidConnectedRoute();
-        if (!mounted) return;
-        if (mounted) {
-          setState(() {
-            vpnEnabled = true;
-            _externalVpnActive = false;
-          });
-          _trackConnectionState(true, route: activeRoute);
-        }
-        return;
-      }
-
-      if (externalVpnActive || systemVpnActive) {
-        if (mounted) {
-          setState(() {
-            vpnEnabled = false;
-            _externalVpnActive = true;
-          });
-          _trackConnectionState(false);
-        }
-        await appendBlueVpnClientLog(
-          'android resume detected external system VPN without confirmed own tunnel',
-        );
-        return;
-      }
-
-      await _syncVpnStatus(source: 'android_resume');
-      await appendBlueVpnClientLog(
-        'android resume sync done vpnEnabled=$vpnEnabled',
-      );
-    } catch (e) {
-      await appendBlueVpnClientLog('android resume status sync failed=$e');
-      await _syncVpnStatus(source: 'android_resume_error');
-    }
+    await _syncVpnStatus(source: 'android_resume');
+    await Future<void>.delayed(const Duration(milliseconds: 600));
+    if (mounted) await _syncVpnStatus(source: 'android_resume_retry');
   }
 
   void _toast(BuildContext context, String text) {
@@ -10994,6 +11155,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       return;
     }
     if (!kIsWeb && Platform.isAndroid) {
+      final managedStatus = await _readAndroidManagedConnectionStatus();
+      await _applyAndroidManagedConnectionSnapshot(
+        managedStatus,
+        source: 'status_sync_$source',
+      );
       final status = await WireGuardAndroidBackend.statusSnapshot(
         tunnelName: kTunnelName,
       );
@@ -13678,6 +13844,15 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         await appendBlueVpnClientLog('toggle connect branch start');
         await _prepareAndroidConnectControlPlane('toggle_connect');
         if (!mounted) return;
+        if (!kIsWeb && Platform.isAndroid && !socialOnlyEnabled) {
+          _setVpnBusyUi(
+            stage: 'Передаём подключение Android...',
+            hint:
+                'Подключение продолжится в системном компоненте, даже если свернуть приложение.',
+          );
+          await _requestAndroidManagedFullConnect();
+          return;
+        }
         var candidates = _connectCandidatesForCurrentSelection();
         if (candidates.isEmpty) {
           await _refreshServerCatalog(showToast: false);
@@ -14092,6 +14267,14 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           stage: 'Отключаем VPN...',
           hint: 'Останавливаем VPN и аккуратно снимаем подключение.',
         );
+        if (!kIsWeb && Platform.isAndroid) {
+          final accepted = await _requestAndroidManagedDisconnect();
+          if (accepted) {
+            _cancelFreeAdSessionTimer();
+            await _waitForAndroidManagedDisconnect();
+          }
+          return;
+        }
         final res = await _vpnBackend.disconnect();
         await appendBlueVpnClientLog(
           'toggle disconnect backend ok=${res.ok} message=${res.message ?? ""}',
@@ -15849,6 +16032,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _vpnPauseTimer?.cancel();
     _connectionUiTimer?.cancel();
     _windowsStatusReconciliationTimer?.cancel();
+    _androidStatusReconciliationTimer?.cancel();
+    _androidConnectionEventDebounce?.cancel();
+    unawaited(_androidConnectionEventsSubscription?.cancel());
     _disarmWindowsRuntimeFailover(reason: 'dispose');
     super.dispose();
   }
@@ -15864,6 +16050,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
   void _clearVpnBusyUi() {
     if (!mounted) return;
+    if (_androidManagedOperationPending) return;
     setState(() {
       vpnBusy = false;
       _vpnBusyStage = null;

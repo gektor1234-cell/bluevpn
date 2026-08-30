@@ -218,6 +218,11 @@ $deployBackendShellPath = Join-Path $ProjectRoot "scripts\deploy_backend_wsl.sh"
 $androidLegacyE2ePath = Join-Path $ProjectRoot "scripts\windows\run_android_vpn_e2e.ps1"
 $androidRuntimeFailoverServicePath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\GreenVpnRuntimeFailoverService.kt"
 $androidRuntimeFailoverPolicyPath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\GreenVpnRuntimeFailoverPolicy.kt"
+$androidConnectionOperationPolicyPath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\GreenVpnConnectionOperationPolicy.kt"
+$androidConnectionOperationPolicyTestPath = Join-Path $ProjectRoot "android\app\src\test\kotlin\pro\greenvpn\app\GreenVpnConnectionOperationPolicyTest.kt"
+$androidUnderlyingNetworkPath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\GreenVpnUnderlyingNetwork.kt"
+$flutterAndroidConnectionPolicyPath = Join-Path $ProjectRoot "lib\services\android_connection_operation_policy.dart"
+$flutterAndroidConnectionPolicyTestPath = Join-Path $ProjectRoot "test\android_connection_operation_policy_test.dart"
 $androidMainActivityPath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\MainActivity.kt"
 
 $main = Read-Text $mainPath
@@ -229,6 +234,11 @@ $publicProductBuildScript = Read-Text $publicProductBuildPath
 $paidBetaBuildScript = Read-Text $paidBetaBuildPath
 $androidRuntimeFailoverService = Read-Text $androidRuntimeFailoverServicePath
 $androidRuntimeFailoverPolicy = Read-Text $androidRuntimeFailoverPolicyPath
+$androidConnectionOperationPolicy = Read-Text $androidConnectionOperationPolicyPath
+$androidConnectionOperationPolicyTest = Read-Text $androidConnectionOperationPolicyTestPath
+$androidUnderlyingNetwork = Read-Text $androidUnderlyingNetworkPath
+$flutterAndroidConnectionPolicy = Read-Text $flutterAndroidConnectionPolicyPath
+$flutterAndroidConnectionPolicyTest = Read-Text $flutterAndroidConnectionPolicyTestPath
 $androidMainActivity = Read-Text $androidMainActivityPath
 $windowsSelectiveRouting = Read-Text $windowsSelectiveRoutingPath
 $serverLocationPolicy = Read-Text $serverLocationPolicyPath
@@ -707,6 +717,15 @@ $fusionIsolationChecks = [ordered]@{
     'Android scheduled-resume cancellation policy' = @($androidRuntimeFailoverPolicy, 'shouldCancelScheduledResume')
     'Android cancellation waits for transition idle' = @($androidMainActivity, 'GreenVpnConnectionOperationGate.awaitIdle()')
     'Flutter cancels abandoned Android resume' = @($main, 'android pause resume UI polling stopped after five minutes')
+    'Android full connect is persisted before Activity permission flow' = @($androidRuntimeFailoverService, 'requestManagedConnect(')
+    'Android connection survives Activity recreation through events' = @($androidMainActivity, 'green_vpn/android_connection_events')
+    'Flutter delegates full Android connect to the native coordinator' = @($main, "'requestManagedConnect'")
+    'Android missing network preserves desired connection state' = @($androidConnectionOperationPolicy, 'stateWithoutUnderlyingNetwork')
+    'Android underlying network excludes VPN transports' = @($androidUnderlyingNetwork, 'TRANSPORT_VPN')
+    'Android underlying network requires validation before recovery' = @($androidUnderlyingNetwork, 'NET_CAPABILITY_VALIDATED')
+    'Android durable connection policy has native tests' = @($androidConnectionOperationPolicyTest, 'pendingConnectStartsOnlyWithPermissionAndValidatedNetwork')
+    'Android durable connection UI has Flutter tests' = @($flutterAndroidConnectionPolicyTest, 'offline connect stays active with an explicit waiting state')
+    'Flutter waiting state explains automatic continuation' = @($flutterAndroidConnectionPolicy, 'waiting_for_network')
 }
 foreach ($check in $fusionIsolationChecks.GetEnumerator()) {
     if ($check.Value[0].Contains($check.Value[1])) {

@@ -3,6 +3,7 @@ package pro.greenvpn.app
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
@@ -23,6 +24,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugin.common.EventChannel
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.nio.charset.StandardCharsets
@@ -37,7 +39,9 @@ import javax.crypto.spec.GCMParameterSpec
 class MainActivity : FlutterActivity() {
     private companion object {
         const val CHANNEL = "green_vpn/android_vpn"
+        const val CONNECTION_EVENTS_CHANNEL = "green_vpn/android_connection_events"
         const val VPN_PERMISSION_REQUEST = 48737
+        const val MANAGED_VPN_PERMISSION_REQUEST = 48738
         const val SECURE_PREFS_NAME = "greenvpn_secure_config_store_v1"
         const val SECURE_KEY_ALIAS = "greenvpn_config_aes_v1"
         const val GCM_TAG_BITS = 128
@@ -54,6 +58,8 @@ class MainActivity : FlutterActivity() {
     private var pendingConfig: Any? = null
     private var pendingProtocol: String = "wireguard_udp"
     private var pendingInstallApkPath: String? = null
+    private var connectionEventSink: EventChannel.EventSink? = null
+    private var connectionPrefsListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
     private val securePrefs by lazy {
         applicationContext.getSharedPreferences(SECURE_PREFS_NAME, Context.MODE_PRIVATE)
     }
@@ -68,6 +74,12 @@ class MainActivity : FlutterActivity() {
                 "status" -> handleStatusV2(call, result)
                 "connect" -> handleConnect(call, result)
                 "disconnect" -> handleDisconnect(result)
+                "requestManagedConnect" -> handleRequestManagedConnect(call, result)
+                "requestManagedDisconnect", "cancelManagedConnect" ->
+                    handleRequestManagedDisconnect(result)
+                "managedConnectionStatus" -> result.success(
+                    GreenVpnRuntimeFailoverService.snapshot(applicationContext)
+                )
                 "probeConnectedRoute" -> handleProbeConnectedRoute(call, result)
                 "armRuntimeFailover" -> handleArmRuntimeFailover(call, result)
                 "scheduleRuntimeResume" -> handleScheduleRuntimeResume(call, result)
@@ -85,6 +97,26 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        EventChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            CONNECTION_EVENTS_CHANNEL,
+        ).setStreamHandler(object : EventChannel.StreamHandler {
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                unregisterConnectionEventListener()
+                connectionEventSink = events
+                val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+                    if (key == "updated_at_ms") emitManagedConnectionSnapshot()
+                }
+                connectionPrefsListener = listener
+                GreenVpnRuntimeFailoverService.eventPreferences(applicationContext)
+                    .registerOnSharedPreferenceChangeListener(listener)
+                emitManagedConnectionSnapshot()
+            }
+
+            override fun onCancel(arguments: Any?) {
+                unregisterConnectionEventListener()
+            }
+        })
     }
 
     override fun onResume() {
@@ -93,6 +125,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        unregisterConnectionEventListener()
         executor.shutdown()
         super.onDestroy()
     }
@@ -100,6 +133,15 @@ class MainActivity : FlutterActivity() {
     @Deprecated("Deprecated in Android API, still supported by FlutterActivity here.")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == MANAGED_VPN_PERMISSION_REQUEST) {
+            if (resultCode == Activity.RESULT_OK) {
+                GreenVpnRuntimeFailoverService.markManagedPermissionGranted(applicationContext)
+            } else {
+                GreenVpnRuntimeFailoverService.markManagedPermissionDenied(applicationContext)
+            }
+            emitManagedConnectionSnapshot()
+            return
+        }
         if (requestCode != VPN_PERMISSION_REQUEST) return
 
         val result = pendingConnectResult
@@ -125,6 +167,52 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun backend(): GoBackend = GreenVpnWireGuardRuntime.backend(applicationContext)
+
+    private fun handleRequestManagedConnect(call: MethodCall, result: MethodChannel.Result) {
+        val serverId = call.argument<String>("serverId").orEmpty()
+        val mode = call.argument<String>("mode").orEmpty().ifBlank { "full" }
+        val response = GreenVpnRuntimeFailoverService.requestManagedConnect(
+            applicationContext,
+            serverId,
+            mode,
+        )
+        result.success(response)
+        if (response["ok"] != true || response["permissionRequired"] != true) return
+        val permissionIntent = VpnService.prepare(this) ?: run {
+            GreenVpnRuntimeFailoverService.markManagedPermissionGranted(applicationContext)
+            return
+        }
+        try {
+            startActivityForResult(permissionIntent, MANAGED_VPN_PERMISSION_REQUEST)
+        } catch (_: Throwable) {
+            GreenVpnRuntimeFailoverService.markManagedPermissionDenied(applicationContext)
+        }
+    }
+
+    private fun handleRequestManagedDisconnect(result: MethodChannel.Result) {
+        result.success(
+            GreenVpnRuntimeFailoverService.requestManagedDisconnect(applicationContext),
+        )
+    }
+
+    private fun emitManagedConnectionSnapshot() {
+        val sink = connectionEventSink ?: return
+        runOnUiThread {
+            connectionEventSink?.success(
+                GreenVpnRuntimeFailoverService.snapshot(applicationContext),
+            )
+        }
+    }
+
+    private fun unregisterConnectionEventListener() {
+        val listener = connectionPrefsListener
+        if (listener != null) {
+            GreenVpnRuntimeFailoverService.eventPreferences(applicationContext)
+                .unregisterOnSharedPreferenceChangeListener(listener)
+        }
+        connectionPrefsListener = null
+        connectionEventSink = null
+    }
 
     private fun handleConnect(call: MethodCall, result: MethodChannel.Result) {
         if (pendingConnectResult != null) {
@@ -270,6 +358,8 @@ class MainActivity : FlutterActivity() {
                         "statusCode" to probe.statusCode,
                         "latencyMs" to probe.latencyMs,
                         "error" to probe.error,
+                        "youtubeTargetOk" to probe.youtubeTargetOk,
+                        "independentTargetOk" to probe.independentTargetOk,
                     )
                 )
             }
@@ -1191,9 +1281,13 @@ class MainActivity : FlutterActivity() {
     private fun isAllowedSecureKey(key: String): Boolean {
         return key == "greenvpn_mobile_managed_config_v1" ||
             key == "greenvpn_mobile_managed_protocol_v1" ||
+            key == "greenvpn_mobile_managed_route_id_v1" ||
             key == "greenvpn_mobile_base_config_v1" ||
             key == "greenvpn_mobile_session_v1" ||
-            key == "greenvpn_mobile_device_id_v1"
+            key == "greenvpn_mobile_device_id_v1" ||
+            (key.startsWith("greenvpn_mobile_base_config_server_v1_") &&
+                key.removePrefix("greenvpn_mobile_base_config_server_v1_")
+                    .matches(Regex("[a-z0-9_.-]{1,160}")))
     }
 
     private fun readSecureString(key: String): String? {

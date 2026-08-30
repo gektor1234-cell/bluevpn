@@ -26,6 +26,13 @@ class GreenVpnRouteProbeTest {
     }
 
     @Test
+    fun routeNeedsYoutubeAndAnIndependentTarget() {
+        assertEquals(false, GreenVpnRouteProbe.quorumSatisfied(true, false))
+        assertEquals(false, GreenVpnRouteProbe.quorumSatisfied(false, true))
+        assertEquals(true, GreenVpnRouteProbe.quorumSatisfied(true, true))
+    }
+
+    @Test
     fun authenticatedSocksGreetingOffersNoAuthAndUsernamePassword() {
         val credentials = GreenVpnDnsttPreview.ProxyCredentials("probe-user", "probe-password-value")
 

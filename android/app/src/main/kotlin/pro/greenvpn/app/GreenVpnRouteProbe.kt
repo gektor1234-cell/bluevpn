@@ -26,11 +26,15 @@ internal object GreenVpnRouteProbe {
         val statusCode: Int?,
         val latencyMs: Long,
         val error: String,
+        val youtubeTargetOk: Boolean = false,
+        val independentTargetOk: Boolean = false,
     )
 
     private val targets = listOf(
-        Target("www.youtube.com", "/generate_204"),
-        Target("i.ytimg.com", "/generate_204"),
+        Target("www.youtube.com", "/generate_204", TargetClass.YOUTUBE),
+        Target("i.ytimg.com", "/generate_204", TargetClass.YOUTUBE),
+        Target("connectivitycheck.gstatic.com", "/generate_204", TargetClass.INDEPENDENT),
+        Target("api.greenvpn.pro", "/healthz", TargetClass.INDEPENDENT),
     )
 
     private val probeExecutor = Executors.newFixedThreadPool(2) { runnable ->
@@ -67,13 +71,18 @@ internal object GreenVpnRouteProbe {
     }
 
     private fun probeBlocking(context: Context, protocol: String): Result {
+        val overallStartedAt = SystemClock.elapsedRealtime()
         val credentials = if (protocol == "dnstt") {
             GreenVpnDnsttPreview.routeProbeCredentials(context.applicationContext)
         } else {
             null
         }
         var last = Result(false, targets.first().url, null, 0L, "route probe did not run")
+        var youtubeTargetOk = false
+        var independentTargetOk = false
         for (target in targets) {
+            if (target.targetClass == TargetClass.YOUTUBE && youtubeTargetOk) continue
+            if (target.targetClass == TargetClass.INDEPENDENT && independentTargetOk) continue
             val startedAt = SystemClock.elapsedRealtime()
             last = try {
                 debug("protocol=$protocol target=${target.host} phase=system start")
@@ -104,10 +113,35 @@ internal object GreenVpnRouteProbe {
                     error = safeError(failure),
                 )
             }
-            if (last.ok) return last
+            if (last.ok) {
+                when (target.targetClass) {
+                    TargetClass.YOUTUBE -> youtubeTargetOk = true
+                    TargetClass.INDEPENDENT -> independentTargetOk = true
+                }
+            }
+            if (quorumSatisfied(youtubeTargetOk, independentTargetOk)) {
+                return last.copy(
+                    ok = true,
+                    target = "youtube+independent",
+                    latencyMs = SystemClock.elapsedRealtime() - overallStartedAt,
+                    youtubeTargetOk = true,
+                    independentTargetOk = true,
+                )
+            }
         }
-        return last
+        return last.copy(
+            ok = false,
+            latencyMs = SystemClock.elapsedRealtime() - overallStartedAt,
+            error = "route quorum failed youtube=$youtubeTargetOk independent=$independentTargetOk; ${last.error}",
+            youtubeTargetOk = youtubeTargetOk,
+            independentTargetOk = independentTargetOk,
+        )
     }
+
+    internal fun quorumSatisfied(
+        youtubeTargetOk: Boolean,
+        independentTargetOk: Boolean,
+    ): Boolean = youtubeTargetOk && independentTargetOk
 
     internal fun socksPortForProtocol(protocol: String): Int? = when (protocol.trim().lowercase()) {
         "hysteria2" -> 1980
@@ -245,7 +279,13 @@ internal object GreenVpnRouteProbe {
         if (BuildConfig.DEBUG) Log.d(TAG, message)
     }
 
-    private data class Target(val host: String, val path: String) {
+    private enum class TargetClass { YOUTUBE, INDEPENDENT }
+
+    private data class Target(
+        val host: String,
+        val path: String,
+        val targetClass: TargetClass,
+    ) {
         val url: String get() = "https://$host$path"
     }
 }

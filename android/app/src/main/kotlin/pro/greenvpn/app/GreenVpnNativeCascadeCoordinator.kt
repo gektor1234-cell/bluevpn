@@ -27,6 +27,8 @@ internal data class GreenVpnNativeCascadeResult(
     val serverId: String = "",
     val protocol: String = "",
     val error: String = "",
+    val verified: Boolean = true,
+    val waitingForNetwork: Boolean = false,
 )
 
 internal data class GreenVpnRuntimeRoute(
@@ -59,6 +61,7 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
         const val DEVICE_ID_KEY = "greenvpn_mobile_device_id_v1"
         const val MANAGED_CONFIG_KEY = "greenvpn_mobile_managed_config_v1"
         const val MANAGED_PROTOCOL_KEY = "greenvpn_mobile_managed_protocol_v1"
+        const val MANAGED_ROUTE_ID_KEY = "greenvpn_mobile_managed_route_id_v1"
         const val ROUTE_COOLDOWN_KEY = "greenvpn_quick_tile_route_cooldown_v1"
         const val LAST_ROUTE_SUCCESS_KEY = "greenvpn_quick_tile_last_route_success_v1"
         const val DEBUG_TAG = "GreenVpnNativeCascade"
@@ -120,9 +123,21 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
         return networkInactive && SUPPORTED_PROTOCOLS.none { isProtocolConnected(it) }
     }
 
-    fun connectBest(continueRequested: () -> Boolean): GreenVpnNativeCascadeResult {
+    fun connectBest(
+        preferredServerId: String = "",
+        hasValidatedUnderlyingNetwork: () -> Boolean = { true },
+        onPhase: (String) -> Unit = {},
+        continueRequested: () -> Boolean,
+    ): GreenVpnNativeCascadeResult {
         if (VpnService.prepare(appContext) != null) {
             return GreenVpnNativeCascadeResult(false, error = "vpn_permission_required")
+        }
+        if (!hasValidatedUnderlyingNetwork()) {
+            return GreenVpnNativeCascadeResult(
+                false,
+                error = "network_unavailable",
+                waitingForNetwork = true,
+            )
         }
         val session = try { readSession() } catch (failure: Throwable) {
             return GreenVpnNativeCascadeResult(false, error = safeError(failure))
@@ -134,15 +149,53 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
             return GreenVpnNativeCascadeResult(false, error = "session_or_device_missing")
         }
 
-        val candidates = fetchCatalogCandidates(preferredBaseUrl)
+        onPhase("fetching_config")
+        val normalizedPreferred = preferredServerId.trim().take(160)
+            .takeUnless { it.equals("auto", ignoreCase = true) }
+            .orEmpty()
+        val discoveredCandidates = fetchCatalogCandidates(preferredBaseUrl)
+        val candidates = if (normalizedPreferred.isEmpty()) {
+            discoveredCandidates
+        } else {
+            val exact = discoveredCandidates.filter { it.serverId == normalizedPreferred }
+            val remaining = discoveredCandidates.filterNot { it.serverId == normalizedPreferred }
+            if (exact.isNotEmpty()) {
+                exact + remaining
+            } else {
+                listOf(
+                    CatalogCandidate(
+                        normalizedPreferred,
+                        "wireguard_udp",
+                        100,
+                        null,
+                        null,
+                    ),
+                ) + remaining
+            }
+        }
         var lastError = "no_candidate_succeeded"
         for (candidate in candidates) {
             if (!continueRequested()) return GreenVpnNativeCascadeResult(false, error = "cancelled")
+            if (!hasValidatedUnderlyingNetwork()) {
+                return GreenVpnNativeCascadeResult(
+                    false,
+                    error = "network_unavailable",
+                    waitingForNetwork = true,
+                )
+            }
             debug("candidate_start id=${candidate.serverId.orEmpty()} protocol=${candidate.protocol}")
+            onPhase("fetching_config")
             val fetched = try {
                 fetchFreshConfig(accessToken, deviceId, preferredBaseUrl, candidate.serverId)
             } catch (failure: Throwable) {
                 lastError = safeError(failure)
+                if (!hasValidatedUnderlyingNetwork()) {
+                    return GreenVpnNativeCascadeResult(
+                        false,
+                        error = "network_unavailable",
+                        waitingForNetwork = true,
+                    )
+                }
                 recordRouteFailure(candidate.serverId.orEmpty(), candidate.protocol)
                 debug("candidate_fetch_failed protocol=${candidate.protocol} error=$lastError")
                 null
@@ -154,6 +207,14 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
                 continue
             }
 
+            if (!hasValidatedUnderlyingNetwork()) {
+                return GreenVpnNativeCascadeResult(
+                    false,
+                    error = "network_unavailable",
+                    waitingForNetwork = true,
+                )
+            }
+            onPhase("connecting")
             val connected = try {
                 connectVpn(fetched.config, fetched.protocol)
             } catch (failure: Throwable) {
@@ -174,12 +235,31 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
                 continue
             }
 
+            if (!hasValidatedUnderlyingNetwork()) {
+                persistSuccessfulRoute(fetched, verified = false)
+                return GreenVpnNativeCascadeResult(
+                    ok = true,
+                    serverId = fetched.serverId,
+                    protocol = fetched.protocol,
+                    verified = false,
+                )
+            }
+            onPhase("verifying")
             val probe = probeStartupRoute(fetched.protocol)
             if (!continueRequested()) {
                 disconnectAll()
                 return GreenVpnNativeCascadeResult(false, error = "cancelled")
             }
             if (!probe.ok) {
+                if (!hasValidatedUnderlyingNetwork()) {
+                    persistSuccessfulRoute(fetched, verified = false)
+                    return GreenVpnNativeCascadeResult(
+                        ok = true,
+                        serverId = fetched.serverId,
+                        protocol = fetched.protocol,
+                        verified = false,
+                    )
+                }
                 lastError = probe.error.ifEmpty { "route_probe_failed" }
                 val stopped = disconnectAll()
                 recordRouteFailure(fetched.serverId, fetched.protocol)
@@ -193,20 +273,26 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
             }
 
             clearRouteFailure(fetched.serverId, fetched.protocol)
-            writeSecureString(MANAGED_CONFIG_KEY, fetched.config)
-            writeSecureString(MANAGED_PROTOCOL_KEY, fetched.protocol)
-            writeSecureString(
-                LAST_ROUTE_SUCCESS_KEY,
-                JSONObject()
-                    .put("serverId", fetched.serverId)
-                    .put("protocol", fetched.protocol)
-                    .put("verifiedAtMs", System.currentTimeMillis())
-                    .toString(),
-            )
+            persistSuccessfulRoute(fetched, verified = true)
             debug("candidate_success id=${fetched.serverId} protocol=${fetched.protocol}")
             return GreenVpnNativeCascadeResult(true, fetched.serverId, fetched.protocol)
         }
         return GreenVpnNativeCascadeResult(false, error = lastError)
+    }
+
+    private fun persistSuccessfulRoute(fetched: FetchedConfig, verified: Boolean) {
+        writeSecureString(MANAGED_CONFIG_KEY, fetched.config)
+        writeSecureString(MANAGED_PROTOCOL_KEY, fetched.protocol)
+        writeSecureString(MANAGED_ROUTE_ID_KEY, fetched.serverId)
+        writeSecureString(
+            LAST_ROUTE_SUCCESS_KEY,
+            JSONObject()
+                .put("serverId", fetched.serverId)
+                .put("protocol", fetched.protocol)
+                .put("verifiedAtMs", if (verified) System.currentTimeMillis() else 0L)
+                .put("connectedAtMs", System.currentTimeMillis())
+                .toString(),
+        )
     }
 
     private fun backend(): GoBackend = GreenVpnWireGuardRuntime.backend(appContext)
