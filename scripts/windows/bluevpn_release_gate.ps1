@@ -3515,6 +3515,8 @@ $androidDnsttSourceChecks = [ordered]@{
     'Android quick tile executor survives service rebinds' = @($androidQuickTile, 'val TILE_EXECUTOR = Executors.newSingleThreadExecutor()', 'TILE_EXECUTOR.execute {')
     'Android proxy route probe follows local SOCKS data plane' = @($androidRouteProbe, '"hysteria2" -> 1980', '"vless_reality" -> 1981', '"naive_https" -> 1982', '"dnstt" -> 1983', 'probeHttpsViaSocks(', 'endpointIdentificationAlgorithm = "HTTPS"')
     'Android proxy route probe has protocol mapping tests' = @($androidRouteProbeTest, 'proxyTransportsRequireTheirDedicatedLoopbackSocksPortsAfterSystemRoute', 'tunnelProtocolsUseTheSystemVpnRoute')
+    'Android route probe binds the established VPN network' = @($androidRouteProbe, 'NetworkCapabilities.TRANSPORT_VPN', 'network.openConnection(URL(target.url))', 'VPN network is unavailable for route probe')
+    'Android route probe rejects direct-network fallback' = @($androidRouteProbeTest, 'activeVpnNetworkIsPreferred', 'vpnNetworkIsFoundWhenTheActiveNetworkIsDirect', 'directNetworkCannotSatisfyVpnRouteProbe')
     'Flutter Android post-connect probe uses native route' = @($main, "invokeMethod<Object?>('probeConnectedRoute'", "'protocol': server.protocolCode")
     'Android quick tile cascade policy is strict and bounded' = @($androidQuickTilePolicy, 'listOf(', '"wireguard_udp"', '"amneziawg"', '"hysteria2"', '"vless_reality"', '"naive_https"', '"dnstt"', '60_000L', '1_800_000L')
     'Android quick tile cascade tests cover order and cooldown' = @($androidQuickTilePolicyTest, 'strictTransportOrderIsPreserved', 'coolingCandidateIsDemotedWithoutChangingBaseOrder', 'cooldownScheduleIsBounded')

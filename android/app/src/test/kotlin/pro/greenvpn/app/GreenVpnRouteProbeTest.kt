@@ -33,6 +33,39 @@ class GreenVpnRouteProbeTest {
     }
 
     @Test
+    fun activeVpnNetworkIsPreferred() {
+        val selected = GreenVpnRouteProbe.preferVpnNetwork(
+            activeNetwork = "active-vpn",
+            availableNetworks = listOf("fallback-vpn", "direct"),
+            isVpnNetwork = { it.endsWith("vpn") },
+        )
+
+        assertEquals("active-vpn", selected)
+    }
+
+    @Test
+    fun vpnNetworkIsFoundWhenTheActiveNetworkIsDirect() {
+        val selected = GreenVpnRouteProbe.preferVpnNetwork(
+            activeNetwork = "direct",
+            availableNetworks = listOf("direct", "candidate-vpn"),
+            isVpnNetwork = { it.endsWith("vpn") },
+        )
+
+        assertEquals("candidate-vpn", selected)
+    }
+
+    @Test
+    fun directNetworkCannotSatisfyVpnRouteProbe() {
+        val selected = GreenVpnRouteProbe.preferVpnNetwork(
+            activeNetwork = "direct",
+            availableNetworks = listOf("direct", "mobile"),
+            isVpnNetwork = { it.endsWith("vpn") },
+        )
+
+        assertNull(selected)
+    }
+
+    @Test
     fun authenticatedSocksGreetingOffersNoAuthAndUsernamePassword() {
         val credentials = GreenVpnDnsttPreview.ProxyCredentials("probe-user", "probe-password-value")
 

@@ -1,6 +1,9 @@
 package pro.greenvpn.app
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.SystemClock
 import android.util.Log
 import java.io.DataInputStream
@@ -86,7 +89,7 @@ internal object GreenVpnRouteProbe {
             val startedAt = SystemClock.elapsedRealtime()
             last = try {
                 debug("protocol=$protocol target=${target.host} phase=system start")
-                val systemStatus = probeSystemRoute(target)
+                val systemStatus = probeSystemRoute(context, target)
                 require(systemStatus in 200..399) { "system route returned HTTP $systemStatus" }
                 debug("protocol=$protocol target=${target.host} phase=system status=$systemStatus")
                 val status = socksPortForProtocol(protocol)?.let { port ->
@@ -151,6 +154,15 @@ internal object GreenVpnRouteProbe {
         else -> null
     }
 
+    internal fun <T> preferVpnNetwork(
+        activeNetwork: T?,
+        availableNetworks: List<T>,
+        isVpnNetwork: (T) -> Boolean,
+    ): T? {
+        if (activeNetwork != null && isVpnNetwork(activeNetwork)) return activeNetwork
+        return availableNetworks.firstOrNull(isVpnNetwork)
+    }
+
     internal fun socksGreeting(credentials: GreenVpnDnsttPreview.ProxyCredentials?): ByteArray =
         if (credentials == null) {
             byteArrayOf(0x05, 0x01, 0x00)
@@ -170,8 +182,9 @@ internal object GreenVpnRouteProbe {
             byteArrayOf(password.size.toByte()) + password
     }
 
-    private fun probeSystemRoute(target: Target): Int {
-        val connection = (URL(target.url).openConnection() as HttpURLConnection).apply {
+    private fun probeSystemRoute(context: Context, target: Target): Int {
+        val network = awaitVpnNetwork(context)
+        val connection = (network.openConnection(URL(target.url)) as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 4_000
             readTimeout = 5_000
@@ -182,6 +195,30 @@ internal object GreenVpnRouteProbe {
         } finally {
             connection.disconnect()
         }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun awaitVpnNetwork(context: Context): Network {
+        val connectivity = context.getSystemService(ConnectivityManager::class.java)
+            ?: error("Connectivity manager is unavailable")
+        val deadline = SystemClock.elapsedRealtime() + 2_500L
+        do {
+            val network = preferVpnNetwork(
+                activeNetwork = connectivity.activeNetwork,
+                availableNetworks = connectivity.allNetworks.toList(),
+            ) { candidate ->
+                connectivity.getNetworkCapabilities(candidate)
+                    ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+            }
+            if (network != null) return network
+            try {
+                Thread.sleep(100L)
+            } catch (interrupted: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw interrupted
+            }
+        } while (SystemClock.elapsedRealtime() < deadline)
+        error("VPN network is unavailable for route probe")
     }
 
     private fun probeHttpsViaSocks(
