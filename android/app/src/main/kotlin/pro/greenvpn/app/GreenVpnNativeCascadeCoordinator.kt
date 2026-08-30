@@ -1,7 +1,6 @@
 package pro.greenvpn.app
 
 import android.content.Context
-import android.net.VpnService
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -99,6 +98,10 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
         else -> false
     }
 
+    fun hasCompetingVpnActive(): Boolean =
+        GreenVpnNetworkTransition.isAnyVpnActive(appContext) &&
+            SUPPORTED_PROTOCOLS.none { isProtocolConnected(it) }
+
     fun probeRoute(protocol: String): GreenVpnRouteProbe.Result =
         GreenVpnRouteProbe.probe(appContext, protocol)
 
@@ -127,10 +130,11 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
         preferredServerId: String = "",
         hasValidatedUnderlyingNetwork: () -> Boolean = { true },
         onPhase: (String) -> Unit = {},
+        allowInitialCompetingVpnTakeover: Boolean = false,
         continueRequested: () -> Boolean,
     ): GreenVpnNativeCascadeResult {
-        if (VpnService.prepare(appContext) != null) {
-            return GreenVpnNativeCascadeResult(false, error = "vpn_permission_required")
+        if (!allowInitialCompetingVpnTakeover && hasCompetingVpnActive()) {
+            return GreenVpnNativeCascadeResult(false, error = "competing_vpn_active")
         }
         if (!hasValidatedUnderlyingNetwork()) {
             return GreenVpnNativeCascadeResult(
@@ -176,6 +180,10 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
         var lastError = "no_candidate_succeeded"
         for (candidate in candidates) {
             if (!continueRequested()) return GreenVpnNativeCascadeResult(false, error = "cancelled")
+            if (hasCompetingVpnActive()) {
+                stopOwnRoutesForCompetingVpn()
+                return GreenVpnNativeCascadeResult(false, error = "competing_vpn_active")
+            }
             if (!hasValidatedUnderlyingNetwork()) {
                 return GreenVpnNativeCascadeResult(
                     false,
@@ -201,6 +209,10 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
                 null
             } ?: continue
             if (!continueRequested()) return GreenVpnNativeCascadeResult(false, error = "cancelled")
+            if (hasCompetingVpnActive()) {
+                stopOwnRoutesForCompetingVpn()
+                return GreenVpnNativeCascadeResult(false, error = "competing_vpn_active")
+            }
             if (fetched.protocol !in SUPPORTED_PROTOCOLS) {
                 lastError = "unsupported_protocol"
                 recordRouteFailure(fetched.serverId, fetched.protocol)
@@ -220,6 +232,10 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
             } catch (failure: Throwable) {
                 lastError = safeError(failure)
                 false
+            }
+            if (hasCompetingVpnActive()) {
+                stopOwnRoutesForCompetingVpn()
+                return GreenVpnNativeCascadeResult(false, error = "competing_vpn_active")
             }
             if (connected) GreenVpnNetworkTransition.markActive(appContext)
             if (!connected || !continueRequested()) {
@@ -245,7 +261,15 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
                 )
             }
             onPhase("verifying")
+            if (hasCompetingVpnActive()) {
+                stopOwnRoutesForCompetingVpn()
+                return GreenVpnNativeCascadeResult(false, error = "competing_vpn_active")
+            }
             val probe = probeStartupRoute(fetched.protocol)
+            if (hasCompetingVpnActive()) {
+                stopOwnRoutesForCompetingVpn()
+                return GreenVpnNativeCascadeResult(false, error = "competing_vpn_active")
+            }
             if (!continueRequested()) {
                 disconnectAll()
                 return GreenVpnNativeCascadeResult(false, error = "cancelled")
@@ -278,6 +302,11 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
             return GreenVpnNativeCascadeResult(true, fetched.serverId, fetched.protocol)
         }
         return GreenVpnNativeCascadeResult(false, error = lastError)
+    }
+
+    private fun stopOwnRoutesForCompetingVpn() {
+        GreenVpnNetworkTransition.markInactive(appContext)
+        disconnectAll()
     }
 
     private fun persistSuccessfulRoute(fetched: FetchedConfig, verified: Boolean) {

@@ -218,6 +218,7 @@ $deployBackendShellPath = Join-Path $ProjectRoot "scripts\deploy_backend_wsl.sh"
 $androidLegacyE2ePath = Join-Path $ProjectRoot "scripts\windows\run_android_vpn_e2e.ps1"
 $androidRuntimeFailoverServicePath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\GreenVpnRuntimeFailoverService.kt"
 $androidRuntimeFailoverPolicyPath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\GreenVpnRuntimeFailoverPolicy.kt"
+$androidNativeCascadeCoordinatorPath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\GreenVpnNativeCascadeCoordinator.kt"
 $androidConnectionOperationPolicyPath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\GreenVpnConnectionOperationPolicy.kt"
 $androidConnectionOperationPolicyTestPath = Join-Path $ProjectRoot "android\app\src\test\kotlin\pro\greenvpn\app\GreenVpnConnectionOperationPolicyTest.kt"
 $androidUnderlyingNetworkPath = Join-Path $ProjectRoot "android\app\src\main\kotlin\pro\greenvpn\app\GreenVpnUnderlyingNetwork.kt"
@@ -234,6 +235,7 @@ $publicProductBuildScript = Read-Text $publicProductBuildPath
 $paidBetaBuildScript = Read-Text $paidBetaBuildPath
 $androidRuntimeFailoverService = Read-Text $androidRuntimeFailoverServicePath
 $androidRuntimeFailoverPolicy = Read-Text $androidRuntimeFailoverPolicyPath
+$androidNativeCascadeCoordinator = Read-Text $androidNativeCascadeCoordinatorPath
 $androidConnectionOperationPolicy = Read-Text $androidConnectionOperationPolicyPath
 $androidConnectionOperationPolicyTest = Read-Text $androidConnectionOperationPolicyTestPath
 $androidUnderlyingNetwork = Read-Text $androidUnderlyingNetworkPath
@@ -720,10 +722,15 @@ $fusionIsolationChecks = [ordered]@{
     'Android full connect is persisted before Activity permission flow' = @($androidRuntimeFailoverService, 'requestManagedConnect(')
     'Android connection survives Activity recreation through events' = @($androidMainActivity, 'green_vpn/android_connection_events')
     'Flutter delegates full Android connect to the native coordinator' = @($main, "'requestManagedConnect'")
+    'Android managed status reads persisted permission without taking VPN ownership' = @($androidRuntimeFailoverService, '"permissionGranted" to values.getBoolean(KEY_PERMISSION_GRANTED, false)')
+    'Android permission query is suppressed while a system VPN is active' = @($androidRuntimeFailoverService, 'GreenVpnConnectionOperationPolicy.shouldQueryVpnPermission(systemVpnActive)')
+    'Android competing VPN terminates automatic recovery' = @($androidRuntimeFailoverService, 'result.error == "competing_vpn_active"')
+    'Android cascade checks for a competing VPN during connection' = @($androidNativeCascadeCoordinator, 'stopOwnRoutesForCompetingVpn()')
     'Android missing network preserves desired connection state' = @($androidConnectionOperationPolicy, 'stateWithoutUnderlyingNetwork')
     'Android underlying network excludes VPN transports' = @($androidUnderlyingNetwork, 'TRANSPORT_VPN')
     'Android underlying network requires validation before recovery' = @($androidUnderlyingNetwork, 'NET_CAPABILITY_VALIDATED')
     'Android durable connection policy has native tests' = @($androidConnectionOperationPolicyTest, 'pendingConnectStartsOnlyWithPermissionAndValidatedNetwork')
+    'Android VPN permission side-effect policy has native tests' = @($androidConnectionOperationPolicyTest, 'permissionQueryNeverRunsWhileAnySystemVpnIsActive')
     'Android durable connection UI has Flutter tests' = @($flutterAndroidConnectionPolicyTest, 'offline connect stays active with an explicit waiting state')
     'Flutter waiting state explains automatic continuation' = @($flutterAndroidConnectionPolicy, 'waiting_for_network')
 }
@@ -734,6 +741,24 @@ foreach ($check in $fusionIsolationChecks.GetEnumerator()) {
     else {
         Add-Error "$($check.Key) marker missing: $($check.Value[1])"
     }
+}
+
+$androidManagedSnapshotBlock = [regex]::Match(
+    $androidRuntimeFailoverService,
+    '(?s)fun snapshot\(context: Context\): Map<String, Any>.*?fun eventPreferences',
+    [System.Text.RegularExpressions.RegexOptions]::CultureInvariant
+).Value
+if ($androidManagedSnapshotBlock -and $androidManagedSnapshotBlock -notmatch 'VpnService\.prepare') {
+    Add-Pass 'Android managed connection snapshot is side-effect free'
+}
+else {
+    Add-Error 'Android managed connection snapshot must never call VpnService.prepare.'
+}
+if ($androidNativeCascadeCoordinator -notmatch 'VpnService\.prepare') {
+    Add-Pass 'Android native cascade never queries VPN permission after coordination starts'
+}
+else {
+    Add-Error 'Android native cascade must not call VpnService.prepare after a competing VPN can appear.'
 }
 
 $fusionAuthoritativeStatusSource =

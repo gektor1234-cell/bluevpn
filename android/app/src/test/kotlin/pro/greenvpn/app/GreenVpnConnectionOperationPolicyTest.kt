@@ -74,4 +74,20 @@ class GreenVpnConnectionOperationPolicyTest {
             ),
         )
     }
+
+    @Test
+    fun permissionQueryNeverRunsWhileAnySystemVpnIsActive() {
+        assertEquals(
+            false,
+            GreenVpnConnectionOperationPolicy.shouldQueryVpnPermission(
+                systemVpnActive = true,
+            ),
+        )
+        assertEquals(
+            true,
+            GreenVpnConnectionOperationPolicy.shouldQueryVpnPermission(
+                systemVpnActive = false,
+            ),
+        )
+    }
 }

@@ -35,6 +35,8 @@ internal object GreenVpnConnectionOperationPolicy {
         validatedUnderlyingNetwork: Boolean,
     ): Boolean = desired && validatedUnderlyingNetwork
 
+    fun shouldQueryVpnPermission(systemVpnActive: Boolean): Boolean = !systemVpnActive
+
     fun stateWithoutUnderlyingNetwork(ownEngineConnected: Boolean): String =
         if (ownEngineConnected) "degraded_no_network" else "waiting_for_network"
 

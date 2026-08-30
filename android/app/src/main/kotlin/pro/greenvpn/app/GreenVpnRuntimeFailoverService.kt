@@ -55,6 +55,7 @@ class GreenVpnRuntimeFailoverService : Service() {
         private const val KEY_CONNECTED_AT_MS = "connected_at_ms"
         private const val KEY_UNDERLYING_INTERNET = "underlying_internet"
         private const val KEY_UNDERLYING_VALIDATED = "underlying_validated"
+        private const val KEY_PERMISSION_GRANTED = "permission_granted"
         private const val CHANNEL_ID = "greenvpn_runtime_connection"
         private const val NOTIFICATION_ID = 7302
         private const val DEBUG_TAG = "GreenVpnRuntimeFailover"
@@ -114,6 +115,7 @@ class GreenVpnRuntimeFailoverService : Service() {
                 .putLong(KEY_OPERATION_STARTED_AT_MS, now)
                 .putBoolean(KEY_UNDERLYING_INTERNET, network.internetNetworkAvailable)
                 .putBoolean(KEY_UNDERLYING_VALIDATED, network.validatedNetworkAvailable)
+                .putBoolean(KEY_PERMISSION_GRANTED, permissionGranted)
                 .putLong(KEY_UPDATED_AT_MS, now)
                 .commit()
             if (committed) {
@@ -140,6 +142,7 @@ class GreenVpnRuntimeFailoverService : Service() {
                 )
                 .putString(KEY_LAST_REASON, "vpn_permission_granted")
                 .putString(KEY_LAST_ERROR, "")
+                .putBoolean(KEY_PERMISSION_GRANTED, true)
                 .putBoolean(KEY_UNDERLYING_INTERNET, network.internetNetworkAvailable)
                 .putBoolean(KEY_UNDERLYING_VALIDATED, network.validatedNetworkAvailable)
                 .putLong(KEY_UPDATED_AT_MS, System.currentTimeMillis())
@@ -153,6 +156,7 @@ class GreenVpnRuntimeFailoverService : Service() {
                 .putString(KEY_STATE, "permission_denied")
                 .putString(KEY_LAST_REASON, "vpn_permission_denied")
                 .putString(KEY_LAST_ERROR, "vpn_permission_denied")
+                .putBoolean(KEY_PERMISSION_GRANTED, false)
                 .putLong(KEY_UPDATED_AT_MS, System.currentTimeMillis())
                 .commit()
             context.stopService(Intent(context, GreenVpnRuntimeFailoverService::class.java))
@@ -212,6 +216,7 @@ class GreenVpnRuntimeFailoverService : Service() {
                 .putString(KEY_LAST_ERROR, "")
                 .putLong(KEY_LAST_PROBE_AT_MS, now)
                 .putBoolean(KEY_LAST_PROBE_OK, true)
+                .putBoolean(KEY_PERMISSION_GRANTED, true)
                 .putLong(KEY_NEXT_RECOVERY_AT_MS, 0L)
                 .putLong(KEY_PAUSE_UNTIL_MS, 0L)
                 .putBoolean(KEY_RESUME_SCHEDULED, false)
@@ -261,6 +266,7 @@ class GreenVpnRuntimeFailoverService : Service() {
                 .putLong(KEY_NEXT_RECOVERY_AT_MS, 0L)
                 .putLong(KEY_PAUSE_UNTIL_MS, resumeAtMs)
                 .putBoolean(KEY_RESUME_SCHEDULED, true)
+                .putBoolean(KEY_PERMISSION_GRANTED, true)
                 .putLong(KEY_OPERATION_STARTED_AT_MS, now)
                 .putLong(KEY_UPDATED_AT_MS, now)
                 .commit()
@@ -332,7 +338,7 @@ class GreenVpnRuntimeFailoverService : Service() {
                 "connectedAtMs" to values.getLong(KEY_CONNECTED_AT_MS, 0L),
                 "underlyingInternet" to network.internetNetworkAvailable,
                 "underlyingValidated" to network.validatedNetworkAvailable,
-                "permissionGranted" to (VpnService.prepare(context.applicationContext) == null),
+                "permissionGranted" to values.getBoolean(KEY_PERMISSION_GRANTED, false),
                 "updatedAtMs" to values.getLong(KEY_UPDATED_AT_MS, 0L),
             )
         }
@@ -457,30 +463,14 @@ class GreenVpnRuntimeFailoverService : Service() {
         } else {
             ownEngineConnected
         }
-        val explicitTakeoverPending = state in setOf(
-            "queued",
-            "permission_required",
-            "fetching_config",
-            "connecting",
-            "verifying",
-        )
+        val explicitTakeoverPending = state in setOf("queued", "permission_required")
         if (!explicitTakeoverPending && GreenVpnRuntimeFailoverPolicy.shouldStopForCompetingVpn(
                 desired = true,
                 systemVpnActive = systemVpnActive,
                 ownVpnStillActive = ownVpnStillActive,
             )
         ) {
-            values.edit()
-                .putBoolean(KEY_DESIRED, false)
-                .putString(KEY_STATE, "competing_vpn_active")
-                .putString(KEY_LAST_REASON, "competing_vpn_active")
-                .putString(KEY_LAST_ERROR, "")
-                .putLong(KEY_UPDATED_AT_MS, now)
-                .commit()
-            coordinator.disconnectAll()
-            GreenVpnNetworkTransition.markInactive(applicationContext)
-            Log.i(DEBUG_TAG, "runtime_failover_disarmed reason=competing_vpn_active")
-            stopSelf()
+            disarmForCompetingVpn(now)
             return
         }
 
@@ -496,9 +486,13 @@ class GreenVpnRuntimeFailoverService : Service() {
             state = "queued"
         }
 
-        if (VpnService.prepare(applicationContext) != null) {
-            publishState("permission_required", "vpn_permission_required", "", 0L)
-            return
+        if (GreenVpnConnectionOperationPolicy.shouldQueryVpnPermission(systemVpnActive)) {
+            val permissionGranted = VpnService.prepare(applicationContext) == null
+            values.edit().putBoolean(KEY_PERMISSION_GRANTED, permissionGranted).apply()
+            if (!permissionGranted) {
+                publishState("permission_required", "vpn_permission_required", "", 0L)
+                return
+            }
         }
 
         val underlying = GreenVpnUnderlyingNetwork.snapshot(applicationContext)
@@ -541,7 +535,7 @@ class GreenVpnRuntimeFailoverService : Service() {
         if (GreenVpnConnectionOperationPolicy.shouldStartConnect(
                 desired = true,
                 state = state,
-                permissionGranted = true,
+                permissionGranted = values.getBoolean(KEY_PERMISSION_GRANTED, false),
                 validatedUnderlyingNetwork = true,
             )
         ) {
@@ -659,6 +653,11 @@ class GreenVpnRuntimeFailoverService : Service() {
                 GreenVpnRuntimeRoute(previousRoute.serverId, previousRoute.protocol),
             )
         }
+        val explicitTakeover = !countRecovery && reason == "queued"
+        if (!explicitTakeover && coordinator.hasCompetingVpnActive()) {
+            disarmForCompetingVpn()
+            return
+        }
         if (countRecovery) coordinator.disconnectAll()
         val values = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val preferredServerId = values.getString(KEY_REQUESTED_SERVER_ID, "").orEmpty()
@@ -671,6 +670,7 @@ class GreenVpnRuntimeFailoverService : Service() {
             onPhase = { phase ->
                 if (isDesired()) publishState(phase, reason, "", 0L)
             },
+            allowInitialCompetingVpnTakeover = explicitTakeover,
         ) { isDesired() && !Thread.currentThread().isInterrupted }
         if (!isDesired()) {
             coordinator.disconnectAll()
@@ -701,6 +701,7 @@ class GreenVpnRuntimeFailoverService : Service() {
                 .putString(KEY_LAST_ERROR, "")
                 .putLong(KEY_LAST_PROBE_AT_MS, now)
                 .putBoolean(KEY_LAST_PROBE_OK, result.verified)
+                .putBoolean(KEY_PERMISSION_GRANTED, true)
                 .putLong(KEY_NEXT_RECOVERY_AT_MS, 0L)
                 .putLong(KEY_PAUSE_UNTIL_MS, 0L)
                 .putBoolean(KEY_RESUME_SCHEDULED, false)
@@ -712,7 +713,10 @@ class GreenVpnRuntimeFailoverService : Service() {
         } else if (result.waitingForNetwork) {
             publishState("waiting_for_network", "underlying_network_unavailable", "", 0L)
         } else if (result.error == "vpn_permission_required") {
+            values.edit().putBoolean(KEY_PERMISSION_GRANTED, false).apply()
             publishState("permission_required", "vpn_permission_required", "", 0L)
+        } else if (result.error == "competing_vpn_active") {
+            disarmForCompetingVpn()
         } else if (result.error == "cancelled") {
             values.edit()
                 .putBoolean(KEY_DESIRED, false)
@@ -743,6 +747,25 @@ class GreenVpnRuntimeFailoverService : Service() {
             debug("connect_failed reason=$reason error=${safeText(result.error)}")
         }
         updateNotification()
+    }
+
+    private fun disarmForCompetingVpn(now: Long = System.currentTimeMillis()) {
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+            .putBoolean(KEY_DESIRED, false)
+            .putBoolean(KEY_PERMISSION_GRANTED, false)
+            .putString(KEY_OPERATION_KIND, "none")
+            .putString(KEY_STATE, "competing_vpn_active")
+            .putString(KEY_LAST_REASON, "competing_vpn_active")
+            .putString(KEY_LAST_ERROR, "")
+            .putLong(KEY_NEXT_RECOVERY_AT_MS, 0L)
+            .putLong(KEY_PAUSE_UNTIL_MS, 0L)
+            .putBoolean(KEY_RESUME_SCHEDULED, false)
+            .putLong(KEY_UPDATED_AT_MS, now)
+            .commit()
+        GreenVpnNetworkTransition.markInactive(applicationContext)
+        coordinator.disconnectAll()
+        Log.i(DEBUG_TAG, "runtime_failover_disarmed reason=competing_vpn_active")
+        stopSelf()
     }
 
     private fun disconnectManagedRouteSafely() {
