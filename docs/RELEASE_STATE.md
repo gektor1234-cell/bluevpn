@@ -1,6 +1,41 @@
 # Green VPN Release State
 
-## Android Subscription Lifecycle 0.4.11 (2026-08-29 MSK)
+## Android Network Lifecycle 0.4.12 (2026-08-31 MSK)
+
+| Layer | Current state |
+|---|---|
+| Stable backend | unchanged: `0.9.165-subscription-lifecycle.2` on fallback and primary |
+| Stable Android | `0.4.12+2026083003`, signed, mandatory |
+| Stable Windows | unchanged: `0.4.6+4636`, `NotSigned`, mandatory |
+| Windows lifecycle candidate | `0.4.6+4637`, unsigned and unpublished |
+| Paid-beta | unchanged: backend `0.9.154-fusion-actions.1` |
+| Automatic charges | disabled in the manual NPD contour |
+
+Source `2856529cd3921031f1a7730d8762f1ee563c4402` fixes Android VPN ownership
+and recovery semantics. A status read no longer requests VPN permission,
+automatic recovery cannot take the system VPN slot back from another VPN, and
+competing-VPN takeover terminally disarms Green VPN before its own engine is
+cleaned up. Foreground connect rechecks ownership throughout configuration,
+connect and probe stages. Offline start and connected network loss retain the
+correct durable intent and restore without a second user action.
+
+The signed APK is `56404945` bytes, SHA-256
+`1B476663062586B3BF1F90BC5A32FB617F99A3CF25455BBF8D9CAC9D250782C0`.
+Native unit tests, Flutter analyze, `144` Flutter tests with `15` intentional
+skips, APK signature, 16 KB compatibility and the release gate all passed.
+
+Direct and full lifecycle acceptance passed on `SM-A530F`, including real
+protected egress, API `200`, YouTube `204`, background completion, offline
+recovery, continuous tunnel preservation across network loss and terminal
+yield to a competing VPN. Mandatory publication completed fallback first and
+primary second with separate backups. Android `0.4.11` now receives HTTP `426`;
+`0.4.12` and update manifests receive `200`; both downloads match the
+candidate. Strict public verification passed `12/12`, both databases pass
+`quick_check`, failed units are `0`, and sync/expiry timers remain active. Full
+evidence is in
+`ANDROID_NETWORK_LIFECYCLE_0_4_12_ROLLOUT_2026_08_31_RU.md`.
+
+## Historical Android Subscription Lifecycle 0.4.11 (2026-08-29 MSK)
 
 | Layer | Current state |
 |---|---|

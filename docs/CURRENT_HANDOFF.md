@@ -1,12 +1,41 @@
 # Green VPN Current Handoff
 
-Updated: 2026-08-29 MSK.
+Updated: 2026-08-31 MSK.
 
 This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
 `PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md`. Dated reports are evidence only.
 
-## Current production: Android lifecycle 0.4.11, 2026-08-29
+## Current production: Android network lifecycle 0.4.12, 2026-08-31
+
+- Source `2856529cd3921031f1a7730d8762f1ee563c4402` is pushed. Android status
+  reads are side-effect free, automatic recovery yields permanently to a
+  competing VPN, foreground connect checks ownership at every transition, and
+  network loss preserves the intended Green VPN state without a second tap.
+- Stable Android is mandatory `0.4.12+2026083003`, signed, size `56404945`,
+  SHA-256
+  `1B476663062586B3BF1F90BC5A32FB617F99A3CF25455BBF8D9CAC9D250782C0`.
+  APK Signature Scheme v2 and 16 KB native-library compatibility passed.
+- Physical direct acceptance and the complete lifecycle matrix passed on
+  `SM-A530F`: foreground/background connect, offline-start recovery, connected
+  network loss, data-plane restoration, and competing-VPN takeover with no
+  automatic Green VPN return. Final Wi-Fi/mobile state was restored, no VPN
+  remained active, and the pre-existing telephony state was unchanged.
+- Publication completed fallback first and primary second through the
+  stable-only publisher. Both nodes require minimum Android `0.4.12` with
+  rollout `100%`; Android `0.4.11` receives `426`, while `0.4.12` and update
+  manifests receive `200`. Both public APK bodies match the exact candidate.
+- Strict public verification passed `12/12`. Stable Windows `0.4.6+4636`, both
+  paid-beta clients and both backend versions are unchanged. Both stable and
+  paid-beta databases return `quick_check=ok`; failed units are `0`, nginx is
+  valid, and DB-sync plus subscription-expiry timers are active.
+- Backend remains `0.9.165-subscription-lifecycle.2`. Automatic charges remain
+  disabled. Windows lifecycle candidate `0.4.6+4637` remains unsigned and
+  unpublished.
+- Exact physical evidence, public verification and rollback paths:
+  `docs/ANDROID_NETWORK_LIFECYCLE_0_4_12_ROLLOUT_2026_08_31_RU.md`.
+
+## Historical production: Android subscription lifecycle 0.4.11, 2026-08-29
 
 - Source `50691989c6c2a2abe53b38ff4cb7d1e51eb87584` fixes the final stale-quote
   race after email restore and is pushed.
