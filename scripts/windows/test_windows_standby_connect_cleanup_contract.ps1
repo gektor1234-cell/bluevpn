@@ -8,7 +8,9 @@ $ErrorActionPreference = 'Stop'
 $project = [IO.Path]::GetFullPath($ProjectRoot)
 $taskPath = Join-Path $project 'scripts\windows\greenvpn_transport_preview_vpn_task.ps1'
 $installerPath = Join-Path $project 'scripts\windows\build_installer.ps1'
-foreach ($path in @($taskPath, $installerPath)) {
+$runnerPath = Join-Path $project 'scripts\windows\run_windows_mode_reconcile_release_smoke.ps1'
+$restorePath = Join-Path $project 'scripts\windows\restore_windows_smoke_network.ps1'
+foreach ($path in @($taskPath, $installerPath, $runnerPath, $restorePath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required source is missing: $path"
     }
@@ -16,6 +18,8 @@ foreach ($path in @($taskPath, $installerPath)) {
 
 $task = [IO.File]::ReadAllText($taskPath, [Text.UTF8Encoding]::new($true))
 $installer = [IO.File]::ReadAllText($installerPath, [Text.UTF8Encoding]::new($true))
+$runner = [IO.File]::ReadAllText($runnerPath, [Text.UTF8Encoding]::new($true))
+$restore = [IO.File]::ReadAllText($restorePath, [Text.UTF8Encoding]::new($true))
 
 $startMarker = 'function Start-OwnTunnel {'
 $cleanupCall = 'if (-not (Remove-StandbyProbeFallbackArtifacts)) {'
@@ -49,6 +53,25 @@ foreach ($fragment in @(
 )) {
     if (-not $installer.Contains($fragment)) {
         throw "Installer standby cleanup marker is missing: $fragment"
+    }
+}
+
+foreach ($fragment in @(
+    "'WireGuardTunnel`$BlueVPNDev1StandbyProbe'",
+    "'AmneziaWGTunnel`$BlueVPNDev1StandbyProbe'"
+)) {
+    if (-not $runner.Contains($fragment)) {
+        throw "Physical smoke managed-service marker is missing: $fragment"
+    }
+}
+
+foreach ($fragment in @(
+    "[string]`$LegacyStandbyProbeTunnelName = 'BlueVPNDev1StandbyProbe'",
+    "('WireGuardTunnel`$' + `$LegacyStandbyProbeTunnelName)",
+    "('AmneziaWGTunnel`$' + `$LegacyStandbyProbeTunnelName)"
+)) {
+    if (-not $restore.Contains($fragment)) {
+        throw "Network recovery managed-service marker is missing: $fragment"
     }
 }
 

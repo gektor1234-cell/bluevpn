@@ -7,6 +7,7 @@ param(
     [int]$LocalServicePort = 48737,
     [string]$ManagedTunnelName = 'BlueVPNDev1',
     [string]$StandbyProbeTunnelName = 'GreenVPNTransportPreviewStandbyProbe',
+    [string]$LegacyStandbyProbeTunnelName = 'BlueVPNDev1StandbyProbe',
     [string]$ExternalVpnServiceName = 'AmneziaWGTunnel$device20_full',
     [string]$ExternalVpnConfigPath = '',
     [switch]$StopGreenUi,
@@ -36,7 +37,11 @@ $resolvedExternalVpnConfigPath = if (
 if ($resolvedProcessName -notmatch '^[A-Za-z0-9_.-]+$') {
     throw 'ProcessName contains unsupported characters.'
 }
-foreach ($name in @($ManagedTunnelName, $StandbyProbeTunnelName)) {
+foreach ($name in @(
+    $ManagedTunnelName,
+    $StandbyProbeTunnelName,
+    $LegacyStandbyProbeTunnelName
+)) {
     if ($name -notmatch '^[A-Za-z0-9_.-]+$') {
         throw 'Tunnel names contain unsupported characters.'
     }
@@ -73,6 +78,7 @@ $report = [ordered]@{
         localServicePort = $LocalServicePort
         managedTunnelName = $ManagedTunnelName
         standbyProbeTunnelName = $StandbyProbeTunnelName
+        legacyStandbyProbeTunnelName = $LegacyStandbyProbeTunnelName
         externalVpnConfigProvided = -not [string]::IsNullOrWhiteSpace(
             $resolvedExternalVpnConfigPath
         )
@@ -154,6 +160,8 @@ function Resolve-ExternalVpnServiceName {
     $managedServiceNames = @(
         ('WireGuardTunnel$' + $ManagedTunnelName),
         ('AmneziaWGTunnel$' + $ManagedTunnelName),
+        ('WireGuardTunnel$' + $LegacyStandbyProbeTunnelName),
+        ('AmneziaWGTunnel$' + $LegacyStandbyProbeTunnelName),
         ('WireGuardTunnel$' + $StandbyProbeTunnelName),
         ('AmneziaWGTunnel$' + $StandbyProbeTunnelName)
     )
@@ -339,7 +347,9 @@ try {
 
     $probeServices = @(
         ('WireGuardTunnel$' + $StandbyProbeTunnelName),
-        ('AmneziaWGTunnel$' + $StandbyProbeTunnelName)
+        ('AmneziaWGTunnel$' + $StandbyProbeTunnelName),
+        ('WireGuardTunnel$' + $LegacyStandbyProbeTunnelName),
+        ('AmneziaWGTunnel$' + $LegacyStandbyProbeTunnelName)
     )
     foreach ($name in $probeServices) {
         $probeService = Get-Service -Name $name -ErrorAction SilentlyContinue

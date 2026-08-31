@@ -160,6 +160,8 @@ function Resolve-ExternalVpnServiceName {
     $managedServiceNames = @(
         'WireGuardTunnel$BlueVPNDev1',
         'AmneziaWGTunnel$BlueVPNDev1',
+        'WireGuardTunnel$BlueVPNDev1StandbyProbe',
+        'AmneziaWGTunnel$BlueVPNDev1StandbyProbe',
         'WireGuardTunnel$GreenVPNTransportPreviewStandbyProbe',
         'AmneziaWGTunnel$GreenVPNTransportPreviewStandbyProbe'
     )
