@@ -45,6 +45,33 @@ foreach ($fragment in @(
 }
 
 foreach ($fragment in @(
+    "`$ConnectFailureDiagnosticsPath = Join-Path `$ProgramDataRoot 'state\connect-failure-diagnostics.json'",
+    'function Write-GreenConnectFailureSnapshot {',
+    'nativeTunnel = Get-GreenNativeTunnelTelemetry -Engine $engine',
+    'rawConfigStored = $false',
+    'rawKeysStored = $false',
+    'rawEndpointStored = $false',
+    "Write-GreenConnectFailureSnapshot -FailureRecord `$failure"
+)) {
+    if (-not $task.Contains($fragment)) {
+        throw "Connect failure diagnostic marker is missing: $fragment"
+    }
+}
+
+$failureCatchIndex = $task.IndexOf(
+    'Write-GreenConnectFailureSnapshot -FailureRecord $failure',
+    [StringComparison]::Ordinal
+)
+$failureRecoveryIndex = $task.IndexOf(
+    'Complete-GreenDisconnectedRuntimeState',
+    $failureCatchIndex,
+    [StringComparison]::Ordinal
+)
+if ($failureCatchIndex -lt 0 -or $failureRecoveryIndex -lt $failureCatchIndex) {
+    throw 'Connect failure diagnostics must be captured before failure recovery.'
+}
+
+foreach ($fragment in @(
     'function Remove-GreenVpnStandbyProbeArtifacts {',
     "`$tunnelName = 'BlueVPNDev1StandbyProbe'",
     '/uninstalltunnelservice $tunnelName',

@@ -2667,7 +2667,7 @@ $windowsRuntimeFailoverChecks = [ordered]@{
     )
     'Windows mode reconciliation proves dedicated application egress' = @(
         $windowsModeReconcileReleaseSmokeScript,
-        "ExpectedApplicationModeEgress = '5.129.216.42'",
+        "ExpectedApplicationModeEgress = '88.218.250.86'",
         'selectedMatchesDedicatedVpn',
         'selectedYouTube204',
         'selectedIpv6BlockedWhenDirectIpv6Available',

@@ -42,6 +42,25 @@ void main() {
         '<redacted>',
       );
     });
+
+    test('retains numeric tunnel telemetry without keys or endpoint data', () {
+      final sanitized =
+          sanitizeWindowsSupportValue(<String, Object?>{
+                'peerCount': 1,
+                'latestHandshakeEpoch': 123456789,
+                'receivedBytes': 2048,
+                'sentBytes': 4096,
+                'rawKeysStored': false,
+                'rawEndpointStored': false,
+              })
+              as Map<String, Object?>;
+      expect(sanitized['peerCount'], 1);
+      expect(sanitized['latestHandshakeEpoch'], 123456789);
+      expect(sanitized['receivedBytes'], 2048);
+      expect(sanitized['sentBytes'], 4096);
+      expect(sanitized['rawKeysStored'], isFalse);
+      expect(sanitized['rawEndpointStored'], isFalse);
+    });
   });
 
   test('log tails are bounded and individual lines are truncated', () {

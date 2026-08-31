@@ -7,6 +7,7 @@ void main() {
       (id: 'current_wg0', protocol: 'wireguard_udp'),
       (id: 'tw-7879598-nl1', protocol: 'amneziawg'),
       (id: 'tw-7879598-nl1', protocol: 'wireguard_udp'),
+      (id: 'ruvds-2584554-ld8', protocol: 'wireguard_udp'),
     ];
 
     final selected = greenVpnWindowsApplicationProxyRoutes(
@@ -18,14 +19,14 @@ void main() {
     expect(selected, <({String id, String protocol})>[routes.last]);
     expect(
       greenVpnWindowsApplicationProxyRouteEligible(
-        serverId: 'tw-7879598-nl1',
+        serverId: 'ruvds-2584554-ld8',
         protocol: 'WIREGUARD_UDP',
       ),
       isTrue,
     );
     expect(
       greenVpnWindowsApplicationProxyRouteEligible(
-        serverId: 'current_wg0',
+        serverId: 'tw-7879598-nl1',
         protocol: 'wireguard_udp',
       ),
       isFalse,

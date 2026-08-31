@@ -105,6 +105,11 @@ class WindowsSupportDiagnosticsCollector {
     final configPath = greenVpnManagedConfigPathSync();
     final backendLog = greenVpnBackendLogPathSync();
     final transportLog = '$root\\state\\transport-task.log';
+    final connectFailureDiagnostics =
+        '$root\\state\\connect-failure-diagnostics.json';
+    final authLog = greenVpnAuthLogPathSync();
+    final processRouterStdout = '$root\\process-router.stdout.log';
+    final processRouterStderr = '$root\\process-router.stderr.log';
     final standbyResult = greenVpnStandbyProbeResultPathSync();
     final stateDir = Directory('$root\\state');
 
@@ -142,12 +147,24 @@ class WindowsSupportDiagnosticsCollector {
         'standbyResult': await _fileMetadata(standbyResult),
         'backendLog': await _fileMetadata(backendLog),
         'transportLog': await _fileMetadata(transportLog),
+        'connectFailureDiagnostics': await _fileMetadata(
+          connectFailureDiagnostics,
+        ),
+        'authLog': await _fileMetadata(authLog),
+        'processRouterStdout': await _fileMetadata(processRouterStdout),
+        'processRouterStderr': await _fileMetadata(processRouterStderr),
       },
       'standbyProbeResult': await _readJsonFile(standbyResult),
+      'connectFailureDiagnostics': await _readJsonFile(
+        connectFailureDiagnostics,
+      ),
       'stateFiles': await _stateFileInventory(stateDir),
       'logs': <String, Object?>{
         'backendTail': await _readLogTail(backendLog),
         'transportTaskTail': await _readLogTail(transportLog),
+        'authTail': await _readLogTail(authLog),
+        'processRouterStdoutTail': await _readLogTail(processRouterStdout),
+        'processRouterStderrTail': await _readLogTail(processRouterStderr),
       },
       'systemSnapshot': await _collectPowerShellSnapshot(),
     };

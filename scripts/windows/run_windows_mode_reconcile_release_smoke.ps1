@@ -31,7 +31,7 @@ param(
     [ValidateRange(600, 1800)][int]$DeadmanDelaySeconds = 900,
     [ValidateRange(10, 120)][int]$MaxConnectSeconds = 30,
     [ValidateRange(15, 120)][int]$MaxModeSwitchSeconds = 60,
-    [string]$ExpectedApplicationModeEgress = '5.129.216.42',
+    [string]$ExpectedApplicationModeEgress = '88.218.250.86',
     [switch]$RecoverInitialBaselineAfterDelay
 )
 

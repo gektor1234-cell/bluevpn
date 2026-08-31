@@ -103,6 +103,7 @@ $DnsttHevStdoutPath = Join-Path $ProgramDataRoot 'dnstt-hev.stdout.log'
 $DnsttHevStderrPath = Join-Path $ProgramDataRoot 'dnstt-hev.stderr.log'
 $LogPath = Join-Path $ProgramDataRoot 'backend.log'
 $DiagnosticLogPath = Join-Path $ProgramDataRoot 'state\transport-task.log'
+$ConnectFailureDiagnosticsPath = Join-Path $ProgramDataRoot 'state\connect-failure-diagnostics.json'
 $CompetingVpnStatePath = Join-Path $ProgramDataRoot 'state\competing-vpn-services.json'
 $DiagnosticLogAclReady = $false
 $CompetingVpnTakeoverOccurred = $false
@@ -294,6 +295,188 @@ function Get-SelectedServiceName {
     param([string]$Protocol)
     if ($Protocol -eq 'amneziawg') { return $AmneziaWgServiceName }
     return $WireGuardServiceName
+}
+
+function ConvertTo-GreenDiagnosticText {
+    param([AllowNull()][object]$Value)
+    $text = ([string]$Value -replace '[\x00-\x08\x0B\x0C\x0E-\x1F]', ' ').Trim()
+    if ($text -match '(?i)\b(private\s*key|privatekey|preshared\s*key|presharedkey|authorization|password|secret|token|cookie)\b\s*[:=]') {
+        return '<redacted sensitive line>'
+    }
+    $text = $text -replace '(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{10,}', 'Bearer <redacted>'
+    $text = $text -replace '(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b', '<redacted email>'
+    $text = $text -replace '(?i)\b[A-Z]:\\Users\\[^\\\s]+', 'C:\Users\<redacted>'
+    if ($text.Length -gt 700) { return $text.Substring(0, 700) + '<truncated>' }
+    return $text
+}
+
+function ConvertTo-GreenDiagnosticInt64 {
+    param([AllowNull()][object]$Value)
+    [long]$parsed = 0
+    if ([long]::TryParse(([string]$Value), [ref]$parsed)) { return $parsed }
+    return 0
+}
+
+function Get-GreenNativeTunnelTelemetry {
+    param([string]$Engine)
+    $result = [ordered]@{
+        attempted = $false
+        exitCode = $null
+        lineCount = 0
+        peerCount = 0
+        peers = @()
+    }
+    if ([string]::IsNullOrWhiteSpace($Engine) -or
+        -not (Test-Path -LiteralPath $Engine -PathType Leaf)) {
+        return $result
+    }
+    try {
+        $result.attempted = $true
+        $lines = @(& $Engine /dumplog $TunnelName 2>$null)
+        $result.exitCode = $LASTEXITCODE
+        $result.lineCount = $lines.Count
+        $peers = [Collections.Generic.List[object]]::new()
+        foreach ($line in $lines) {
+            $fields = @(([string]$line) -split "`t", -1)
+            if ($fields.Count -notin @(8, 9)) { continue }
+            $offset = if ($fields.Count -eq 9) { 1 } else { 0 }
+            [void]$peers.Add([ordered]@{
+                endpointPresent = -not [string]::IsNullOrWhiteSpace($fields[$offset + 2]) -and
+                    $fields[$offset + 2] -ne '(none)'
+                allowedIpCount = @($fields[$offset + 3] -split ',' |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+                latestHandshakeEpoch = ConvertTo-GreenDiagnosticInt64 $fields[$offset + 4]
+                receivedBytes = ConvertTo-GreenDiagnosticInt64 $fields[$offset + 5]
+                sentBytes = ConvertTo-GreenDiagnosticInt64 $fields[$offset + 6]
+                persistentKeepaliveSeconds = ConvertTo-GreenDiagnosticInt64 $fields[$offset + 7]
+            })
+        }
+        $result.peerCount = $peers.Count
+        $result.peers = [object[]]$peers
+    } catch {
+        $result['errorType'] = $_.Exception.GetType().Name
+    }
+    return $result
+}
+
+function Write-GreenConnectFailureSnapshot {
+    param([Parameter(Mandatory=$true)][object]$FailureRecord)
+    try {
+        Ensure-DiagnosticLogAccess
+        $protocol = try { Get-ManagedProtocol } catch { 'unknown' }
+        $routingMode = try { Get-GreenRoutingMode } catch { 'unknown' }
+        $serviceName = Get-SelectedServiceName -Protocol $protocol
+        $engine = if ($protocol -eq 'amneziawg') {
+            Resolve-AmneziaWgExe
+        } else {
+            Resolve-WireGuardExe
+        }
+        $service = Get-CimInstance Win32_Service `
+            -Filter "Name='$serviceName'" -ErrorAction SilentlyContinue
+        $adapter = Get-NetAdapter -Name $TunnelName -ErrorAction SilentlyContinue
+        $proxyRoutes = @(
+            Find-NetRoute -RemoteIPAddress $ApplicationProxyHost -ErrorAction SilentlyContinue |
+                Where-Object { $_.CimClass.CimClassName -eq 'MSFT_NetRoute' } |
+                Select-Object -First 10 |
+                ForEach-Object {
+                    [ordered]@{
+                        destinationPrefix = [string]$_.DestinationPrefix
+                        interfaceAlias = [string]$_.InterfaceAlias
+                        interfaceIndex = [int]$_.InterfaceIndex
+                        routeMetric = [int]$_.RouteMetric
+                    }
+                }
+        )
+        $defaultRoutes = @(
+            Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' `
+                -ErrorAction SilentlyContinue |
+                Sort-Object RouteMetric, InterfaceMetric |
+                Select-Object -First 10 |
+                ForEach-Object {
+                    [ordered]@{
+                        interfaceAlias = [string]$_.InterfaceAlias
+                        interfaceIndex = [int]$_.InterfaceIndex
+                        routeMetric = [int]$_.RouteMetric
+                        interfaceMetric = [int]$_.InterfaceMetric
+                        state = [string]$_.State
+                    }
+                }
+        )
+        $configMetadata = [ordered]@{ exists = $false }
+        if (Test-Path -LiteralPath $ConfigPath -PathType Leaf) {
+            $configItem = Get-Item -LiteralPath $ConfigPath
+            $configMetadata = [ordered]@{
+                exists = $true
+                sizeBytes = [long]$configItem.Length
+                sha256 = (Get-FileHash -LiteralPath $ConfigPath -Algorithm SHA256).Hash
+                modifiedAtUtc = $configItem.LastWriteTimeUtc.ToString('o')
+            }
+        }
+        $failureLine = 0
+        try { $failureLine = [int]$FailureRecord.InvocationInfo.ScriptLineNumber } catch {}
+        $snapshot = [ordered]@{
+            schema = 1
+            capturedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+            action = $Action
+            protocol = $protocol
+            routingMode = $routingMode
+            failure = [ordered]@{
+                line = $failureLine
+                type = $FailureRecord.Exception.GetType().Name
+                message = ConvertTo-GreenDiagnosticText $FailureRecord.Exception.Message
+            }
+            service = if ($null -eq $service) {
+                [ordered]@{ exists = $false; name = $serviceName }
+            } else {
+                [ordered]@{
+                    exists = $true
+                    name = $serviceName
+                    state = [string]$service.State
+                    startMode = [string]$service.StartMode
+                    exitCode = [int]$service.ExitCode
+                    processId = [int]$service.ProcessId
+                }
+            }
+            adapter = if ($null -eq $adapter) {
+                [ordered]@{ exists = $false }
+            } else {
+                [ordered]@{
+                    exists = $true
+                    status = [string]$adapter.Status
+                    interfaceIndex = [int]$adapter.ifIndex
+                    description = [string]$adapter.InterfaceDescription
+                }
+            }
+            config = $configMetadata
+            proxy = [ordered]@{
+                hostTag = 'application-gateway-v1'
+                tcpReady = [bool](Test-GreenTcpEndpoint `
+                    -HostName $ApplicationProxyHost `
+                    -Port $ApplicationProxyPort -TimeoutMs 500)
+                routes = [object[]]$proxyRoutes
+            }
+            defaultRoutes = [object[]]$defaultRoutes
+            standbyMetricRouteCount = @(
+                Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                    Where-Object { [int]$_.RouteMetric -eq $StandbyProbeEndpointRouteMetric }
+            ).Count
+            processRouterCount = @(
+                Get-Process -Name 'ProxyBridge_CLI' -ErrorAction SilentlyContinue
+            ).Count
+            nativeTunnel = Get-GreenNativeTunnelTelemetry -Engine $engine
+            rawConfigStored = $false
+            rawKeysStored = $false
+            rawEndpointStored = $false
+        }
+        $temporaryPath = $ConnectFailureDiagnosticsPath + '.tmp'
+        $snapshot | ConvertTo-Json -Depth 8 |
+            Set-Content -LiteralPath $temporaryPath -Encoding UTF8
+        Move-Item -LiteralPath $temporaryPath `
+            -Destination $ConnectFailureDiagnosticsPath -Force
+        Write-GreenLog 'connect failure diagnostic snapshot captured'
+    } catch {
+        Write-GreenLog "connect failure diagnostic snapshot failed type=$($_.Exception.GetType().Name)"
+    }
 }
 
 function Ensure-GreenProgramDataAcl {
@@ -1778,6 +1961,8 @@ function Complete-GreenDisconnectedRuntimeState {
 
 function Start-OwnTunnel {
     if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "Config missing: $ConfigPath" }
+    Remove-Item -LiteralPath $ConnectFailureDiagnosticsPath `
+        -Force -ErrorAction SilentlyContinue
     $protocol = Get-ManagedProtocol
     Write-GreenLog "connect phase=preflight protocol=$protocol"
     Write-GreenLog 'connect phase=standby-cleanup-start'
@@ -2139,6 +2324,9 @@ try {
 } catch {
     $failure = $_
     Write-GreenLog "failed line=$($failure.InvocationInfo.ScriptLineNumber): $($failure.Exception.Message)"
+    if ($Action -eq 'Connect') {
+        Write-GreenConnectFailureSnapshot -FailureRecord $failure
+    }
     $mustRecover = $null -ne $runtimeMutationMutex -and (
         $Action -eq 'Connect' -or
         $null -ne $script:ActiveRuntimeTransitionGeneration -or

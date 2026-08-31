@@ -4,7 +4,7 @@ param(
     [string]$ProductionVersion = '0.4.7',
     [string]$PaidBetaVersion = '0.4.6-paid-beta.2',
     [ValidateRange(0, 65535)]
-    [int]$WindowsBuildNumber = 4638,
+    [int]$WindowsBuildNumber = 4639,
     [ValidateRange(0, 65535)]
     [int]$PaidBetaWindowsBuildNumber = 4602,
     [string]$CertificateThumbprint = '',

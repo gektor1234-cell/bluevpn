@@ -5,21 +5,26 @@ APPLY=0
 EXPECTED_PUBLIC_IP=""
 APPROVED_EXISTING_HOST=""
 TARGET_HOST="5.129.216.42"
+ALLOWED_TARGET_HOSTS=("5.129.216.42" "88.218.250.86")
 WG_INTERFACE="wg0"
 WG_ADDRESS="10.10.0.1"
 WG_NETWORK="10.10.0.0/24"
 LISTEN_PORT="1080"
 CONFIG_PATH="/etc/danted.conf"
 SERVICE_NAME="danted.service"
+DROPIN_DIR="/etc/systemd/system/danted.service.d"
+DROPIN_PATH="${DROPIN_DIR}/greenvpn-wg0-order.conf"
 
 usage() {
   cat <<'USAGE'
 Deploy the internal SOCKS5 gateway for Green VPN Windows application routing.
 
-Default mode is dry-run. Apply is restricted to the owner-approved NL2 host:
+Default mode is dry-run. Apply is restricted to an explicitly approved Green
+VPN host. Example for the London fallback node:
   deploy_windows_application_proxy.sh \
-    --expected-public-ip 5.129.216.42 \
-    --approved-existing-host 5.129.216.42 --apply
+    --target-host 88.218.250.86 \
+    --expected-public-ip 88.218.250.86 \
+    --approved-existing-host 88.218.250.86 --apply
 
 The gateway binds only to 10.10.0.1:1080 on wg0 and accepts clients only from
 10.10.0.0/24. It is not published in the user catalog and does not alter wg0,
@@ -35,6 +40,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --expected-public-ip)
       EXPECTED_PUBLIC_IP="${2:?missing expected public IP}"
+      shift 2
+      ;;
+    --target-host)
+      TARGET_HOST="${2:?missing target host}"
       shift 2
       ;;
     --approved-existing-host)
@@ -58,16 +67,27 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
+TARGET_ALLOWED=0
+for allowed_host in "${ALLOWED_TARGET_HOSTS[@]}"; do
+  if [[ "${TARGET_HOST}" == "${allowed_host}" ]]; then
+    TARGET_ALLOWED=1
+    break
+  fi
+done
+if [[ "${TARGET_ALLOWED}" -ne 1 ]]; then
+  echo "Refusing deployment outside the exact Green VPN host allowlist." >&2
+  exit 1
+fi
 if ! ip -4 -o address show scope global | awk '{print $4}' \
   | cut -d/ -f1 | grep -Fxq "${TARGET_HOST}"; then
-  echo "Refusing deployment outside exact NL2 host ${TARGET_HOST}." >&2
+  echo "Refusing deployment outside exact target host ${TARGET_HOST}." >&2
   exit 1
 fi
 if [[ "${APPLY}" -eq 1 ]] && {
   [[ "${EXPECTED_PUBLIC_IP}" != "${TARGET_HOST}" ]] \
     || [[ "${APPROVED_EXISTING_HOST}" != "${TARGET_HOST}" ]];
 }; then
-  echo "Apply requires exact expected and approved NL2 host values." >&2
+  echo "Apply requires exact expected and approved target host values." >&2
   exit 1
 fi
 if ! ip link show dev "${WG_INTERFACE}" >/dev/null 2>&1; then
@@ -120,6 +140,9 @@ systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null \
 if [[ -e "${CONFIG_PATH}" ]]; then
   cp -a -- "${CONFIG_PATH}" "${BACKUP_ROOT}/danted.conf"
 fi
+if [[ -e "${DROPIN_PATH}" ]]; then
+  cp -a -- "${DROPIN_PATH}" "${BACKUP_ROOT}/greenvpn-wg0-order.conf"
+fi
 systemctl cat "${SERVICE_NAME}" > "${BACKUP_ROOT}/danted.service.txt" 2>/dev/null || true
 iptables-save > "${BACKUP_ROOT}/iptables-save.txt" 2>/dev/null || true
 nft list ruleset > "${BACKUP_ROOT}/nft-ruleset.txt" 2>/dev/null || true
@@ -130,6 +153,47 @@ SERVICE_WAS_ENABLED=${SERVICE_WAS_ENABLED}
 SERVICE_WAS_ACTIVE=${SERVICE_WAS_ACTIVE}
 EOF
 chmod 0600 "${BACKUP_ROOT}/state.env"
+
+cat > "${BACKUP_ROOT}/rollback.sh" <<'ROLLBACK'
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+source "${ROOT}/state.env"
+systemctl stop danted.service 2>/dev/null || true
+if [[ -f "${ROOT}/danted.conf" ]]; then
+  cp -a -- "${ROOT}/danted.conf" /etc/danted.conf
+else
+  rm -f -- /etc/danted.conf
+fi
+mkdir -p /etc/systemd/system/danted.service.d
+if [[ -f "${ROOT}/greenvpn-wg0-order.conf" ]]; then
+  cp -a -- "${ROOT}/greenvpn-wg0-order.conf" \
+    /etc/systemd/system/danted.service.d/greenvpn-wg0-order.conf
+else
+  rm -f -- /etc/systemd/system/danted.service.d/greenvpn-wg0-order.conf
+fi
+systemctl daemon-reload
+if [[ "${SERVICE_WAS_ENABLED}" -eq 1 ]]; then
+  systemctl enable danted.service
+else
+  systemctl disable danted.service 2>/dev/null || true
+fi
+if [[ "${SERVICE_WAS_ACTIVE}" -eq 1 ]]; then
+  systemctl restart danted.service
+fi
+if [[ "${PACKAGE_WAS_INSTALLED}" -ne 1 ]]; then
+  apt-get remove -y dante-server
+fi
+ROLLBACK
+chmod 0700 "${BACKUP_ROOT}/rollback.sh"
+
+rollback_on_error() {
+  local exit_code=$?
+  trap - ERR
+  "${BACKUP_ROOT}/rollback.sh" >&2 || true
+  exit "${exit_code}"
+}
+trap rollback_on_error ERR
 
 if [[ "${PACKAGE_WAS_INSTALLED}" -ne 1 ]]; then
   export DEBIAN_FRONTEND=noninteractive
@@ -172,50 +236,42 @@ EOF
 chown root:root "${CONFIG_PATH}"
 chmod 0600 "${CONFIG_PATH}"
 
+mkdir -p "${DROPIN_DIR}"
+cat > "${DROPIN_PATH}" <<EOF
+[Unit]
+Requires=wg-quick@${WG_INTERFACE}.service
+After=wg-quick@${WG_INTERFACE}.service
+EOF
+chown root:root "${DROPIN_PATH}"
+chmod 0644 "${DROPIN_PATH}"
+
 danted -V -f "${CONFIG_PATH}"
+systemctl daemon-reload
 systemctl enable "${SERVICE_NAME}"
 systemctl restart "${SERVICE_NAME}"
 systemctl is-active --quiet "${SERVICE_NAME}"
 
-LISTEN_STATE="$(ss -H -lntup "sport = :${LISTEN_PORT}" 2>/dev/null || true)"
+LISTEN_STATE=""
+for _ in $(seq 1 40); do
+  LISTEN_STATE="$(ss -H -lntup "sport = :${LISTEN_PORT}" 2>/dev/null || true)"
+  [[ -n "${LISTEN_STATE}" ]] && break
+  sleep 0.25
+done
 if [[ -z "${LISTEN_STATE}" ]]; then
   echo "Dante did not create the expected listener." >&2
-  exit 1
+  false
 fi
 if ! grep -Fq "${WG_ADDRESS}:${LISTEN_PORT}" <<<"${LISTEN_STATE}"; then
   echo "Dante is not bound to the expected internal address." >&2
-  exit 1
+  false
 fi
 if grep -Eq "(^|[[:space:]])(0\.0\.0\.0|${TARGET_HOST}):${LISTEN_PORT}([[:space:]]|$)" \
   <<<"${LISTEN_STATE}"; then
   echo "Dante unexpectedly exposed the gateway on a public/wildcard address." >&2
-  exit 1
+  false
 fi
 
-cat > "${BACKUP_ROOT}/rollback.sh" <<'ROLLBACK'
-#!/usr/bin/env bash
-set -euo pipefail
-ROOT="$(cd "$(dirname "$0")" && pwd)"
-source "${ROOT}/state.env"
-systemctl stop danted.service 2>/dev/null || true
-if [[ -f "${ROOT}/danted.conf" ]]; then
-  cp -a -- "${ROOT}/danted.conf" /etc/danted.conf
-else
-  rm -f -- /etc/danted.conf
-fi
-if [[ "${SERVICE_WAS_ENABLED}" -eq 1 ]]; then
-  systemctl enable danted.service
-else
-  systemctl disable danted.service 2>/dev/null || true
-fi
-if [[ "${SERVICE_WAS_ACTIVE}" -eq 1 ]]; then
-  systemctl restart danted.service
-fi
-if [[ "${PACKAGE_WAS_INSTALLED}" -ne 1 ]]; then
-  apt-get remove -y dante-server
-fi
-ROLLBACK
-chmod 0700 "${BACKUP_ROOT}/rollback.sh"
+trap - ERR
 
 echo "application_proxy=ready"
 echo "backup=${BACKUP_ROOT}"

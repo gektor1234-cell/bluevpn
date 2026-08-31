@@ -1,4 +1,4 @@
-const String greenVpnWindowsApplicationProxyServerId = 'tw-7879598-nl1';
+const String greenVpnWindowsApplicationProxyServerId = 'ruvds-2584554-ld8';
 const String greenVpnWindowsApplicationProxyProtocol = 'wireguard_udp';
 
 bool greenVpnWindowsApplicationProxyRouteEligible({
