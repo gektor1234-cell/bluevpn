@@ -78,6 +78,7 @@ $DnsttSocksPort = 1983
 $DnsttZone = 't.greenvpn.pro'
 $DnsttExpectedEgress = '5.129.216.42'
 $StandbyProbeScript = Join-Path $PSScriptRoot 'greenvpn_standby_probe.ps1'
+$StandbyProbeTunnelName = 'GreenVPNTransportPreviewStandbyProbe'
 $StandbyProbeWireGuardServiceName = 'WireGuardTunnel$GreenVPNTransportPreviewStandbyProbe'
 $StandbyProbeAmneziaServiceName = 'AmneziaWGTunnel$GreenVPNTransportPreviewStandbyProbe'
 $StandbyProbeRequestPath = Join-Path $ProgramDataRoot 'standby-probe-request.json'
@@ -1779,6 +1780,12 @@ function Start-OwnTunnel {
     if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "Config missing: $ConfigPath" }
     $protocol = Get-ManagedProtocol
     Write-GreenLog "connect phase=preflight protocol=$protocol"
+    Write-GreenLog 'connect phase=standby-cleanup-start'
+    if (-not (Remove-StandbyProbeFallbackArtifacts)) {
+        Write-GreenLog 'connect phase=standby-cleanup-failed'
+        throw 'Standby probe cleanup did not complete.'
+    }
+    Write-GreenLog 'connect phase=standby-cleanup-complete'
     $script:ActiveRuntimeTransitionGeneration = [uint32](
         Start-GreenRuntimeStateTransition
     )
@@ -1963,7 +1970,8 @@ function Remove-StandbyProbeFallbackArtifacts {
         'hysteria-windows-amd64.exe',
         'xray.exe',
         'naive.exe',
-        'dnstt-client-windows-amd64.exe'
+        'dnstt-client-windows-amd64.exe',
+        'hev-socks5-tunnel.exe'
     )
     foreach ($process in @(
         Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
@@ -1977,6 +1985,19 @@ function Remove-StandbyProbeFallbackArtifacts {
             }
     )) {
         try { Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction Stop } catch {}
+    }
+    foreach ($engine in @(
+        $(try { Resolve-WireGuardExe } catch { $null }),
+        $(try { Resolve-AmneziaWgExe } catch { $null })
+    )) {
+        if ([string]::IsNullOrWhiteSpace([string]$engine) -or
+            -not (Test-Path -LiteralPath ([string]$engine) -PathType Leaf)) {
+            continue
+        }
+        try {
+            & ([string]$engine) /uninstalltunnelservice $StandbyProbeTunnelName |
+                Out-Null
+        } catch {}
     }
     foreach ($serviceName in @(
         $StandbyProbeWireGuardServiceName,
@@ -1992,25 +2013,44 @@ function Remove-StandbyProbeFallbackArtifacts {
             } |
             Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
     } catch {}
-    for ($attempt = 1; $attempt -le 3; $attempt++) {
+    for ($attempt = 1; $attempt -le 20; $attempt++) {
         try {
             Remove-Item -LiteralPath $StandbyProbeRuntimeRoot -Recurse -Force `
                 -ErrorAction SilentlyContinue
         } catch {}
-        if (-not (Test-Path -LiteralPath $StandbyProbeRuntimeRoot)) { break }
+        $servicesGone = @(Get-Service -Name @(
+            $StandbyProbeWireGuardServiceName,
+            $StandbyProbeAmneziaServiceName
+        ) -ErrorAction SilentlyContinue).Count -eq 0
+        $adapterGone = @(
+            Get-NetAdapter -Name $StandbyProbeTunnelName -ErrorAction SilentlyContinue
+        ).Count -eq 0
+        $routesGone = @(
+            Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                Where-Object {
+                    [int]$_.RouteMetric -eq $StandbyProbeEndpointRouteMetric
+                }
+        ).Count -eq 0
+        if ($servicesGone -and $adapterGone -and $routesGone -and
+            -not (Test-Path -LiteralPath $StandbyProbeRuntimeRoot)) {
+            return $true
+        }
         Start-Sleep -Milliseconds 250
     }
     $servicesGone = @(Get-Service -Name @(
         $StandbyProbeWireGuardServiceName,
         $StandbyProbeAmneziaServiceName
     ) -ErrorAction SilentlyContinue).Count -eq 0
+    $adapterGone = @(
+        Get-NetAdapter -Name $StandbyProbeTunnelName -ErrorAction SilentlyContinue
+    ).Count -eq 0
     $routesGone = @(
         Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue |
             Where-Object {
                 [int]$_.RouteMetric -eq $StandbyProbeEndpointRouteMetric
             }
     ).Count -eq 0
-    return $servicesGone -and $routesGone -and
+    return $servicesGone -and $adapterGone -and $routesGone -and
         -not (Test-Path -LiteralPath $StandbyProbeRuntimeRoot)
 }
 

@@ -87,6 +87,7 @@ $vpnTaskPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_vpn_task.ps1"
 $transportPreviewVpnTaskPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_transport_preview_vpn_task.ps1"
 $windowsStandbyProbePath = Join-Path $ProjectRoot "scripts\windows\greenvpn_standby_probe.ps1"
 $windowsStandbyResultContractTestPath = Join-Path $ProjectRoot "scripts\windows\test_windows_standby_probe_result_contract.ps1"
+$windowsStandbyConnectCleanupContractTestPath = Join-Path $ProjectRoot "scripts\windows\test_windows_standby_connect_cleanup_contract.ps1"
 $transportSelectiveRoutingPath = Join-Path $ProjectRoot "scripts\windows\greenvpn_selective_routing.ps1"
 $transportSelectiveRoutingTestPath = Join-Path $ProjectRoot "scripts\windows\test_windows_selective_routing_policy.ps1"
 $windowsRuntimeFailoverPhysicalTestPath = Join-Path $ProjectRoot "scripts\windows\test_windows_public_runtime_failover_physical.ps1"
@@ -1226,7 +1227,11 @@ $requiredSupportReportClientFragments = @(
     "return 'GVPN1.",
     'Future<void> _sendReport()',
     '_fallbackReportCode = result.ok ? null : reportCode',
-    'Future<void> _copyFallbackReportCode()'
+    'Future<void> _copyFallbackReportCode()',
+    "'schema': 2",
+    "'GREENVPN_BUILD_NUMBER'",
+    'WindowsSupportDiagnosticsCollector.collect(',
+    "payload['windowsDiagnostics'] = windowsDiagnostics"
 )
 
 foreach ($fragment in $requiredSupportReportClientFragments) {
@@ -1810,7 +1815,11 @@ $serviceFragments = @(
     'GreenVPNHysteria2Preview',
     'ProcessRouterGuardThread',
     'processRouterState',
-    'routingMode'
+    'routingMode',
+    'lastTaskAction',
+    'lastTaskExitCode',
+    'lastTaskSequence',
+    'lastTaskInProgress'
 )
 
 foreach ($fragment in $serviceFragments) {
@@ -2371,6 +2380,7 @@ foreach ($scriptPath in @(
     $transportPreviewVpnTaskPath,
     $windowsStandbyProbePath,
     $windowsStandbyResultContractTestPath,
+    $windowsStandbyConnectCleanupContractTestPath,
     $transportSelectiveRoutingPath,
     $transportSelectiveRoutingTestPath,
     $transportCascadeStagePath,
@@ -2397,6 +2407,14 @@ try {
 }
 catch {
     Add-Error "Windows standby result contract test failed: $($_.Exception.Message)"
+}
+
+try {
+    & $windowsStandbyConnectCleanupContractTestPath -ProjectRoot $ProjectRoot | Out-Null
+    Add-Pass 'Windows connect and installer clean stale standby diagnostics before takeover'
+}
+catch {
+    Add-Error "Windows standby connect cleanup contract test failed: $($_.Exception.Message)"
 }
 
 $windowsRuntimeFailoverChecks = [ordered]@{

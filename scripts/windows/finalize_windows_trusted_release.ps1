@@ -1,10 +1,10 @@
 param(
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path,
     [string]$OutDir = 'C:\BlueVPN_Builds\windows_trusted_release',
-    [string]$ProductionVersion = '0.4.6',
+    [string]$ProductionVersion = '0.4.7',
     [string]$PaidBetaVersion = '0.4.6-paid-beta.2',
     [ValidateRange(0, 65535)]
-    [int]$WindowsBuildNumber = 4637,
+    [int]$WindowsBuildNumber = 4638,
     [ValidateRange(0, 65535)]
     [int]$PaidBetaWindowsBuildNumber = 4602,
     [string]$CertificateThumbprint = '',

@@ -412,6 +412,7 @@ if ([string]::IsNullOrWhiteSpace($ReleaseZip)) {
                 --build-name="$WindowsBuildName" `
                 --build-number="$WindowsBuildNumber" `
                 --dart-define="GREENVPN_APP_VERSION=$AppVersion" `
+                --dart-define="GREENVPN_BUILD_NUMBER=$WindowsBuildNumber" `
                 --dart-define="GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=$trialOnlyDefine" `
                 --dart-define="GREENVPN_PAID_BETA_BUILD=$paidBetaDefine" `
                 --dart-define="GREENVPN_PUBLIC_PRODUCT_BUILD=$publicProductDefine" `
@@ -860,6 +861,83 @@ function Remove-GreenVpnService {
     }
 }
 
+function Remove-GreenVpnStandbyProbeArtifacts {
+    $tunnelName = 'BlueVPNDev1StandbyProbe'
+    $serviceNames = @(
+        'WireGuardTunnel$BlueVPNDev1StandbyProbe',
+        'AmneziaWGTunnel$BlueVPNDev1StandbyProbe'
+    )
+    $runtimeRoot = Join-Path $env:ProgramData 'BlueVPN\standby-probe-runtime'
+    $runtimeNeedle = [IO.Path]::GetFullPath($runtimeRoot)
+
+    foreach ($process in @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                [string]$_.Name -in @(
+                    'hysteria-windows-amd64.exe',
+                    'xray.exe',
+                    'naive.exe',
+                    'dnstt-client-windows-amd64.exe',
+                    'hev-socks5-tunnel.exe'
+                ) -and
+                -not [string]::IsNullOrWhiteSpace([string]$_.CommandLine) -and
+                ([string]$_.CommandLine).IndexOf(
+                    $runtimeNeedle,
+                    [StringComparison]::OrdinalIgnoreCase
+                ) -ge 0
+            }
+    )) {
+        try { Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction Stop } catch {}
+    }
+
+    $engineCandidates = @(
+        (Join-Path $env:ProgramFiles 'WireGuard\wireguard.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'WireGuard\wireguard.exe'),
+        (Join-Path $installRoot 'tools\amneziawg2\amneziawg.exe'),
+        (Join-Path $stagingRoot 'tools\amneziawg2\amneziawg.exe')
+    )
+    foreach ($engine in @($engineCandidates | Select-Object -Unique)) {
+        if ([string]::IsNullOrWhiteSpace([string]$engine) -or
+            -not (Test-Path -LiteralPath ([string]$engine) -PathType Leaf)) {
+            continue
+        }
+        try { & ([string]$engine) /uninstalltunnelservice $tunnelName | Out-Null } catch {}
+    }
+
+    foreach ($serviceName in $serviceNames) {
+        try { & sc.exe stop $serviceName 2>$null | Out-Null } catch {}
+        try { & sc.exe delete $serviceName 2>$null | Out-Null } catch {}
+    }
+    try {
+        Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { [int]$_.RouteMetric -eq 42739 } |
+            Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+    } catch {}
+    foreach ($path in @(
+        $runtimeRoot,
+        (Join-Path $env:ProgramData 'BlueVPN\standby-probe-request.json'),
+        (Join-Path $env:ProgramData 'BlueVPN\standby-probe-result.json'),
+        (Join-Path $env:ProgramData 'BlueVPN\standby-probe.cancel')
+    )) {
+        try { Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+    }
+
+    for ($attempt = 1; $attempt -le 20; $attempt++) {
+        $servicesGone = @(Get-Service -Name $serviceNames -ErrorAction SilentlyContinue).Count -eq 0
+        $adapterGone = @(Get-NetAdapter -Name $tunnelName -ErrorAction SilentlyContinue).Count -eq 0
+        $routesGone = @(
+            Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                Where-Object { [int]$_.RouteMetric -eq 42739 }
+        ).Count -eq 0
+        if ($servicesGone -and $adapterGone -and $routesGone -and
+            -not (Test-Path -LiteralPath $runtimeRoot)) {
+            return $true
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    return $false
+}
+
 function Install-GreenVpnService {
     param(
         [Parameter(Mandatory=$true)][string]$ServiceExe,
@@ -1220,6 +1298,10 @@ try {
 
     Write-Step "Обновляем системную службу Green VPN..."
     Remove-GreenVpnService
+    Write-Step "Очищаем служебный профиль диагностики Green VPN..."
+    if (-not (Remove-GreenVpnStandbyProbeArtifacts)) {
+        throw 'Green VPN standby diagnostic profile could not be removed safely.'
+    }
 
     if (Test-Path -LiteralPath $installRoot) {
         if ($existingInstallValid) {
@@ -1396,6 +1478,41 @@ for (`$i = 0; `$i -lt 20; `$i++) {
     `$svc = Get-CimInstance Win32_Service -Filter "Name='GreenVPNService'" -ErrorAction SilentlyContinue
     if (`$null -eq `$svc) { break }
     Start-Sleep -Milliseconds 250
+}
+
+Write-Step "Removing Green VPN standby diagnostic profile..."
+`$standbyTunnelName = 'BlueVPNDev1StandbyProbe'
+`$standbyServices = @(
+    'WireGuardTunnel`$BlueVPNDev1StandbyProbe',
+    'AmneziaWGTunnel`$BlueVPNDev1StandbyProbe'
+)
+foreach (`$engine in @(
+    (Join-Path `$env:ProgramFiles 'WireGuard\wireguard.exe'),
+    (Join-Path `${env:ProgramFiles(x86)} 'WireGuard\wireguard.exe'),
+    (Join-Path `$InstallRoot 'tools\amneziawg2\amneziawg.exe')
+)) {
+    if ([string]::IsNullOrWhiteSpace([string]`$engine) -or
+        -not (Test-Path -LiteralPath ([string]`$engine) -PathType Leaf)) {
+        continue
+    }
+    try { & ([string]`$engine) /uninstalltunnelservice `$standbyTunnelName | Out-Null } catch {}
+}
+foreach (`$standbyService in `$standbyServices) {
+    try { sc.exe stop `$standbyService 2>`$null | Out-Null } catch {}
+    try { sc.exe delete `$standbyService 2>`$null | Out-Null } catch {}
+}
+try {
+    Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object { [int]`$_.RouteMetric -eq 42739 } |
+        Remove-NetRoute -Confirm:`$false -ErrorAction SilentlyContinue
+} catch {}
+foreach (`$standbyPath in @(
+    (Join-Path `$env:ProgramData 'BlueVPN\standby-probe-runtime'),
+    (Join-Path `$env:ProgramData 'BlueVPN\standby-probe-request.json'),
+    (Join-Path `$env:ProgramData 'BlueVPN\standby-probe-result.json'),
+    (Join-Path `$env:ProgramData 'BlueVPN\standby-probe.cancel')
+)) {
+    Remove-Item -LiteralPath `$standbyPath -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Step "Removing Green VPN scheduled tasks..."

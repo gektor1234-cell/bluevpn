@@ -21,6 +21,7 @@ import 'services/single_flight_operation.dart';
 import 'services/transport_preview_policy.dart';
 import 'services/windows_dpapi.dart';
 import 'services/windows_selective_routing_service.dart';
+import 'services/windows_support_diagnostics.dart';
 import 'services/windows_vpn_status_policy.dart';
 
 /*
@@ -39,6 +40,10 @@ const String kIntelligentSmewHost = '37.220.85.211';
 const String kAppVersion = String.fromEnvironment(
   'GREENVPN_APP_VERSION',
   defaultValue: '0.2.23-trial-only-android-vpn-takeover',
+);
+const String kBuildNumber = String.fromEnvironment(
+  'GREENVPN_BUILD_NUMBER',
+  defaultValue: 'dev',
 );
 const bool kTrialOnlyNoAdsBuild = bool.fromEnvironment(
   'GREENVPN_TRIAL_ONLY_NO_ADS_BUILD',
@@ -24629,10 +24634,22 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
     final windowsMode = _isWindowsDiagnostics
         ? _windowsModeLabel(runtime)
         : null;
+    final windowsDiagnostics = _isWindowsDiagnostics
+        ? await WindowsSupportDiagnosticsCollector.collect(
+            appBuildNumber: kBuildNumber,
+            localServiceOk: _windowsSystemStatus?.ok == true,
+            localServiceHttpStatus: _windowsSystemStatus?.statusCode ?? 0,
+            localServiceExitCode: _windowsSystemStatus?.exitCode,
+            localServiceMessage: _windowsSystemStatus?.message,
+            localServiceData:
+                _windowsSystemStatus?.data ?? const <String, dynamic>{},
+          )
+        : null;
     final payload = <String, Object?>{
-      'schema': 1,
+      'schema': 2,
       'product': kProductName,
       'appVersion': kAppVersion,
+      'buildNumber': kBuildNumber,
       'build': kBuildMarker,
       'createdAt': DateTime.now().toUtc().toIso8601String(),
       'platform': Platform.operatingSystem,
@@ -24663,6 +24680,9 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
       if (android?['androidStatus'] != null)
         'androidStatus': android?['androidStatus'],
     };
+    if (windowsDiagnostics != null) {
+      payload['windowsDiagnostics'] = windowsDiagnostics;
+    }
     final jsonBytes = utf8.encode(jsonEncode(payload));
     final packed = gzip.encode(jsonBytes);
     return 'GVPN1.${base64UrlEncode(packed)}';

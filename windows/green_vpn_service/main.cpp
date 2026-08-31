@@ -6,6 +6,7 @@
 #include <shellapi.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cwctype>
 #include <cstdio>
@@ -77,6 +78,10 @@ HANDLE g_guard_thread = nullptr;
 SOCKET g_listen_socket = INVALID_SOCKET;
 std::wstring g_task_script_path;
 std::mutex g_task_action_mutex;
+std::atomic<int> g_last_task_action{0};
+std::atomic<int> g_last_task_exit_code{-1};
+std::atomic<unsigned long long> g_last_task_sequence{0};
+std::atomic<bool> g_last_task_in_progress{false};
 volatile LONG g_active_client_workers = 0;
 HANDLE g_clients_drained_event = nullptr;
 constexpr LONG kMaxConcurrentLocalClients = 32;
@@ -424,19 +429,54 @@ std::wstring GetPowerShellPath() {
   return L"powershell.exe";
 }
 
+int TaskActionCode(const wchar_t* action) {
+  const std::wstring value = action == nullptr ? L"" : action;
+  if (value == L"Connect") return 1;
+  if (value == L"Disconnect") return 2;
+  if (value == L"Guard") return 3;
+  if (value == L"ProbeStandby") return 4;
+  return 0;
+}
+
+std::string TaskActionName(int action_code) {
+  switch (action_code) {
+    case 1:
+      return "connect";
+    case 2:
+      return "disconnect";
+    case 3:
+      return "guard";
+    case 4:
+      return "probe_standby";
+    default:
+      return "unknown";
+  }
+}
+
 int RunTaskAction(const wchar_t* action, DWORD timeout_ms,
                   bool clear_standby_cancel = false) {
   const std::lock_guard<std::mutex> lock(g_task_action_mutex);
+  const int action_code = TaskActionCode(action);
+  g_last_task_action.store(action_code);
+  g_last_task_exit_code.store(-1);
+  g_last_task_in_progress.store(true);
+  const auto finish = [action_code](int exit_code) {
+    g_last_task_action.store(action_code);
+    g_last_task_exit_code.store(exit_code);
+    g_last_task_sequence.fetch_add(1);
+    g_last_task_in_progress.store(false);
+    return exit_code;
+  };
   if (clear_standby_cancel &&
       !DeleteFileW(kStandbyProbeCancelPath) &&
       GetLastError() != ERROR_FILE_NOT_FOUND) {
     AppendLog(L"standby probe cancellation reset failed err=" +
               std::to_wstring(GetLastError()));
-    return 4;
+    return finish(4);
   }
   if (g_task_script_path.empty() || !FileExists(g_task_script_path)) {
     AppendLog(L"task script missing: " + g_task_script_path);
-    return 3;
+    return finish(3);
   }
 
   const std::wstring powershell = GetPowerShellPath();
@@ -457,7 +497,7 @@ int RunTaskAction(const wchar_t* action, DWORD timeout_ms,
   if (!ok) {
     const DWORD err = GetLastError();
     AppendLog(L"CreateProcess failed err=" + std::to_wstring(err));
-    return 1000 + static_cast<int>(err % 1000);
+    return finish(1000 + static_cast<int>(err % 1000));
   }
 
   const DWORD wait_result = WaitForSingleObject(pi.hProcess, timeout_ms);
@@ -476,7 +516,7 @@ int RunTaskAction(const wchar_t* action, DWORD timeout_ms,
   CloseHandle(pi.hProcess);
   AppendLog(L"task action " + std::wstring(action) +
             L" exit=" + std::to_wstring(exit_code));
-  return exit_code;
+  return finish(exit_code);
 }
 
 bool RequestStandbyProbeCancellation() {
@@ -786,6 +826,10 @@ std::string QueryTunnelStatusJson() {
   const std::string external_vpn_state = QueryRunningCompetingVpnState();
   const bool external_vpn_active = external_vpn_state == "active";
   const bool external_vpn_state_known = external_vpn_state != "unknown";
+  const int last_task_action_code = g_last_task_action.load();
+  const int last_task_exit_code = g_last_task_exit_code.load();
+  const unsigned long long last_task_sequence = g_last_task_sequence.load();
+  const bool last_task_in_progress = g_last_task_in_progress.load();
   DWORD runtime_state_generation_after = 0;
   const bool runtime_state_generation_after_known = ReadRuntimeRegistryDword(
       kRuntimeStateGenerationValue, &runtime_state_generation_after);
@@ -874,7 +918,15 @@ std::string QueryTunnelStatusJson() {
          "\"externalVpnActive\":" +
          (external_vpn_active ? "true" : "false") + "," +
          "\"externalVpnStateKnown\":" +
-         (external_vpn_state_known ? "true" : "false") + "}";
+         (external_vpn_state_known ? "true" : "false") + "," +
+         "\"lastTaskKnown\":" +
+         (last_task_action_code != 0 ? "true" : "false") + "," +
+         "\"lastTaskAction\":\"" + TaskActionName(last_task_action_code) +
+         "\",\"lastTaskExitCode\":" +
+         std::to_string(last_task_exit_code) + "," +
+         "\"lastTaskSequence\":" + std::to_string(last_task_sequence) +
+         ",\"lastTaskInProgress\":" +
+         (last_task_in_progress ? "true" : "false") + "}";
 }
 
 std::string TaskResultJson(bool ok, int exit_code, const std::string& message) {
