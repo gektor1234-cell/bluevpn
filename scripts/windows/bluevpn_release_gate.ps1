@@ -2548,7 +2548,10 @@ $windowsRuntimeFailoverChecks = [ordered]@{
         'reason=runtime_failover_armed',
         'windows runtime failover clean-down confirmed',
         'disconnectResult?.ok == true && !stillConnected',
-        '_disarmWindowsRuntimeFailover(reason: ''user_disconnect'')',
+        'bool requestStandbyCancel = true',
+        'requestStandbyCancel: false',
+        'routing preference disconnect completed requested=',
+        'type=${e.runtimeType} message=$diagnosticError stack=$diagnosticStack',
         'starting ordered reconnect'
     )
     'Windows runtime failover restart restore' = @(

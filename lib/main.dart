@@ -8737,7 +8737,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         } catch (_) {}
       }
       if (disconnectVpn) {
-        _disarmWindowsRuntimeFailover(reason: 'session_invalidation');
+        _disarmWindowsRuntimeFailover(
+          reason: 'session_invalidation',
+          requestStandbyCancel: false,
+        );
         try {
           await _vpnBackend.disconnect().timeout(const Duration(seconds: 8));
         } catch (e) {
@@ -10775,7 +10778,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   Future<bool> _failClosedRoutingPreference({required String reason}) async {
-    _disarmWindowsRuntimeFailover(reason: 'routing_mode_fail_closed');
+    _disarmWindowsRuntimeFailover(
+      reason: 'routing_mode_fail_closed',
+      requestStandbyCancel: false,
+    );
     var disconnectAccepted = false;
     try {
       final off = await _vpnBackend.disconnect();
@@ -10810,7 +10816,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     required bool wasConnected,
   }) async {
     if (!mounted) return false;
-    _disarmWindowsRuntimeFailover(reason: 'routing_mode_rollback');
+    _disarmWindowsRuntimeFailover(
+      reason: 'routing_mode_rollback',
+      requestStandbyCancel: false,
+    );
     setState(() => _restoreRoutingPreferenceInMemory(snapshot));
     try {
       if (!kIsWeb && Platform.isWindows && snapshot.runtimeRoute != null) {
@@ -10933,8 +10942,17 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             preparedWindowsRoute ??
             _activeWindowsRuntimeRoute ??
             _activeConnectionRoute;
-        _disarmWindowsRuntimeFailover(reason: 'routing_mode_reconnect');
+        // The privileged disconnect endpoint already cancels and joins the
+        // standby probe. A separate concurrent cancellation request can occupy
+        // the same serialized task gate and make the mode switch fail early.
+        _disarmWindowsRuntimeFailover(
+          reason: 'routing_mode_reconnect',
+          requestStandbyCancel: false,
+        );
         final off = await _vpnBackend.disconnect();
+        await appendBlueVpnClientLog(
+          'routing preference disconnect completed requested=${requestedApplicationsOnly ? "applications" : "full"} ok=${off.ok} message=${sanitizeWindowsSupportText(off.message ?? "", maxLength: 400)}',
+        );
         if (!mounted) return false;
         if (!off.ok) {
           _toast(context, off.message ?? 'Не удалось переподключить VPN.');
@@ -11741,7 +11759,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           'Отключаем VPN. Для нового подключения нужно снова посмотреть рекламу.',
     );
     try {
-      _disarmWindowsRuntimeFailover(reason: 'free_session_expired');
+      _disarmWindowsRuntimeFailover(
+        reason: 'free_session_expired',
+        requestStandbyCancel: false,
+      );
       final res = await _vpnBackend.disconnect();
       await appendBlueVpnClientLog(
         'free ad session disconnect ok=${res.ok} message=${res.message ?? ""}',
@@ -12816,12 +12837,17 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       const service = _GreenVpnSystemServiceClient();
       final response = await service.cancelStandbyProbe();
       await appendBlueVpnClientLog(
-        'windows standby cancel reason=$reason ok=${response.ok}',
+        'windows standby cancel reason=$reason ok=${response.ok} '
+        'http=${response.statusCode} exit=${response.exitCode ?? -1} '
+        'message=${sanitizeWindowsSupportText(response.message ?? "", maxLength: 400)}',
       );
     }());
   }
 
-  void _disarmWindowsRuntimeFailover({required String reason}) {
+  void _disarmWindowsRuntimeFailover({
+    required String reason,
+    bool requestStandbyCancel = true,
+  }) {
     final hadMonitor =
         _windowsRuntimeFailoverTimer != null ||
         _activeWindowsRuntimeRoute != null;
@@ -12835,7 +12861,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     _windowsFullTunnelDataPlaneConfirmed = false;
     _windowsRuntimeRecoveryProofCutoff = null;
     _windowsRuntimeFailoverEpoch += 1;
-    _cancelWindowsStandbyProbe(reason: reason);
+    if (requestStandbyCancel) {
+      _cancelWindowsStandbyProbe(reason: reason);
+    }
     if (hadMonitor) {
       unawaited(
         appendBlueVpnClientLog(
@@ -13105,7 +13133,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     final recoveryProofCutoff = _windowsRuntimeLastHealthyAt;
     _recordRouteFailure(server, 'runtime_probe');
     _windowsRuntimeRecoveryRunning = true;
-    _disarmWindowsRuntimeFailover(reason: 'failure_threshold');
+    _disarmWindowsRuntimeFailover(
+      reason: 'failure_threshold',
+      requestStandbyCancel: false,
+    );
     _windowsRuntimeRecoveryProofCutoff = recoveryProofCutoff;
     var handedOffToConnect = false;
     try {
@@ -14267,7 +14298,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         );
       } else {
         await appendBlueVpnClientLog('toggle disconnect branch start');
-        _disarmWindowsRuntimeFailover(reason: 'user_disconnect');
+        _disarmWindowsRuntimeFailover(
+          reason: 'user_disconnect',
+          requestStandbyCancel: false,
+        );
         _setVpnBusyUi(
           stage: 'Отключаем VPN...',
           hint: 'Останавливаем VPN и аккуратно снимаем подключение.',
@@ -14737,7 +14771,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       stage: 'Переключаем сервер...',
       hint: 'Останавливаем текущее подключение и запускаем VPN заново.',
     );
-    _disarmWindowsRuntimeFailover(reason: 'server_switch');
+    _disarmWindowsRuntimeFailover(
+      reason: 'server_switch',
+      requestStandbyCancel: false,
+    );
 
     try {
       await appendBlueVpnClientLog(
@@ -16412,9 +16449,20 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       await appendBlueVpnClientLog(
         'routing preference confirmed mode=${enabled ? "applications" : "full"} connected=$vpnEnabled protected=$_windowsProtectionConfirmed',
       );
-    } catch (e) {
+    } catch (e, stackTrace) {
+      final diagnosticError = sanitizeWindowsSupportText('$e', maxLength: 500);
+      final diagnosticStack = sanitizeWindowsSupportText(
+        stackTrace
+            .toString()
+            .split(RegExp(r'\r?\n'))
+            .where((line) => line.trim().isNotEmpty)
+            .take(8)
+            .join(' | '),
+        maxLength: 1400,
+      );
       await appendBlueVpnClientLog(
-        'routing preference apply failed requested=${enabled ? "applications" : "full"} type=${e.runtimeType}',
+        'routing preference apply failed requested=${enabled ? "applications" : "full"} '
+        'type=${e.runtimeType} message=$diagnosticError stack=$diagnosticStack',
       );
       final restored = await _restoreRoutingPreferenceAfterFailure(
         snapshot: previous,

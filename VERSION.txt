@@ -1,10 +1,10 @@
 Green VPN 0.4.12
 Windows version: 0.4.7
 Android build: 2026083003
-Windows build: 4639
+Windows build: 4640
 Platforms: Android, Windows
 Source backend: 0.9.165-subscription-lifecycle.2
-Status: Android 0.4.12+2026083003 is published as the mandatory stable release; backend 0.9.165-subscription-lifecycle.2 is live; Windows 0.4.7+4639 is an unsigned unpublished hotfix candidate
+Status: Android 0.4.12+2026083003 is published as the mandatory stable release; backend 0.9.165-subscription-lifecycle.2 is live; Windows 0.4.7+4640 is an unsigned unpublished hotfix candidate
 Production sales: enabled on the primary billing node only
 Refund execution: enabled on the primary billing node only
 Auto-renew: explicit consent UI is released; automatic charges remain disabled in the manual NPD contour
