@@ -1,10 +1,41 @@
 # Green VPN Current Handoff
 
-Updated: 2026-08-31 MSK.
+Updated: 2026-09-01 MSK.
 
 This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
 `PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md`. Dated reports are evidence only.
+
+## Current production: Windows standby transition 0.4.7, 2026-09-01
+
+- Source `7e24fc2d1ef4f41d0a3c22aac213d415f7c1d035` is pushed. It prevents a
+  standalone standby-cancel request from racing the privileged disconnect that
+  owns cancellation during an immediate mode transition. Earlier source
+  `c68e59bc3664f80fe05bbac0cd1bccd31f9ad0a7` also removes stale Green-owned
+  standby services/adapters before competitor detection and expands the
+  secret-safe support report without changing the user-facing diagnostics UI.
+- Stable Windows is mandatory `0.4.7+4640`, `NotSigned`, size `54060032`,
+  SHA-256
+  `BC65E3D8B1E6060C59C48547C674877A213B527365F7063AAF4D1D007A8B5F2B`.
+  Package audit passed with `66` payload entries and no errors.
+- Exact delayed physical acceptance passed on the owner PC. The authoritative
+  flow `full -> applications -> full` retained one foreground candidate,
+  passed the full data plane, explicit SOCKS preflight, selected-executable
+  egress, selected YouTube `204`, IPv6 fail-closed check and authenticated
+  cleanup. Diagnostics visibly reports `Подключение: активно`.
+- Final recovery restored `AmneziaWGTunnel$maxim_pc_full`; API and YouTube
+  passed, no metric `42739`, failsafe task, Green tunnel or process router
+  remained, and the exact `+4640` installation was retained.
+- Mandatory publication completed fallback first and primary second through
+  the Windows stable-only publisher. Both nodes require minimum Windows
+  `0.4.7`; `0.4.6` receives `426`, while `0.4.7` and update manifests receive
+  `200`. Both public installer bodies match the exact candidate.
+- Post-sync strict verification passed `12/12`. Android stable, both paid-beta
+  clients and both backend versions are unchanged. Both production databases
+  return `quick_check=ok`, sync completed with `success/0`, and failed units
+  are `0`.
+- Exact evidence and rollback paths:
+  `docs/WINDOWS_STANDBY_TRANSITION_0_4_7_ROLLOUT_2026_09_01_RU.md`.
 
 ## Current production: Android network lifecycle 0.4.12, 2026-08-31
 

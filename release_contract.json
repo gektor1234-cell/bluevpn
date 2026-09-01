@@ -38,10 +38,10 @@
     "rewardedAdsEnabled": false
   },
   "publication": {
-    "productionPublished": false,
+    "productionPublished": true,
     "androidProductionPublished": true,
     "androidPaidBetaPublished": true,
-    "windowsProductionPublished": false,
+    "windowsProductionPublished": true,
     "windowsPaidBetaPublished": true,
     "ownerApprovalRequired": true,
     "mandatoryUpdateRequired": true,

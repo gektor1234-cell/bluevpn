@@ -1,5 +1,42 @@
 # Green VPN Release State
 
+## Windows Standby Transition 0.4.7 (2026-09-01 MSK)
+
+| Layer | Current state |
+|---|---|
+| Stable backend | unchanged: `0.9.165-subscription-lifecycle.2` on fallback and primary |
+| Stable Android | unchanged: `0.4.12+2026083003`, signed, mandatory |
+| Stable Windows | `0.4.7+4640`, `NotSigned`, mandatory |
+| Paid-beta | unchanged: backend `0.9.154-fusion-actions.1` and both clients |
+| Automatic charges | disabled in the manual NPD contour |
+
+Source `7e24fc2d1ef4f41d0a3c22aac213d415f7c1d035` removes the race between a
+standalone standby cancellation and the privileged disconnect that already
+serializes cancellation during mode transitions. The same release also carries
+the stale standby cleanup and expanded secret-safe Windows support evidence from
+`c68e59bc3664f80fe05bbac0cd1bccd31f9ad0a7`; the visible diagnostics controls
+and wording are unchanged.
+
+The installer is `54060032` bytes, SHA-256
+`BC65E3D8B1E6060C59C48547C674877A213B527365F7063AAF4D1D007A8B5F2B`,
+and remains unsigned. Flutter analyze, `149` tests with `15` intentional skips,
+Fusion policy tests, PowerShell parser checks, package audit and release gate
+passed before the clean build.
+
+Exact physical acceptance passed with a paid owner session and
+`full -> applications -> full`. Selected routing differed from direct traffic,
+matched the dedicated London egress, returned YouTube `204`, and showed no IPv6
+escape. Full-mode diagnostics visibly reported an active connection. Cleanup
+restored the exact external Amnezia profile with API/YouTube available and no
+probe route or failsafe residue.
+
+Mandatory stable publication completed fallback first and primary second with
+atomic backups. Windows `0.4.6` receives HTTP `426`; `0.4.7` and update
+manifests receive `200`. Post-sync strict verification passed `12/12`, both
+databases pass `quick_check`, and Android/paid-beta/backend bytes and versions
+remain unchanged. Full evidence is in
+`WINDOWS_STANDBY_TRANSITION_0_4_7_ROLLOUT_2026_09_01_RU.md`.
+
 ## Android Network Lifecycle 0.4.12 (2026-08-31 MSK)
 
 | Layer | Current state |
