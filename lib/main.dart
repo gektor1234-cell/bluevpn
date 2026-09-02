@@ -7771,6 +7771,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   bool _tariffBusy = false;
   bool _serverCatalogBusy = false;
   final SingleFlightOperation _serverCatalogRefresh = SingleFlightOperation();
+  final SingleFlightOperation _serverPickerOperation = SingleFlightOperation();
+  final SingleFlightOperation _selectedModeConfigurationOperation =
+      SingleFlightOperation();
   Map<String, dynamic>? _tariffCatalog;
   Map<String, dynamic>? _tariffQuote;
   String? _tariffStatus;
@@ -14507,7 +14510,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _openServerPicker(BuildContext context) async {
+  Future<void> _openServerPicker(BuildContext context) {
+    return _serverPickerOperation.run(() => _openServerPickerOnce(context));
+  }
+
+  Future<void> _openServerPickerOnce(BuildContext context) async {
     await _prepareAndroidControlPlaneAccess('server_picker');
     await _refreshServerCatalog(showToast: false);
     if (!context.mounted) return;
@@ -15178,14 +15185,14 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               final normalizedQuery = query.trim().toLowerCase();
               final filtered = normalizedQuery.isEmpty
                   ? apps
-                  : apps.where((app) {
-                      return app.label.toLowerCase().contains(
+                  : apps
+                        .where(
+                          (app) => windowsLaunchableAppMatchesQuery(
+                            app,
                             normalizedQuery,
-                          ) ||
-                          windowsApplicationLabel(
-                            app.path,
-                          ).toLowerCase().contains(normalizedQuery);
-                    }).toList();
+                          ),
+                        )
+                        .toList();
               return AlertDialog(
                 title: const Text('Установленные программы'),
                 content: SizedBox(
@@ -15353,7 +15360,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _commitSocialOnlySelection({
+  Future<bool> _commitSocialOnlySelection({
     required BuildContext context,
     required Set<SocialApp> presets,
     required Set<String> androidPackages,
@@ -15380,7 +15387,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
     if (!socialOnlyEnabled) {
       _schedulePrefsSave();
-      return;
+      return true;
     }
     if (mounted) {
       setState(() {
@@ -15400,6 +15407,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         throw StateError('Новый список не был подтверждён системой.');
       }
       _schedulePrefsSave();
+      return true;
     } catch (e) {
       final restored = await _restoreRoutingPreferenceAfterFailure(
         snapshot: previous,
@@ -15413,6 +15421,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               : '${e.toString().replaceFirst('Bad state: ', '')} Не удалось восстановить список; фактическое состояние показано на главном экране.',
         );
       }
+      return false;
     } finally {
       if (mounted) {
         setState(() {
@@ -15424,7 +15433,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _openFusionSocialAppsPicker(BuildContext context) async {
+  Future<bool> _openFusionSocialAppsPicker(BuildContext context) async {
     final tempPresets = Set<SocialApp>.from(socialOnlyApps);
     final usesAndroidApplications = !kIsWeb && Platform.isAndroid;
     final usesWindowsApplications = !kIsWeb && Platform.isWindows;
@@ -15695,8 +15704,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       ),
     );
 
-    if (picked != true || !context.mounted) return;
-    await _commitSocialOnlySelection(
+    if (picked != true || !context.mounted) return false;
+    return _commitSocialOnlySelection(
       context: context,
       presets: tempPresets,
       androidPackages: tempCustomPackages,
@@ -15705,10 +15714,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> _openSocialAppsPicker(BuildContext context) async {
+  Future<bool> _openSocialAppsPicker(BuildContext context) async {
     if (kFusionUiEnabled) {
-      await _openFusionSocialAppsPicker(context);
-      return;
+      return _openFusionSocialAppsPicker(context);
     }
     final tempPresets = Set<SocialApp>.from(socialOnlyApps);
     final usesAndroidApplications = !kIsWeb && Platform.isAndroid;
@@ -16053,8 +16061,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       },
     );
 
-    if (picked != true || !context.mounted) return;
-    await _commitSocialOnlySelection(
+    if (picked != true || !context.mounted) return false;
+    return _commitSocialOnlySelection(
       context: context,
       presets: tempPresets,
       androidPackages: tempCustomPackages,
@@ -16407,21 +16415,44 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       return;
     }
 
+    if (enabled && kFusionUiEnabled) {
+      await _selectedModeConfigurationOperation.run(
+        _configureAndApplySelectedMode,
+      );
+      return;
+    }
+
     final noSelection =
         socialOnlyApps.isEmpty &&
         socialOnlyCustomPackages.isEmpty &&
         socialOnlyWindowsApplications.isEmpty &&
         socialOnlyWindowsSites.isEmpty;
-    final shouldOpenPicker =
+    final legacyPickerRequired =
         enabled &&
         noSelection &&
         !kIsWeb &&
-        (Platform.isWindows || (kFusionUiEnabled && Platform.isAndroid));
-    if (shouldOpenPicker) {
-      await _openSocialAppsPicker(context);
-      if (!mounted || _selectedTrafficTitles().isEmpty) return;
+        (Platform.isWindows || Platform.isAndroid);
+    if (legacyPickerRequired) {
+      final configured = await _openSocialAppsPicker(context);
+      if (!mounted || !configured || _selectedTrafficTitles().isEmpty) return;
     }
 
+    await _applySocialOnlyMode(enabled);
+  }
+
+  Future<void> _configureAndApplySelectedMode() async {
+    setState(() => _index = 1);
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    final configured = await _openSocialAppsPicker(context);
+    if (!mounted || !configured || _selectedTrafficTitles().isEmpty) return;
+    await _applySocialOnlyMode(true, returnToVpnAfterConfiguration: true);
+  }
+
+  Future<void> _applySocialOnlyMode(
+    bool enabled, {
+    bool returnToVpnAfterConfiguration = false,
+  }) async {
     final previous = _captureRoutingPreference();
     final wasConnected = vpnEnabled;
     await appendBlueVpnClientLog(
@@ -16482,6 +16513,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           vpnBusy = false;
           _vpnBusyStage = null;
           if (!_vpnTapCooldown) _vpnBusyHint = null;
+          if (returnToVpnAfterConfiguration) _index = 0;
         });
       }
     }

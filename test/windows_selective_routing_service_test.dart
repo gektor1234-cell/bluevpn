@@ -45,5 +45,19 @@ void main() {
       expect(app!.label, 'Telegram');
       expect(app.path, r'C:\Apps\Telegram\Telegram.exe');
     });
+
+    test('searches packaged apps by both visible name and package path', () {
+      const app = WindowsLaunchableApp(
+        label: 'Acme Notes',
+        path:
+            r'C:\Program Files\WindowsApps\Contoso.Writer_1.0_x64__example\Writer.exe',
+      );
+
+      expect(windowsLaunchableAppMatchesQuery(app, 'notes'), isTrue);
+      expect(windowsLaunchableAppMatchesQuery(app, 'writer'), isTrue);
+      expect(windowsLaunchableAppMatchesQuery(app, 'contoso'), isTrue);
+      expect(windowsLaunchableAppMatchesQuery(app, 'browser'), isFalse);
+      expect(windowsLaunchableAppMatchesQuery(app, '  '), isTrue);
+    });
   });
 }

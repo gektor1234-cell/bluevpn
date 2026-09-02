@@ -2178,9 +2178,14 @@ $windowsSelectiveUiFragments = @(
     'socialOnlyWindowsSites',
     '_openWindowsInstalledAppsPicker',
     '_openWindowsSitePicker',
+    '_serverPickerOperation',
+    '_selectedModeConfigurationOperation',
     'normalizeWindowsVpnSite',
     'listWindowsLaunchableApps',
-    'resolveWindowsVpnSites'
+    'resolveWindowsVpnSites',
+    'Get-AppxPackage',
+    'Get-StartApps',
+    'Get-AppxPackageManifest'
 )
 foreach ($fragment in $windowsSelectiveUiFragments) {
     if ($main.Contains($fragment) -or $windowsSelectiveRouting.Contains($fragment)) {

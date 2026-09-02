@@ -87,6 +87,13 @@ class WindowsLaunchableApp {
   }
 }
 
+bool windowsLaunchableAppMatchesQuery(WindowsLaunchableApp app, String query) {
+  final normalizedQuery = query.trim().toLowerCase();
+  if (normalizedQuery.isEmpty) return true;
+  return app.label.toLowerCase().contains(normalizedQuery) ||
+      app.path.toLowerCase().contains(normalizedQuery);
+}
+
 class WindowsSiteResolution {
   final List<String> sites;
   final List<String> ipv4Cidrs;
@@ -241,6 +248,7 @@ List<int> _utf16LeBytes(String value) {
 
 const String _windowsAppDiscoveryScript = r'''
 $ErrorActionPreference = 'SilentlyContinue'
+$ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $apps = @{}
 
@@ -291,6 +299,58 @@ try {
 } finally {
     if ($null -ne $shell) {
         [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)
+    }
+}
+
+# Microsoft Store/MSIX launchers use an application user model ID instead of a
+# normal shortcut target. Resolve desktop executables from each package manifest
+# so packaged Win32 apps can participate in the existing path-based router.
+$packagesByFamily = @{}
+foreach ($package in @(Get-AppxPackage -ErrorAction SilentlyContinue)) {
+    $family = ([string]$package.PackageFamilyName).Trim()
+    $location = ([string]$package.InstallLocation).Trim()
+    if (
+        -not [string]::IsNullOrWhiteSpace($family) -and
+        -not [string]::IsNullOrWhiteSpace($location)
+    ) {
+        $packagesByFamily[$family] = $package
+    }
+}
+
+$manifestByPackage = @{}
+foreach ($startApp in @(Get-StartApps -ErrorAction SilentlyContinue)) {
+    $appUserModelId = ([string]$startApp.AppID).Trim()
+    $separator = $appUserModelId.LastIndexOf('!')
+    if ($separator -lt 1 -or $separator -ge ($appUserModelId.Length - 1)) {
+        continue
+    }
+
+    $family = $appUserModelId.Substring(0, $separator)
+    $applicationId = $appUserModelId.Substring($separator + 1)
+    $package = $packagesByFamily[$family]
+    if ($null -eq $package) { continue }
+
+    $packageFullName = ([string]$package.PackageFullName).Trim()
+    if ([string]::IsNullOrWhiteSpace($packageFullName)) { continue }
+    if (-not $manifestByPackage.ContainsKey($packageFullName)) {
+        $manifestByPackage[$packageFullName] = Get-AppxPackageManifest `
+            -Package $packageFullName -ErrorAction SilentlyContinue
+    }
+    $manifest = $manifestByPackage[$packageFullName]
+    if ($null -eq $manifest) { continue }
+
+    foreach ($application in @($manifest.Package.Applications.Application)) {
+        if (-not ([string]$application.Id).Equals(
+            $applicationId,
+            [StringComparison]::OrdinalIgnoreCase
+        )) {
+            continue
+        }
+        $relativeExecutable = ([string]$application.Executable).Trim()
+        if ([string]::IsNullOrWhiteSpace($relativeExecutable)) { continue }
+        $relativeExecutable = $relativeExecutable.Replace('/', '\').TrimStart('\')
+        $target = Join-Path ([string]$package.InstallLocation) $relativeExecutable
+        Add-GreenVpnApp -Label ([string]$startApp.Name) -Path $target
     }
 }
 
