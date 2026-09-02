@@ -231,8 +231,8 @@ updates = {
     "GREENVPN_MIN_SUPPORTED_VERSION": min_supported_version,
     "GREENVPN_UPDATE_RELEASED_AT": released_at,
     "GREENVPN_UPDATE_CHANGELOG": (
-        f"Green VPN {version}: быстрый запуск, фоновые резервные маршруты "
-        "и исправленная иконка в системном трее."
+        f"Green VPN {version}: полный список Windows-приложений, одиночный "
+        "выбор локации и безопасная настройка режима «Только выбранное»."
     ),
     "GREENVPN_PUBLIC_WINDOWS_DOWNLOAD_URL": download_url,
     "GREENVPN_WINDOWS_CODE_SIGNING_PROVIDER": "",
@@ -283,9 +283,9 @@ installer = pathlib.Path(installer_raw)
 required = 1 if required_raw == "1" else 0
 changelog = json.dumps(
     [
-        "Быстрое подключение использует один основной маршрут без ожидания полного каскада.",
-        "Резервные маршруты проверяются в фоне и используются для быстрого восстановления.",
-        "Исправлены синхронизация статуса и дублирование значка в системном трее.",
+        "Поиск программ теперь включает обычные и Microsoft Store/MSIX-приложения.",
+        "Выбор локации больше не открывает дублирующиеся окна при повторных нажатиях.",
+        "Режим «Только выбранное» применяется только после подтверждения списка.",
     ],
     ensure_ascii=False,
 )
