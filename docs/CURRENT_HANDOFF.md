@@ -1,12 +1,39 @@
 # Green VPN Current Handoff
 
-Updated: 2026-09-01 MSK.
+Updated: 2026-09-02 MSK.
 
 This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
 `PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md`. Dated reports are evidence only.
 
-## Current production: Windows standby transition 0.4.7, 2026-09-01
+## Current production: Windows selective UI 0.4.8, 2026-09-02
+
+- Source `f89317d575f86e539f207c30ac09036ec9054ac8` is pushed. Windows app
+  discovery now covers classic shortcuts, App Paths, uninstall registrations
+  and current-user Microsoft Store/MSIX packages without product-specific
+  exceptions. Location selection is single-flight, and selecting `Только
+  выбранное` opens configuration without changing the active VPN mode until
+  the user confirms with `Готово`.
+- Stable Windows is mandatory `0.4.8+4641`, `NotSigned`, size `52839424`,
+  SHA-256
+  `357EDA90DB1E58793385DABFACBB0C110FC6ECECF41B895F5EE343400CBF5A21`.
+  Package audit passed with `66` payload entries and no errors.
+- Publication completed fallback first and primary second through the
+  Windows stable-only publisher. Both nodes require minimum Windows `0.4.8`;
+  `0.4.7` receives `426`, while `0.4.8` and update manifests receive `200`.
+  Both public installer bodies match the exact candidate.
+- Post-sync strict verification passed `12/12`. Android stable, both paid-beta
+  clients and both backend versions are unchanged. Both production databases
+  return `quick_check=ok`, sync completed with `success/0`, all relevant
+  timers are active, and failed units are `0`.
+- Owner explicitly requested publication without another physical GUI run and
+  is now testing the in-app update path. That end-user install result is not
+  yet recorded as acceptance. The installer remains unsigned and Windows may
+  display a warning.
+- Exact evidence and rollback paths:
+  `docs/WINDOWS_SELECTIVE_UI_0_4_8_ROLLOUT_2026_09_02_RU.md`.
+
+## Historical production: Windows standby transition 0.4.7, 2026-09-01
 
 - Source `7e24fc2d1ef4f41d0a3c22aac213d415f7c1d035` is pushed. It prevents a
   standalone standby-cancel request from racing the privileged disconnect that

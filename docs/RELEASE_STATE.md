@@ -1,6 +1,35 @@
 # Green VPN Release State
 
-## Windows Standby Transition 0.4.7 (2026-09-01 MSK)
+## Windows Selective UI 0.4.8 (2026-09-02 MSK)
+
+| Layer | Current state |
+|---|---|
+| Stable backend | unchanged: `0.9.165-subscription-lifecycle.2` on fallback and primary |
+| Stable Android | unchanged: `0.4.12+2026083003`, signed, mandatory |
+| Stable Windows | `0.4.8+4641`, `NotSigned`, mandatory |
+| Paid-beta | unchanged: backend `0.9.154-fusion-actions.1` and both clients |
+| Automatic charges | disabled in the manual NPD contour |
+
+Source `f89317d575f86e539f207c30ac09036ec9054ac8` makes Windows application
+discovery generic across classic and Store/MSIX registrations, serializes the
+location picker, and defers the `Только выбранное` mode change until the
+application list is confirmed. Publisher metadata is fixed in
+`49a7e2e4ea680de99c70ffe52b5b02365c70caaf`.
+
+The installer is `52839424` bytes, SHA-256
+`357EDA90DB1E58793385DABFACBB0C110FC6ECECF41B895F5EE343400CBF5A21`,
+and remains unsigned. Analyze, focused and full tests, package audit and the
+release gate passed before publication.
+
+Mandatory stable publication completed fallback first and primary second with
+atomic backups. Windows `0.4.7` receives HTTP `426`; `0.4.8` and update
+manifests receive `200`. Post-sync strict verification passed `12/12`, both
+databases pass `quick_check`, and Android/paid-beta/backend bytes and versions
+remain unchanged. The owner requested publication without a new physical GUI
+run and is testing the in-app updater; that result remains unrecorded. Full
+evidence is in `WINDOWS_SELECTIVE_UI_0_4_8_ROLLOUT_2026_09_02_RU.md`.
+
+## Previous Windows Standby Transition 0.4.7 (2026-09-01 MSK)
 
 | Layer | Current state |
 |---|---|

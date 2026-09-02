@@ -2,15 +2,15 @@ param(
     [ValidateSet("android", "windows", "both")]
     [string]$Mode = "both",
     [string]$AppVersion = "0.4.12",
-    [string]$WindowsAppVersion = "0.4.7",
+    [string]$WindowsAppVersion = "0.4.8",
     [ValidateRange(0, 65535)]
-    [int]$WindowsBuildNumber = 4640,
+    [int]$WindowsBuildNumber = 4641,
     [string]$AndroidBuildNumber = "2026083003",
     [string]$AndroidApplicationId = "pro.greenvpn.app",
     [string]$AndroidAppLabel = "Green VPN",
     [string]$ApiBaseUrl = "https://api.greenvpn.pro",
     [string]$ApiFallbackBaseUrls = "https://176-113-81-35.sslip.io",
-    [string]$OutDir = "C:\BlueVPN_Builds\public_product_20260901_android_2026083003_windows_4640",
+    [string]$OutDir = "C:\BlueVPN_Builds\public_product_20260902_android_2026083003_windows_4641",
     [bool]$EnableTransportCascade = $true,
     [bool]$EnableFusionUi = $true,
     [switch]$PrepareFusionProductionPromotionCandidate,
