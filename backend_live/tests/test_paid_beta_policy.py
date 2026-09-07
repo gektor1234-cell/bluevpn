@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import gzip
 import os
 import copy
 import hashlib
@@ -11,7 +12,7 @@ import sqlite3
 import tempfile
 import unittest
 import urllib.error
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from threading import Event
@@ -129,7 +130,11 @@ class PaidBetaPolicyTests(unittest.TestCase):
             conn.execute("DELETE FROM subscription_events")
             conn.execute("DELETE FROM subscriptions")
             conn.execute("DELETE FROM tokens")
+            conn.execute("DELETE FROM support_report_comments")
+            conn.execute("DELETE FROM support_reports")
             conn.execute("DELETE FROM email_outbox")
+            conn.execute("DELETE FROM email_delivery_jobs")
+            conn.execute("DELETE FROM email_login_codes")
             conn.execute("DELETE FROM device_transport_assignments")
             conn.execute("DELETE FROM client_endpoint_assignments")
             conn.execute("DELETE FROM client_route_events")
@@ -1258,6 +1263,175 @@ class PaidBetaPolicyTests(unittest.TestCase):
             datetime.fromisoformat(activated_at),
         )
 
+    def test_expiry_does_not_delete_concurrently_renewed_access(self) -> None:
+        original_db = main.db
+        renewed = (main.utc_now() + timedelta(days=30)).isoformat()
+        with original_db() as conn:
+            conn.execute("UPDATE subscriptions SET is_active=1, expires_at=? WHERE user_id=?",
+                         ((main.utc_now() - timedelta(minutes=5)).isoformat(), self.user_id))
+        opens = 0
+
+        @contextmanager
+        def concurrent_db():
+            nonlocal opens
+            opens += 1
+            if opens == 2:
+                with original_db() as conn:
+                    conn.execute("UPDATE subscriptions SET expires_at=?, revision=revision+1 WHERE user_id=?",
+                                 (renewed, self.user_id))
+            with original_db() as conn:
+                yield conn
+
+        with patch.object(main, "db", concurrent_db), patch.object(main, "remove_user_subscription_peers") as remove:
+            result = main.reconcile_expired_subscriptions(dry_run=False)
+        self.assertEqual(result["changedCount"], 0)
+        remove.assert_not_called()
+
+    def test_cleanup_fence_rejects_new_revision_and_active_entitlement(self) -> None:
+        current = main.get_subscription_row(self.user_id)
+        with main.db() as conn:
+            conn.execute("UPDATE subscriptions SET peer_revocation_pending=1, revision=revision+1 WHERE user_id=?", (self.user_id,))
+        with patch.object(main, "remove_user_subscription_peers") as remove:
+            main.cleanup_revoked_subscription_peers(self.user_id, int(current["id"]), int(current["revision"]))
+        remove.assert_not_called()
+
+    def test_replica_expiry_never_removes_peers(self) -> None:
+        with main.db() as conn:
+            conn.execute("UPDATE subscriptions SET is_active=0, peer_revocation_pending=1 WHERE user_id=?", (self.user_id,))
+        with patch.object(main, "billing_writer_primary", return_value=False), patch.object(main, "remove_user_subscription_peers") as remove:
+            result = main.reconcile_expired_subscriptions(dry_run=False)
+        self.assertEqual(result["skipped"], "authoritative_writer_only")
+        remove.assert_not_called()
+
+    def test_peer_delete_fences_a_real_concurrent_renewal_writer(self) -> None:
+        with main.db() as conn:
+            conn.execute("UPDATE subscriptions SET is_active=0, peer_revocation_pending=1 WHERE user_id=?", (self.user_id,))
+            conn.execute("INSERT INTO devices(user_id,device_uid,device_name,platform,app_version,client_public_key,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)",
+                         (self.user_id, "fenced-fixture-device", "fixture", "android", "0.0.0", "fixture-public-key", main.utc_now_iso(), main.utc_now_iso()))
+        current = main.get_subscription_row(self.user_id)
+        writer_started, writer_done = Event(), Event()
+        futures = []
+        def renew():
+            writer_started.set()
+            with main.db() as conn:
+                conn.execute("UPDATE subscriptions SET is_active=1, revision=revision+1 WHERE user_id=?", (self.user_id,))
+            writer_done.set()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            def delete_fixture(*args, **kwargs):
+                futures.append(pool.submit(renew))
+                self.assertTrue(writer_started.wait(2))
+                self.assertFalse(writer_done.wait(0.05))
+                return True
+            with patch.object(main, "best_effort_remove_peer_from_server", side_effect=delete_fixture):
+                result = main.cleanup_revoked_subscription_peers(self.user_id, current["id"], current["revision"])
+            for future in futures:
+                future.result(timeout=5)
+        self.assertEqual(result["removed"], 1)
+        self.assertTrue(main.get_subscription_row(self.user_id)["is_active"])
+
+    def test_consumer_session_hash_expiry_and_idempotent_logout(self) -> None:
+        token = main.issue_token(self.user_id)
+        digest = main.session_token_digest(token)
+        with main.db() as conn:
+            self.assertIsNone(conn.execute("SELECT 1 FROM tokens WHERE token=?", (token,)).fetchone())
+            self.assertIsNotNone(conn.execute("SELECT 1 FROM tokens WHERE token=?", (digest,)).fetchone())
+        self.assertEqual(main.get_user_by_token(f"Bearer {token}")["id"], self.user_id)
+        with self.assertRaises(main.HTTPException):
+            main.get_user_by_token(f"Bearer {digest}")
+        main.logout_session(authorization=f"Bearer {token}")
+        main.logout_session(authorization=f"Bearer {token}")
+        with self.assertRaises(main.HTTPException) as revoked:
+            main.get_user_by_token(f"Bearer {token}")
+        self.assertEqual(revoked.exception.status_code, 401)
+        with main.db() as conn:
+            conn.execute("UPDATE tokens SET created_at='2000-01-01T00:00:00+00:00' WHERE token=?",
+                         (main.session_token_digest(self.access_token),))
+        with self.assertRaises(main.HTTPException):
+            main.get_user_by_token(f"Bearer {self.access_token}")
+
+    def test_legacy_session_migration_preserves_bearer_and_revocation(self) -> None:
+        token = "legacy-fixture-session-not-a-real-token"
+        with main.db() as conn:
+            conn.execute("INSERT INTO tokens VALUES (?,?,?)", (token, self.user_id, main.utc_now_iso()))
+        main.migrate_session_digests()
+        main.migrate_session_digests()
+        self.assertEqual(main.get_user_by_token(f"Bearer {token}")["id"], self.user_id)
+        with main.db() as conn:
+            self.assertIsNone(conn.execute("SELECT 1 FROM tokens WHERE token=?", (token,)).fetchone())
+            created = conn.execute("SELECT created_at FROM tokens WHERE token=?", (main.session_token_digest(token),)).fetchone()[0]
+        main.logout_session(authorization=f"Bearer {token}")
+        # Simulate a still-old replica returning a previously revoked raw session.
+        with main.db() as conn:
+            conn.execute("INSERT INTO tokens VALUES (?,?,?)", (token, self.user_id, created))
+        with self.assertRaises(main.HTTPException):
+            main.get_user_by_token(f"Bearer {token}")
+
+    def test_email_delivery_operation_is_idempotent_and_restart_does_not_resend(self) -> None:
+        request_id = "email-fixture-operation-000001"
+        with patch.object(main, "schedule_email_delivery_job") as schedule:
+            first = main.start_email_delivery_job(self.user_id, "beta@example.test", "login_or_register", request_id, "login")
+            second = main.start_email_delivery_job(self.user_id, "beta@example.test", "login_or_register", request_id, "login")
+        self.assertEqual(first["deliveryStatus"], "queued")
+        self.assertEqual(first, second)
+        with main.db() as conn:
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM email_login_codes").fetchone()[0], 1)
+            job = conn.execute("SELECT * FROM email_delivery_jobs").fetchone()
+        self.assertEqual(schedule.call_count, 2)
+        with patch.object(main, "send_or_queue_email_login_code", return_value={"deliveryStatus": "sent"}) as send:
+            # Synchronous execution of the scheduled worker, with no network operation.
+            with patch.object(main._EMAIL_EXECUTOR, "submit", side_effect=lambda fn, key: fn(key)):
+                main.schedule_email_delivery_job(job["operation_hash"])
+                main.schedule_email_delivery_job(job["operation_hash"])
+            send.assert_called_once()
+        with patch.object(main, "schedule_email_delivery_job") as schedule:
+            ready = main.start_email_delivery_job(self.user_id, "beta@example.test", "login_or_register", request_id, "login")
+            self.assertEqual(ready["deliveryStatus"], "sent")
+            schedule.assert_not_called()
+        with main.db() as conn:
+            conn.execute("UPDATE email_delivery_jobs SET status='sending'")
+        with patch.object(main, "schedule_email_delivery_job") as schedule:
+            main.recover_email_delivery_jobs()
+            schedule.assert_not_called()
+        with main.db() as conn:
+            row = conn.execute("SELECT status,nonce FROM email_delivery_jobs").fetchone()
+            self.assertEqual(tuple(row), ("failed", ""))
+
+    def test_email_delivery_cooldown_and_stale_queue_are_bounded(self) -> None:
+        with patch.object(main, "schedule_email_delivery_job"):
+            main.start_email_delivery_job(self.user_id, "beta@example.test", "login_or_register", "email-fixture-operation-000002", "login")
+            with self.assertRaises(main.HTTPException) as cooldown:
+                main.start_email_delivery_job(self.user_id, "beta@example.test", "login_or_register", "email-fixture-operation-000003", "login")
+            self.assertEqual(cooldown.exception.status_code, 429)
+            with main.db() as conn:
+                conn.execute("UPDATE email_delivery_jobs SET created_at='2000-01-01T00:00:00+00:00'")
+            result = main.start_email_delivery_job(self.user_id, "beta@example.test", "login_or_register", "email-fixture-operation-000002", "login")
+            self.assertEqual(result["deliveryStatus"], "failed")
+
+    def test_support_report_rejects_expansion_and_stores_only_sanitized_content(self) -> None:
+        def pack(value):
+            return "GVPN1." + base64.urlsafe_b64encode(gzip.compress(json.dumps(value).encode())).decode()
+        with self.assertRaises(main.HTTPException):
+            main.decode_support_report_code(pack({"padding": "x" * 600_000}))
+        marker = "not-a-real-audit-credential"
+        response = main.support_reports(
+            main.SupportReportIn(report=pack({"accessToken": marker, "platform": "windows"})),
+            Request({"type": "http", "headers": [], "client": ("127.0.0.1", 1)}),
+            authorization=f"Bearer {self.access_token}",
+        )
+        with main.db() as conn:
+            stored = conn.execute("SELECT report_code FROM support_reports WHERE id=?", (response["reportId"],)).fetchone()[0]
+        raw = gzip.decompress(base64.urlsafe_b64decode(stored.split(".", 1)[1])).decode()
+        self.assertNotIn(marker, raw)
+        self.assertIn("windows", raw)
+        with main.db() as conn:
+            conn.execute("UPDATE support_reports SET report_code=? WHERE id=?",
+                         (pack({"accessToken": marker, "platform": "windows"}), response["reportId"]))
+        self.assertEqual(main.sanitize_stored_support_reports()["sanitized"], 1)
+        self.assertEqual(main.sanitize_stored_support_reports()["sanitized"], 0)
+        with main.db() as conn:
+            stored = conn.execute("SELECT report_code FROM support_reports WHERE id=?", (response["reportId"],)).fetchone()[0]
+        self.assertNotIn(marker, gzip.decompress(base64.urlsafe_b64decode(stored.split(".", 1)[1])).decode())
+
     def test_expiry_reconciliation_revokes_once_and_cleans_peers(self) -> None:
         expired_at = (main.utc_now() - timedelta(minutes=5)).isoformat()
         with main.db() as conn:
@@ -1283,7 +1457,10 @@ class PaidBetaPolicyTests(unittest.TestCase):
 
         self.assertEqual(result["changedCount"], 1)
         self.assertEqual(result["peerCleanup"]["removed"], 1)
-        cleanup.assert_called_once_with(self.user_id)
+        cleanup.assert_called_once()
+        self.assertEqual(cleanup.call_args.args, (self.user_id,))
+        self.assertEqual(cleanup.call_args.kwargs["expected_revision"],
+                         (main.get_subscription_row(self.user_id)["id"], main.get_subscription_row(self.user_id)["revision"]))
         subscription = main.subscription_status(main.get_subscription_row(self.user_id))
         self.assertFalse(subscription["storedIsActive"])
         self.assertEqual(subscription["status"], "expired")
@@ -1589,7 +1766,8 @@ class PaidBetaPolicyTests(unittest.TestCase):
         self.assertEqual(retry["candidateCount"], 1)
         self.assertEqual(retry["changedCount"], 0)
         self.assertEqual(retry["peerCleanup"]["failed"], 0)
-        cleanup.assert_called_once_with(self.user_id)
+        cleanup.assert_called_once()
+        self.assertEqual(cleanup.call_args.args, (self.user_id,))
         resolved = main.subscription_status(main.get_subscription_row(self.user_id))
         self.assertFalse(resolved["peerRevocationPending"])
 

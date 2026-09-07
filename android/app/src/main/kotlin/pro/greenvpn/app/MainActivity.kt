@@ -390,6 +390,8 @@ class MainActivity : FlutterActivity() {
             resumeAtMs,
             serverId,
             protocol,
+            call.argument<String>("mode") ?: "full",
+            call.argument<List<String>>("includedApplications")?.toSet() ?: emptySet(),
         )
         result.success(
             LinkedHashMap<String, Any>(

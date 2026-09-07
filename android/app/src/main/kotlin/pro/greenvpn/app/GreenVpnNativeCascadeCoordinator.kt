@@ -36,7 +36,7 @@ internal data class GreenVpnRuntimeRoute(
 )
 
 internal class GreenVpnNativeCascadeCoordinator(context: Context) {
-    private companion object {
+    companion object {
         val API_BASE_URL = BuildConfig.GREENVPN_API_BASE_URL.trim().trimEnd('/')
         val API_FALLBACK_BASE_URLS = BuildConfig.GREENVPN_API_FALLBACK_BASE_URLS
             .split(',')
@@ -128,7 +128,9 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
 
     fun connectBest(
         preferredServerId: String = "",
+        routingIntent: GreenVpnRoutingIntent = GreenVpnRoutingIntent("full", emptySet()),
         hasValidatedUnderlyingNetwork: () -> Boolean = { true },
+        canAttemptUnderlyingNetwork: () -> Boolean = hasValidatedUnderlyingNetwork,
         onPhase: (String) -> Unit = {},
         allowInitialCompetingVpnTakeover: Boolean = false,
         continueRequested: () -> Boolean,
@@ -137,7 +139,7 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
         if (!allowInitialCompetingVpnTakeover && hasCompetingVpnActive()) {
             return GreenVpnNativeCascadeResult(false, error = "competing_vpn_active")
         }
-        if (!hasValidatedUnderlyingNetwork()) {
+        if (!canAttemptUnderlyingNetwork()) {
             return GreenVpnNativeCascadeResult(
                 false,
                 error = "network_unavailable",
@@ -180,12 +182,13 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
         }
         var lastError = "no_candidate_succeeded"
         for (candidate in candidates) {
+            if (candidate.protocol !in routingIntent.supportedProtocols) continue
             if (!continueRequested()) return GreenVpnNativeCascadeResult(false, error = "cancelled")
             if (!initialTakeoverPending && hasCompetingVpnActive()) {
                 stopOwnRoutesForCompetingVpn()
                 return GreenVpnNativeCascadeResult(false, error = "competing_vpn_active")
             }
-            if (!hasValidatedUnderlyingNetwork()) {
+            if (!canAttemptUnderlyingNetwork()) {
                 return GreenVpnNativeCascadeResult(
                     false,
                     error = "network_unavailable",
@@ -195,10 +198,10 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
             debug("candidate_start id=${candidate.serverId.orEmpty()} protocol=${candidate.protocol}")
             onPhase("fetching_config")
             val fetched = try {
-                fetchFreshConfig(accessToken, deviceId, preferredBaseUrl, candidate.serverId)
+                fetchFreshConfig(accessToken, deviceId, preferredBaseUrl, candidate.serverId, routingIntent)
             } catch (failure: Throwable) {
                 lastError = safeError(failure)
-                if (!hasValidatedUnderlyingNetwork()) {
+                if (!canAttemptUnderlyingNetwork()) {
                     return GreenVpnNativeCascadeResult(
                         false,
                         error = "network_unavailable",
@@ -214,13 +217,13 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
                 stopOwnRoutesForCompetingVpn()
                 return GreenVpnNativeCascadeResult(false, error = "competing_vpn_active")
             }
-            if (fetched.protocol !in SUPPORTED_PROTOCOLS) {
+            if (fetched.protocol !in routingIntent.supportedProtocols) {
                 lastError = "unsupported_protocol"
                 recordRouteFailure(fetched.serverId, fetched.protocol)
                 continue
             }
 
-            if (!hasValidatedUnderlyingNetwork()) {
+            if (!canAttemptUnderlyingNetwork()) {
                 return GreenVpnNativeCascadeResult(
                     false,
                     error = "network_unavailable",
@@ -253,15 +256,8 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
                 continue
             }
 
-            if (!hasValidatedUnderlyingNetwork()) {
-                persistSuccessfulRoute(fetched, verified = false)
-                return GreenVpnNativeCascadeResult(
-                    ok = true,
-                    serverId = fetched.serverId,
-                    protocol = fetched.protocol,
-                    verified = false,
-                )
-            }
+            // Unknown Android validation still permits the bounded route probe.
+            // A failed probe must not tear down an existing tunnel on that basis.
             onPhase("verifying")
             if (hasCompetingVpnActive()) {
                 stopOwnRoutesForCompetingVpn()
@@ -377,12 +373,13 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
         deviceId: String,
         preferredBaseUrl: String?,
         serverId: String?,
+        routingIntent: GreenVpnRoutingIntent,
     ): FetchedConfig? {
         val payload = JSONObject()
             .put("deviceUid", deviceId)
-            .put("mode", "full")
+            .put("mode", routingIntent.mode)
             .put("releaseChannel", RELEASE_CHANNEL)
-            .put("supportedProtocols", JSONArray(SUPPORTED_PROTOCOLS))
+            .put("supportedProtocols", JSONArray(routingIntent.supportedProtocols))
         if (CLIENT_MARKER.isNotEmpty()) payload.put("clientMarker", CLIENT_MARKER)
         if (!serverId.isNullOrBlank()) payload.put("serverId", serverId)
         val json = postJson(
@@ -394,7 +391,8 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
         val config = json.optString("configText").trim()
         val protocol = json.optString("protocol", "wireguard_udp").trim().lowercase()
         val returnedServerId = json.optString("serverId", serverId.orEmpty()).trim()
-        return if (config.isEmpty()) null else FetchedConfig(config, protocol, returnedServerId)
+        if (config.isEmpty() || protocol !in routingIntent.supportedProtocols) return null
+        return FetchedConfig(routingIntent.apply(config), protocol, returnedServerId)
     }
 
     private fun fetchCatalogCandidates(preferredBaseUrl: String?): List<CatalogCandidate> = try {

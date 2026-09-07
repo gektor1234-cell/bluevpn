@@ -9,7 +9,9 @@ transaction. Conflicts are reported and left untouched.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 import pathlib
 import sqlite3
 import sys
@@ -320,6 +322,47 @@ def _build_id_maps(
             id_maps,
         )
     return id_maps
+
+
+def _digest_session_token(value: str) -> str:
+    return value if re.fullmatch(r"sha256:[0-9a-f]{64}", value) else "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _hash_session_row(table: str, row: Mapping[str, Any]) -> Mapping[str, Any]:
+    if table == "tokens":
+        return {**dict(row), "token": _digest_session_token(str(row["token"]))}
+    if table == "replication_tombstones" and row["table_name"] == "tokens":
+        values = json.loads(str(row["natural_key_json"]))
+        values["token"] = _digest_session_token(str(values["token"]))
+        return {**dict(row), "natural_key_json": json.dumps(values, sort_keys=True, separators=(",", ":"))}
+    return row
+
+
+def _uses_session_digests(conn: sqlite3.Connection) -> bool:
+    return "session_storage_policy" in _tables(conn) and conn.execute(
+        "SELECT 1 FROM session_storage_policy WHERE format='sha256-v1'"
+    ).fetchone() is not None
+
+
+def _migrate_session_storage(conn: sqlite3.Connection) -> None:
+    # The same executable also services paid-beta, whose backend may be older.
+    if not _uses_session_digests(conn):
+        return
+    tables = _tables(conn)
+    if "tokens" in tables:
+        for row in conn.execute("SELECT token FROM tokens").fetchall():
+            value = str(row["token"])
+            digest = _digest_session_token(value)
+            if digest != value:
+                conn.execute("UPDATE OR IGNORE tokens SET token = ? WHERE token = ?", (digest, value))
+                conn.execute("DELETE FROM tokens WHERE token = ?", (value,))
+    if "replication_tombstones" in tables:
+        for row in conn.execute("SELECT * FROM replication_tombstones WHERE table_name = 'tokens'").fetchall():
+            hashed = _hash_session_row("replication_tombstones", row)["natural_key_json"]
+            if hashed != row["natural_key_json"]:
+                conn.execute("UPDATE OR IGNORE replication_tombstones SET natural_key_json = ? WHERE table_name = 'tokens' AND natural_key_json = ?", (hashed, row["natural_key_json"]))
+                conn.execute("UPDATE replication_tombstones SET deleted_at = MAX(deleted_at, ?) WHERE table_name = 'tokens' AND natural_key_json = ?", (row["deleted_at"], hashed))
+                conn.execute("DELETE FROM replication_tombstones WHERE table_name = 'tokens' AND natural_key_json = ?", (row["natural_key_json"],))
 
 
 def _remap_replication_tombstone(
@@ -701,6 +744,10 @@ def _sync_table(
     id_maps: Mapping[str, Mapping[int, int]] | None = None,
 ) -> TableResult:
     result = TableResult(table=table)
+    hash_sessions = _uses_session_digests(target_conn)
+    if table in ("tokens", "replication_tombstones") and _uses_session_digests(source_conn) and not hash_sessions:
+        result.error = "source requires session digest support; upgrade the target backend first"
+        return result
     source_tables = _tables(source_conn)
     target_tables = _tables(target_conn)
     source_has_table = table in source_tables
@@ -746,6 +793,8 @@ def _sync_table(
             )
         else:
             source_row = _remap_id_references(raw_source_row, id_maps)
+        if hash_sessions:
+            source_row = _hash_session_row(table, source_row)
         key_values = _row_key(source_row, keys)
         target_row = target_conn.execute(lookup_sql, key_values).fetchone()
         tombstone = target_tombstones.get(_natural_key_json(source_row, keys))
@@ -875,6 +924,7 @@ def main() -> int:
     results: list[TableResult] = []
     try:
         target_conn.execute("BEGIN IMMEDIATE")
+        _migrate_session_storage(target_conn)
         ordered_tables = list(dict.fromkeys(args.tables))
         if "replication_tombstones" in ordered_tables:
             ordered_tables.remove("replication_tombstones")

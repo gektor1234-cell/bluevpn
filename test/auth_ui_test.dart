@@ -12,6 +12,7 @@ class _FakeAuthApi extends BlueVpnApi {
   final List<String> verifiedMethods = <String>[];
   String? checkoutEmail;
   String? accessEmail;
+  int accessStarts = 0;
 
   @override
   Future<ApiResult<Map<String, dynamic>>> startAuthChallenge({
@@ -85,6 +86,7 @@ class _FakeAuthApi extends BlueVpnApi {
     required String email,
   }) async {
     accessEmail = email;
+    accessStarts++;
     return ApiResult<Map<String, dynamic>>.ok(<String, dynamic>{
       'email': email,
       'deliveryStatus': 'sent',
@@ -281,6 +283,44 @@ void main() {
     expect(completed!.emailVerified, isTrue);
     expect(completed!.accessToken, _fixtureAccessToken('checkout'));
   });
+
+  testWidgets(
+    'restore permits bounded resend and changing email in the same dialog',
+    (tester) async {
+      final api = _FakeAuthApi();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: RestoreAccessDialog(
+            api: api,
+            session: Session(
+              accessToken: _fixtureAccessToken('guest'),
+              email: '',
+              isGuest: true,
+            ),
+            initialEmail: 'subscriber@example.test',
+            deviceUidOverride: 'fixture-device',
+          ),
+        ),
+      );
+      await tester.tap(find.text('Получить код'));
+      await tester.pumpAndSettle();
+      expect(api.accessStarts, 1);
+      expect(find.textContaining('Повторить через'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 61));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Отправить код ещё раз'));
+      await tester.pumpAndSettle();
+      expect(api.accessStarts, 2);
+      await tester.tap(find.text('Изменить email'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('restore_access_code')), findsNothing);
+      final input = tester.widget<TextField>(
+        find.byKey(const Key('restore_access_email')),
+      );
+      expect(input.enabled, isTrue);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 
   testWidgets('existing access is restored outside the payment flow', (
     tester,

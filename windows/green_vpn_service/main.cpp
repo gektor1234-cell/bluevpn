@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "green_vpn_runtime_config.h"
+#include "http_headers.h"
 
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "ws2_32.lib")
@@ -1075,9 +1076,25 @@ DWORD WINAPI HttpClientThread(LPVOID parameter) {
 
   if (client != INVALID_SOCKET) {
     char buffer[4096] = {};
-    const int received = recv(client, buffer, sizeof(buffer), 0);
-    if (received > 0) {
-      HandleRequest(client, std::string(buffer, static_cast<size_t>(received)));
+    greenvpn::HttpHeaders headers;
+    auto state = greenvpn::HttpHeaders::State::incomplete;
+    const auto deadline = GetTickCount64() + 5000;
+    while (state == greenvpn::HttpHeaders::State::incomplete) {
+      const auto now = GetTickCount64();
+      if (now >= deadline) break;
+      const DWORD remaining = static_cast<DWORD>(deadline - now);
+      setsockopt(client, SOL_SOCKET, SO_RCVTIMEO,
+                 reinterpret_cast<const char*>(&remaining), sizeof(remaining));
+      const int received = recv(client, buffer, sizeof(buffer), 0);
+      if (received <= 0) break;
+      state = headers.append(buffer, static_cast<size_t>(received));
+    }
+    if (state == greenvpn::HttpHeaders::State::complete) {
+      HandleRequest(client, headers.value());
+    } else {
+      const bool large = state == greenvpn::HttpHeaders::State::too_large;
+      SendHttp(client, large ? 431 : 400, large ? "Request Header Fields Too Large" : "Bad Request",
+               "{\"ok\":false,\"message\":\"incomplete or invalid headers\"}");
     }
     shutdown(client, SD_BOTH);
     closesocket(client);

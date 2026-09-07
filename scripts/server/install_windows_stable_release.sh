@@ -122,6 +122,19 @@ echo "sha256=$SHA256"
 echo "size_bytes=$(stat -c %s "$INSTALLER")"
 echo "required=$REQUIRED"
 echo "min_supported_version=$MIN_SUPPORTED_VERSION"
+python3 - "$INSTALLER" "$DATABASE" "$DOWNLOADS" <<'PY'
+import pathlib, shutil, sys
+artifact, database, downloads = map(pathlib.Path, sys.argv[1:])
+# Reserve two file copies, rollback DB plus WAL, and operating headroom.
+old_alias = downloads / 'GreenVPN_Setup.exe'
+old_size = old_alias.stat().st_size if old_alias.is_file() else 0
+required = artifact.stat().st_size * 2 + old_size + database.stat().st_size * 3 + 256 * 1024 * 1024
+for root in (downloads, pathlib.Path('/root')):
+    free = shutil.disk_usage(root).free
+    if free < required:
+        raise SystemExit(f'insufficient disk reserve: free={free} required={required}')
+print(f'disk_reserve_required={required}')
+PY
 [[ $APPLY -eq 1 ]] || exit 0
 [[ $EUID -eq 0 ]] || {
   echo "Run apply mode as root" >&2
@@ -283,8 +296,9 @@ installer = pathlib.Path(installer_raw)
 required = 1 if required_raw == "1" else 0
 changelog = json.dumps(
     [
-        "После успешной установки окно закрывается автоматически, без нажатия кнопки Готово.",
-        "При ошибке окно остаётся открытым с причиной и путём к журналу установки.",
+        "Исправлены вход по email и завершение VPN при выходе из аккаунта.",
+        "Загрузка обновления ограничена по времени, доступна отмена; файл проверяется перед установкой.",
+        "В режиме выбора Windows используются приложения; для сайтов выбирайте браузер целиком.",
     ],
     ensure_ascii=False,
 )

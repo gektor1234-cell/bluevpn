@@ -114,6 +114,18 @@ echo "sha256=$SHA256"
 echo "size_bytes=$(stat -c %s "$APK")"
 echo "required=$REQUIRED"
 echo "min_supported_version=$MIN_SUPPORTED_VERSION"
+python3 - "$APK" "$DATABASE" "$DOWNLOADS" <<'PY'
+import pathlib, shutil, sys
+artifact, database, downloads = map(pathlib.Path, sys.argv[1:])
+old_alias = downloads / 'GreenVPN_Android.apk'
+old_size = old_alias.stat().st_size if old_alias.is_file() else 0
+required = artifact.stat().st_size * 2 + old_size + database.stat().st_size * 3 + 256 * 1024 * 1024
+for root in (downloads, pathlib.Path('/root')):
+    free = shutil.disk_usage(root).free
+    if free < required:
+        raise SystemExit(f'insufficient disk reserve: free={free} required={required}')
+print(f'disk_reserve_required={required}')
+PY
 [[ $APPLY -eq 1 ]] || exit 0
 [[ $EUID -eq 0 ]] || {
   echo "Run apply mode as root" >&2
@@ -268,9 +280,9 @@ apk = pathlib.Path(apk_raw)
 required = 1 if required_raw == "1" else 0
 changelog = json.dumps(
     [
-        "Устаревшие команды подключения и отключения больше не заменяют новые.",
-        "Улучшено переключение с другого VPN по запросу пользователя.",
-        "Сокращено количество повторных фоновых проверок при изменении сети.",
+        "Возврат из паузы сохраняет выбранные приложения и режим VPN.",
+        "Улучшена обработка слабой сети и переключения на другой VPN.",
+        "Исправлены повторная отправка кода входа, настройки автопродления и проверка обновлений.",
     ],
     ensure_ascii=False,
 )

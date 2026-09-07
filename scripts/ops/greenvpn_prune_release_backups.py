@@ -16,6 +16,8 @@ BACKUP_ROOTS = (
     pathlib.Path("/root/greenvpn-paid-beta-backups"),
     pathlib.Path("/root/greenvpn-apk-release-backups"),
     pathlib.Path("/root/greenvpn-windows-release-backups"),
+    pathlib.Path("/root/greenvpn-android-stable-release-backups"),
+    pathlib.Path("/root/greenvpn-windows-stable-release-backups"),
     pathlib.Path("/root/greenvpn-main-site-backups"),
     pathlib.Path("/root/greenvpn-admin-static-backups"),
     pathlib.Path("/root/greenvpn-release-rollback-backups"),

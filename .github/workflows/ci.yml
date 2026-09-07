@@ -78,6 +78,10 @@ jobs:
   flutter:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [default, production]
     steps:
       - uses: actions/checkout@v6
       - uses: subosito/flutter-action@v2
@@ -87,7 +91,34 @@ jobs:
           cache: true
       - run: flutter pub get
       - run: flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings
-      - run: flutter test --no-pub
+      - name: Test the complete client suite in each release contour
+        shell: bash
+        run: |
+          if [[ "${{ matrix.profile }}" == "production" ]]; then
+            flutter test --no-pub --dart-define=GREENVPN_PUBLIC_PRODUCT_BUILD=true \
+              --dart-define=GREENVPN_FUSION_UI_ENABLED=true \
+              --dart-define=GREENVPN_EXPECT_FUSION_UI_ENABLED=true \
+              --dart-define=GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=false \
+              --dart-define=GREENVPN_PAID_BETA_BUILD=false \
+              --dart-define=GREENVPN_FUSION_PRODUCTION_PROMOTION_CANDIDATE=true \
+              --dart-define=GREENVPN_AWG2_PREVIEW_ENABLED=true \
+              --dart-define=GREENVPN_HYSTERIA2_PREVIEW_ENABLED=true \
+              --dart-define=GREENVPN_VLESS_REALITY_PREVIEW_ENABLED=true \
+              --dart-define=GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED=true \
+              --dart-define=GREENVPN_DNSTT_PREVIEW_ENABLED=true
+          else
+            flutter test --no-pub
+          fi
+
+  local-service-parser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify fragmented and bounded HTTP headers without a Windows service
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror windows/green_vpn_service/http_headers_test.cpp -o /tmp/http-headers-test
+          /tmp/http-headers-test
 
   android-app-tests:
     runs-on: ubuntu-latest

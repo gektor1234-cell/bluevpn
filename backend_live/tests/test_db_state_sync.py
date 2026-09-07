@@ -1,4 +1,6 @@
 import sqlite3
+import hashlib
+import json
 import subprocess
 import sys
 import tempfile
@@ -53,6 +55,40 @@ def create_users_db(
 
 
 class DbStateSyncTests(unittest.TestCase):
+    def test_digest_policy_is_opt_in_and_revoked_legacy_token_cannot_return(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="greenvpn-session-sync-") as directory:
+            source, target = Path(directory) / "source.db", Path(directory) / "target.db"
+            token = "fixture-old-session-not-a-real-token"
+            digest = "sha256:" + hashlib.sha256(token.encode()).hexdigest()
+            for path in (source, target):
+                with sqlite3.connect(path) as conn:
+                    conn.executescript("""
+                        CREATE TABLE tokens(token TEXT PRIMARY KEY, user_id INTEGER, created_at TEXT);
+                        CREATE TABLE replication_tombstones(table_name TEXT,natural_key_json TEXT,deleted_at TEXT,origin_node TEXT,
+                            PRIMARY KEY(table_name,natural_key_json));
+                    """)
+            with sqlite3.connect(source) as conn:
+                conn.execute("INSERT INTO tokens VALUES (?,1,'2026-09-01T00:00:00+00:00')", (token,))
+            result = self.run_sync(source, target, tables=["tokens"])
+            self.assertEqual(result.returncode, 0, result.stdout)
+            with sqlite3.connect(target) as conn:
+                self.assertEqual(conn.execute("SELECT token FROM tokens").fetchone()[0], token)
+                conn.execute("CREATE TABLE session_storage_policy(format TEXT PRIMARY KEY)")
+                conn.execute("INSERT INTO session_storage_policy VALUES ('sha256-v1')")
+            result = self.run_sync(source, target, tables=["tokens"])
+            self.assertEqual(result.returncode, 0, result.stdout)
+            with sqlite3.connect(target) as conn:
+                self.assertEqual(conn.execute("SELECT token FROM tokens").fetchone()[0], digest)
+                conn.execute("INSERT INTO replication_tombstones VALUES ('tokens',?,'2026-09-02T00:00:00+00:00','fixture')",
+                             (json.dumps({"token": digest}, separators=(",", ":")),))
+            result = self.run_sync(source, target, tables=["tokens"])
+            self.assertEqual(result.returncode, 0, result.stdout)
+            with sqlite3.connect(target) as conn:
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM tokens").fetchone()[0], 0)
+            # An old backend must not receive tokens it cannot authenticate.
+            reverse = self.run_sync(target, source, tables=["tokens"])
+            self.assertNotEqual(reverse.returncode, 0)
+
     def run_sync(
         self,
         source_db: Path,

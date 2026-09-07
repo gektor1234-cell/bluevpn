@@ -18,6 +18,8 @@ import ssl
 import subprocess
 import tempfile
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -2053,6 +2055,7 @@ class EmailVerifyIn(BaseModel):
 
 class EmailCodeStartIn(BaseModel):
     email: str
+    requestId: Optional[str] = None
 
 
 class EmailCodeVerifyIn(BaseModel):
@@ -2076,6 +2079,7 @@ class GuestSessionIn(BaseModel):
 class AuthChallengeStartIn(BaseModel):
     method: Optional[str] = None
     email: Optional[str] = None
+    requestId: Optional[str] = None
 
 
 class AuthChallengeVerifyIn(BaseModel):
@@ -2090,6 +2094,7 @@ class AuthChallengeVerifyIn(BaseModel):
 
 class CheckoutEmailStartIn(BaseModel):
     email: str
+    requestId: Optional[str] = None
 
 
 class CheckoutEmailVerifyIn(BaseModel):
@@ -2581,6 +2586,19 @@ def init_db() -> None:
         )
         ensure_column(conn, "email_login_codes", "last_attempt_at", "last_attempt_at TEXT")
         ensure_column(conn, "email_login_codes", "locked_until", "locked_until TEXT")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS email_delivery_jobs (
+                operation_hash TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                email TEXT NOT NULL,
+                purpose TEXT NOT NULL,
+                nonce TEXT NOT NULL,
+                code_id INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
 
         conn.execute(
             """
@@ -4168,6 +4186,9 @@ def record_replication_tombstone(
     if not keys:
         return
     values = {key: row[key] for key in keys}
+    if table == "tokens":
+        value = str(values["token"])
+        values["token"] = value if re.fullmatch(r"sha256:[0-9a-f]{64}", value) else session_token_digest(value)
     natural_key_json = json.dumps(
         values,
         ensure_ascii=False,
@@ -7922,12 +7943,39 @@ def verify_password(password: str, password_hash: str) -> bool:
     return hmac.compare_digest(actual, expected)
 
 
+SESSION_MAX_AGE_DAYS = 90
+
+
+def session_token_digest(token: str) -> str:
+    return "sha256:" + hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def migrate_session_digests() -> None:
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("CREATE TABLE IF NOT EXISTS session_storage_policy (format TEXT PRIMARY KEY)")
+        for row in conn.execute("SELECT token, user_id, created_at FROM tokens").fetchall():
+            if re.fullmatch(r"sha256:[0-9a-f]{64}", row["token"]):
+                continue
+            digest = session_token_digest(row["token"])
+            conn.execute("INSERT OR IGNORE INTO tokens(token,user_id,created_at) VALUES (?,?,?)", (digest,row["user_id"],row["created_at"]))
+            conn.execute("DELETE FROM tokens WHERE token = ?", (row["token"],))
+        for row in conn.execute("SELECT * FROM replication_tombstones WHERE table_name = 'tokens'").fetchall():
+            values = json.loads(row["natural_key_json"])
+            if re.fullmatch(r"sha256:[0-9a-f]{64}", str(values.get("token", ""))):
+                continue
+            record_replication_tombstone(conn, "tokens", values, deleted_at=row["deleted_at"])
+            conn.execute("DELETE FROM replication_tombstones WHERE table_name = 'tokens' AND natural_key_json = ?", (row["natural_key_json"],))
+        conn.execute("INSERT OR IGNORE INTO session_storage_policy(format) VALUES ('sha256-v1')")
+        conn.commit()
+
+
 def issue_token(user_id: int) -> str:
     token = secrets.token_urlsafe(32)
     with db() as conn:
         conn.execute(
             "INSERT INTO tokens(token, user_id, created_at) VALUES (?, ?, ?)",
-            (token, user_id, utc_now_iso()),
+            (session_token_digest(token), user_id, utc_now_iso()),
         )
         conn.commit()
     return token
@@ -7938,7 +7986,7 @@ def get_user_by_token(authorization: Optional[str]):
         raise HTTPException(status_code=401, detail="Нет bearer token.")
 
     token = authorization.split(" ", 1)[1].strip()
-    if not token:
+    if not token or token.startswith("sha256:"):
         raise HTTPException(status_code=401, detail="Bearer token пустой.")
 
     with db() as conn:
@@ -7957,15 +8005,41 @@ def get_user_by_token(authorization: Optional[str]):
                 u.cohort_enrolled_at
             FROM tokens t
             JOIN users u ON u.id = t.user_id
-            WHERE t.token = ?
+            WHERE t.token IN (?, ?)
+              AND datetime(t.created_at) > datetime(?)
+              AND datetime(t.created_at) <= datetime(?)
+              AND NOT EXISTS (
+                  SELECT 1 FROM replication_tombstones r
+                  WHERE r.table_name = 'tokens' AND r.natural_key_json = ?
+                  AND datetime(r.deleted_at) >= datetime(t.created_at)
+              )
             """,
-            (token,),
+            (
+                session_token_digest(token), token,
+                (utc_now() - timedelta(days=SESSION_MAX_AGE_DAYS)).isoformat(),
+                (utc_now() + timedelta(minutes=5)).isoformat(),
+                json.dumps({"token": session_token_digest(token)}, separators=(",", ":")),
+            ),
         ).fetchone()
 
     if row is None:
         raise HTTPException(status_code=401, detail="Некорректный token.")
 
     return row
+
+
+@app.post("/api/v1/auth/logout")
+def logout_session(authorization: Optional[str] = Header(default=None)):
+    # Idempotent even for an expired session; tombstones prevent sync resurrection.
+    token = (authorization or "").removeprefix("Bearer ").strip()
+    if not authorization or not authorization.startswith("Bearer ") or not token or token.startswith("sha256:"):
+        raise HTTPException(status_code=401, detail="Нет bearer token.")
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        args = (session_token_digest(token), token)
+        record_replication_tombstones_for_delete(conn, "tokens", "token IN (?, ?)", args)
+        conn.execute("DELETE FROM tokens WHERE token IN (?, ?)", args)
+    return {"ok": True}
 
 
 def user_email_verified(user) -> bool:
@@ -8475,7 +8549,12 @@ def decode_support_report_code(report: str) -> dict:
     encoded += "=" * ((4 - len(encoded) % 4) % 4)
     try:
         packed = base64.urlsafe_b64decode(encoded.encode("ascii"))
-        raw = gzip.decompress(packed).decode("utf-8")
+        # Bound expansion before parsing; the encoded-size limit alone is unsafe.
+        with gzip.GzipFile(fileobj=io.BytesIO(packed)) as stream:
+            raw_bytes = stream.read(512 * 1024 + 1)
+        if len(raw_bytes) > 512 * 1024:
+            raise ValueError("support report exceeds decoded size limit")
+        raw = raw_bytes.decode("utf-8")
         decoded = json.loads(raw)
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Не удалось разобрать отчёт поддержки.") from exc
@@ -8525,6 +8604,30 @@ def support_sla_due_at(priority: str, created_at: Optional[str] = None) -> str:
             start = utc_now()
     hours = SUPPORT_PRIORITIES.get(priority, SUPPORT_PRIORITIES["normal"])["slaHours"]
     return (start + timedelta(hours=hours)).isoformat()
+
+
+def sanitize_stored_support_reports() -> dict:
+    """Operator migration: run on both nodes while state sync is paused."""
+    changed = 0
+    unreadable = 0
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute("SELECT id, report_code FROM support_reports").fetchall()
+        for row in rows:
+            try:
+                decoded = decode_support_report_code(row["report_code"])
+            except (HTTPException, ValueError, TypeError):
+                # Retain the report record and comments without retaining unsafe payloads.
+                decoded = {"reportUnavailable": True, "reason": "legacy_payload_invalid_or_oversized"}
+                unreadable += 1
+            sanitized = "GVPN1." + base64.urlsafe_b64encode(gzip.compress(
+                json.dumps(decoded, ensure_ascii=False, allow_nan=False).encode("utf-8"), mtime=0
+            )).decode("ascii")
+            if sanitized != row["report_code"]:
+                conn.execute("UPDATE support_reports SET report_code=? WHERE id=?", (sanitized, row["id"]))
+                changed += 1
+        conn.commit()
+    return {"checked": len(rows), "sanitized": changed, "unreadable": unreadable}
 
 
 def infer_support_report_workflow(summary: str, report_code: str) -> dict:
@@ -9194,6 +9297,107 @@ def create_email_login_code(
         )
         conn.commit()
         return int(cursor.lastrowid), code
+
+
+_EMAIL_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="email-delivery")
+_EMAIL_SLOTS = threading.BoundedSemaphore(32)
+_EMAIL_JOB_LOCK = threading.Lock()
+_EMAIL_SCHEDULED: set[str] = set()
+
+
+def delivery_job_code(nonce: str) -> str:
+    digest = hmac.new(AUTH_CODE_PEPPER.encode(), f"email-delivery:{nonce}".encode(), hashlib.sha256).digest()
+    return f"{int.from_bytes(digest, 'big') % AUTH_CODE_BOUND:0{AUTH_CODE_DIGITS}d}"
+
+
+def run_email_delivery_job(operation_hash: str) -> None:
+    try:
+        with db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            job = conn.execute("SELECT * FROM email_delivery_jobs WHERE operation_hash = ?", (operation_hash,)).fetchone()
+            if job is None or job["status"] != "queued":
+                return
+            code = conn.execute("SELECT status, expires_at FROM email_login_codes WHERE id = ?", (job["code_id"],)).fetchone()
+            expires_at = parse_dt(code["expires_at"]) if code else None
+            if code is None or code["status"] != "pending" or expires_at is None or expires_at <= utc_now():
+                conn.execute("UPDATE email_delivery_jobs SET status = 'failed', nonce = '', updated_at = ? WHERE operation_hash = ?", (utc_now_iso(), operation_hash))
+                conn.commit()
+                return
+            conn.execute("UPDATE email_delivery_jobs SET status = 'sending', updated_at = ? WHERE operation_hash = ?", (utc_now_iso(), operation_hash))
+            conn.commit()
+        result = send_or_queue_email_login_code(job["user_id"], job["email"], job["code_id"], delivery_job_code(job["nonce"]))
+        with db() as conn:
+            conn.execute("UPDATE email_delivery_jobs SET status = ?, updated_at = ?, nonce = '' WHERE operation_hash = ? AND status = 'sending'", (result["deliveryStatus"], utc_now_iso(), operation_hash))
+            conn.commit()
+    except Exception:
+        # Persist a terminal outcome without logging addresses, codes or SMTP credentials.
+        with db() as conn:
+            conn.execute("UPDATE email_delivery_jobs SET status = 'failed', nonce = '', updated_at = ? WHERE operation_hash = ? AND status IN ('queued','sending')", (utc_now_iso(), operation_hash))
+            conn.commit()
+    finally:
+        with _EMAIL_JOB_LOCK:
+            _EMAIL_SCHEDULED.discard(operation_hash)
+        _EMAIL_SLOTS.release()
+
+
+def schedule_email_delivery_job(operation_hash: str) -> None:
+    with _EMAIL_JOB_LOCK:
+        if operation_hash in _EMAIL_SCHEDULED or not _EMAIL_SLOTS.acquire(blocking=False):
+            return
+        _EMAIL_SCHEDULED.add(operation_hash)
+    try:
+        _EMAIL_EXECUTOR.submit(run_email_delivery_job, operation_hash)
+    except RuntimeError:
+        with _EMAIL_JOB_LOCK:
+            _EMAIL_SCHEDULED.discard(operation_hash)
+        _EMAIL_SLOTS.release()
+
+
+def start_email_delivery_job(user_id: int, email: str, purpose: str, request_id: str, scope: str) -> dict:
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{24,80}", request_id):
+        raise HTTPException(status_code=400, detail="Некорректный идентификатор запроса кода.")
+    operation_hash = hashlib.sha256(f"{scope}:{email}:{request_id}".encode()).hexdigest()
+    now = utc_now()
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("UPDATE email_delivery_jobs SET status = 'failed', nonce = '', updated_at = ? WHERE status IN ('queued','sending') AND datetime(created_at) < datetime(?, '-3 minutes')", (now.isoformat(), now.isoformat()))
+        job = conn.execute("SELECT * FROM email_delivery_jobs WHERE operation_hash = ?", (operation_hash,)).fetchone()
+        if job is None:
+            last = conn.execute("SELECT created_at FROM email_login_codes WHERE email = ? ORDER BY id DESC LIMIT 1", (email,)).fetchone()
+            if last and parse_dt(last["created_at"]) + timedelta(seconds=AUTH_CODE_RESEND_COOLDOWN_SECONDS) > now:
+                raise HTTPException(status_code=429, detail="Повторите отправку кода через минуту.")
+            if conn.execute("SELECT COUNT(*) FROM email_delivery_jobs WHERE status IN ('queued','sending')").fetchone()[0] >= 32:
+                raise HTTPException(status_code=503, detail="Сервис отправки занят. Повторите через минуту.")
+            nonce = secrets.token_hex(32)
+            code_hash = one_time_code_hash("email", email, delivery_job_code(nonce))
+            conn.execute("UPDATE email_login_codes SET status = 'superseded', consumed_at = ? WHERE email = ? AND status = 'pending'", (now.isoformat(), email))
+            cursor = conn.execute("""INSERT INTO email_login_codes(user_id,email,code_hash,status,purpose,created_at,expires_at)
+                VALUES (?,?,?,'pending',?,?,?)""", (user_id, email, code_hash, purpose, now.isoformat(), (now + timedelta(minutes=AUTH_CODE_TTL_MINUTES)).isoformat()))
+            conn.execute("INSERT INTO email_delivery_jobs VALUES (?,?,?,?,?,?,'queued',?,?)", (operation_hash, user_id, email, purpose, nonce, cursor.lastrowid, now.isoformat(), now.isoformat()))
+            job = conn.execute("SELECT * FROM email_delivery_jobs WHERE operation_hash = ?", (operation_hash,)).fetchone()
+        conn.commit()
+    status = job["status"]
+    if status in ("queued", "sending") and parse_dt(job["created_at"]) + timedelta(minutes=3) < now:
+        status = "failed"
+        with db() as conn:
+            conn.execute("UPDATE email_delivery_jobs SET status = 'failed', nonce = '', updated_at = ? WHERE operation_hash = ?", (utc_now_iso(), operation_hash))
+            conn.commit()
+    if status == "queued":
+        schedule_email_delivery_job(operation_hash)
+    return {"ok": True, "email": email, "deliveryStatus": status,
+            "deliveryReady": email_sender_configured(), "codeDigits": AUTH_CODE_DIGITS,
+            "ttlMinutes": AUTH_CODE_TTL_MINUTES, "resendCooldownSeconds": AUTH_CODE_RESEND_COOLDOWN_SECONDS}
+
+
+def recover_email_delivery_jobs() -> None:
+    with db() as conn:
+        # Do not resend ambiguous SMTP operations after a process restart.
+        conn.execute("UPDATE email_delivery_jobs SET status = 'failed', nonce = '' WHERE status = 'sending'")
+        conn.execute("DELETE FROM email_delivery_jobs WHERE datetime(created_at) < datetime('now', '-1 day')")
+        jobs = conn.execute("SELECT operation_hash FROM email_delivery_jobs WHERE status = 'queued' LIMIT 32").fetchall()
+        conn.commit()
+    for job in jobs:
+        schedule_email_delivery_job(job["operation_hash"])
 
 
 def send_or_queue_email_login_code(
@@ -20214,10 +20418,8 @@ def upsert_subscription_for_user(
         conn.commit()
 
     if not payload.isActive:
-        cleanup = remove_user_subscription_peers(int(user_id))
-        set_subscription_peer_revocation_pending(
-            int(user_id),
-            pending=bool(cleanup["failed"]),
+        cleanup_revoked_subscription_peers(
+            int(user_id), int(saved_row["id"]), int(saved_row["revision"]),
         )
         saved_row = get_subscription_row(int(user_id))
     return subscription_status(saved_row)
@@ -20246,7 +20448,7 @@ def selection_without_auto_renew(row: Optional[sqlite3.Row]) -> Optional[str]:
     return json.dumps(selection, ensure_ascii=False, sort_keys=True)
 
 
-def remove_user_subscription_peers(user_id: int) -> dict:
+def remove_user_subscription_peers(user_id: int, *, expected_revision: Optional[tuple[int, int]] = None) -> dict:
     with db() as conn:
         device_rows = conn.execute(
             """
@@ -20301,13 +20503,17 @@ def remove_user_subscription_peers(user_id: int) -> dict:
     attempted = 0
     removed = 0
     for device_uid, public_key, server_id in sorted(peer_targets):
-        attempted += 1
-        if best_effort_remove_peer_from_server(
-            server_id,
-            device_uid=device_uid,
-            public_key=public_key,
-        ):
-            removed += 1
+        # Fence one bounded remote deletion at a time, not the entire device set.
+        with db() as fence:
+            if expected_revision is not None:
+                fence.execute("BEGIN IMMEDIATE")
+                if not subscription_cleanup_revision_matches(fence, user_id, *expected_revision):
+                    break
+            attempted += 1
+            if best_effort_remove_peer_from_server(
+                server_id, device_uid=device_uid, public_key=public_key,
+            ):
+                removed += 1
     return {
         "attempted": attempted,
         "removed": removed,
@@ -20331,6 +20537,32 @@ def set_subscription_peer_revocation_pending(user_id: int, *, pending: bool) -> 
             (1 if pending else 0, utc_now_iso(), int(user_id)),
         )
         conn.commit()
+
+
+def subscription_cleanup_revision_matches(conn, user_id: int, subscription_id: int, revision: int) -> bool:
+    current = conn.execute(
+        "SELECT * FROM subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1", (int(user_id),),
+    ).fetchone()
+    return bool(current is not None and int(current["id"]) == subscription_id
+                and int(current["revision"]) == revision and not bool(current["is_active"])
+                and bool(current["peer_revocation_pending"]))
+
+
+def cleanup_revoked_subscription_peers(user_id: int, subscription_id: int, revision: int) -> dict:
+    empty = {"attempted": 0, "removed": 0, "failed": 0}
+    with db() as conn:
+        if not subscription_cleanup_revision_matches(conn, user_id, subscription_id, revision):
+            return empty
+    result = remove_user_subscription_peers(user_id, expected_revision=(subscription_id, revision))
+    with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if not subscription_cleanup_revision_matches(conn, user_id, subscription_id, revision):
+            return result
+        conn.execute(
+            "UPDATE subscriptions SET peer_revocation_pending = ?, updated_at = ? WHERE id = ? AND revision = ?",
+            (int(bool(result["failed"])), utc_now_iso(), subscription_id, revision),
+        )
+        return result
 
 
 def grant_subscription_for_user(
@@ -20547,10 +20779,8 @@ def revoke_subscription_for_user(
             )
         conn.commit()
 
-    peer_cleanup = remove_user_subscription_peers(int(user_id))
-    set_subscription_peer_revocation_pending(
-        int(user_id),
-        pending=bool(peer_cleanup["failed"]),
+    peer_cleanup = cleanup_revoked_subscription_peers(
+        int(user_id), int(saved_row["id"]), int(saved_row["revision"]),
     )
     return {
         "changed": changed,
@@ -20598,6 +20828,13 @@ def reconcile_expired_subscriptions(
         ).fetchall()
 
     candidate_payloads = [subscription_lifecycle_snapshot(row) for row in candidates]
+    if not dry_run and not billing_writer_primary():
+        return {
+            "ok": True, "dryRun": False, "skipped": "authoritative_writer_only",
+            "generatedAt": now_iso, "candidateCount": len(candidates), "changedCount": 0,
+            "peerCleanup": {"attempted": 0, "removed": 0, "failed": 0},
+            "candidates": candidate_payloads,
+        }
     if dry_run:
         return {
             "ok": True,
@@ -20610,14 +20847,18 @@ def reconcile_expired_subscriptions(
         }
 
     changed_user_ids: list[int] = []
+    cleanup_versions: dict[int, tuple[int, int]] = {}
     with db() as conn:
         conn.execute("BEGIN IMMEDIATE")
         for candidate in candidates:
             current = conn.execute(
-                "SELECT * FROM subscriptions WHERE id = ?",
-                (int(candidate["id"]),),
+                "SELECT * FROM subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+                (int(candidate["user_id"]),),
             ).fetchone()
-            if current is None:
+            if current is None or int(current["id"]) != int(candidate["id"]):
+                continue
+            if not bool(current["is_active"]) and bool(current["peer_revocation_pending"]):
+                cleanup_versions[int(current["user_id"])] = (int(current["id"]), int(current["revision"]))
                 continue
             current_expiry = parse_dt(current["expires_at"])
             if current_expiry is None:
@@ -20665,17 +20906,12 @@ def reconcile_expired_subscriptions(
                 ),
             )
             changed_user_ids.append(int(current["user_id"]))
+            cleanup_versions[int(current["user_id"])] = (int(saved_row["id"]), int(saved_row["revision"]))
         conn.commit()
 
     peer_cleanup = {"attempted": 0, "removed": 0, "failed": 0}
-    # Retry cleanup for every expired candidate, including rows already marked
-    # inactive by a previous run whose network cleanup may have failed.
-    for user_id in sorted({int(row["user_id"]) for row in candidates}):
-        result = remove_user_subscription_peers(user_id)
-        set_subscription_peer_revocation_pending(
-            user_id,
-            pending=bool(result["failed"]),
-        )
+    for user_id, (subscription_id, revision) in sorted(cleanup_versions.items()):
+        result = cleanup_revoked_subscription_peers(user_id, subscription_id, revision)
         for key in peer_cleanup:
             peer_cleanup[key] += int(result.get(key) or 0)
 
@@ -34348,6 +34584,7 @@ def list_auth_events(
 def on_startup() -> None:
     global ADMIN_TOKEN
     init_db()
+    migrate_session_digests()
     seed_default_monitoring_targets()
     seed_default_feature_flags_and_runbooks()
     backfill_support_report_workflow_fields()
@@ -34356,6 +34593,7 @@ def on_startup() -> None:
     ensure_subscription_for_existing_users()
     backfill_subscription_events_from_billing_orders()
     ADMIN_TOKEN = ensure_admin_token()
+    recover_email_delivery_jobs()
 
 
 @app.head("/healthz")
@@ -35433,7 +35671,7 @@ def auth_guest(payload: GuestSessionIn, request: Request):
 def auth_challenge_start(payload: AuthChallengeStartIn, request: Request):
     normalize_auth_challenge_method(payload.method, payload.email)
     result = auth_email_code_start(
-        EmailCodeStartIn(email=payload.email or ""),
+        EmailCodeStartIn(email=payload.email or "", requestId=payload.requestId),
         request,
     )
     result["challengeMethod"] = "email_code"
@@ -35465,6 +35703,8 @@ def auth_challenge_verify(payload: AuthChallengeVerifyIn, request: Request):
 def auth_email_code_start(payload: EmailCodeStartIn, request: Request):
     email = normalize_email(payload.email)
     user, created = ensure_user_for_email_code(email)
+    if payload.requestId:
+        return start_email_delivery_job(int(user["id"]), email, "login_or_register", payload.requestId, "login")
     ensure_email_code_resend_allowed(email)
     code_id, code = create_email_login_code(int(user["id"]), email)
     delivery = send_or_queue_email_login_code(int(user["id"]), email, code_id, code)
@@ -35556,7 +35796,6 @@ def auth_checkout_email_start(
             status_code=409,
             detail="Подтвердите email текущего аккаунта или войдите в другой аккаунт.",
         )
-    ensure_email_code_resend_allowed(email)
     guest_user_id = int(current_user["id"])
     with db() as conn:
         existing = conn.execute(
@@ -35566,6 +35805,9 @@ def auth_checkout_email_start(
     target_user = existing or current_user
     action = "attach" if user_is_guest(current_user) and existing is None else "login"
     purpose = f"checkout_{action}:{guest_user_id}"
+    if payload.requestId:
+        return start_email_delivery_job(int(target_user["id"]), email, purpose, payload.requestId, f"checkout:{guest_user_id}")
+    ensure_email_code_resend_allowed(email)
     code_id, code = create_email_login_code(
         int(target_user["id"]),
         email,
@@ -37297,7 +37539,10 @@ def support_reports(
     authorization: Optional[str] = Header(default=None),
 ):
     user = get_user_by_token(authorization)
-    report_code = validate_support_report_code(payload.report)
+    decoded = decode_support_report_code(payload.report)
+    report_code = "GVPN1." + base64.urlsafe_b64encode(
+        gzip.compress(json.dumps(decoded, ensure_ascii=False, allow_nan=False).encode("utf-8"), mtime=0)
+    ).decode("ascii")
     summary = clean_limited_text(payload.summary, 1000)
     app_version = clean_limited_text(payload.appVersion, 80)
     device_uid = clean_limited_text(payload.deviceUid, 128)
@@ -37307,6 +37552,10 @@ def support_reports(
     now = utc_now_iso()
 
     with db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        recent = conn.execute("SELECT COUNT(*) FROM support_reports WHERE user_id = ? AND datetime(created_at) > datetime('now', '-1 hour')", (int(user["id"]),)).fetchone()[0]
+        if recent >= 10:
+            raise HTTPException(status_code=429, detail="Отчёт уже получен. Повторите отправку позже.")
         cursor = conn.execute(
             """
             INSERT INTO support_reports(

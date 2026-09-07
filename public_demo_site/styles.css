@@ -839,11 +839,20 @@ footer {
   .signal-graphic {
     width: min(100%, 270px);
     justify-self: center;
+    aspect-ratio: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
   }
 
   .signal-core {
     width: 152px;
     min-height: 152px;
+    position: relative;
+    top: auto;
+    left: auto;
+    transform: none;
   }
 
   .signal-core img {
@@ -859,17 +868,20 @@ footer {
     width: 138px;
     min-height: 68px;
     padding: 11px 12px;
+    position: relative;
   }
 
   .node-all {
-    top: 12px;
-    left: 0;
+    top: auto;
+    left: auto;
   }
 
   .node-selected {
-    right: 0;
-    bottom: 12px;
+    right: auto;
+    bottom: auto;
   }
+
+  .signal-ring { display: none; }
 
   .signal-strip {
     grid-template-columns: 1fr;

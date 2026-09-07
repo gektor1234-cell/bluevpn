@@ -67,9 +67,16 @@ if (-not $SkipChecks) {
     if ($EnableFusionUi) {
         flutter test --no-pub `
             --dart-define="GREENVPN_PUBLIC_PRODUCT_BUILD=true" `
+            --dart-define="GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=false" `
+            --dart-define="GREENVPN_PAID_BETA_BUILD=false" `
             --dart-define="GREENVPN_FUSION_UI_ENABLED=true" `
+            --dart-define="GREENVPN_EXPECT_FUSION_UI_ENABLED=true" `
             --dart-define="GREENVPN_FUSION_PRODUCTION_PROMOTION_CANDIDATE=true" `
-            "test\fusion_ui_test.dart" "test\free_tier_ui_test.dart" | Out-Host
+            --dart-define="GREENVPN_AWG2_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" `
+            --dart-define="GREENVPN_HYSTERIA2_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" `
+            --dart-define="GREENVPN_VLESS_REALITY_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" `
+            --dart-define="GREENVPN_NAIVE_HTTPS_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" `
+            --dart-define="GREENVPN_DNSTT_PREVIEW_ENABLED=$($EnableTransportCascade.ToString().ToLowerInvariant())" | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "Fusion production UI test failed" }
     }
 }
@@ -167,6 +174,7 @@ if ($Mode -in @("android", "both")) {
             '--build-number'
             $AndroidBuildNumber
             "--dart-define=GREENVPN_APP_VERSION=$AppVersion"
+            "--dart-define=GREENVPN_BUILD_NUMBER=$AndroidBuildNumber"
             "--dart-define=GREENVPN_TRIAL_ONLY_NO_ADS_BUILD=$trialOnlyNoAdsValue"
             '--dart-define=GREENVPN_PAID_BETA_BUILD=false'
             '--dart-define=GREENVPN_PUBLIC_PRODUCT_BUILD=true'

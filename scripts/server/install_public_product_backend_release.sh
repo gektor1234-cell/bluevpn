@@ -142,12 +142,30 @@ sync_was_active=0
 env_modified=0
 code_modified=0
 sync_scripts_modified=0
+session_rollback_requires_relogin=0
 if systemctl is-active --quiet "$SYNC_TIMER"; then sync_was_active=1; fi
 
 rollback_on_error() {
   code=$?
   trap - ERR
   if [[ $code_modified -eq 1 ]]; then
+    if ! grep -q '^def session_token_digest(' "$backup_dir/main.py"; then
+      # Digests cannot be reversed. Never restore a whole DB over new payments.
+      # Old code requires fresh login; keep inter-node sync paused until aligned.
+      if python3 - "$DATA_DIR/bluevpn.db" <<'PY'
+import sqlite3, sys
+with sqlite3.connect(sys.argv[1], timeout=30) as conn:
+    exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_storage_policy'").fetchone()
+    if not exists:
+        sys.exit(1)
+    conn.execute("DELETE FROM tokens WHERE token LIKE 'sha256:%'")
+    conn.execute("DROP TABLE session_storage_policy")
+PY
+      then
+        session_rollback_requires_relogin=1
+        echo 'rollback_sessions=require_relogin; sync=paused_until_both_nodes_aligned' >&2
+      fi
+    fi
     cp -a "$backup_dir/main.py" "$APP_ROOT/app/main.py"
     cp -a "$backup_dir/requirements.txt" "$APP_ROOT/requirements.txt"
   fi
@@ -158,7 +176,7 @@ rollback_on_error() {
   fi
   if [[ $env_modified -eq 1 ]]; then cp -a "$backup_dir/backend.env" "$ENV_FILE"; fi
   systemctl restart "$SERVICE" >/dev/null 2>&1 || true
-  if [[ $sync_was_active -eq 1 ]]; then systemctl restart "$SYNC_TIMER" >/dev/null 2>&1 || true; fi
+  if [[ $sync_was_active -eq 1 && $session_rollback_requires_relogin -eq 0 ]]; then systemctl restart "$SYNC_TIMER" >/dev/null 2>&1 || true; fi
   exit "$code"
 }
 trap rollback_on_error ERR

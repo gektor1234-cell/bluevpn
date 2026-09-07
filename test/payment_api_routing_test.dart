@@ -31,7 +31,13 @@ void main() {
             }),
           );
         case '/api/v1/auth/checkout/email/start':
-          request.response.write(jsonEncode({'ok': true}));
+          request.response.write(
+            jsonEncode({
+              'ok': true,
+              'deliveryStatus': 'sent',
+              'deliveryReady': true,
+            }),
+          );
         case '/api/v1/auth/checkout/email/verify':
           request.response.write(
             jsonEncode({

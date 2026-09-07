@@ -8,6 +8,7 @@ deliberately never printed, so CI logs cannot become another secret store.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import subprocess
 import sys
@@ -204,6 +205,18 @@ def scan_text(relative: Path, text: str) -> set[tuple[str, int]]:
     return findings
 
 
+# Exact historical synthetic fixture lines reviewed in the 2026-09-07 audit.
+# These exceptions never apply to current files, new commits, paths or values.
+HISTORICAL_FIXTURE_LINES = {
+    ("0a47e07af795a446a1f24dffa46c8ee198cac809", "test/payment_api_routing_test.dart", "c8542289aaf22135a23ccf726cb5a3578ff182bbf3255b19933bdb201d99f92c"),
+    ("e7580d33ec080882a9e53fb0c9960735a6be5020", "test/payment_api_routing_test.dart", "c8542289aaf22135a23ccf726cb5a3578ff182bbf3255b19933bdb201d99f92c"),
+    ("37a823f14e53db8ec3336e7aabe468909a2fde9f", "test/auth_ui_test.dart", "d148ba9f67a57a98c467404894cc6d9eaf6af17b2fc8ec624e0738a2215d204f"),
+    ("37a823f14e53db8ec3336e7aabe468909a2fde9f", "test/auth_ui_test.dart", "9d8b8e81580fb13e6c6ce54c895e9acbaeab1f62b09b5080669281320a7c4403"),
+    ("5fa411a4e1157543ff57cb04aef27ffadff79785", "test/auth_ui_test.dart", "d148ba9f67a57a98c467404894cc6d9eaf6af17b2fc8ec624e0738a2215d204f"),
+    ("5fa411a4e1157543ff57cb04aef27ffadff79785", "test/auth_ui_test.dart", "9d8b8e81580fb13e6c6ce54c895e9acbaeab1f62b09b5080669281320a7c4403"),
+}
+
+
 def scan_history(root: Path) -> set[tuple[str, str, str]]:
     marker = "__GREENVPN_SECRET_SCAN_COMMIT__"
     process = subprocess.Popen(
@@ -242,6 +255,10 @@ def scan_history(root: Path) -> set[tuple[str, str, str]]:
             continue
         content = line[1:]
         for rule_name, _ in scan_text(Path(path), content):
+            if rule_name == "literal-sensitive-assignment" and (
+                commit, path, hashlib.sha256(content.encode("utf-8")).hexdigest()
+            ) in HISTORICAL_FIXTURE_LINES:
+                continue
             findings.add((commit[:12], path, rule_name))
 
     stderr = process.stderr.read() if process.stderr is not None else b""

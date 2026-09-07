@@ -52,6 +52,8 @@ class GreenVpnRuntimeFailoverService : Service() {
         private const val KEY_OPERATION_KIND = "operation_kind"
         private const val KEY_REQUESTED_SERVER_ID = "requested_server_id"
         private const val KEY_REQUESTED_MODE = "requested_mode"
+        private const val KEY_REQUESTED_PACKAGES = "requested_packages"
+        private const val KEY_EXPLICIT_TAKEOVER = "explicit_takeover"
         private const val KEY_OPERATION_STARTED_AT_MS = "operation_started_at_ms"
         private const val KEY_CONNECTED_AT_MS = "connected_at_ms"
         private const val KEY_UNDERLYING_INTERNET = "underlying_internet"
@@ -96,7 +98,7 @@ class GreenVpnRuntimeFailoverService : Service() {
             val network = GreenVpnUnderlyingNetwork.snapshot(context)
             val state = when {
                 !permissionGranted -> "permission_required"
-                !network.validatedNetworkAvailable -> "waiting_for_network"
+                !network.probeEligibleNetworkAvailable -> "waiting_for_network"
                 else -> "queued"
             }
             val committed = prefs(context).edit()
@@ -105,6 +107,8 @@ class GreenVpnRuntimeFailoverService : Service() {
                 .putString(KEY_OPERATION_KIND, "connect")
                 .putString(KEY_REQUESTED_SERVER_ID, normalizedServerId)
                 .putString(KEY_REQUESTED_MODE, normalizedMode)
+                .putStringSet(KEY_REQUESTED_PACKAGES, emptySet())
+                .putBoolean(KEY_EXPLICIT_TAKEOVER, true)
                 .putString(KEY_STATE, state)
                 .putInt(KEY_ROUTE_FAILURES, 0)
                 .putInt(KEY_RECOVERY_FAILURES, 0)
@@ -139,7 +143,7 @@ class GreenVpnRuntimeFailoverService : Service() {
             values.edit()
                 .putString(
                     KEY_STATE,
-                    if (network.validatedNetworkAvailable) "queued" else "waiting_for_network",
+                    if (network.probeEligibleNetworkAvailable) "queued" else "waiting_for_network",
                 )
                 .putString(KEY_LAST_REASON, "vpn_permission_granted")
                 .putString(KEY_LAST_ERROR, "")
@@ -209,6 +213,9 @@ class GreenVpnRuntimeFailoverService : Service() {
             val committed = prefs(context).edit()
                 .putBoolean(KEY_DESIRED, true)
                 .putString(KEY_OPERATION_KIND, "monitor")
+                .putString(KEY_REQUESTED_MODE, "full")
+                .putStringSet(KEY_REQUESTED_PACKAGES, emptySet())
+                .putBoolean(KEY_EXPLICIT_TAKEOVER, false)
                 .putString(KEY_OPERATION_ID, UUID.randomUUID().toString())
                 .putString(KEY_SERVER_ID, normalizedServerId)
                 .putString(KEY_PROTOCOL, normalizedProtocol)
@@ -243,7 +250,12 @@ class GreenVpnRuntimeFailoverService : Service() {
             resumeAtMs: Long,
             serverId: String,
             protocol: String,
+            mode: String = "full",
+            includedApplications: Set<String> = emptySet(),
         ): Boolean {
+            val routing = try {
+                GreenVpnRoutingIntent(mode, includedApplications)
+            } catch (_: IllegalArgumentException) { return false }
             val now = System.currentTimeMillis()
             val normalizedServerId = serverId.trim().take(160)
             val normalizedProtocol = protocol.trim().lowercase()
@@ -258,7 +270,9 @@ class GreenVpnRuntimeFailoverService : Service() {
                 .putString(KEY_OPERATION_ID, UUID.randomUUID().toString())
                 .putString(KEY_OPERATION_KIND, "connect")
                 .putString(KEY_REQUESTED_SERVER_ID, normalizedServerId)
-                .putString(KEY_REQUESTED_MODE, "full")
+                .putString(KEY_REQUESTED_MODE, routing.mode)
+                .putStringSet(KEY_REQUESTED_PACKAGES, routing.packages)
+                .putBoolean(KEY_EXPLICIT_TAKEOVER, false)
                 .putString(KEY_SERVER_ID, normalizedServerId)
                 .putString(KEY_PROTOCOL, normalizedProtocol)
                 .putString(KEY_STATE, "paused")
@@ -480,7 +494,8 @@ class GreenVpnRuntimeFailoverService : Service() {
         } else {
             ownEngineConnected
         }
-        val explicitTakeoverPending = state in setOf("queued", "permission_required")
+        val explicitTakeoverPending = values.getBoolean(KEY_EXPLICIT_TAKEOVER, false) &&
+            state in setOf("queued", "permission_required", "waiting_for_network")
         if (!explicitTakeoverPending && GreenVpnRuntimeFailoverPolicy.shouldStopForCompetingVpn(
                 desired = true,
                 systemVpnActive = systemVpnActive,
@@ -519,7 +534,7 @@ class GreenVpnRuntimeFailoverService : Service() {
             .apply()
         if (!GreenVpnConnectionOperationPolicy.shouldProbeOrRecover(
                 desired = true,
-                validatedUnderlyingNetwork = underlying.validatedNetworkAvailable,
+                validatedUnderlyingNetwork = underlying.probeEligibleNetworkAvailable,
             )
         ) {
             publishState(
@@ -598,7 +613,7 @@ class GreenVpnRuntimeFailoverService : Service() {
         val probe = coordinator.probeRoute(route.protocol)
         if (!isDesired() || !isCurrentOperation(operationId)) return
         val networkAfterProbe = GreenVpnUnderlyingNetwork.snapshot(applicationContext)
-        if (GreenVpnConnectionOperationPolicy.shouldPreserveTunnelAfterProbeFailure(
+        if (!probe.ok && GreenVpnConnectionOperationPolicy.shouldPreserveTunnelAfterProbeFailure(
                 networkAfterProbe.validatedNetworkAvailable,
             )
         ) {
@@ -652,7 +667,7 @@ class GreenVpnRuntimeFailoverService : Service() {
         if (!isDesired()) return
         val operationId = currentOperationId()
         val network = GreenVpnUnderlyingNetwork.snapshot(applicationContext)
-        if (!network.validatedNetworkAvailable) {
+        if (!network.probeEligibleNetworkAvailable) {
             val currentRoute = activeRoute()
             val ownConnected = currentRoute?.let { coordinator.isProtocolConnected(it.protocol) }
                 ?: supportedProtocols.any { coordinator.isProtocolConnected(it) }
@@ -671,22 +686,39 @@ class GreenVpnRuntimeFailoverService : Service() {
                 GreenVpnRuntimeRoute(previousRoute.serverId, previousRoute.protocol),
             )
         }
-        val explicitTakeover = !countRecovery && reason == "queued"
+        val values = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val explicitTakeover = !countRecovery &&
+            values.getBoolean(KEY_EXPLICIT_TAKEOVER, false)
         if (!explicitTakeover && coordinator.hasCompetingVpnActive()) {
             disarmForCompetingVpn()
             return
         }
         if (countRecovery) coordinator.disconnectAll()
-        val values = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val preferredServerId = values.getString(KEY_REQUESTED_SERVER_ID, "").orEmpty()
+        val routing = try {
+            GreenVpnRoutingIntent(
+                values.getString(KEY_REQUESTED_MODE, "full").orEmpty(),
+                values.getStringSet(KEY_REQUESTED_PACKAGES, emptySet()).orEmpty().toSet(),
+            )
+        } catch (_: IllegalArgumentException) {
+            disarm(applicationContext, "invalid_routing_intent")
+            return
+        }
         val result = coordinator.connectBest(
             preferredServerId = preferredServerId,
+            routingIntent = routing,
+            canAttemptUnderlyingNetwork = {
+                GreenVpnUnderlyingNetwork.snapshot(applicationContext).probeEligibleNetworkAvailable
+            },
             hasValidatedUnderlyingNetwork = {
                 GreenVpnUnderlyingNetwork.snapshot(applicationContext)
                     .validatedNetworkAvailable
             },
             onPhase = { phase ->
                 if (isDesired() && isCurrentOperation(operationId)) {
+                    if (phase == "connecting") {
+                        values.edit().putBoolean(KEY_EXPLICIT_TAKEOVER, false).commit()
+                    }
                     publishState(phase, reason, "", 0L)
                 }
             },

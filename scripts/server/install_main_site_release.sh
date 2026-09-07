@@ -13,6 +13,7 @@ BACKUP_ROOT="/root/greenvpn-main-site-backups"
 declare -a RELEASE_FILES=(
   "index.html"
   "styles.css"
+  "release-info.js"
   "assets/app_icon.ico"
   "privacy/index.html"
 )
@@ -30,7 +31,7 @@ Install the Green VPN main-site source without touching public downloads.
   install_main_site_release.sh --bundle /root/greenvpn-main-site-stage/site.tar.gz [--target timeweb|ruvds-msk] [--apply]
 
 Dry-run is the default. The archive must contain exactly the guarded main page,
-shared styles, app icon, and privacy page. Apply retires the three obsolete
+shared styles, release-info.js, app icon, and privacy page. Apply retires the three obsolete
 product screenshots, creates a root-only rollback copy, and restores it
 automatically when nginx or HTTPS verification fails.
 USAGE
@@ -122,6 +123,7 @@ destination = pathlib.Path(sys.argv[2])
 expected_files = {
     "index.html",
     "styles.css",
+    "release-info.js",
     "assets/app_icon.ico",
     "privacy/index.html",
 }
@@ -154,8 +156,9 @@ if seen != expected_files:
 PY
 
 grep -Fq '<title>Green VPN — скачать для Android и Windows</title>' "${WORK_ROOT}/index.html"
-grep -Fq 'href="/styles.css?v=20260825-r2"' "${WORK_ROOT}/index.html"
-grep -Fq 'Защищённое подключение для всего интернета или только выбранных приложений и сайтов.' "${WORK_ROOT}/index.html"
+grep -Fq 'href="/styles.css?v=20260907-r1"' "${WORK_ROOT}/index.html"
+grep -Fq 'Защищённое подключение для всего интернета или только выбранных приложений.' "${WORK_ROOT}/index.html"
+grep -Fq 'src="/release-info.js?v=20260907-r1"' "${WORK_ROOT}/index.html"
 grep -Fq 'Только выбранное' "${WORK_ROOT}/index.html"
 grep -Fq 'Диагностика' "${WORK_ROOT}/index.html"
 grep -Fq 'href="/downloads/GreenVPN_Android.apk"' "${WORK_ROOT}/index.html"
@@ -172,6 +175,7 @@ grep -Fq 'href="/legal/offer"' "${WORK_ROOT}/index.html"
 grep -Fq 'Политика конфиденциальности' "${WORK_ROOT}/privacy/index.html"
 for asset in \
   "styles.css" \
+  "release-info.js" \
   "assets/app_icon.ico"; do
   [[ -s "${WORK_ROOT}/${asset}" ]]
 done

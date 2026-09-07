@@ -24,6 +24,8 @@ class ReleaseBackupRetentionTests(unittest.TestCase):
             "/root/greenvpn-main-site-backups",
             "/root/greenvpn-admin-static-backups",
             "/root/greenvpn-release-rollback-backups",
+            "/root/greenvpn-android-stable-release-backups",
+            "/root/greenvpn-windows-stable-release-backups",
         }
         self.assertEqual(
             {path.as_posix() for path in RETENTION.BACKUP_ROOTS},

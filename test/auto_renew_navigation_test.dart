@@ -3,6 +3,39 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:greenvpn/main.dart';
 
 void main() {
+  testWidgets('unavailable renewal cannot be enabled but can be cancelled', (
+    tester,
+  ) async {
+    var enableCalls = 0;
+    var cancelCalls = 0;
+    for (final enabled in [false, true]) {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AutoRenewSettingsPage(
+            key: ValueKey(enabled),
+            autoRenewEnabled: enabled,
+            paymentMethodSaved: enabled,
+            autoRenewAvailable: false,
+            onEnableAutoRenew: () => enableCalls++,
+            onCancelAutoRenew: () async {
+              cancelCalls++;
+              return true;
+            },
+          ),
+        ),
+      );
+      final toggle = find.byKey(const Key('auto_renew_settings_switch'));
+      await tester.ensureVisible(toggle);
+      if (enabled) {
+        await tester.tap(toggle);
+        await tester.pumpAndSettle();
+      }
+      expect(tester.widget<SwitchListTile>(toggle).onChanged, isNull);
+    }
+    expect(enableCalls, 0);
+    expect(cancelCalls, 1);
+  });
+
   final publicProductSkip =
       !kPublicProductBuild || kTrialOnlyNoAdsBuild || kPaidBetaCustomerUi;
 
@@ -32,6 +65,7 @@ void main() {
               onRefreshEmailStatus: () async {},
               hasPaidEntitlement: true,
               subscriptionAutoRenew: true,
+              autoRenewAvailable: true,
               paymentMethodSaved: true,
               onOpenTariff: () => tariffCalls += 1,
               onCancelAutoRenew: () async {

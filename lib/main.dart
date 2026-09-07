@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:pub_semver/pub_semver.dart';
 
 import 'runtime_config.dart';
 import 'services/android_connection_operation_policy.dart';
@@ -19,6 +20,7 @@ import 'services/route_failure_cooldown.dart';
 import 'services/server_location_policy.dart';
 import 'services/single_flight_operation.dart';
 import 'services/transport_preview_policy.dart';
+import 'services/update_download.dart';
 import 'services/windows_dpapi.dart';
 import 'services/windows_selective_routing_service.dart';
 import 'services/windows_support_diagnostics.dart';
@@ -3060,6 +3062,9 @@ class GreenVpnUpdateManifest {
   final String rolloutReason;
   final List<String> changelog;
   final String releasedAt;
+  final int sizeBytes;
+  final bool fileReady;
+  final String buildNumber;
 
   const GreenVpnUpdateManifest({
     required this.platform,
@@ -3075,16 +3080,50 @@ class GreenVpnUpdateManifest {
     required this.rolloutReason,
     required this.changelog,
     required this.releasedAt,
+    this.sizeBytes = 0,
+    this.fileReady = false,
+    this.buildNumber = '',
   });
 
-  bool get serverHasNewerVersion =>
-      latestVersion.trim().isNotEmpty && latestVersion.trim() != currentVersion;
+  bool get serverHasNewerVersion {
+    try {
+      var latest = latestVersion.trim();
+      final current = Version.parse(currentVersion.trim());
+      if (!latest.contains('+') &&
+          current.build.isNotEmpty &&
+          RegExp(r'^\d+$').hasMatch(buildNumber)) {
+        latest = '$latest+$buildNumber';
+      }
+      var candidate = Version.parse(latest);
+      if (current.build.isEmpty && candidate.build.isNotEmpty) {
+        candidate = Version.parse(latest.split('+').first);
+      }
+      return candidate > current;
+    } on FormatException {
+      return false;
+    }
+  }
 
   bool get hasUpdate => updateAvailable && serverHasNewerVersion;
 
   bool get heldByRollout => serverHasNewerVersion && !updateAvailable;
 
-  bool get canDownload => downloadUrl.trim().isNotEmpty;
+  bool get canDownload {
+    final uri = Uri.tryParse(downloadUrl.trim());
+    return fileReady &&
+        validUpdateIntegrity(sha256, sizeBytes) &&
+        uri != null &&
+        uri.scheme == 'https' &&
+        uri.port == 443 &&
+        uri.userInfo.isEmpty &&
+        !uri.hasFragment &&
+        const {
+          'greenvpn.pro',
+          'www.greenvpn.pro',
+          'api.greenvpn.pro',
+          '176-113-81-35.sslip.io',
+        }.contains(uri.host.toLowerCase());
+  }
 
   static GreenVpnUpdateManifest fromJson(Map<String, dynamic> json) {
     bool asBool(dynamic value) {
@@ -3110,8 +3149,18 @@ class GreenVpnUpdateManifest {
         : <String>[];
     final current = (json['currentVersion'] ?? kAppVersion).toString();
     final latest = (json['latestVersion'] ?? '').toString();
-    final fallbackUpdateAvailable =
-        latest.trim().isNotEmpty && latest.trim() != current;
+    var fallbackUpdateAvailable = false;
+    try {
+      final build = (json['buildNumber'] ?? '').toString();
+      final comparable =
+          !latest.contains('+') && RegExp(r'^\d+$').hasMatch(build)
+          ? '$latest+$build'
+          : latest;
+      fallbackUpdateAvailable =
+          Version.parse(comparable) > Version.parse(current);
+    } on FormatException {
+      // An invalid or older version must never unlock installation.
+    }
     final hasExplicitUpdateFlag = json.containsKey('updateAvailable');
     final updateAvailable = hasExplicitUpdateFlag
         ? asBool(json['updateAvailable'])
@@ -3134,6 +3183,9 @@ class GreenVpnUpdateManifest {
       rolloutReason: (json['rolloutReason'] ?? '').toString(),
       changelog: changelog,
       releasedAt: (json['releasedAt'] ?? '').toString(),
+      sizeBytes: int.tryParse('${json['sizeBytes'] ?? ''}') ?? 0,
+      fileReady: asBool(json['fileReady']),
+      buildNumber: (json['buildNumber'] ?? '').toString(),
     );
   }
 }
@@ -3540,6 +3592,8 @@ class BlueVpnApi {
       <String, DateTime>{};
   static String? _lastSuccessfulApiBaseUrl;
   static String? _pendingAuthApiBaseUrl;
+  static final Map<String, ({String id, DateTime createdAt})>
+  _emailDeliveryRequests = {};
   static final Map<String, String> _sessionApiBaseByAccessToken =
       <String, String>{};
 
@@ -4069,19 +4123,7 @@ while True:
   Future<ApiResult<Map<String, dynamic>>> startEmailCodeAuth({
     required String email,
   }) async {
-    final res = await _jsonRequest(
-      method: 'POST',
-      path: '/api/v1/auth/email/code/start',
-      payload: {'email': email},
-      onSuccessBaseUrl: (baseUrl) {
-        _pendingAuthApiBaseUrl = _normalizeApiBaseUrl(baseUrl);
-      },
-    );
-    if (!res.ok) return ApiResult.err(res.message);
-    if (res.data is! Map) {
-      return const ApiResult.err('Некорректный ответ auth/email/code/start.');
-    }
-    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+    return _emailDelivery('/api/v1/auth/email/code/start', email: email);
   }
 
   Future<ApiResult<Session>> verifyEmailCodeAuth({
@@ -4110,19 +4152,11 @@ while True:
     required String method,
     String? email,
   }) async {
-    final res = await _jsonRequest(
-      method: 'POST',
-      path: '/api/v1/auth/challenge/start',
-      payload: {'method': method, 'email': ?email},
-      onSuccessBaseUrl: (baseUrl) {
-        _pendingAuthApiBaseUrl = _normalizeApiBaseUrl(baseUrl);
-      },
+    return _emailDelivery(
+      '/api/v1/auth/challenge/start',
+      email: email ?? '',
+      method: method,
     );
-    if (!res.ok) return ApiResult.err(res.message);
-    if (res.data is! Map) {
-      return const ApiResult.err('Некорректный ответ auth/challenge/start.');
-    }
-    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
   }
 
   Future<ApiResult<Session>> verifyAuthChallenge({
@@ -4149,21 +4183,11 @@ while True:
     required String accessToken,
     required String email,
   }) async {
-    final res = await _jsonRequest(
-      method: 'POST',
-      path: '/api/v1/auth/checkout/email/start',
-      bearerToken: accessToken,
-      preferredBaseUrl: _primaryBaseUrl(),
-      allowApiBaseFailover: false,
-      payload: {'email': email},
+    return _emailDelivery(
+      '/api/v1/auth/checkout/email/start',
+      email: email,
+      accessToken: accessToken,
     );
-    if (!res.ok) return ApiResult.err(res.message);
-    if (res.data is! Map) {
-      return const ApiResult.err(
-        'Некорректный ответ auth/checkout/email/start.',
-      );
-    }
-    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
   }
 
   Future<ApiResult<Session>> verifyCheckoutEmail({
@@ -4199,17 +4223,90 @@ while True:
     required String accessToken,
     required String email,
   }) async {
-    final res = await _jsonRequest(
-      method: 'POST',
-      path: '/api/v1/auth/access/email/start',
-      bearerToken: accessToken,
-      payload: {'email': email},
+    return _emailDelivery(
+      '/api/v1/auth/access/email/start',
+      email: email,
+      accessToken: accessToken,
     );
-    if (!res.ok) return ApiResult.err(res.message);
-    if (res.data is! Map) {
-      return const ApiResult.err('Некорректный ответ auth/access/email/start.');
+  }
+
+  Future<ApiResult<Map<String, dynamic>>> _emailDelivery(
+    String path, {
+    required String email,
+    String? accessToken,
+    String? method,
+  }) async {
+    final base = _primaryBaseUrl();
+    final key = crypto.sha256
+        .convert(
+          utf8.encode('$base:$path:$accessToken:${email.trim().toLowerCase()}'),
+        )
+        .toString();
+    final now = DateTime.now();
+    _emailDeliveryRequests.removeWhere(
+      (_, value) =>
+          now.difference(value.createdAt) > const Duration(minutes: 10),
+    );
+    if (_emailDeliveryRequests.length >= 32 &&
+        !_emailDeliveryRequests.containsKey(key)) {
+      return const ApiResult.err(
+        'Слишком много незавершённых запросов кода. Повторите позже.',
+      );
     }
-    return ApiResult.ok(Map<String, dynamic>.from(res.data as Map));
+    final requestId = _emailDeliveryRequests.putIfAbsent(key, () {
+      final random = Random.secure();
+      return (
+        id: base64UrlEncode(List<int>.generate(24, (_) => random.nextInt(256))),
+        createdAt: now,
+      );
+    }).id;
+    final watch = Stopwatch()..start();
+    while (watch.elapsed < const Duration(seconds: 70)) {
+      final result = await _jsonRequest(
+        method: 'POST',
+        path: path,
+        bearerToken: accessToken,
+        preferredBaseUrl: base,
+        allowApiBaseFailover: false,
+        totalBudget: const Duration(seconds: 15),
+        payload: {'email': email, 'requestId': requestId, 'method': ?method},
+      );
+      if (!result.ok) return ApiResult.err(result.message);
+      if (result.data is! Map) {
+        return const ApiResult.err('Некорректный ответ сервиса отправки кода.');
+      }
+      final data = Map<String, dynamic>.from(result.data as Map);
+      final status = data['deliveryStatus'];
+      if (status == 'sent') {
+        _emailDeliveryRequests.remove(key);
+        _pendingAuthApiBaseUrl = _normalizeApiBaseUrl(base);
+        return ApiResult.ok(data);
+      }
+      if (status != 'queued' && status != 'sending') {
+        _emailDeliveryRequests.remove(key);
+        return const ApiResult.err(
+          'Не удалось отправить код. Повторите через минуту.',
+        );
+      }
+      await Future<void>.delayed(const Duration(seconds: 2));
+    }
+    return const ApiResult.err(
+      'Доставка кода ещё выполняется. Повторите запрос: новая отправка не будет создана.',
+    );
+  }
+
+  Future<ApiResult<void>> logoutSession(String accessToken) async {
+    for (final base in _apiBaseUrls()) {
+      final result = await _jsonRequest(
+        method: 'POST',
+        path: '/api/v1/auth/logout',
+        bearerToken: accessToken,
+        preferredBaseUrl: base,
+        allowApiBaseFailover: false,
+      );
+      if (!result.ok) return ApiResult.err(result.message);
+    }
+    return const ApiResult.ok(null);
   }
 
   Future<ApiResult<Session>> verifyAccessEmail({
@@ -4231,8 +4328,9 @@ while True:
         'platform': ?platform,
         'appVersion': ?appVersion,
       },
-      preferredApiBaseUrl: _preferredApiBaseUrlForBearer(accessToken),
+      preferredApiBaseUrl: _pendingAuthApiBaseUrl ?? _primaryBaseUrl(),
       bearerToken: accessToken,
+      allowApiBaseFailover: false,
     );
   }
 
@@ -4460,6 +4558,12 @@ while True:
     final manifest = rawManifest is Map
         ? Map<String, dynamic>.from(rawManifest)
         : map;
+    manifest['currentVersion'] =
+        currentVersion == kAppVersion &&
+            !currentVersion.contains('+') &&
+            RegExp(r'^\d+$').hasMatch(kBuildNumber)
+        ? '$currentVersion+$kBuildNumber'
+        : currentVersion;
     return ApiResult.ok(GreenVpnUpdateManifest.fromJson(manifest));
   }
 
@@ -5013,6 +5117,7 @@ while True:
     Map<String, dynamic>? payload,
     String? preferredBaseUrl,
     bool allowApiBaseFailover = true,
+    Duration? totalBudget,
     void Function(String baseUrl)? onSuccessBaseUrl,
   }) async {
     try {
@@ -5070,6 +5175,7 @@ while True:
         preferredBaseUrl:
             preferredBaseUrl ?? _preferredApiBaseUrlForBearer(bearerToken),
         allowApiBaseFailover: allowApiBaseFailover,
+        totalBudget: totalBudget,
       );
 
       if (body.trim().isEmpty) {
@@ -6722,7 +6828,30 @@ class RestoreAccessDialog extends StatefulWidget {
   State<RestoreAccessDialog> createState() => _RestoreAccessDialogState();
 }
 
-class _RestoreAccessDialogState extends State<RestoreAccessDialog> {
+mixin _EmailResendCooldown<T extends StatefulWidget> on State<T> {
+  Timer? _resendTimer;
+  int _resendSeconds = 0;
+
+  void _beginResendCooldown(dynamic seconds) {
+    _resendTimer?.cancel();
+    _resendSeconds = (int.tryParse('$seconds') ?? 60).clamp(1, 600);
+    _resendTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted || _resendSeconds <= 1) timer.cancel();
+      if (mounted) {
+        setState(() => _resendSeconds = (_resendSeconds - 1).clamp(0, 600));
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _resendTimer?.cancel();
+    super.dispose();
+  }
+}
+
+class _RestoreAccessDialogState extends State<RestoreAccessDialog>
+    with _EmailResendCooldown<RestoreAccessDialog> {
   final _email = TextEditingController();
   final _code = TextEditingController();
   final _deviceStore = DeviceIdStore();
@@ -6746,6 +6875,7 @@ class _RestoreAccessDialogState extends State<RestoreAccessDialog> {
   }
 
   Future<void> _start() async {
+    if (_busy || (_codeRequested && _resendSeconds > 0)) return;
     final email = _email.text.trim();
     if (_busy || email.isEmpty || !email.contains('@')) {
       setState(() => _status = 'Введите корректный email.');
@@ -6787,6 +6917,9 @@ class _RestoreAccessDialogState extends State<RestoreAccessDialog> {
       }
       final delivery = (res.data!['deliveryStatus'] ?? '').toString();
       final ready = res.data!['deliveryReady'] == true;
+      if (delivery == 'sent' && ready) {
+        _beginResendCooldown(res.data!['resendCooldownSeconds']);
+      }
       setState(() {
         _codeRequested = delivery == 'sent' && ready;
         _code.clear();
@@ -6842,6 +6975,7 @@ class _RestoreAccessDialogState extends State<RestoreAccessDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('Войти в аккаунт'),
+      scrollable: true,
       content: SizedBox(
         width: 420,
         child: Column(
@@ -6887,6 +7021,28 @@ class _RestoreAccessDialogState extends State<RestoreAccessDialog> {
                   border: OutlineInputBorder(),
                 ),
                 onSubmitted: (_) => unawaited(_verify()),
+              ),
+              Wrap(
+                children: [
+                  TextButton(
+                    onPressed: _busy || _resendSeconds > 0 ? null : _start,
+                    child: Text(
+                      _resendSeconds > 0
+                          ? 'Повторить через $_resendSeconds с'
+                          : 'Отправить код ещё раз',
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _busy
+                        ? null
+                        : () => setState(() {
+                            _codeRequested = false;
+                            _code.clear();
+                            _status = null;
+                          }),
+                    child: const Text('Изменить email'),
+                  ),
+                ],
               ),
             ],
             if ((_status ?? '').isNotEmpty) ...[
@@ -6949,7 +7105,8 @@ class CheckoutEmailDialog extends StatefulWidget {
   State<CheckoutEmailDialog> createState() => _CheckoutEmailDialogState();
 }
 
-class _CheckoutEmailDialogState extends State<CheckoutEmailDialog> {
+class _CheckoutEmailDialogState extends State<CheckoutEmailDialog>
+    with _EmailResendCooldown<CheckoutEmailDialog> {
   final _email = TextEditingController();
   final _code = TextEditingController();
   final _deviceStore = DeviceIdStore();
@@ -6971,6 +7128,7 @@ class _CheckoutEmailDialogState extends State<CheckoutEmailDialog> {
   }
 
   Future<void> _start() async {
+    if (_busy || (_codeRequested && _resendSeconds > 0)) return;
     final email = _email.text.trim();
     if (_busy || email.isEmpty || !email.contains('@')) {
       setState(() => _status = 'Введите корректный email.');
@@ -6992,6 +7150,9 @@ class _CheckoutEmailDialogState extends State<CheckoutEmailDialog> {
       }
       final delivery = (res.data!['deliveryStatus'] ?? '').toString();
       final ready = res.data!['deliveryReady'] == true;
+      if (delivery == 'sent' && ready) {
+        _beginResendCooldown(res.data!['resendCooldownSeconds']);
+      }
       setState(() {
         _codeRequested = delivery == 'sent' && ready;
         _code.clear();
@@ -7044,6 +7205,7 @@ class _CheckoutEmailDialogState extends State<CheckoutEmailDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('Email для оплаты'),
+      scrollable: true,
       content: SizedBox(
         width: 420,
         child: Column(
@@ -7088,6 +7250,28 @@ class _CheckoutEmailDialogState extends State<CheckoutEmailDialog> {
                   border: OutlineInputBorder(),
                 ),
                 onSubmitted: (_) => unawaited(_verify()),
+              ),
+              Wrap(
+                children: [
+                  TextButton(
+                    onPressed: _busy || _resendSeconds > 0 ? null : _start,
+                    child: Text(
+                      _resendSeconds > 0
+                          ? 'Повторить через $_resendSeconds с'
+                          : 'Отправить код ещё раз',
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _busy
+                        ? null
+                        : () => setState(() {
+                            _codeRequested = false;
+                            _code.clear();
+                            _status = null;
+                          }),
+                    child: const Text('Изменить email'),
+                  ),
+                ],
               ),
             ],
             if ((_status ?? '').isNotEmpty) ...[
@@ -7526,33 +7710,6 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     // Starter ranges for MVP; later these should be moved to server-side/domain-based rules.
     SocialApp.discord: ['162.159.128.0/17', '66.22.192.0/18'],
     SocialApp.tiktok: ['23.192.0.0/11', '23.32.0.0/11'],
-  };
-
-  static const Map<SocialApp, List<String>> _socialDomains = {
-    SocialApp.telegram: ['telegram.org', 't.me'],
-    SocialApp.vk: [
-      'vk.com',
-      'vk.ru',
-      'vkvideo.ru',
-      'userapi.com',
-      'vkuseraudio.net',
-      'vkuserlive.net',
-      'vkcdnservice.com',
-    ],
-    SocialApp.instagram: ['instagram.com', 'cdninstagram.com'],
-    SocialApp.tiktok: ['tiktok.com', 'tiktokcdn.com', 'tiktokv.com'],
-    SocialApp.discord: [
-      'discord.com',
-      'discord.gg',
-      'discordapp.com',
-      'discordapp.net',
-    ],
-    SocialApp.youtube: [
-      'youtube.com',
-      'youtu.be',
-      'googlevideo.com',
-      'ytimg.com',
-    ],
   };
 
   static const Map<SocialApp, List<String>> _androidSocialPackageNames = {
@@ -8284,6 +8441,15 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             'resumeAtMs': until.millisecondsSinceEpoch,
             'serverId': route?.id ?? '',
             'protocol': route?.protocolCode ?? 'wireguard_udp',
+            'mode': socialOnlyEnabled ? 'social_only' : 'full',
+            'includedApplications': socialOnlyEnabled
+                ? <String>{
+                    ..._resolveAndroidSocialPackageNames(socialOnlyApps),
+                    ...socialOnlyCustomPackages.where(
+                      _isValidAndroidPackageName,
+                    ),
+                  }.toList()
+                : <String>[],
           });
       return response?['ok'] == true;
     } catch (error) {
@@ -8696,6 +8862,79 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
   }
 
+  bool _logoutInProgress = false;
+
+  bool get _accountChangeBlocked =>
+      _vpnInteractionLocked ||
+      _windowsRuntimeRecoveryRunning ||
+      _windowsRuntimeRestoreRunning ||
+      _windowsStandbyCycleRunning;
+
+  Future<void> _stopOwnVpnForAccountChange() async {
+    _vpnPauseTimer?.cancel();
+    _vpnPausedUntil = null;
+    _prefsDebounce?.cancel();
+    _tariffDebounce?.cancel();
+    _stopPendingBillingPolling();
+    _cancelFreeAdSessionTimer();
+    _disarmWindowsRuntimeFailover(
+      reason: 'account_change',
+      requestStandbyCancel: false,
+    );
+    await _pendingVpnActionStore.clear();
+    if (!kIsWeb && Platform.isAndroid) {
+      if (!await _requestAndroidManagedDisconnect()) {
+        throw StateError('native_disconnect_rejected');
+      }
+      await _waitForAndroidManagedDisconnect();
+    } else if (!kIsWeb && (Platform.isWindows || await _vpnBackend.isConnected())) {
+      final stopped = await _vpnBackend.disconnect().timeout(
+        const Duration(seconds: 130),
+      );
+      if (!stopped.ok) throw StateError('native_disconnect_failed');
+    }
+    if (!kIsWeb &&
+        await _vpnBackend.isConnected().timeout(const Duration(seconds: 5))) {
+      throw StateError('native_session_still_active');
+    }
+    await _prefsStore.patch({'vpnPauseUntil': ''});
+  }
+
+  Future<void> _logoutAccount() async {
+    if (_logoutInProgress) return;
+    if (_accountChangeBlocked) {
+      _toast(
+        context,
+        'Дождитесь завершения текущего переключения VPN и повторите выход.',
+      );
+      return;
+    }
+    _logoutInProgress = true;
+    _setVpnBusyUi(
+      stage: 'Выходим из аккаунта...',
+      hint: 'Завершаем собственное подключение и сессию.',
+    );
+    try {
+      await _stopOwnVpnForAccountChange();
+      final revoked = await _api.logoutSession(widget.session.accessToken);
+      if (!revoked.ok) throw StateError('session_revocation_failed');
+      await widget.onLogout();
+    } catch (_) {
+      if (mounted) {
+        _toast(
+          context,
+          'Не удалось завершить выход. Аккаунт сохранён; повторите попытку.',
+        );
+      }
+    } finally {
+      _logoutInProgress = false;
+      if (mounted) {
+        _clearVpnBusyUi();
+        await _syncVpnStatus();
+      }
+    }
+  }
+
   Future<void> _handleInvalidSession({
     required String source,
     String? message,
@@ -8734,25 +8973,24 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       try {
         await _pendingVpnActionStore.clear();
       } catch (_) {}
+      if (logout || disconnectVpn) {
+        try {
+          await _stopOwnVpnForAccountChange();
+        } catch (_) {
+          if (mounted && showToast) {
+            _toast(
+              context,
+              'Не удалось завершить подключение. Повторите выход из аккаунта.',
+            );
+          }
+          return;
+        }
+      }
       if (clearManagedConfig) {
         try {
           await _cfg.deleteManagedConfig();
         } catch (_) {}
       }
-      if (disconnectVpn) {
-        _disarmWindowsRuntimeFailover(
-          reason: 'session_invalidation',
-          requestStandbyCancel: false,
-        );
-        try {
-          await _vpnBackend.disconnect().timeout(const Duration(seconds: 8));
-        } catch (e) {
-          await appendBlueVpnClientLog(
-            'invalid session tunnel cleanup failed source=$source error=$e',
-          );
-        }
-      }
-
       if (mounted) {
         setState(() {
           if (disconnectVpn) {
@@ -8971,7 +9209,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               )
               .toSet(),
         );
-      if (socialOnlyApps.isEmpty) {
+      if (socialOnlyApps.isEmpty && !Platform.isWindows) {
         socialOnlyApps.addAll({SocialApp.telegram, SocialApp.instagram});
       }
       socialOnlyCustomPackages
@@ -9004,14 +9242,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               .whereType<String>()
               .take(maxWindowsVpnSites),
         );
-      if (Platform.isWindows &&
-          socialOnlyEnabled &&
-          socialOnlyApps.isEmpty &&
-          socialOnlyWindowsApplications.isEmpty &&
-          socialOnlyWindowsSites.isEmpty) {
-        // An empty selective policy must never look enabled to the user.
-        socialOnlyEnabled = false;
-      }
+      // Keep a legacy selective intent visible; require configuration before
+      // connecting instead of silently switching it to an unrestricted mode.
 
       // Apply tariff settings
       selectedApps
@@ -9776,6 +10008,13 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     if (!widget.session.isGuest && widget.session.emailVerified) {
       return widget.session;
     }
+    if (_accountChangeBlocked) {
+      _toast(
+        context,
+        'Дождитесь завершения переключения VPN и повторите вход.',
+      );
+      return null;
+    }
     var checkoutSession = widget.session;
     if (checkoutSession.isGuest) {
       final renewed = await _renewGuestSession(
@@ -9804,6 +10043,30 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     );
     if (session == null || !mounted) return null;
 
+    if (_accountChangeBlocked) {
+      _toast(
+        context,
+        'VPN ещё переключается. Повторите вход после завершения.',
+      );
+      return null;
+    }
+    _setVpnBusyUi(
+      stage: 'Входим в аккаунт...',
+      hint: 'Завершаем подключение предыдущего профиля.',
+    );
+    try {
+      await _stopOwnVpnForAccountChange();
+    } catch (_) {
+      if (mounted) {
+        _toast(
+          context,
+          'Не удалось завершить предыдущее подключение. Повторите вход.',
+        );
+      }
+      return null;
+    } finally {
+      if (mounted) _clearVpnBusyUi();
+    }
     await widget.onSessionChanged(session);
     if (!mounted) return null;
     setState(() {
@@ -9843,6 +10106,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   Future<void> _openRestoreAccess() async {
+    if (_accountChangeBlocked || _logoutInProgress) {
+      _toast(context, 'Дождитесь завершения переключения VPN.');
+      return;
+    }
     if (!widget.session.isGuest) {
       _toast(context, 'Вы уже вошли в аккаунт.');
       return;
@@ -9864,6 +10131,30 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     );
     if (session == null || !mounted) return;
 
+    if (_accountChangeBlocked) {
+      _toast(
+        context,
+        'VPN ещё переключается. Повторите вход после завершения.',
+      );
+      return;
+    }
+    _setVpnBusyUi(
+      stage: 'Входим в аккаунт...',
+      hint: 'Завершаем подключение предыдущего профиля.',
+    );
+    try {
+      await _stopOwnVpnForAccountChange();
+    } catch (_) {
+      if (mounted) {
+        _toast(
+          context,
+          'Не удалось завершить предыдущее подключение. Повторите вход.',
+        );
+      }
+      return;
+    } finally {
+      if (mounted) _clearVpnBusyUi();
+    }
     await widget.onSessionChanged(session);
     if (!mounted) return;
     setState(() {
@@ -10390,6 +10681,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   String _buildWindowsApplicationOnlyConfig(String baseConfig) {
+    if (socialOnlyWindowsApplications.isEmpty) {
+      throw StateError(
+        'Для Windows выберите программу или браузер целиком. Правила отдельных сайтов больше не применяются.',
+      );
+    }
     final withoutIncluded = _removeWireGuardInterfaceField(
       baseConfig,
       'IncludedApplications',
@@ -10411,26 +10707,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
   Future<void> _syncWindowsRoutingPolicy() async {
     if (kIsWeb || !Platform.isWindows) return;
-    final destinations = <String>{};
-    if (socialOnlyEnabled) {
-      final domains = <String>{...socialOnlyWindowsSites};
-      for (final app in socialOnlyApps) {
-        destinations.addAll(_socialAllowedIps[app] ?? const <String>[]);
-        domains.addAll(_socialDomains[app] ?? const <String>[]);
-      }
-      final resolution = await resolveWindowsVpnSites(domains);
-      final unresolvedCustomSites = resolution.unresolvedSites
-          .where(socialOnlyWindowsSites.contains)
-          .toList();
-      if (unresolvedCustomSites.isNotEmpty) {
-        throw StateError(
-          'Не удалось найти сайт: ${unresolvedCustomSites.first}. Проверь адрес и интернет.',
-        );
-      }
-      destinations.addAll(resolution.ipv4Cidrs);
+    if (socialOnlyEnabled && socialOnlyWindowsApplications.isEmpty) {
+      throw StateError('Для Windows выберите программу или браузер целиком.');
     }
-    final normalizedDestinations =
-        destinations.where(isValidWindowsVpnDestinationCidr).toList()..sort();
+    const normalizedDestinations = <String>[];
     _windowsSelectiveDestinationCidrs = normalizedDestinations;
     await _cfg.writeWindowsRoutingPolicy(
       applicationsOnly: socialOnlyEnabled,
@@ -13906,6 +14186,20 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       );
       return;
     }
+    if (!vpnEnabled &&
+        !kIsWeb &&
+        Platform.isWindows &&
+        socialOnlyEnabled &&
+        socialOnlyWindowsApplications.isEmpty) {
+      _toast(
+        context,
+        'Сначала выберите приложения. Для сайтов выберите браузер целиком.',
+      );
+      await _selectedModeConfigurationOperation.run(
+        _configureAndApplySelectedMode,
+      );
+      return;
+    }
     _setVpnBusyUi(
       stage: vpnEnabled ? 'Отключаем...' : 'Готовим подключение...',
       hint: vpnEnabled
@@ -15434,13 +15728,17 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     required Set<String> windowsApplications,
     required Set<String> windowsSites,
   }) async {
+    if (!kIsWeb && Platform.isWindows && windowsApplications.isEmpty) {
+      _toast(context, 'Выберите хотя бы одну программу или браузер целиком.');
+      return false;
+    }
     final previous = _captureRoutingPreference();
     final wasConnected = vpnEnabled;
     _prefsDebounce?.cancel();
     setState(() {
       socialOnlyApps
         ..clear()
-        ..addAll(presets);
+        ..addAll(!kIsWeb && Platform.isWindows ? <SocialApp>{} : presets);
       socialOnlyCustomPackages
         ..clear()
         ..addAll(androidPackages);
@@ -15449,7 +15747,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         ..addAll(windowsApplications);
       socialOnlyWindowsSites
         ..clear()
-        ..addAll(windowsSites);
+        ..addAll(!kIsWeb && Platform.isWindows ? <String>{} : windowsSites);
     });
 
     if (!socialOnlyEnabled) {
@@ -15504,15 +15802,14 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     final tempPresets = Set<SocialApp>.from(socialOnlyApps);
     final usesAndroidApplications = !kIsWeb && Platform.isAndroid;
     final usesWindowsApplications = !kIsWeb && Platform.isWindows;
+    if (usesWindowsApplications) tempPresets.clear();
     final tempCustomPackages = usesAndroidApplications
         ? Set<String>.from(socialOnlyCustomPackages)
         : <String>{};
     final tempWindowsApplications = usesWindowsApplications
         ? Set<String>.from(socialOnlyWindowsApplications)
         : <String>{};
-    final tempWindowsSites = usesWindowsApplications
-        ? Set<String>.from(socialOnlyWindowsSites)
-        : <String>{};
+    final tempWindowsSites = <String>{};
 
     final picked = await showDialog<bool>(
       context: context,
@@ -15520,7 +15817,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         builder: (ctx, setLocal) {
           final choices =
               <_FusionTrafficChoice>[
-                for (final app in SocialApp.values)
+                for (final app
+                    in usesWindowsApplications
+                        ? <SocialApp>[]
+                        : SocialApp.values)
                   _FusionTrafficChoice(
                     id: 'preset_${app.name}',
                     title: app.title,
@@ -15610,16 +15910,6 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             }
           }
 
-          Future<void> addWindowsSite() async {
-            try {
-              final site = await _openWindowsSitePicker(ctx);
-              if (site == null || !ctx.mounted) return;
-              setLocal(() => tempWindowsSites.add(site));
-            } catch (e) {
-              if (ctx.mounted) _toast(ctx, 'Не удалось добавить сайт: $e');
-            }
-          }
-
           Future<void> addWindowsExecutablesManually() async {
             try {
               final result = await FilePicker.platform.pickFiles(
@@ -15662,8 +15952,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Text(
-                    'Выберите всё, что должно работать через VPN. Остальной интернет останется без VPN.',
+                  Text(
+                    usesWindowsApplications
+                        ? 'Выберите программы. Для сайтов выберите браузер целиком: все его соединения будут проходить через VPN.'
+                        : 'Выберите всё, что должно работать через VPN. Остальной интернет останется без VPN.',
                   ),
                   const SizedBox(height: 12),
                   if (usesAndroidApplications)
@@ -15687,15 +15979,6 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                               : addWindowsApplications,
                           icon: const Icon(Icons.search_rounded),
                           label: const Text('Добавить программу'),
-                        ),
-                        OutlinedButton.icon(
-                          key: const Key('fusion_add_windows_site'),
-                          onPressed:
-                              tempWindowsSites.length >= maxWindowsVpnSites
-                              ? null
-                              : addWindowsSite,
-                          icon: const Icon(Icons.add_link_rounded),
-                          label: const Text('Добавить сайт'),
                         ),
                         TextButton.icon(
                           key: const Key('fusion_manual_windows_exe'),
@@ -15782,7 +16065,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   Future<bool> _openSocialAppsPicker(BuildContext context) async {
-    if (kFusionUiEnabled) {
+    if (kFusionUiEnabled || (!kIsWeb && Platform.isWindows)) {
       return _openFusionSocialAppsPicker(context);
     }
     final tempPresets = Set<SocialApp>.from(socialOnlyApps);
@@ -16456,7 +16739,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
   List<String> _selectedTrafficTitles() {
     final titles = <String>[
-      ...socialOnlyApps.map((app) => app.title),
+      if (kIsWeb || !Platform.isWindows)
+        ...socialOnlyApps.map((app) => app.title),
       if (!kIsWeb && Platform.isAndroid)
         ...socialOnlyCustomPackages.map(
           (packageName) =>
@@ -16467,7 +16751,6 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           (path) =>
               _windowsInstalledAppLabels[path] ?? windowsApplicationLabel(path),
         ),
-      if (!kIsWeb && Platform.isWindows) ...socialOnlyWindowsSites,
     ];
     titles.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     return titles;
@@ -16837,11 +17120,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         onRefreshEmailStatus: () => _refreshEmailStatus(showToast: true),
         hasPaidEntitlement: _hasPaidSubscriptionEntitlement,
         subscriptionAutoRenew: _subscriptionAutoRenew,
+        autoRenewAvailable: _tariffCatalog?['autoRenew'] == true,
         paymentMethodSaved: _paymentMethodSaved,
         onOpenTariff: _openTariff,
         onRestoreAccess: () => unawaited(_openRestoreAccess()),
         onCancelAutoRenew: _cancelAutoRenew,
-        onLogout: widget.onLogout,
+        onLogout: _logoutAccount,
         onOpenUpdates: () {
           Navigator.of(
             context,
@@ -21092,6 +21376,7 @@ class SettingsPage extends StatelessWidget {
   final Future<void> Function() onRefreshEmailStatus;
   final bool hasPaidEntitlement;
   final bool subscriptionAutoRenew;
+  final bool autoRenewAvailable;
   final bool paymentMethodSaved;
   final VoidCallback onOpenTariff;
   final VoidCallback? onRestoreAccess;
@@ -21120,6 +21405,7 @@ class SettingsPage extends StatelessWidget {
     required this.onRefreshEmailStatus,
     required this.hasPaidEntitlement,
     required this.subscriptionAutoRenew,
+    this.autoRenewAvailable = false,
     required this.paymentMethodSaved,
     required this.onOpenTariff,
     this.onRestoreAccess,
@@ -21137,6 +21423,7 @@ class SettingsPage extends StatelessWidget {
       MaterialPageRoute(
         builder: (_) => AutoRenewSettingsPage(
           autoRenewEnabled: subscriptionAutoRenew,
+          autoRenewAvailable: autoRenewAvailable,
           paymentMethodSaved: paymentMethodSaved,
           onEnableAutoRenew: () {
             Navigator.of(context).pop();
@@ -21368,6 +21655,7 @@ class SettingsPage extends StatelessWidget {
 
 class AutoRenewSettingsPage extends StatefulWidget {
   final bool autoRenewEnabled;
+  final bool autoRenewAvailable;
   final bool paymentMethodSaved;
   final VoidCallback onEnableAutoRenew;
   final Future<bool> Function() onCancelAutoRenew;
@@ -21375,6 +21663,7 @@ class AutoRenewSettingsPage extends StatefulWidget {
   const AutoRenewSettingsPage({
     super.key,
     required this.autoRenewEnabled,
+    this.autoRenewAvailable = false,
     required this.paymentMethodSaved,
     required this.onEnableAutoRenew,
     required this.onCancelAutoRenew,
@@ -21448,7 +21737,9 @@ class _AutoRenewSettingsPageState extends State<AutoRenewSettingsPage> {
                     key: const Key('auto_renew_settings_switch'),
                     contentPadding: EdgeInsets.zero,
                     value: _autoRenewEnabled,
-                    onChanged: _busy
+                    onChanged:
+                        _busy ||
+                            (!_autoRenewEnabled && !widget.autoRenewAvailable)
                         ? null
                         : (enabled) {
                             if (enabled) {
@@ -21472,7 +21763,9 @@ class _AutoRenewSettingsPageState extends State<AutoRenewSettingsPage> {
                     subtitle: Text(
                       _autoRenewEnabled
                           ? 'Подписка продлевается автоматически.'
-                          : 'Включение подтверждается при следующей оплате.',
+                          : widget.autoRenewAvailable
+                          ? 'Включение подтверждается при следующей оплате.'
+                          : 'Автопродление сейчас недоступно. Подписку можно продлить вручную.',
                       style: TextStyle(
                         color: mutedColor,
                         fontWeight: FontWeight.w700,
@@ -21562,6 +21855,19 @@ class _UpdatesPageState extends State<UpdatesPage> {
   GreenVpnUpdateManifest? _manifest;
   String? _error;
   bool _autoStartConsumed = false;
+  UpdateDownloadTask? _activeDownload;
+  bool _cancelUpdateRequested = false;
+
+  void _cancelDownload() {
+    _cancelUpdateRequested = true;
+    _activeDownload?.cancel();
+  }
+
+  @override
+  void dispose() {
+    _cancelDownload();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -21614,8 +21920,6 @@ class _UpdatesPageState extends State<UpdatesPage> {
       _maybeAutoStartUpdate();
     });
   }
-
-  String get _platform => greenVpnClientPlatform();
 
   String get _platformTitle => greenVpnClientPlatformTitle();
 
@@ -21688,6 +21992,19 @@ class _UpdatesPageState extends State<UpdatesPage> {
       }
     }
 
+    if (Platform.isWindows) {
+      final base = Platform.environment['LOCALAPPDATA'];
+      if (base == null || base.trim().isEmpty) {
+        throw const FileSystemException('Не найдена личная папка обновлений.');
+      }
+      final dir = Directory('$base\\GreenVPN\\Updates');
+      await dir.create(recursive: true);
+      await WindowsLocalSecurity._prepareProtectedSharedPath(
+        dir.path,
+        directory: true,
+      );
+      return dir;
+    }
     final dir = Directory(
       '${Directory.systemTemp.path}${Platform.pathSeparator}GreenVPNUpdates',
     );
@@ -21699,15 +22016,12 @@ class _UpdatesPageState extends State<UpdatesPage> {
     File file,
     GreenVpnUpdateManifest manifest,
   ) async {
-    if (!await file.exists()) return false;
-    final expectedSha = manifest.sha256.trim().toUpperCase();
-    if (expectedSha.isEmpty) {
-      return (await file.length()) > 0;
-    }
-    final actualSha = (await crypto.sha256.bind(file.openRead()).first)
-        .toString()
-        .toUpperCase();
-    return actualSha == expectedSha;
+    if (!manifest.canDownload) return false;
+    return updateFileMatches(
+      file,
+      manifest.sha256,
+      manifest.sizeBytes,
+    ).timeout(const Duration(seconds: 45));
   }
 
   Future<void> _cleanupOldUpdateFiles(
@@ -21766,6 +22080,11 @@ class _UpdatesPageState extends State<UpdatesPage> {
 
   Future<File> _downloadUpdateFile(GreenVpnUpdateManifest manifest) async {
     final url = manifest.downloadUrl.trim();
+    if (!manifest.canDownload) {
+      throw const FormatException(
+        'Сервер не подтвердил целостность файла обновления. Повторите проверку.',
+      );
+    }
     if (!greenVpnUpdateManifestMatchesCurrentPlatform(manifest)) {
       throw Exception(
         'Update manifest is for ${manifest.platform}, but this device is $_platformTitle.',
@@ -21809,60 +22128,23 @@ class _UpdatesPageState extends State<UpdatesPage> {
       await temp.delete();
     }
 
-    final client = HttpClient();
-    IOSink? sink;
-    try {
-      final request = await client.getUrl(uri);
-      request.headers.set(
-        HttpHeaders.userAgentHeader,
-        'GreenVPN/$kAppVersion ($_platform; updater)',
-      );
-      final response = await request.close();
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw Exception(
-          'Сервер обновлений вернул HTTP ${response.statusCode}.',
-        );
-      }
-
-      sink = temp.openWrite();
-      var downloaded = 0;
-      final total = response.contentLength;
-      await for (final chunk in response) {
-        downloaded += chunk.length;
-        sink.add(chunk);
-        if (mounted && total > 0) {
-          setState(() {
-            _downloadProgress = downloaded / total;
-            _downloadStatus =
-                'Скачивание: ${(downloaded / 1024 / 1024).toStringAsFixed(1)} из ${(total / 1024 / 1024).toStringAsFixed(1)} МБ';
-          });
-        }
-      }
-      await sink.close();
-      sink = null;
-    } finally {
-      client.close(force: true);
-      await sink?.close();
-    }
-
-    final expectedSha = manifest.sha256.trim().toUpperCase();
-    if (expectedSha.isNotEmpty) {
-      if (mounted) {
-        setState(() => _downloadStatus = 'Проверка файла обновления...');
-      }
-      final actualSha = (await crypto.sha256.bind(temp.openRead()).first)
-          .toString()
-          .toUpperCase();
-      if (actualSha != expectedSha) {
-        await temp.delete();
-        throw Exception('Проверка файла не пройдена. Установка остановлена.');
-      }
-    }
-
-    if (await file.exists()) {
-      await file.delete();
-    }
-    return temp.rename(file.path);
+    if (_cancelUpdateRequested) throw UpdateDownloadCancelled();
+    final task = UpdateDownloadTask();
+    _activeDownload = task;
+    return task.download(
+      uri: uri,
+      destination: file,
+      sha256: manifest.sha256,
+      size: manifest.sizeBytes,
+      onProgress: (downloaded, total) {
+        if (!mounted) return;
+        setState(() {
+          _downloadProgress = downloaded / total;
+          _downloadStatus =
+              'Скачивание: ${(downloaded / 1024 / 1024).toStringAsFixed(1)} из ${(total / 1024 / 1024).toStringAsFixed(1)} МБ';
+        });
+      },
+    );
   }
 
   Future<void> _installDownloadedUpdate(File file) async {
@@ -21894,8 +22176,14 @@ class _UpdatesPageState extends State<UpdatesPage> {
 
   Future<void> _downloadAndInstall() async {
     final manifest = _manifest;
-    if (manifest == null || _downloading) return;
+    if (manifest == null ||
+        _downloading ||
+        !manifest.hasUpdate ||
+        !manifest.canDownload) {
+      return;
+    }
 
+    _cancelUpdateRequested = false;
     setState(() {
       _downloading = true;
       _downloadProgress = null;
@@ -21905,6 +22193,13 @@ class _UpdatesPageState extends State<UpdatesPage> {
 
     try {
       final file = await _downloadUpdateFile(manifest);
+      if (!mounted || _cancelUpdateRequested) throw UpdateDownloadCancelled();
+      if (!await _downloadedFileMatchesManifest(file, manifest)) {
+        throw const FormatException(
+          'Проверка файла не пройдена. Установка остановлена.',
+        );
+      }
+      if (!mounted || _cancelUpdateRequested) throw UpdateDownloadCancelled();
       if (mounted) {
         setState(() => _downloadStatus = 'Файл скачан. Запускаю установку...');
       }
@@ -21919,12 +22214,19 @@ class _UpdatesPageState extends State<UpdatesPage> {
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        _downloadError = authUserMessage(
-          error,
-          fallback: 'Не удалось установить обновление.',
-        );
+        _downloadError = error is UpdateDownloadCancelled
+            ? 'Загрузка отменена. Обновление можно запустить повторно.'
+            : error is TimeoutException
+            ? 'Загрузка не завершилась вовремя. Проверьте соединение и повторите попытку.'
+            : error is FormatException
+            ? 'Проверка файла обновления не пройдена. Повторите загрузку.'
+            : authUserMessage(
+                error,
+                fallback: 'Не удалось установить обновление.',
+              );
       });
     } finally {
+      _activeDownload = null;
       if (mounted) {
         setState(() {
           _downloading = false;
@@ -21953,7 +22255,8 @@ class _UpdatesPageState extends State<UpdatesPage> {
     final hasUpdate = manifest?.hasUpdate ?? false;
     final heldByRollout = manifest?.heldByRollout ?? false;
     final requiredUpdate = manifest?.required ?? false;
-    final forceLocked = widget.forceRequired && (_loading || hasUpdate);
+    final forceLocked = widget.forceRequired || (requiredUpdate && hasUpdate);
+    final updateStateUnknown = _error != null || manifest == null;
 
     return PopScope(
       canPop: !forceLocked,
@@ -21964,7 +22267,7 @@ class _UpdatesPageState extends State<UpdatesPage> {
           actions: [
             IconButton(
               tooltip: 'Проверить',
-              onPressed: _loading ? null : _refresh,
+              onPressed: _loading || _downloading ? null : _refresh,
               icon: const Icon(Icons.refresh_rounded),
             ),
           ],
@@ -21975,17 +22278,23 @@ class _UpdatesPageState extends State<UpdatesPage> {
                 padding: const EdgeInsets.all(16),
                 children: [
                   _PageTitle(
-                    title: hasUpdate
+                    title: updateStateUnknown
+                        ? 'Не удалось проверить обновления'
+                        : hasUpdate
                         ? (requiredUpdate
                               ? 'Требуется обновление'
                               : 'Есть новая версия')
                         : 'Версия актуальна',
-                    subtitle: hasUpdate
+                    subtitle: updateStateUnknown
+                        ? 'Актуальность версии пока неизвестна. Повторите проверку.'
+                        : hasUpdate
                         ? 'Новая версия будет установлена для $_platformTitle.'
                         : heldByRollout
                         ? 'Сервер обновлений работает. Новая версия будет предложена, когда дойдёт очередь этого устройства.'
                         : 'Green VPN проверил сервер обновлений.',
-                    icon: hasUpdate
+                    icon: updateStateUnknown
+                        ? Icons.error_outline_rounded
+                        : hasUpdate
                         ? Icons.system_update_alt_rounded
                         : Icons.verified_rounded,
                   ),
@@ -22092,7 +22401,7 @@ class _UpdatesPageState extends State<UpdatesPage> {
                             Text(
                               manifest.canDownload
                                   ? _installHint
-                                  : 'Ссылка на скачивание пока не настроена на сервере.',
+                                  : 'Сервер не подтвердил готовность и целостность файла. Повторите проверку позже.',
                               style: TextStyle(
                                 color: Theme.of(
                                   context,
@@ -22169,6 +22478,12 @@ class _UpdatesPageState extends State<UpdatesPage> {
                                 child: const Text('Открыть ссылку вручную'),
                               ),
                             ],
+                            if (_downloading)
+                              TextButton.icon(
+                                onPressed: _cancelDownload,
+                                icon: const Icon(Icons.close_rounded),
+                                label: const Text('Отменить загрузку'),
+                              ),
                           ],
                         ),
                       ),
