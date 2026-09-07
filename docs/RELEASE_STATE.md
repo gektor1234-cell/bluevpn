@@ -1,6 +1,21 @@
 # Green VPN Release State
 
-## Current: Product Audit Hardening (2026-09-07 MSK)
+## Current: VPN-Off Updates (2026-09-07 MSK)
+
+Mandatory stable Android `0.4.15+2026090703` and Windows `0.4.12+4645` are
+published on fallback and primary. Minimum versions are `0.4.15` / `0.4.12`.
+The updater stops Green VPN, cancels automatic resume/failover and requires a
+stopped VPN state before downloading. Supported Windows competitors are stopped;
+an external Android VPN requires manual disconnect. Automatic restoration of
+third-party VPNs was removed from packaged runtime, including failure rollback.
+Backend stays `0.9.166-product-hardening.1`, paid-beta/payment policy unchanged.
+No tests/analyzer/physical acceptance were run for this change, per owner request.
+Build/package identities, public manifests and server download hashes/sizes were
+recorded. Host VPN/network untouched. Windows remains unsigned. Old installed
+updaters cannot acquire this behavior until the new release is installed.
+See `UPDATE_DOWNLOAD_VPN_POLICY_2026_09_07.md` for evidence and limitations.
+
+## Historical: Product Audit Hardening (2026-09-07 MSK)
 
 Mandatory stable Android `0.4.14+2026090702`, Windows `0.4.11+4644`, backend
 `0.9.166-product-hardening.1` are published on both control nodes. Public exact

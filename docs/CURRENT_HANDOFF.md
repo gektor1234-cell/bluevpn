@@ -6,7 +6,25 @@ This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
 `PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md`. Dated reports are evidence only.
 
-## Current Production: Audit Hardening, 2026-09-07
+## Current Production: VPN-Off Updates, 2026-09-07
+
+Android `0.4.15+2026090703` and Windows `0.4.12+4645` are mandatory stable on
+primary and fallback; minimum supported versions match. Backend remains
+`0.9.166-product-hardening.1`; paid-beta and payment policy remain unchanged.
+Before an actual update download the app stops its VPN and cancels its pending
+resume/failover. No packaged runtime path restores a third-party VPN, including
+failed initial takeover. No automatic resume after update/cancellation/failure.
+Windows stops supported WireGuard/AmneziaWG/WARP services; Android blocks on
+another active system VPN and asks for manual disconnect. Do not claim control
+over all vendors, Always-on or other apps' own reconnect mechanisms.
+This only changes the updater after this release is installed, not the updater
+already installed by an older release. Compilation/package identities and both
+nodes' publication receipts are recorded; tests/analyzer/physical acceptance
+were NOT RUN by owner request. Host VPN/network was not touched. No automation.
+See `UPDATE_DOWNLOAD_VPN_POLICY_2026_09_07.md` for hashes, sources and rollback.
+Do not rerun old network/installer/deadman harnesses on the owner's host.
+
+## Historical Production: Audit Hardening, 2026-09-07
 
 Android `0.4.14+2026090702`, Windows `0.4.11+4644`, backend
 `0.9.166-product-hardening.1` are published on primary and fallback. Updates are
