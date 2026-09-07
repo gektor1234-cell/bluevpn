@@ -1,6 +1,23 @@
 # Green VPN Release State
 
-## Windows Selective UI 0.4.8 (2026-09-02 MSK)
+## Reliability Android 0.4.13 / Windows 0.4.9 (2026-09-07 MSK)
+
+Both platforms are published as mandatory stable releases on fallback and primary:
+Android `0.4.13+2026090701` (signed), Windows `0.4.9+4642` (NotSigned).
+The owner explicitly delegated physical testing to themselves and requested
+publication now. Exact-artifact physical acceptance remains NOT RUN.
+
+Public verification passed `12/12`, enforcement checks `24/24`, and both sites'
+download links resolve to exact new artifacts. Old versions receive `426`, new
+versions receive `200`, and update manifests remain reachable to old clients.
+DB integrity, synchronization and service checks passed. Backend and paid-beta
+versions/bytes are unchanged. No host VPN transition or recurring automation.
+
+App source: `3da704da3d5d8ecd59af2bb1305c8910cbdb46dd`.
+Publisher source: `e07369dccac9cd1b823eafb80840985ead7f866c`.
+See `RELIABILITY_ROLLOUT_2026_09_07.md` for hashes, rollback and residual risks.
+
+## Previous Windows Selective UI 0.4.8 (2026-09-02 MSK)
 
 | Layer | Current state |
 |---|---|

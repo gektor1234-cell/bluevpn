@@ -1,4 +1,10 @@
-# Reliability candidates - not published
+# Reliability release preparation - historical procedure
+
+Publication completed on 2026-09-07 after a subsequent explicit owner instruction
+to publish both platforms with mandatory updates and let the owner test devices.
+See `RELIABILITY_ROLLOUT_2026_09_07.md` for authoritative publication evidence.
+Physical acceptance was not performed and is not marked as passed. The procedure
+below is the original preparation record, not an instruction to publish again.
 
 Final artifact directory:
 `C:\BlueVPN_Builds\reliability_audit_20260907_v0413_v049_b4642_v3`.

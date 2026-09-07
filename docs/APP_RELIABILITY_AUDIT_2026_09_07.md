@@ -1,5 +1,10 @@
 # App reliability audit - 2026-09-07
 
+Publication addendum: the subsequent owner instruction explicitly authorized
+mandatory publication without physical acceptance. Both exact v3 artifacts are
+now published; see `RELIABILITY_ROLLOUT_2026_09_07.md`. The original audit below
+records the prepublication scope and does not claim physical testing passed.
+
 ## Scope and release boundary
 
 Owner request: audit application lifecycle, recovery, behavior and security;

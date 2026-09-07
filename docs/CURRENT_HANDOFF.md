@@ -1,12 +1,34 @@
 # Green VPN Current Handoff
 
-Updated: 2026-09-02 MSK.
+Updated: 2026-09-07 MSK.
 
 This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
 `PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md`. Dated reports are evidence only.
 
-## Current production: Windows selective UI 0.4.8, 2026-09-02
+## Current production: reliability Android 0.4.13 / Windows 0.4.9, 2026-09-07
+
+- Mandatory stable Android is `0.4.13+2026090701`, signed, `56407381` bytes,
+  SHA-256 `A70DA5C0F2D86627BAABFB44B366A1E96361DADDE20EA20B90DCD636AE38147A`.
+- Mandatory stable Windows is `0.4.9+4642`, `NotSigned`, `52843520` bytes,
+  SHA-256 `0BDD42D9159B8985079D0593BFEDE339AF7D5D3934E79C68F4C81BE74F747D04`.
+- App source `3da704da3d5d8ecd59af2bb1305c8910cbdb46dd` fixes Windows VPN
+  ownership/rollback and stale recovery, Android stale operations/takeover,
+  and diagnostic redaction. Publisher source is `e07369dccac9cd1b823eafb80840985ead7f866c`.
+- Owner explicitly authorized publication and mandatory updates without the
+  remaining device/network matrix, taking real-world testing personally.
+  Physical acceptance remains NOT RUN, not implicitly passed.
+- Published fallback first, then primary. Both platforms have `required=true`,
+  rollout `100%`, and minimum versions equal to the new versions. Old clients
+  receive `426`; new clients and old-client update manifests receive `200`.
+- Post-sync public verification: `12/12`; paid-beta bytes and versions and both
+  backend versions unchanged. Both production/paid-beta DBs pass quick_check;
+  relevant units/timers active, sync success/0, failed units 0.
+- Residual operations risk: fallback free disk was about 182 MiB after retaining
+  rollback backups. Temporary staging was removed. No old backups were deleted.
+- Exact evidence and rollback paths: `RELIABILITY_ROLLOUT_2026_09_07.md`.
+
+## Historical production: Windows selective UI 0.4.8, 2026-09-02
 
 - Source `f89317d575f86e539f207c30ac09036ec9054ac8` is pushed. Windows app
   discovery now covers classic shortcuts, App Paths, uninstall registrations
@@ -64,7 +86,7 @@ This is the current operational entry point. Read it together with
 - Exact evidence and rollback paths:
   `docs/WINDOWS_STANDBY_TRANSITION_0_4_7_ROLLOUT_2026_09_01_RU.md`.
 
-## Current production: Android network lifecycle 0.4.12, 2026-08-31
+## Historical production: Android network lifecycle 0.4.12, 2026-08-31
 
 - Source `2856529cd3921031f1a7730d8762f1ee563c4402` is pushed. Android status
   reads are side-effect free, automatic recovery yields permanently to a
