@@ -1,6 +1,9 @@
 package pro.greenvpn.app
 
 internal object GreenVpnConnectionOperationPolicy {
+    fun isCurrentOperation(expectedId: String, currentId: String): Boolean =
+        expectedId == currentId
+
     val pendingConnectStates = setOf(
         "queued",
         "permission_required",

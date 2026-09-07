@@ -11112,6 +11112,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                 _windowsRuntimeFailoverTimer != null,
             recoveryRunning: _windowsRuntimeRecoveryRunning,
             vpnBusy: vpnBusy,
+            externalVpnActive: snapshot.externalVpnActive,
+            externalVpnStateKnown: snapshot.externalVpnStateKnown,
           );
       if (recoverUnexpectedDisconnect && activeRuntimeRoute != null) {
         if (_windowsProtectionConfirmed ||
@@ -11156,7 +11158,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           'windows status sync source=$source connected=$on systemProtected=${snapshot.protectionConfirmed} dataPlane=$_windowsFullTunnelDataPlaneConfirmed protected=$effectiveProtectionConfirmed mode=${snapshot.routingMode.name} externalVpn=${snapshot.externalVpnActive} externalVpnKnown=${snapshot.externalVpnStateKnown} previous=$previous',
         );
       }
-      if (on) {
+      if (snapshot.externalVpnStateKnown && snapshot.externalVpnActive) {
+        if (_activeWindowsRuntimeRoute != null ||
+            _windowsRuntimeFailoverTimer != null) {
+          _disarmWindowsRuntimeFailover(reason: 'external_vpn_active');
+        }
+      } else if (on) {
         await _restoreWindowsRuntimeFailoverIfPossible(source: 'status_sync');
       } else if (_activeWindowsRuntimeRoute != null ||
           _windowsRuntimeFailoverTimer != null) {
@@ -12965,6 +12972,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         !mounted ||
         !_prefsLoaded ||
         !vpnEnabled ||
+        _externalVpnActive ||
         _windowsRuntimeRestoreRunning ||
         _windowsRuntimeRecoveryRunning ||
         _windowsRuntimeFailoverTimer != null ||
@@ -12975,6 +12983,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
 
     _windowsRuntimeRestoreRunning = true;
+    final restoreEpoch = _windowsRuntimeFailoverEpoch;
     try {
       final routeId = greenVpnNormalizeManagedRouteId(
         await _cfg.readManagedRouteId(),
@@ -13002,6 +13011,15 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       }
 
       final route = matches.first;
+      if (!mounted ||
+          !vpnEnabled ||
+          vpnBusy ||
+          _externalVpnActive ||
+          socialOnlyEnabled ||
+          _socialOnlyPreferenceRequested ||
+          restoreEpoch != _windowsRuntimeFailoverEpoch) {
+        return;
+      }
       await _armRuntimeFailover(route);
       _trackConnectionState(true, route: route, latencyMs: route.pingMs);
       await appendBlueVpnClientLog(
@@ -13037,22 +13055,33 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
 
     _windowsRuntimeProbeRunning = true;
-    var backendConnected = false;
-    late PostConnectProbeResult probe;
-    Object? statusError;
     try {
-      final probeFuture = _probeConnectedTunnelRoute(server);
-      try {
-        backendConnected = await _vpnBackend.isConnected().timeout(
-          const Duration(seconds: 5),
-        );
-      } catch (error) {
-        statusError = error;
-      }
-      probe = await probeFuture;
+      await _runWindowsRuntimeFailoverProbe(server, epoch);
+    } catch (error) {
+      await appendBlueVpnClientLog(
+        'windows runtime monitor failed; tunnel retained error=${sanitizeWindowsSupportText(error.toString(), maxLength: 400)}',
+      );
     } finally {
       _windowsRuntimeProbeRunning = false;
     }
+  }
+
+  Future<void> _runWindowsRuntimeFailoverProbe(
+    ServerLocation server,
+    int epoch,
+  ) async {
+    var backendConnected = false;
+    late PostConnectProbeResult probe;
+    Object? statusError;
+    final probeFuture = _probeConnectedTunnelRoute(server);
+    try {
+      backendConnected = await _vpnBackend.isConnected().timeout(
+        const Duration(seconds: 5),
+      );
+    } catch (error) {
+      statusError = error;
+    }
+    probe = await probeFuture;
 
     if (!mounted ||
         epoch != _windowsRuntimeFailoverEpoch ||
@@ -13134,6 +13163,35 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
     await _loadWindowsStandbyProofs();
     final recoveryProofCutoff = _windowsRuntimeLastHealthyAt;
+    final snapshot = await _readWindowsManagedTunnelState();
+    if (!mounted || epoch != _windowsRuntimeFailoverEpoch || vpnBusy) return;
+    if (snapshot.externalVpnStateKnown && snapshot.externalVpnActive) {
+      _disarmWindowsRuntimeFailover(reason: 'external_vpn_active');
+      await _syncVpnStatus(source: 'runtime_external_vpn');
+      return;
+    }
+    final alternatives =
+        _connectCandidatesForCurrentSelection(
+          requireWindowsStandbyProof: true,
+          recoveryProofCutoff: recoveryProofCutoff,
+        ).where(
+          (candidate) =>
+              _routeCooldownKey(candidate) != _routeCooldownKey(server),
+        );
+    if (!greenVpnCanBeginWindowsRuntimeRecovery(
+      statusKnown:
+          snapshot.tunnelState != GreenVpnWindowsManagedTunnelState.unknown,
+      externalVpnStateKnown: snapshot.externalVpnStateKnown,
+      externalVpnActive: snapshot.externalVpnActive,
+      hasProvenAlternative: alternatives.isNotEmpty,
+      unhealthyFor: recoveryProofCutoff == null
+          ? Duration.zero
+          : DateTime.now().toUtc().difference(recoveryProofCutoff),
+    )) {
+      // Keep the tunnel/kill switch and intent alive while the network recovers.
+      // A probe timeout alone is not permission to drop the current route.
+      return;
+    }
     _recordRouteFailure(server, 'runtime_probe');
     _windowsRuntimeRecoveryRunning = true;
     _disarmWindowsRuntimeFailover(
@@ -13289,9 +13347,14 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     );
   }
 
-  List<ServerLocation> _connectCandidatesForCurrentSelection() {
+  List<ServerLocation> _connectCandidatesForCurrentSelection({
+    bool requireWindowsStandbyProof = false,
+    DateTime? recoveryProofCutoff,
+  }) {
     final windowsRecoveryRequiresProof =
-        !kIsWeb && Platform.isWindows && _windowsRuntimeRecoveryRunning;
+        !kIsWeb &&
+        Platform.isWindows &&
+        (_windowsRuntimeRecoveryRunning || requireWindowsStandbyProof);
     var usable =
         servers
             .where(
@@ -13316,7 +13379,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
     if (windowsRecoveryRequiresProof) {
       final now = DateTime.now().toUtc();
-      final proofCutoff = _windowsRuntimeRecoveryProofCutoff;
+      final proofCutoff =
+          recoveryProofCutoff ?? _windowsRuntimeRecoveryProofCutoff;
       usable = greenVpnWindowsRecoveryCandidates<ServerLocation>(
         candidates: usable,
         recoveryRunning: true,
@@ -13628,7 +13692,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     unawaited(
       _reportRouteEvent(
         server,
-        stage: '${stage}_disconnect',
+        stage: 'disconnect',
         ok: stopped,
         latencyMs: watch.elapsedMilliseconds,
         errorCode: stopped ? null : 'previous_route_still_active',
@@ -13636,6 +13700,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             ? 'Предыдущий маршрут полностью остановлен перед fallback.'
             : 'Не удалось подтвердить остановку предыдущего маршрута.',
         details: {
+          'cleanupReason': stage,
           'disconnectCallOk': disconnectResult?.ok ?? false,
           'disconnectError': disconnectError?.toString(),
           'statusError': statusError?.toString(),
@@ -14049,7 +14114,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
             'toggle connect backend start server=${candidate.id} cfg=$configPath',
           );
           final connectWatch = Stopwatch()..start();
-          final res = await _vpnBackend.connect(configPath: configPath);
+          final res = _windowsRuntimeRecoveryRunning
+              ? await _vpnBackend.reconnect(configPath: configPath)
+              : await _vpnBackend.connect(configPath: configPath);
           connectWatch.stop();
           await appendBlueVpnClientLog(
             'toggle connect backend server=${candidate.id} ok=${res.ok} message=${res.message ?? ""}',
@@ -25064,6 +25131,11 @@ abstract class VpnBackend {
   const VpnBackend();
 
   Future<VpnBackendResult> connect({required String configPath});
+  Future<VpnBackendResult> reconnect({required String configPath}) async =>
+      const VpnBackendResult(
+        ok: false,
+        message: 'Safe background reconnect is unavailable.',
+      );
   Future<VpnBackendResult> disconnect();
   Future<bool> isConnected();
 
@@ -25265,6 +25337,13 @@ class _GreenVpnSystemServiceClient {
     responseTimeout: const Duration(seconds: 130),
   );
 
+  Future<_GreenVpnSystemServiceResponse> reconnect() => _request(
+    'POST',
+    '/reconnect',
+    connectTimeout: const Duration(seconds: 2),
+    responseTimeout: const Duration(seconds: 130),
+  );
+
   Future<_GreenVpnSystemServiceResponse> disconnect() => _request(
     'POST',
     '/disconnect',
@@ -25392,6 +25471,39 @@ class _GreenVpnSystemServiceClient {
 }
 
 class WindowsTransportPreviewBackend extends VpnBackend {
+  @override
+  Future<VpnBackendResult> reconnect({required String configPath}) async {
+    if (!File(configPath).existsSync()) {
+      return const VpnBackendResult(
+        ok: false,
+        message: 'Конфигурация VPN отсутствует.',
+      );
+    }
+    const service = _GreenVpnSystemServiceClient();
+    // Never fall back to /connect: older controllers cannot enforce ownership.
+    final response = await service.reconnect();
+    if (!response.ok) {
+      return VpnBackendResult(
+        ok: false,
+        message: response.message ?? 'Не удалось восстановить VPN.',
+      );
+    }
+    final status = await service.status();
+    if (!greenVpnWindowsRoutingModeIsConfirmed(
+      requestOk: status.ok,
+      data: status.data,
+      applicationsOnly: false,
+      processRouterRequired: false,
+    )) {
+      await service.disconnect();
+      return const VpnBackendResult(
+        ok: false,
+        message: 'Состояние восстановленного VPN не подтверждено.',
+      );
+    }
+    return const VpnBackendResult(ok: true);
+  }
+
   final WireGuardWindowsBackend _wireGuard;
   final AmneziaWgWindowsPreviewBackend _amneziaWg;
   final SystemServiceWindowsPreviewBackend _hysteria2;

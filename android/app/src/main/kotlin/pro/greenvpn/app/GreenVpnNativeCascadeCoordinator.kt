@@ -133,6 +133,7 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
         allowInitialCompetingVpnTakeover: Boolean = false,
         continueRequested: () -> Boolean,
     ): GreenVpnNativeCascadeResult {
+        var initialTakeoverPending = allowInitialCompetingVpnTakeover
         if (!allowInitialCompetingVpnTakeover && hasCompetingVpnActive()) {
             return GreenVpnNativeCascadeResult(false, error = "competing_vpn_active")
         }
@@ -180,7 +181,7 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
         var lastError = "no_candidate_succeeded"
         for (candidate in candidates) {
             if (!continueRequested()) return GreenVpnNativeCascadeResult(false, error = "cancelled")
-            if (hasCompetingVpnActive()) {
+            if (!initialTakeoverPending && hasCompetingVpnActive()) {
                 stopOwnRoutesForCompetingVpn()
                 return GreenVpnNativeCascadeResult(false, error = "competing_vpn_active")
             }
@@ -209,7 +210,7 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
                 null
             } ?: continue
             if (!continueRequested()) return GreenVpnNativeCascadeResult(false, error = "cancelled")
-            if (hasCompetingVpnActive()) {
+            if (!initialTakeoverPending && hasCompetingVpnActive()) {
                 stopOwnRoutesForCompetingVpn()
                 return GreenVpnNativeCascadeResult(false, error = "competing_vpn_active")
             }
@@ -233,6 +234,7 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
                 lastError = safeError(failure)
                 false
             }
+            initialTakeoverPending = false
             if (hasCompetingVpnActive()) {
                 stopOwnRoutesForCompetingVpn()
                 return GreenVpnNativeCascadeResult(false, error = "competing_vpn_active")

@@ -101,12 +101,29 @@ bool greenVpnShouldRecoverUnexpectedWindowsDisconnect({
   required bool monitorArmed,
   required bool recoveryRunning,
   required bool vpnBusy,
+  bool externalVpnActive = false,
+  bool externalVpnStateKnown = true,
 }) =>
     !reportedConnected &&
     vpnEnabled &&
     monitorArmed &&
     !recoveryRunning &&
-    !vpnBusy;
+    !vpnBusy &&
+    externalVpnStateKnown &&
+    !externalVpnActive;
+
+bool greenVpnCanBeginWindowsRuntimeRecovery({
+  required bool statusKnown,
+  required bool externalVpnStateKnown,
+  required bool externalVpnActive,
+  required bool hasProvenAlternative,
+  required Duration unhealthyFor,
+}) =>
+    statusKnown &&
+    externalVpnStateKnown &&
+    !externalVpnActive &&
+    hasProvenAlternative &&
+    unhealthyFor >= const Duration(seconds: 30);
 
 bool greenVpnRuntimeRouteHealthy({
   required bool backendConnected,

@@ -9,7 +9,11 @@ const int windowsSupportLogMaxBytes = 128 * 1024;
 const int windowsSupportLogLineMaxLength = 700;
 
 final RegExp _sensitiveLinePattern = RegExp(
-  r'\b(private\s*key|privatekey|preshared\s*key|presharedkey|authorization|password|secret|token|cookie)\b\s*[:=]',
+  r'''\b([\w-]*(?:token|password|secret|cookie)|(?:private|preshared|api)[ _-]?key|authorization)\b["']?\s*[:=]''',
+  caseSensitive: false,
+);
+final RegExp _credentialUrlPattern = RegExp(
+  r'\b(?:https?|socks5?)://[^\s/@]+:[^\s/@]+@',
   caseSensitive: false,
 );
 final RegExp _bearerPattern = RegExp(
@@ -32,7 +36,8 @@ String sanitizeWindowsSupportText(
   var clean = value
       .replaceAll(RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F]'), ' ')
       .trim();
-  if (_sensitiveLinePattern.hasMatch(clean)) {
+  if (_sensitiveLinePattern.hasMatch(clean) ||
+      _credentialUrlPattern.hasMatch(clean)) {
     return '<redacted sensitive line>';
   }
   clean = clean

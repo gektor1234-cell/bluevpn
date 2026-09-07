@@ -19,6 +19,7 @@ import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 class GreenVpnRuntimeFailoverService : Service() {
     companion object {
@@ -188,6 +189,7 @@ class GreenVpnRuntimeFailoverService : Service() {
         private fun startRuntimeService(context: Context, action: String) {
             val intent = Intent(context, GreenVpnRuntimeFailoverService::class.java)
                 .setAction(action)
+                .putExtra(KEY_OPERATION_ID, prefs(context).getString(KEY_OPERATION_ID, ""))
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
             } else {
@@ -207,6 +209,7 @@ class GreenVpnRuntimeFailoverService : Service() {
             val committed = prefs(context).edit()
                 .putBoolean(KEY_DESIRED, true)
                 .putString(KEY_OPERATION_KIND, "monitor")
+                .putString(KEY_OPERATION_ID, UUID.randomUUID().toString())
                 .putString(KEY_SERVER_ID, normalizedServerId)
                 .putString(KEY_PROTOCOL, normalizedProtocol)
                 .putString(KEY_STATE, "monitoring")
@@ -354,6 +357,7 @@ class GreenVpnRuntimeFailoverService : Service() {
     private val coordinator by lazy { GreenVpnNativeCascadeCoordinator(applicationContext) }
     private var monitor: ScheduledExecutorService? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private val networkMonitorQueued = AtomicBoolean(false)
 
     override fun onCreate() {
         super.onCreate()
@@ -367,6 +371,11 @@ class GreenVpnRuntimeFailoverService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_REQUEST_DISCONNECT &&
+            !isCurrentOperation(intent.getStringExtra(KEY_OPERATION_ID).orEmpty())
+        ) {
+            return if (isDesired()) START_STICKY else START_NOT_STICKY
+        }
         if (!serviceEnabled()) {
             stopSelf()
             return START_NOT_STICKY
@@ -374,7 +383,8 @@ class GreenVpnRuntimeFailoverService : Service() {
         ensureForeground()
         startMonitor()
         if (intent?.action == ACTION_REQUEST_DISCONNECT) {
-            monitor?.execute { disconnectManagedRouteSafely() }
+            val operationId = intent.getStringExtra(KEY_OPERATION_ID).orEmpty()
+            monitor?.execute { disconnectManagedRouteSafely(operationId) }
             updateNotification()
             return START_NOT_STICKY
         }
@@ -420,17 +430,23 @@ class GreenVpnRuntimeFailoverService : Service() {
     }
 
     private fun triggerMonitor() {
+        val executor = monitor ?: return
+        if (!networkMonitorQueued.compareAndSet(false, true)) return
         try {
-            monitor?.execute { monitorOnceSafely() }
+            executor.execute {
+                try { monitorOnceSafely() } finally { networkMonitorQueued.set(false) }
+            }
         } catch (_: Throwable) {
+            networkMonitorQueued.set(false)
         }
     }
 
     private fun monitorOnceSafely() {
+        val operationId = currentOperationId()
         try {
             monitorOnce()
         } catch (failure: Throwable) {
-            if (failure is InterruptedException || !isDesired()) return
+            if (failure is InterruptedException || !isDesired() || !isCurrentOperation(operationId)) return
             publishState(
                 state = "error",
                 reason = "monitor_exception",
@@ -443,10 +459,11 @@ class GreenVpnRuntimeFailoverService : Service() {
 
     private fun monitorOnce() {
         val values = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val operationId = currentOperationId()
         val now = System.currentTimeMillis()
         var state = values.getString(KEY_STATE, "idle").orEmpty()
         if (state == "disconnecting") {
-            disconnectManagedRouteSafely()
+            disconnectManagedRouteSafely(operationId)
             return
         }
         if (!isDesired()) {
@@ -579,7 +596,7 @@ class GreenVpnRuntimeFailoverService : Service() {
         val lastProbeAt = values.getLong(KEY_LAST_PROBE_AT_MS, 0L)
         if (now - lastProbeAt < GreenVpnRuntimeFailoverPolicy.ROUTE_PROBE_INTERVAL_MS) return
         val probe = coordinator.probeRoute(route.protocol)
-        if (!isDesired()) return
+        if (!isDesired() || !isCurrentOperation(operationId)) return
         val networkAfterProbe = GreenVpnUnderlyingNetwork.snapshot(applicationContext)
         if (GreenVpnConnectionOperationPolicy.shouldPreserveTunnelAfterProbeFailure(
                 networkAfterProbe.validatedNetworkAvailable,
@@ -633,6 +650,7 @@ class GreenVpnRuntimeFailoverService : Service() {
         countRecovery: Boolean,
     ) {
         if (!isDesired()) return
+        val operationId = currentOperationId()
         val network = GreenVpnUnderlyingNetwork.snapshot(applicationContext)
         if (!network.validatedNetworkAvailable) {
             val currentRoute = activeRoute()
@@ -668,11 +686,13 @@ class GreenVpnRuntimeFailoverService : Service() {
                     .validatedNetworkAvailable
             },
             onPhase = { phase ->
-                if (isDesired()) publishState(phase, reason, "", 0L)
+                if (isDesired() && isCurrentOperation(operationId)) {
+                    publishState(phase, reason, "", 0L)
+                }
             },
             allowInitialCompetingVpnTakeover = explicitTakeover,
-        ) { isDesired() && !Thread.currentThread().isInterrupted }
-        if (!isDesired()) {
+        ) { isDesired() && isCurrentOperation(operationId) && !Thread.currentThread().isInterrupted }
+        if (!isDesired() || !isCurrentOperation(operationId)) {
             coordinator.disconnectAll()
             return
         }
@@ -768,10 +788,13 @@ class GreenVpnRuntimeFailoverService : Service() {
         stopSelf()
     }
 
-    private fun disconnectManagedRouteSafely() {
+    private fun disconnectManagedRouteSafely(operationId: String) {
+        if (!isCurrentOperation(operationId)) return
         try {
             GreenVpnConnectionOperationGate.runExclusive {
+                if (!isCurrentOperation(operationId)) return@runExclusive
                 val disconnected = coordinator.disconnectAll()
+                if (!isCurrentOperation(operationId)) return@runExclusive
                 if (disconnected) GreenVpnNetworkTransition.markInactive(applicationContext)
                 getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
                     .putBoolean(KEY_DESIRED, false)
@@ -788,6 +811,7 @@ class GreenVpnRuntimeFailoverService : Service() {
                     .commit()
             }
         } catch (failure: Throwable) {
+            if (!isCurrentOperation(operationId)) return
             getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
                 .putBoolean(KEY_DESIRED, false)
                 .putString(KEY_STATE, "error")
@@ -796,11 +820,19 @@ class GreenVpnRuntimeFailoverService : Service() {
                 .putLong(KEY_UPDATED_AT_MS, System.currentTimeMillis())
                 .commit()
         } finally {
-            updateNotification()
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            if (isCurrentOperation(operationId)) {
+                updateNotification()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
         }
     }
+
+    private fun currentOperationId(): String = prefs(applicationContext)
+        .getString(KEY_OPERATION_ID, "").orEmpty()
+
+    private fun isCurrentOperation(operationId: String): Boolean =
+        GreenVpnConnectionOperationPolicy.isCurrentOperation(operationId, currentOperationId())
 
     private fun activeRoute(): ActiveRoute? {
         val values = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

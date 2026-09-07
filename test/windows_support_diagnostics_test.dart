@@ -3,6 +3,29 @@ import 'package:greenvpn/services/windows_support_diagnostics.dart';
 
 void main() {
   group('Windows support diagnostics redaction', () {
+    test('redacts JSON, compound secret keys and proxy credentials', () {
+      for (final line in [
+        '{"accessToken":"sensitive-value"}',
+        "{'refresh_token': 'sensitive-value'}",
+        'api-key=sensitive-value',
+        'proxy=socks5://user:sensitive-value@proxy.example:1080',
+      ]) {
+        expect(sanitizeWindowsSupportText(line), '<redacted sensitive line>');
+      }
+      final result =
+          sanitizeWindowsSupportValue({
+                'accessToken': 'sensitive-value',
+                'refresh_token': 'sensitive-value',
+                'clientSecret': 'sensitive-value',
+                'peerCount': 1,
+              })
+              as Map;
+      expect(result['accessToken'], '<redacted>');
+      expect(result['refresh_token'], '<redacted>');
+      expect(result['clientSecret'], '<redacted>');
+      expect(result['peerCount'], 1);
+    });
+
     test('removes secret-bearing lines', () {
       expect(
         sanitizeWindowsSupportText('PrivateKey = abcdef123456'),

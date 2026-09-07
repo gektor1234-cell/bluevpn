@@ -5,6 +5,14 @@ import org.junit.Test
 
 class GreenVpnConnectionOperationPolicyTest {
     @Test
+    fun staleCompletionCannotOverwriteANewerCommand() {
+        assertEquals(true, GreenVpnConnectionOperationPolicy.isCurrentOperation("connect-1", "connect-1"))
+        assertEquals(false, GreenVpnConnectionOperationPolicy.isCurrentOperation("connect-1", "disconnect-2"))
+        assertEquals(false, GreenVpnConnectionOperationPolicy.isCurrentOperation("disconnect-2", "connect-3"))
+        assertEquals(false, GreenVpnConnectionOperationPolicy.isCurrentOperation("", "connect-3"))
+    }
+
+    @Test
     fun pendingConnectStartsOnlyWithPermissionAndValidatedNetwork() {
         assertEquals(
             true,

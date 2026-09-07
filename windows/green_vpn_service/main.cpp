@@ -435,6 +435,7 @@ int TaskActionCode(const wchar_t* action) {
   if (value == L"Disconnect") return 2;
   if (value == L"Guard") return 3;
   if (value == L"ProbeStandby") return 4;
+  if (value == L"Reconnect") return 5;
   return 0;
 }
 
@@ -448,6 +449,8 @@ std::string TaskActionName(int action_code) {
       return "guard";
     case 4:
       return "probe_standby";
+    case 5:
+      return "reconnect";
     default:
       return "unknown";
   }
@@ -961,18 +964,19 @@ void HandleRequest(SOCKET client, const std::string& request) {
     return;
   }
 
-  if (path == "/connect" && method != "post") {
+  if ((path == "/connect" || path == "/reconnect") && method != "post") {
     SendHttp(client, 405, "Method Not Allowed",
              "{\"ok\":false,\"message\":\"connect requires POST\"}");
     return;
   }
 
-  if (method == "post" && path == "/connect") {
+  if (method == "post" && (path == "/connect" || path == "/reconnect")) {
     if (!RequireLocalToken(client, request)) {
       return;
     }
     CancelStandbyProbeAndWait();
-    const int exit_code = RunTaskAction(L"Connect", 120000);
+    const int exit_code = RunTaskAction(
+        path == "/reconnect" ? L"Reconnect" : L"Connect", 120000);
     if (exit_code == 0) {
       SendHttp(client, 200, "OK",
                TaskResultJson(true, exit_code, "connect task accepted"));

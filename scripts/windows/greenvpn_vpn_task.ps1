@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Connect', 'Disconnect', 'Guard')]
+    [ValidateSet('Connect', 'Reconnect', 'Disconnect', 'Guard')]
     [string]$Action = 'Guard'
 )
 
@@ -23,6 +23,7 @@ $ProcessRouterProfilePath = Join-Path $ProgramDataRoot 'process-router.pbprofile
 $ProcessRouterStdoutPath = Join-Path $ProgramDataRoot 'process-router.stdout.log'
 $ProcessRouterStderrPath = Join-Path $ProgramDataRoot 'process-router.stderr.log'
 $CompetingVpnStatePath = Join-Path $ProgramDataRoot 'state\competing-vpn-services.json'
+$script:CompetingVpnRollbackPending = $false
 $ApplicationProxyHost = '10.10.0.1'
 $ApplicationProxyPort = 1080
 $ProcessRouterHashes = @{
@@ -890,6 +891,11 @@ function Save-CompetingVpnState {
 }
 
 function Restore-CompetingVpnTunnels {
+    # A previous successful session is not permission to restart another VPN.
+    if (-not $script:CompetingVpnRollbackPending) {
+        Complete-CompetingVpnTakeover
+        return
+    }
     if (-not (Test-Path -LiteralPath $CompetingVpnStatePath -PathType Leaf)) {
         return
     }
@@ -920,6 +926,12 @@ function Restore-CompetingVpnTunnels {
         Write-GreenLog "restored competing VPN service: $serviceName"
     }
     Remove-Item -LiteralPath $CompetingVpnStatePath -Force -ErrorAction Stop
+    $script:CompetingVpnRollbackPending = $false
+}
+
+function Complete-CompetingVpnTakeover {
+    $script:CompetingVpnRollbackPending = $false
+    Remove-Item -LiteralPath $CompetingVpnStatePath -Force -ErrorAction SilentlyContinue
 }
 
 function Get-CompetingVpnLabels {
@@ -951,16 +963,21 @@ function Get-CompetingVpnLabels {
 
 function Stop-CompetingVpnTunnels {
     param(
-        [ValidateSet('connect', 'guard')]
+        [ValidateSet('connect')]
         [string]$Reason
     )
 
+    if ($Action -ne 'Connect') {
+        # Enforce ownership under the privileged mutation lock, not a UI snapshot.
+        return @(Get-CompetingVpnLabels)
+    }
     $services = @(Get-CompetingVpnServices)
     if ($services.Count -eq 0) {
         return @(Get-CompetingVpnLabels)
     }
 
     Save-CompetingVpnState -Services $services
+    $script:CompetingVpnRollbackPending = $true
     Write-GreenLog "takeover requested reason=$Reason serviceCount=$($services.Count)"
     foreach ($service in $services) {
         $serviceName = [string]$service.Name
@@ -1141,35 +1158,15 @@ function Invoke-GreenGuard {
     ) {
         Write-GreenLog 'guard disconnecting application-only tunnel because process router stopped'
         Complete-GreenDisconnectedRuntimeState
-        Restore-CompetingVpnTunnels
+        Complete-CompetingVpnTakeover
         return
     }
 
     $competitorLabels = @(Get-CompetingVpnLabels)
     if ($competitorLabels.Count -eq 0) { return }
-    $activeMode = [string](
-        Read-GreenPrivilegedRuntimeValue -Name 'ActiveRoutingMode'
-    )
-    $routerRequired = [int](
-        Read-GreenPrivilegedRuntimeValue -Name 'ProcessRouterRequired'
-    ) -eq 1
-    $script:ActiveRuntimeTransitionGeneration = [uint32](
-        Start-GreenRuntimeStateTransition
-    )
-    $competitors = @(Stop-CompetingVpnTunnels -Reason 'guard')
-    if ($competitors.Count -gt 0) {
-        Write-GreenLog "guard disconnecting Green VPN because takeover remained incomplete count=$($competitors.Count)"
-        Complete-GreenDisconnectedRuntimeState
-        Restore-CompetingVpnTunnels
-        return
-    }
-    if ($activeMode -notin @('full', 'applications')) {
-        throw 'Guard cannot republish an unknown active routing mode.'
-    }
-    Write-GreenActiveRoutingMode -Mode $activeMode `
-        -ProcessRouterRequired $routerRequired `
-        -TransitionGeneration $script:ActiveRuntimeTransitionGeneration
-    $script:ActiveRuntimeTransitionGeneration = $null
+    Write-GreenLog 'guard yielding to externally activated VPN; explicit Connect required'
+    Complete-GreenDisconnectedRuntimeState
+    Complete-CompetingVpnTakeover
 }
 
 $runtimeMutationMutex = $null
@@ -1178,11 +1175,19 @@ try {
     $runtimeMutationMutex = Enter-GreenRuntimeMutationLock
     Write-GreenLog 'started'
     switch ($Action) {
-        'Connect' { Start-GreenTunnel }
+        'Connect' {
+            Complete-CompetingVpnTakeover
+            Start-GreenTunnel
+            Complete-CompetingVpnTakeover
+        }
+        'Reconnect' {
+            Complete-CompetingVpnTakeover
+            Start-GreenTunnel
+        }
         'Disconnect' {
             Ensure-GreenProgramDataAcl
             Complete-GreenDisconnectedRuntimeState
-            Restore-CompetingVpnTunnels
+            Complete-CompetingVpnTakeover
         }
         'Guard' { Invoke-GreenGuard }
     }
@@ -1190,18 +1195,20 @@ try {
 } catch {
     Write-GreenLog "failed: $($_.Exception.Message)"
     $mustRecover = $null -ne $runtimeMutationMutex -and (
-        $Action -eq 'Connect' -or
+        $Action -in @('Connect', 'Reconnect') -or
         $null -ne $script:ActiveRuntimeTransitionGeneration -or
         -not (Test-GreenRuntimeStateStable)
     )
     if ($mustRecover) {
+        $cleanupComplete = $false
         try {
             Complete-GreenDisconnectedRuntimeState
+            $cleanupComplete = $true
         } catch {
             Write-GreenLog "failed tunnel cleanup: $($_.Exception.Message)"
         }
         try {
-            Restore-CompetingVpnTunnels
+            if ($cleanupComplete) { Restore-CompetingVpnTunnels }
         } catch {
             Write-GreenLog "failed competitor restore: $($_.Exception.Message)"
         }

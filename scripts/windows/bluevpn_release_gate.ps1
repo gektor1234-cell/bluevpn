@@ -1943,7 +1943,10 @@ $vpnPriorityTakeoverFragments = @(
     'function Get-CompetingVpnServices',
     'function Stop-CompetingVpnTunnels',
     "Stop-CompetingVpnTunnels -Reason 'connect'",
-    "Stop-CompetingVpnTunnels -Reason 'guard'",
+    'guard yielding to externally activated VPN; explicit Connect required',
+    'function Complete-CompetingVpnTakeover',
+    'if (-not $script:CompetingVpnRollbackPending)',
+    'if ($cleanupComplete) { Restore-CompetingVpnTunnels }',
     '-AllowedExitCodes @(0, 1056, 1060, 1062)',
     'takeover complete reason=$Reason',
     'connect takeover blocked by competitor count=',
@@ -1967,6 +1970,12 @@ foreach ($fragment in $vpnPriorityTakeoverFragments) {
     }
     else {
         Add-Error "Windows transport cascade priority-takeover marker missing: $fragment"
+    }
+}
+
+foreach ($taskSource in @($vpnTaskScript, $transportPreviewVpnTaskScript)) {
+    if ($taskSource.Contains("Stop-CompetingVpnTunnels -Reason 'guard'")) {
+        Add-Error 'Background guard must not take over an external VPN'
     }
 }
 
@@ -2226,7 +2235,7 @@ $transportPreviewRouteFragments = @(
     'No physical gateway route is available',
     'endpoint bypass route ready',
     '$mustRecover = $null -ne $runtimeMutationMutex -and (',
-    '$Action -eq ''Connect'' -or',
+    '$Action -in @(''Connect'', ''Reconnect'') -or',
     '$null -ne $script:ActiveRuntimeTransitionGeneration',
     'failed competitor restore line=',
     'Broad write ACL is forbidden for transport preview state',
