@@ -1898,7 +1898,7 @@ $hintLabel.Font = New-Font 8.5 ([System.Drawing.FontStyle]::Regular)
 $card.Controls.Add($hintLabel)
 
 $okButton = [System.Windows.Forms.Button]::new()
-$okButton.Text = 'Готово'
+$okButton.Text = 'Закрыть'
 $okButton.Enabled = $false
 $okButton.Location = [System.Drawing.Point]::new(348, 274)
 $okButton.Size = [System.Drawing.Size]::new(128, 32)
@@ -1940,9 +1940,9 @@ $timer.Add_Tick({
         if ($script:exitCode -eq 0) {
             Set-UiText -Title 'Green VPN установлен' -Detail 'Приложение и служба Green VPN готовы к работе.' -Accent $brandGreen
             $stageLabel.Text = 'Установка успешно завершена.'
-            $hintLabel.Text = 'Green VPN уже запущен. Это окно можно закрыть.'
-            $okButton.Text = 'Готово'
-            if ($env:GREENVPN_INSTALLER_AUTOCLOSE_SUCCESS -eq '1') {
+            $hintLabel.Text = 'Приложение и системная служба установлены.'
+            # Keep the success window only when explicitly requested for diagnostics.
+            if ($env:GREENVPN_INSTALLER_AUTOCLOSE_SUCCESS -ne '0') {
                 $form.Close()
                 return
             }

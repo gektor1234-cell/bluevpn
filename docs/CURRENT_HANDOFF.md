@@ -6,6 +6,18 @@ This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
 `PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md`. Dated reports are evidence only.
 
+## Prepared, not published: Windows installer completion UX
+
+- The installer now closes automatically after a successful child-process exit,
+  without requiring a final Done click. Installation/startup errors remain visible
+  with a Close button and error details; unfinished installation stays open.
+- `GREENVPN_INSTALLER_AUTOCLOSE_SUCCESS=0` explicitly retains the success window
+  for diagnostics. The normal unset value and existing smoke value 1 auto-close.
+- `test_installer_ui_completion.ps1` exercises the embedded UI handlers with
+  mocked controls/processes: 12 cases passed, without opening windows or installing.
+- Source-only change requested after the mandatory rollout below. No new build,
+  installation, publication, browser download-dialog change or version bump.
+
 ## Current production: reliability Android 0.4.13 / Windows 0.4.9, 2026-09-07
 
 - Mandatory stable Android is `0.4.13+2026090701`, signed, `56407381` bytes,
