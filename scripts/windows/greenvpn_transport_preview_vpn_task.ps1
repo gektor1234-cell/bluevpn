@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Connect', 'Reconnect', 'Disconnect', 'Guard', 'ProbeStandby')]
+    [ValidateSet('Connect', 'Reconnect', 'Disconnect', 'PrepareUpdate', 'Guard', 'ProbeStandby')]
     [string]$Action = 'Guard'
 )
 
@@ -105,7 +105,6 @@ $LogPath = Join-Path $ProgramDataRoot 'backend.log'
 $DiagnosticLogPath = Join-Path $ProgramDataRoot 'state\transport-task.log'
 $ConnectFailureDiagnosticsPath = Join-Path $ProgramDataRoot 'state\connect-failure-diagnostics.json'
 $CompetingVpnStatePath = Join-Path $ProgramDataRoot 'state\competing-vpn-services.json'
-$script:CompetingVpnRollbackPending = $false
 $DiagnosticLogAclReady = $false
 $CompetingVpnTakeoverOccurred = $false
 $ActiveRuntimeTransitionGeneration = $null
@@ -1671,11 +1670,7 @@ function Start-DnsttTunnel {
 function Get-CompetingVpnServices {
     try {
         return @(
-            Get-Service -Name @(
-                'WireGuardTunnel$*',
-                'AmneziaWGTunnel$*',
-                'CloudflareWARP'
-            ) -ErrorAction SilentlyContinue |
+            Get-Service -ErrorAction Stop |
                 Where-Object {
                     [string]$_.Status -ne 'Stopped' -and
                     $_.Name -notin @(
@@ -1693,107 +1688,27 @@ function Get-CompetingVpnServices {
         )
     } catch {
         Write-GreenLog 'service competition check failed'
+        if ($Action -eq 'PrepareUpdate') { throw }
         return @()
     }
 }
 
-function Test-AllowedCompetingVpnServiceName {
-    param([Parameter(Mandatory=$true)][string]$Name)
-
-    return (
-        $Name -ne $WireGuardServiceName -and
-        $Name -ne $AmneziaWgServiceName -and
-        $Name -ne $StandbyProbeWireGuardServiceName -and
-        $Name -ne $StandbyProbeAmneziaServiceName -and
-        (
-            $Name -like 'WireGuardTunnel$*' -or
-            $Name -like 'AmneziaWGTunnel$*' -or
-            $Name -eq 'CloudflareWARP'
-        )
-    )
-}
-
-function Save-CompetingVpnState {
-    param([Parameter(Mandatory=$true)][object[]]$Services)
-
-    $serviceNames = @(
-        $Services |
-            ForEach-Object { [string]$_.Name } |
-            Where-Object { Test-AllowedCompetingVpnServiceName -Name $_ } |
-            Sort-Object -Unique
-    )
-    if ($serviceNames.Count -eq 0) { return }
-
-    New-Item `
-        -ItemType Directory `
-        -Force `
-        -Path (Split-Path -Parent $CompetingVpnStatePath) |
-        Out-Null
-    $state = [ordered]@{
-        schema = 1
-        createdAtUtc = (Get-Date).ToUniversalTime().ToString('o')
-        services = [object[]]$serviceNames
-    }
-    Write-PrivateRuntimeFile `
-        -Path $CompetingVpnStatePath `
-        -Content ($state | ConvertTo-Json -Depth 4)
-}
-
-function Restore-CompetingVpnTunnels {
-    # A previous successful session is not permission to restart another VPN.
-    if (-not $script:CompetingVpnRollbackPending) {
-        Complete-CompetingVpnTakeover
-        return
-    }
-    if (-not (Test-Path -LiteralPath $CompetingVpnStatePath -PathType Leaf)) {
-        return
-    }
-
-    $state = Get-Content -LiteralPath $CompetingVpnStatePath -Raw |
-        ConvertFrom-Json
-    if ([int]$state.schema -ne 1) {
-        throw 'Unsupported competing VPN restore state.'
-    }
-    $serviceNames = @(
-        @($state.services) |
-            ForEach-Object { ([string]$_).Trim() } |
-            Where-Object { $_ } |
-            Sort-Object -Unique
-    )
-    foreach ($serviceName in $serviceNames) {
-        if (-not (Test-AllowedCompetingVpnServiceName -Name $serviceName)) {
-            throw "Unsafe competing VPN restore service name: $serviceName"
-        }
-        $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-        if ($null -eq $service) { continue }
-        if ([string]$service.Status -ne 'Running') {
-            Start-Service -Name $serviceName -ErrorAction Stop
-            $service.WaitForStatus(
-                [System.ServiceProcess.ServiceControllerStatus]::Running,
-                [TimeSpan]::FromSeconds(45)
-            )
-        }
-        Write-GreenLog "restored competing VPN service: $serviceName"
-    }
-    Remove-Item -LiteralPath $CompetingVpnStatePath -Force -ErrorAction Stop
-    $script:CompetingVpnRollbackPending = $false
-}
-
 function Complete-CompetingVpnTakeover {
-    $script:CompetingVpnRollbackPending = $false
+    # Discard legacy restore journals; Green VPN never restarts another VPN.
     Remove-Item -LiteralPath $CompetingVpnStatePath -Force -ErrorAction SilentlyContinue
 }
 
 function Get-CompetingVpnLabels {
     $labels = New-Object System.Collections.Generic.List[string]
     try {
-        Get-NetAdapter -ErrorAction SilentlyContinue |
+        Get-NetAdapter -ErrorAction Stop |
             Where-Object {
                 $_.Status -eq 'Up' -and $_.Name -notin @($TunnelName, $HysteriaTunnelName, $VlessTunnelName, $NaiveTunnelName, $DnsttTunnelName) -and
                 ($_.Name -match '(?i)(wireguard|wintun|amnezia|warp|cloudflare|device[0-9_]+)' -or $_.InterfaceDescription -match '(?i)(wireguard|wintun|amnezia|warp|cloudflare)')
             } | ForEach-Object { $labels.Add("adapter:$($_.Name)") | Out-Null }
     } catch {
         Write-GreenLog 'adapter competition check failed'
+        if ($Action -eq 'PrepareUpdate') { throw }
     }
     Get-CompetingVpnServices |
         ForEach-Object { $labels.Add("service:$($_.Name)") | Out-Null }
@@ -1802,11 +1717,11 @@ function Get-CompetingVpnLabels {
 
 function Stop-CompetingVpnTunnels {
     param(
-        [ValidateSet('connect')]
+        [ValidateSet('connect', 'update')]
         [string]$Reason
     )
 
-    if ($Action -ne 'Connect') {
+    if ($Action -notin @('Connect', 'PrepareUpdate')) {
         # Enforce ownership under the privileged mutation lock, not a UI snapshot.
         return @(Get-CompetingVpnLabels)
     }
@@ -1816,8 +1731,7 @@ function Stop-CompetingVpnTunnels {
     }
 
     $script:CompetingVpnTakeoverOccurred = $true
-    Save-CompetingVpnState -Services $services
-    $script:CompetingVpnRollbackPending = $true
+    Complete-CompetingVpnTakeover
     Write-GreenLog "takeover requested reason=$Reason serviceCount=$($services.Count)"
     foreach ($service in $services) {
         $serviceName = [string]$service.Name
@@ -2302,6 +2216,14 @@ try {
             Complete-GreenDisconnectedRuntimeState
             Complete-CompetingVpnTakeover
         }
+        'PrepareUpdate' {
+            Ensure-GreenProgramDataAcl
+            Complete-CompetingVpnTakeover
+            Complete-GreenDisconnectedRuntimeState
+            if (@(Stop-CompetingVpnTunnels -Reason 'update').Count -gt 0) {
+                throw 'A competing VPN is still active; direct update download is blocked.'
+            }
+        }
         'Guard' { Invoke-GreenGuard }
         'ProbeStandby' {
             if (-not (Test-Path -LiteralPath $StandbyProbeScript -PathType Leaf)) {
@@ -2338,18 +2260,12 @@ try {
         -not (Test-GreenRuntimeStateStable)
     )
     if ($mustRecover) {
-        $cleanupComplete = $false
         try {
             Complete-GreenDisconnectedRuntimeState
-            $cleanupComplete = $true
         } catch {
             Write-GreenLog "failed tunnel cleanup line=$($_.InvocationInfo.ScriptLineNumber): $($_.Exception.Message)"
         }
-        try {
-            if ($cleanupComplete) { Restore-CompetingVpnTunnels }
-        } catch {
-            Write-GreenLog "failed competitor restore line=$($_.InvocationInfo.ScriptLineNumber): $($_.Exception.Message)"
-        }
+        Complete-CompetingVpnTakeover
     }
     $taskExitCode = 10
 } finally {

@@ -19,6 +19,12 @@ Future<bool> updateFileMatches(File file, String sha256, int size) async {
 
 class UpdateDownloadCancelled implements Exception {}
 
+class UpdatePreparationException implements Exception {
+  final String message;
+
+  const UpdatePreparationException(this.message);
+}
+
 class UpdateDownloadTask {
   final Duration connectTimeout;
   final Duration idleTimeout;

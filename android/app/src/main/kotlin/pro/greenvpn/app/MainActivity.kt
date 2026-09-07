@@ -93,6 +93,7 @@ class MainActivity : FlutterActivity() {
                 "listInstalledApps" -> handleListInstalledApps(result)
                 "openUrl" -> handleOpenUrl(call, result)
                 "getUpdateCacheDir" -> handleGetUpdateCacheDir(result)
+                "updateNetworkStatus" -> handleUpdateNetworkStatus(result)
                 "installApk" -> handleInstallApk(call, result)
                 else -> result.notImplemented()
             }
@@ -995,6 +996,20 @@ class MainActivity : FlutterActivity() {
                     )
                 )
             }
+        }
+    }
+
+    private fun handleUpdateNetworkStatus(result: MethodChannel.Result) {
+        try {
+            val connectivity = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val vpnActive = connectivity.allNetworks.any { network ->
+                val capabilities = connectivity.getNetworkCapabilities(network)
+                    ?: throw IllegalStateException("Network changed during update preparation")
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+            }
+            result.success(mapOf("ok" to true, "vpnActive" to vpnActive))
+        } catch (_: Exception) {
+            result.success(mapOf("ok" to false))
         }
     }
 

@@ -8068,7 +8068,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     await next;
   }
 
-  bool get _vpnInteractionLocked => vpnBusy || _vpnTapCooldown;
+  bool _updateInProgress = false;
+
+  bool get _vpnInteractionLocked =>
+      vpnBusy || _vpnTapCooldown || _updateInProgress;
 
   bool _clientFeatureEnabled(String key) {
     return fusionClientFeatureEnabled(
@@ -8514,6 +8517,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   Future<void> _resumeVpnAfterPause({required bool automatic}) async {
+    if (_updateInProgress) return;
     final hadPause = _vpnPausedUntil != null;
     _vpnPauseTimer?.cancel();
     _vpnPauseTimer = null;
@@ -8521,6 +8525,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
     if (!kIsWeb && Platform.isAndroid && automatic) {
       await Future<void>.delayed(const Duration(seconds: 2));
+      if (_updateInProgress || _vpnPausedUntil == null) return;
       await _syncVpnStatus(source: 'android_pause_elapsed');
       if (!mounted) return;
       if (!vpnEnabled) {
@@ -8864,6 +8869,104 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
   bool _logoutInProgress = false;
 
+  Future<void> _prepareForUpdateDownload() async {
+    if (!mounted ||
+        _updateInProgress ||
+        vpnBusy ||
+        _windowsRuntimeRecoveryRunning ||
+        _windowsRuntimeRestoreRunning) {
+      throw const UpdatePreparationException(
+        'Дождитесь завершения переключения VPN и повторите обновление.',
+      );
+    }
+    setState(() => _updateInProgress = true);
+    _vpnPauseTimer?.cancel();
+    _vpnPauseTimer = null;
+    _vpnPausedUntil = null;
+    _prefsDebounce?.cancel();
+    _cancelFreeAdSessionTimer();
+    _disarmWindowsRuntimeFailover(
+      reason: 'update_download',
+      requestStandbyCancel: false,
+    );
+    try {
+      await _pendingVpnActionStore.clear();
+      await _prefsStore.patch({'vpnPauseUntil': ''});
+      if (!kIsWeb && Platform.isAndroid) {
+        if (!await _cancelAndroidPauseResume() ||
+            !await _requestAndroidManagedDisconnect()) {
+          throw const UpdatePreparationException(
+            'Не удалось остановить Green VPN. Повторите обновление.',
+          );
+        }
+        await _waitForAndroidManagedDisconnect();
+      } else if (!kIsWeb && Platform.isWindows) {
+        const service = _GreenVpnSystemServiceClient();
+        final stopped = await service.prepareUpdate();
+        if (!stopped.ok) {
+          throw const UpdatePreparationException(
+            'Не удалось отключить VPN перед загрузкой. Выключите активные VPN '
+            'и повторите обновление. Если служба устарела, скачайте установщик с сайта.',
+          );
+        }
+      }
+      await _verifyUpdateDownloadNetwork();
+      await _syncVpnStatus(source: 'update_download');
+      _trackConnectionState(false);
+    } catch (_) {
+      _finishUpdateDownload();
+      rethrow;
+    }
+  }
+
+  Future<void> _verifyUpdateDownloadNetwork() async {
+    if (kIsWeb) return;
+    if (Platform.isAndroid) {
+      final own = await _readAndroidManagedConnectionStatus().timeout(
+        const Duration(seconds: 5),
+      );
+      if (own.isEmpty ||
+          own['desired'] == true ||
+          greenVpnAndroidConnectionUiState(own).busy ||
+          await _vpnBackend.isConnected().timeout(const Duration(seconds: 5))) {
+        throw const UpdatePreparationException(
+          'Green VPN ещё отключается. Повторите обновление через несколько секунд.',
+        );
+      }
+      final status = await kAndroidPlatformChannel
+          .invokeMapMethod<String, dynamic>('updateNetworkStatus')
+          .timeout(const Duration(seconds: 5));
+      if (status?['ok'] != true) {
+        throw const UpdatePreparationException(
+          'Не удалось проверить отключение VPN. Повторите обновление.',
+        );
+      }
+      if (status?['vpnActive'] != false) {
+        throw const UpdatePreparationException(
+          'Другой VPN ещё активен. Выключите его в настройках Android '
+          'и повторите обновление.',
+        );
+      }
+    } else if (Platform.isWindows) {
+      final status = await _readWindowsManagedTunnelState();
+      if (status.tunnelState !=
+              GreenVpnWindowsManagedTunnelState.disconnected ||
+          !status.externalVpnStateKnown ||
+          status.externalVpnActive) {
+        throw const UpdatePreparationException(
+          'VPN ещё активен или его состояние неизвестно. Выключите VPN '
+          'и повторите обновление.',
+        );
+      }
+    }
+  }
+
+  void _finishUpdateDownload() {
+    if (!mounted) return;
+    setState(() => _updateInProgress = false);
+    // Updating never resumes a tunnel, a scheduled pause or a previous VPN.
+  }
+
   bool get _accountChangeBlocked =>
       _vpnInteractionLocked ||
       _windowsRuntimeRecoveryRunning ||
@@ -8887,7 +8990,8 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         throw StateError('native_disconnect_rejected');
       }
       await _waitForAndroidManagedDisconnect();
-    } else if (!kIsWeb && (Platform.isWindows || await _vpnBackend.isConnected())) {
+    } else if (!kIsWeb &&
+        (Platform.isWindows || await _vpnBackend.isConnected())) {
       final stopped = await _vpnBackend.disconnect().timeout(
         const Duration(seconds: 130),
       );
@@ -13164,6 +13268,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   Future<void> _armRuntimeFailover(ServerLocation server) async {
+    if (_updateInProgress) return;
     final isAndroid =
         !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
     final isWindows =
@@ -14163,11 +14268,12 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   Future<void> _toggleVpnReal() async {
+    if (_updateInProgress) return;
     final toggleWatch = Stopwatch()..start();
     await appendBlueVpnClientLog(
       'toggle requested vpnEnabled=$vpnEnabled busy=$vpnBusy cooldown=$_vpnTapCooldown',
     );
-    if (!mounted) return;
+    if (!mounted || _updateInProgress) return;
     if (vpnBusy) {
       _toast(
         context,
@@ -16681,6 +16787,11 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
                                     Navigator.of(context).push(
                                       MaterialPageRoute(
                                         builder: (_) => UpdatesPage(
+                                          prepareDownload:
+                                              _prepareForUpdateDownload,
+                                          verifyDownloadNetwork:
+                                              _verifyUpdateDownloadNetwork,
+                                          finishDownload: _finishUpdateDownload,
                                           initialManifest: manifest,
                                           autoStart: true,
                                           forceRequired: manifest.required,
@@ -17127,9 +17238,15 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         onCancelAutoRenew: _cancelAutoRenew,
         onLogout: _logoutAccount,
         onOpenUpdates: () {
-          Navigator.of(
-            context,
-          ).push(MaterialPageRoute(builder: (_) => const UpdatesPage()));
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => UpdatesPage(
+                prepareDownload: _prepareForUpdateDownload,
+                verifyDownloadNetwork: _verifyUpdateDownloadNetwork,
+                finishDownload: _finishUpdateDownload,
+              ),
+            ),
+          );
         },
         onOpenDiagnostics: _openDiagnosticsPage,
         showWindowsCloseBehavior:
@@ -21825,12 +21942,18 @@ class _AutoRenewSettingsPageState extends State<AutoRenewSettingsPage> {
 }
 
 class UpdatesPage extends StatefulWidget {
+  final Future<void> Function() prepareDownload;
+  final Future<void> Function() verifyDownloadNetwork;
+  final VoidCallback finishDownload;
   final bool forceRequired;
   final GreenVpnUpdateManifest? initialManifest;
   final bool autoStart;
 
   const UpdatesPage({
     super.key,
+    required this.prepareDownload,
+    required this.verifyDownloadNetwork,
+    required this.finishDownload,
     this.forceRequired = false,
     this.initialManifest,
     this.autoStart = false,
@@ -21933,10 +22056,10 @@ class _UpdatesPageState extends State<UpdatesPage> {
 
   String get _installHint {
     if (!kIsWeb && Platform.isAndroid) {
-      return 'Обновление скачается внутри Green VPN, затем Android откроет системную установку.';
+      return 'Перед загрузкой Green VPN отключится. После скачивания Android откроет установку.';
     }
     if (!kIsWeb && Platform.isWindows) {
-      return 'Установщик скачается внутри Green VPN и запустится автоматически.';
+      return 'Перед загрузкой VPN отключится. Установщик скачается и запустится автоматически.';
     }
     return 'Green VPN скачает файл обновления для этой платформы.';
   }
@@ -22129,6 +22252,8 @@ class _UpdatesPageState extends State<UpdatesPage> {
     }
 
     if (_cancelUpdateRequested) throw UpdateDownloadCancelled();
+    await widget.verifyDownloadNetwork();
+    if (_cancelUpdateRequested) throw UpdateDownloadCancelled();
     final task = UpdateDownloadTask();
     _activeDownload = task;
     return task.download(
@@ -22187,11 +22312,15 @@ class _UpdatesPageState extends State<UpdatesPage> {
     setState(() {
       _downloading = true;
       _downloadProgress = null;
-      _downloadStatus = 'Подготовка обновления для $_platformTitle...';
+      _downloadStatus = 'Отключаем VPN перед загрузкой...';
       _downloadError = null;
     });
 
+    var prepared = false;
     try {
+      await widget.prepareDownload();
+      prepared = true;
+      if (!mounted || _cancelUpdateRequested) throw UpdateDownloadCancelled();
       final file = await _downloadUpdateFile(manifest);
       if (!mounted || _cancelUpdateRequested) throw UpdateDownloadCancelled();
       if (!await _downloadedFileMatchesManifest(file, manifest)) {
@@ -22199,6 +22328,8 @@ class _UpdatesPageState extends State<UpdatesPage> {
           'Проверка файла не пройдена. Установка остановлена.',
         );
       }
+      if (!mounted || _cancelUpdateRequested) throw UpdateDownloadCancelled();
+      await widget.verifyDownloadNetwork();
       if (!mounted || _cancelUpdateRequested) throw UpdateDownloadCancelled();
       if (mounted) {
         setState(() => _downloadStatus = 'Файл скачан. Запускаю установку...');
@@ -22216,6 +22347,8 @@ class _UpdatesPageState extends State<UpdatesPage> {
       setState(() {
         _downloadError = error is UpdateDownloadCancelled
             ? 'Загрузка отменена. Обновление можно запустить повторно.'
+            : error is UpdatePreparationException
+            ? error.message
             : error is TimeoutException
             ? 'Загрузка не завершилась вовремя. Проверьте соединение и повторите попытку.'
             : error is FormatException
@@ -22227,6 +22360,7 @@ class _UpdatesPageState extends State<UpdatesPage> {
       });
     } finally {
       _activeDownload = null;
+      if (prepared) widget.finishDownload();
       if (mounted) {
         setState(() {
           _downloading = false;
@@ -25666,6 +25800,13 @@ class _GreenVpnSystemServiceClient {
     responseTimeout: const Duration(seconds: 130),
   );
 
+  Future<_GreenVpnSystemServiceResponse> prepareUpdate() => _request(
+    'POST',
+    '/update/prepare',
+    connectTimeout: const Duration(seconds: 2),
+    responseTimeout: const Duration(seconds: 130),
+  );
+
   Future<_GreenVpnSystemServiceResponse> status() => _request(
     'GET',
     '/status',
@@ -25765,6 +25906,8 @@ class _GreenVpnSystemServiceClient {
   static bool _requiresLocalToken(String path) {
     final lower = path.toLowerCase();
     return lower == '/connect' ||
+        lower == '/reconnect' ||
+        lower == '/update/prepare' ||
         lower == '/disconnect' ||
         lower == '/status' ||
         lower == '/standby/probe' ||

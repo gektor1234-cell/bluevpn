@@ -437,6 +437,7 @@ int TaskActionCode(const wchar_t* action) {
   if (value == L"Guard") return 3;
   if (value == L"ProbeStandby") return 4;
   if (value == L"Reconnect") return 5;
+  if (value == L"PrepareUpdate") return 6;
   return 0;
 }
 
@@ -452,6 +453,8 @@ std::string TaskActionName(int action_code) {
       return "probe_standby";
     case 5:
       return "reconnect";
+    case 6:
+      return "prepare_update";
     default:
       return "unknown";
   }
@@ -992,18 +995,19 @@ void HandleRequest(SOCKET client, const std::string& request) {
     return;
   }
 
-  if (path == "/disconnect" && method != "post") {
+  if ((path == "/disconnect" || path == "/update/prepare") && method != "post") {
     SendHttp(client, 405, "Method Not Allowed",
              "{\"ok\":false,\"message\":\"disconnect requires POST\"}");
     return;
   }
 
-  if (method == "post" && path == "/disconnect") {
+  if (method == "post" && (path == "/disconnect" || path == "/update/prepare")) {
     if (!RequireLocalToken(client, request)) {
       return;
     }
     CancelStandbyProbeAndWait();
-    const int exit_code = RunTaskAction(L"Disconnect", 120000);
+    const int exit_code = RunTaskAction(
+        path == "/update/prepare" ? L"PrepareUpdate" : L"Disconnect", 120000);
     if (exit_code == 0) {
       SendHttp(client, 200, "OK",
                TaskResultJson(true, exit_code, "disconnect task accepted"));

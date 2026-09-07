@@ -137,8 +137,8 @@ function Prepare-ExactCandidate {
         }
         $taskText = Get-Content -LiteralPath $taskPath -Raw -Encoding UTF8
         foreach ($marker in @(
-            'Save-CompetingVpnState',
-            'Restore-CompetingVpnTunnels',
+            'Complete-CompetingVpnTakeover',
+            "Stop-CompetingVpnTunnels -Reason 'update'",
             '$activeAdapters = @(if ('
         )) {
             if (-not $taskText.Contains($marker)) {

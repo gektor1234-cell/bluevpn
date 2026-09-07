@@ -17,14 +17,17 @@ foreach ($file in @('greenvpn_vpn_task.ps1', 'greenvpn_transport_preview_vpn_tas
         $errors = $null
         $ast = [Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
         if ($errors.Count) { throw ($errors | Out-String) }
-        foreach ($name in @('Restore-CompetingVpnTunnels', 'Complete-CompetingVpnTakeover', 'Stop-CompetingVpnTunnels', 'Invoke-GreenGuard')) {
+        foreach ($name in @('Save-CompetingVpnState', 'Restore-CompetingVpnTunnels')) {
+            $fn = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
+            if ($null -ne $fn) { throw "Forbidden external VPN restoration function: $name" }
+        }
+        foreach ($name in @('Complete-CompetingVpnTakeover', 'Stop-CompetingVpnTunnels', 'Invoke-GreenGuard')) {
             $fn = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
             . ([scriptblock]::Create($fn.Extent.Text))
         }
         $dispatcher = $ast.Find({ param($node) $node -is [Management.Automation.Language.TryStatementAst] -and $node.Body.Extent.Text.Contains('switch ($Action)') }, $false)
         if ($null -eq $dispatcher) { throw 'Task dispatcher missing' }
         $run = [scriptblock]::Create($dispatcher.Extent.Text)
-        $script:CompetingVpnRollbackPending = $false
         $script:ActiveRuntimeTransitionGeneration = $null
         $script:started = 0
         $script:stopped = 0
@@ -56,8 +59,6 @@ foreach ($file in @('greenvpn_vpn_task.ps1', 'greenvpn_transport_preview_vpn_tas
         function Test-Path { param($LiteralPath, $PathType) return $script:snapshotExists }
         function Remove-Item { param($LiteralPath, [switch]$Force, $ErrorAction) $script:snapshotExists = $false; $script:deleted++ }
         function Get-Content { param($LiteralPath, [switch]$Raw) return (@{schema=1; services=@($script:snapshotName)} | ConvertTo-Json) }
-        function Test-AllowedCompetingVpnServiceName { param($Name) return $Name -eq 'WireGuardTunnel$ExternalTest' }
-        function Save-CompetingVpnState { param($Services) $script:snapshotExists = $true }
         function Get-CompetingVpnServices {
             if ($script:competitorRunning) { [pscustomobject]@{Name='WireGuardTunnel$ExternalTest'} }
         }
@@ -85,14 +86,14 @@ foreach ($file in @('greenvpn_vpn_task.ps1', 'greenvpn_transport_preview_vpn_tas
         }
         function Start-OwnTunnel { Start-GreenTunnel }
 
-        Restore-CompetingVpnTunnels
+        Complete-CompetingVpnTakeover
         Assert-Equal $script:started 0 'Stale snapshot must not restart a VPN'
         $Action = 'Connect'
         $taskExitCode = 0
         . $run
         Assert-Equal $taskExitCode 0 'Successful takeover'
         Assert-Equal $script:stopped 1 'Connect stops external VPN once'
-        Assert-Equal $script:CompetingVpnRollbackPending $false 'Successful takeover commits'
+        Assert-Equal $script:snapshotExists $false 'Successful takeover does not retain a restore journal'
         $Action = 'Disconnect'
         . $run
         Assert-Equal $script:started 0 'Disconnect must not restore a previous VPN'
@@ -102,13 +103,13 @@ foreach ($file in @('greenvpn_vpn_task.ps1', 'greenvpn_transport_preview_vpn_tas
         $Action = 'Connect'
         . $run
         Assert-Equal $taskExitCode 10 'Failed takeover reports failure'
-        Assert-Equal $script:started 1 'Failed initial takeover rolls back once'
-        Restore-CompetingVpnTunnels
-        Assert-Equal $script:started 1 'Rollback is single use'
+        Assert-Equal $script:started 0 'Failed initial takeover must leave external VPN stopped'
+        Complete-CompetingVpnTakeover
+        Assert-Equal $script:started 0 'Cleanup never starts another VPN'
 
         $script:failCleanup = $true
         . $run
-        Assert-Equal $script:started 1 'Unconfirmed cleanup must not start a competing tunnel'
+        Assert-Equal $script:started 0 'Unconfirmed cleanup must not start a competing tunnel'
         $script:failCleanup = $false
         Complete-CompetingVpnTakeover
         $script:competitorRunning = $true
@@ -118,7 +119,7 @@ foreach ($file in @('greenvpn_vpn_task.ps1', 'greenvpn_transport_preview_vpn_tas
         . $run
         Assert-Equal $script:stopped $beforeStop 'Guard must not seize another VPN'
         Assert-Equal $script:cleanup ($beforeCleanup + 1) 'Guard yields own tunnel'
-        Assert-Equal $script:started 1 'Guard must not restore old snapshot'
+        Assert-Equal $script:started 0 'Guard must not restore old snapshot'
 
         $script:competitorRunning = $false
         $script:routerRequired = 1
@@ -126,7 +127,7 @@ foreach ($file in @('greenvpn_vpn_task.ps1', 'greenvpn_transport_preview_vpn_tas
         $beforeCleanup = $script:cleanup
         . $run
         Assert-Equal $script:cleanup ($beforeCleanup + 1) 'Router loss remains fail closed'
-        Assert-Equal $script:started 1 'Router loss must not restore old VPN'
+        Assert-Equal $script:started 0 'Router loss must not restore old VPN'
 
         $script:failConnect = $false
         $script:routerRequired = 0
@@ -136,11 +137,21 @@ foreach ($file in @('greenvpn_vpn_task.ps1', 'greenvpn_transport_preview_vpn_tas
         . $run
         Assert-Equal $taskExitCode 10 'Recovery rejects an external VPN activated after the UI check'
         Assert-Equal $script:stopped $beforeStop 'Recovery never stops another VPN'
-        Assert-Equal $script:started 1 'Recovery never restores another VPN'
+        Assert-Equal $script:started 0 'Recovery never restores another VPN'
         $script:competitorRunning = $false
         $taskExitCode = 0
         . $run
         Assert-Equal $taskExitCode 0 'Recovery can connect when no external VPN owns the network'
+
+        $script:competitorRunning = $true
+        $beforeStop = $script:stopped
+        $beforeCleanup = $script:cleanup
+        $Action = 'PrepareUpdate'
+        . $run
+        Assert-Equal $taskExitCode 0 'Update preparation succeeds'
+        Assert-Equal $script:stopped ($beforeStop + 1) 'Update preparation stops supported external VPN'
+        Assert-Equal $script:cleanup ($beforeCleanup + 1) 'Update preparation stops Green VPN first'
+        Assert-Equal $script:started 0 'Update preparation never restores a VPN'
         Write-Output "$file ownership behavior passed"
     }
 }
