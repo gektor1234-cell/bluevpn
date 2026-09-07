@@ -71,8 +71,14 @@ python -m py_compile `
 if ($LASTEXITCODE -ne 0) {
     throw 'Python validation failed for backend-only bundle.'
 }
-Get-ChildItem -LiteralPath $stage -Directory -Filter '__pycache__' -Recurse |
-    Remove-Item -Recurse -Force
+foreach ($cache in Get-ChildItem -LiteralPath $stage -Directory -Filter '__pycache__' -Recurse) {
+    $resolvedCache = (Resolve-Path -LiteralPath $cache.FullName).Path
+    if (-not $resolvedCache.StartsWith($stage.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase) -or
+        ($cache.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw "Unsafe generated cache path: $resolvedCache"
+    }
+    Remove-Item -LiteralPath $resolvedCache -Recurse -Force
+}
 Push-Location $repo
 try {
     $gitBash = Join-Path $env:ProgramFiles 'Git\bin\bash.exe'

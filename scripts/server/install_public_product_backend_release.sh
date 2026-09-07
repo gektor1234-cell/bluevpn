@@ -284,7 +284,7 @@ policy_defaults = {
 }
 
 updates = {
-    **source_values,
+    **{key: target_values.get(key, value) for key, value in source_values.items()},
     **{
         key: target_values.get(key, default)
         for key, default in policy_defaults.items()
@@ -298,13 +298,13 @@ updates = {
     "GREENVPN_PAID_BETA_BILLING_PRIMARY": billing_primary,
     "GREENVPN_REFUND_BILLING_PRIMARY": billing_primary,
     "GREENVPN_AUTO_RENEWAL_BILLING_PRIMARY": billing_primary,
-    "GREENVPN_PUBLIC_PRODUCT_TRANSPORT_SERVER_IDS": (
+    "GREENVPN_PUBLIC_PRODUCT_TRANSPORT_SERVER_IDS": target_values.get("GREENVPN_PUBLIC_PRODUCT_TRANSPORT_SERVER_IDS", (
         "nl1-awg2-canary,nl1-hysteria2-canary,nl1-vless-reality-xhttp-canary,"
         "nl1-naive-https-canary,nl2-awg2-canary,nl2-hysteria2-canary,"
         "nl2-vless-reality-xhttp-canary,nl2-naive-https-canary,nl2-dnstt-canary,"
         "gb1-awg2-canary,gb1-hysteria2-canary,"
         "gb1-vless-reality-xhttp-canary,gb1-naive-https-canary"
-    ),
+    )),
 }
 if select_prodamus_fail_closed:
     updates.update(
