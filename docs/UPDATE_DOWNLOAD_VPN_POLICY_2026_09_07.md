@@ -46,3 +46,8 @@ Android 0.4.15+2026090703, Windows 0.4.12+4645. Backend stays
 0.9.166-product-hardening.1. Existing ownership fixtures and package contract
 markers were aligned with the new invariant, but were NOT RUN. No runtime test,
 analyzer, physical installation or native network transition was performed.
+
+Stable publisher rollback is restricted to the affected platform's stable
+app_releases rows. It no longer restores the whole database over payments or
+subscriptions created since the publication backup. This rollback change is
+source-reviewed only; no forced production failure or rollback test was run.

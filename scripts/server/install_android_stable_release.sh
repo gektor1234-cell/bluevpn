@@ -180,7 +180,23 @@ source_raw, target_raw = sys.argv[1:]
 source = sqlite3.connect(f"file:{source_raw}?mode=ro", uri=True, timeout=60)
 target = sqlite3.connect(target_raw, timeout=60)
 try:
-    source.backup(target)
+    # Roll back release metadata only; never overwrite payments created since backup.
+    columns = [row[1] for row in source.execute('PRAGMA table_info(app_releases)')]
+    quoted = ', '.join('"' + column.replace('"', '""') + '"' for column in columns)
+    rows = source.execute(
+        'SELECT * FROM app_releases WHERE platform = ? AND channel = ?',
+        ('android', 'stable'),
+    ).fetchall()
+    target.execute('BEGIN IMMEDIATE')
+    target.execute(
+        'DELETE FROM app_releases WHERE platform = ? AND channel = ?',
+        ('android', 'stable'),
+    )
+    target.executemany(
+        f'INSERT INTO app_releases ({quoted}) VALUES ({", ".join("?" for _ in columns)})',
+        rows,
+    )
+    target.commit()
     if target.execute("PRAGMA quick_check").fetchone()[0] != "ok":
         raise SystemExit("database restore quick_check failed")
 finally:
