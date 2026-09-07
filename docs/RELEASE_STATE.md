@@ -1,6 +1,18 @@
 # Green VPN Release State
 
-## Windows Installer Completion 0.4.10 (2026-09-07 MSK)
+## Current: Product Audit Hardening (2026-09-07 MSK)
+
+Mandatory stable Android `0.4.14+2026090702`, Windows `0.4.11+4644`, backend
+`0.9.166-product-hardening.1` are published on both control nodes. Public exact
+checks 12/12, enforcement 24/24, DB integrity/sync/units pass. Paid-beta unchanged;
+primary payments remain enabled, automatic charges remain disabled.
+Guest tests: backend 245, Flutter default 167/public 177, Android JVM 34 PASS.
+Windows application-only selection is a mitigation for unsafe site/IP snapshots,
+not implementation of domain routing. Physical acceptance is NOT RUN under the
+owner's waiver. No host VPN transitions. Windows installer remains unsigned.
+See `PRODUCT_HARDENING_ROLLOUT_2026_09_07.md` for exact files and limitations.
+
+## Historical: Windows Installer Completion 0.4.10 (2026-09-07 MSK)
 
 Windows `0.4.10+4643` is published on fallback and primary with required=true,
 rollout=100%, minimum `0.4.10`. Successful installation closes automatically;

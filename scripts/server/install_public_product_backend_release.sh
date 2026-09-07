@@ -96,6 +96,19 @@ echo "select_yookassa_npd_manual_fail_closed=$SELECT_YOOKASSA_NPD_MANUAL_FAIL_CL
 echo "subscription_expiry_start=$([[ $DEFER_SUBSCRIPTION_EXPIRY -eq 1 ]] && echo deferred || echo enabled)"
 echo "source_main_sha256=$(sha256sum "$BUNDLE_DIR/backend/app/main.py" | awk '{print $1}')"
 echo "database_source=production_only"
+python3 - "$DATA_DIR/bluevpn.db" "$BUNDLE_DIR" <<'PY'
+import pathlib, shutil, sys
+database, bundle = map(pathlib.Path, sys.argv[1:])
+wal = pathlib.Path(str(database) + '-wal')
+snapshot_size = database.stat().st_size + (wal.stat().st_size if wal.exists() else 0)
+bundle_size = sum(path.stat().st_size for path in bundle.rglob('*') if path.is_file())
+required = snapshot_size * 2 + bundle_size * 2 + 128 * 1024 * 1024
+for root in (database.parent, pathlib.Path('/root')):
+    free = shutil.disk_usage(root).free
+    if free < required:
+        raise SystemExit(f'insufficient backend backup reserve: free={free} required={required}')
+print(f'backend_disk_reserve_required={required}')
+PY
 
 [[ $APPLY -eq 1 ]] || exit 0
 [[ $EUID -eq 0 ]] || { echo "Run apply mode as root" >&2; exit 1; }

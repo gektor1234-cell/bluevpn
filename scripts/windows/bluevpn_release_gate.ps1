@@ -1,7 +1,8 @@
 param(
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\.." )).Path,
     [string]$ReleaseZip = "",
-    [switch]$StrictPaymentGate
+    [switch]$StrictPaymentGate,
+    [switch]$StaticOnly
 )
 
 Set-StrictMode -Version Latest
@@ -2415,12 +2416,16 @@ foreach ($scriptPath in @(
     }
 }
 
-try {
-    & $windowsStandbyResultContractTestPath -ProjectRoot $ProjectRoot | Out-Null
-    Add-Pass 'Windows standby probe fails closed and recovers from transient cleanup races'
-}
-catch {
-    Add-Error "Windows standby result contract test failed: $($_.Exception.Message)"
+if ($StaticOnly) {
+    Add-Warning 'NOT RUN: Windows PowerShell child-process standby fixture (StaticOnly).'
+} else {
+    try {
+        & $windowsStandbyResultContractTestPath -ProjectRoot $ProjectRoot | Out-Null
+        Add-Pass 'Windows standby probe fails closed and recovers from transient cleanup races'
+    }
+    catch {
+        Add-Error "Windows standby result contract test failed: $($_.Exception.Message)"
+    }
 }
 
 try {

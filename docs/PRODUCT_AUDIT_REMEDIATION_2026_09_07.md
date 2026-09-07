@@ -26,7 +26,7 @@ Baseline: `89b302e6cbc5e3f1703742194a6992a9ba335127`.
 | A04 | Bounded, cancellable mandatory download | IMPLEMENTED | PASS: guest HTTP fixtures, truncation/oversize/cancel/header/idle/total timeout |
 | A05 | Strict manifest/hash/size/version | IMPLEMENTED | PASS: incomplete metadata, untrusted URI, downgrade, modified cache, same-version build |
 | A06 | Bounded support decompression | IMPLEMENTED: 512 KiB, bounded redaction, per-user throttle | PASS: expansion rejected, compatible sanitized reports |
-| A07 | Stable backup retention/disk reserve | IMPLEMENTED: roots + service permissions + deploy reserve | PASS: retention fixtures; production maintenance pending |
+| A07 | Stable backup retention/disk reserve | IMPLEMENTED: roots + service permissions + deploy reserve | PASS: fixtures, production bounded retention and reserve preflight |
 | A08 | Email operation timeout/idempotency | IMPLEMENTED: durable bounded queue, primary-pinned polling | PASS: mocked SMTP/idempotency/restart/cooldown; live email NOT RUN |
 | A09 | OTP resend/change email | IMPLEMENTED | PASS: UI resend cooldown/change-email flow |
 | A10 | Authoritative auto-renew capability | IMPLEMENTED | PASS: unavailable provider cannot enable, existing agreement can cancel |
@@ -34,13 +34,14 @@ Baseline: `89b302e6cbc5e3f1703742194a6992a9ba335127`.
 | A12 | Session lifetime/hash/revocation | IMPLEMENTED: 90 days, digests, logout tombstones, opt-in sync format | PASS: migration, revoked raw replica, digest replay rejection, old paid-beta compatibility |
 | A13 | Account logout stops own native session | IMPLEMENTED: logout, invalid session, restore, checkout promotion | CODE; physical queued/connected disconnect NOT RUN |
 | A14 | Fragmented local HTTP headers | IMPLEMENTED: bounded complete header before parsing | PASS: C++ split-every-byte/oversize/NUL fixture compiled and executed in WSL |
-| A15 | Redact reports before storage | IMPLEMENTED: new reports + explicit legacy migration | PASS: old/new report redaction + idempotent migration; production migration pending |
+| A15 | Redact reports before storage | IMPLEMENTED: new reports + explicit legacy migration | PASS: fixtures and production migration, 10 reports on each node |
 | A16 | Android unvalidated-network/ownership states | IMPLEMENTED: probe eligibility vs validation, explicit takeover epoch | PASS: native policy tests; real mobile/telephony matrix NOT RUN |
 | A17 | Production test matrix/release gates | IMPLEMENTED: default + public flags, native parser CI, exact historical scanner exceptions | PASS: guest test runs and current/history secret scan; hosted CI not yet run |
 | A18 | Mobile hero overlap | IMPLEMENTED: in-flow mobile layout | CODE; fresh visual browser acceptance NOT RUN |
-| A19 | Download compatibility information | IMPLEMENTED: platform requirements + bounded live version fetch | CODE; live publication pending |
+| A19 | Download compatibility information | IMPLEMENTED: platform requirements + bounded live version fetch | PASS: live HTML/script/API and explicit CSP allowance; visual acceptance NOT RUN |
 
-Publication status: NOT STARTED. Existing release files remain unchanged.
+Publication status: COMPLETE on primary and fallback. See
+`PRODUCT_HARDENING_ROLLOUT_2026_09_07.md`. Physical acceptance remains NOT RUN.
 
 ## Verification evidence
 
@@ -54,9 +55,10 @@ are exact historical fixture commit/path/line hashes, never current-tree rules.
 
 ## Release and rollback boundaries
 
-Next candidates reserved after reading both live manifests: Android
+Published exact candidates after reading both live manifests: Android
 `0.4.14+2026090702`, Windows `0.4.11+4644`, backend
-`0.9.166-product-hardening.1`. They are NOT published yet.
+`0.9.166-product-hardening.1`. Post-sync exact verification 12/12 and mandatory
+update enforcement 24/24 PASS. Production support migration and retention applied.
 
 Session storage is a one-way migration. Pause only production DB sync on both
 remote control nodes until both run the new format; paid-beta retains raw-token

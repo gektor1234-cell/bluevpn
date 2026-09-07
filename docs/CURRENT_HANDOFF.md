@@ -6,7 +6,21 @@ This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
 `PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md`. Dated reports are evidence only.
 
-## Current production: Windows installer completion 0.4.10, 2026-09-07
+## Current Production: Audit Hardening, 2026-09-07
+
+Android `0.4.14+2026090702`, Windows `0.4.11+4644`, backend
+`0.9.166-product-hardening.1` are published on primary and fallback. Updates are
+mandatory, rollout 100%, minimum versions `0.4.14` / `0.4.11`. Exact public
+verification 12/12 and enforcement 24/24 pass; paid-beta and sales policy unchanged.
+All A01-A19 findings have implementation or an explicit mitigation; Windows
+site-only routing is restricted to whole applications/browser, not a domain engine.
+Guest fixtures pass; physical/installer/email/payment/carrier acceptance remains
+NOT RUN under owner waiver. No host VPN/network transition and no automation.
+Use `PRODUCT_HARDENING_ROLLOUT_2026_09_07.md` and
+`PRODUCT_AUDIT_REMEDIATION_2026_09_07.md` for hashes, evidence and rollback.
+Never resume an old physical runner or heartbeat from historical notes.
+
+## Historical Production: Windows Installer Completion 0.4.10, 2026-09-07
 
 - The installer now closes automatically after a successful child-process exit,
   without requiring a final Done click. Installation/startup errors remain visible

@@ -86,6 +86,7 @@ command -v python3 >/dev/null 2>&1 || { echo "python3 is required." >&2; exit 1;
 WORK_ROOT="$(mktemp -d /root/greenvpn-main-site-verify.XXXXXX)"
 BACKUP_DIR=""
 APPLY_STARTED=0
+CSP_CONFIG=""
 cleanup() {
   rm -rf --one-file-system -- "${WORK_ROOT}"
 }
@@ -103,6 +104,9 @@ rollback() {
         rm -f -- "${destination}"
       fi
     done
+    if [[ -n "$CSP_CONFIG" && -f "${BACKUP_DIR}/nginx-main-site.conf" ]]; then
+      install -m 0644 "${BACKUP_DIR}/nginx-main-site.conf" "$CSP_CONFIG"
+    fi
     nginx -t >/dev/null 2>&1 && systemctl reload nginx || true
     echo "main_site_rollback=completed" >&2
   fi
@@ -185,6 +189,28 @@ echo "main_site_target=${TARGET}"
 echo "main_site_bundle_sha256=$(sha256sum -- "${BUNDLE}" | cut -d' ' -f1)"
 echo "main_site_release_files=${#RELEASE_FILES[@]}"
 echo "main_site_retired_files=${#RETIRED_FILES[@]}"
+if [[ "$TARGET" == timeweb ]]; then
+  CSP_CONFIG=/etc/nginx/sites-available/greenvpn-site
+  [[ -f "$CSP_CONFIG" && ! -L "$CSP_CONFIG" ]]
+  python3 - "$CSP_CONFIG" "$WORK_ROOT/nginx-main-site.conf" <<'PY'
+import pathlib, re, sys
+source, target = map(pathlib.Path, sys.argv[1:])
+def update(match):
+    directives = [value.strip() for value in match.group(2).split(';') if value.strip()]
+    connect = [value for value in directives if value.startswith('connect-src ')]
+    if connect:
+        if 'https://api.greenvpn.pro' not in connect[0].split():
+            raise SystemExit('Unexpected connect-src policy; refusing to replace it')
+    else:
+        directives.insert(1, "connect-src 'self' https://api.greenvpn.pro")
+    return match.group(1) + '; '.join(directives) + match.group(3)
+text, count = re.subn(r'(add_header Content-Security-Policy ")(default-src \'self\';[^"]+)(" always;)', update, source.read_text())
+if count < 1:
+    raise SystemExit('Expected main-site CSP was not found')
+target.write_text(text)
+print('main_site_csp=explicit_production_api_only')
+PY
+fi
 [[ "${APPLY}" -eq 1 ]] || exit 0
 
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -209,7 +235,13 @@ for relative in "${BACKUP_FILES[@]}"; do
   fi
 done
 
+if [[ -n "$CSP_CONFIG" ]]; then
+  install -m 0600 "$CSP_CONFIG" "${BACKUP_DIR}/nginx-main-site.conf"
+fi
 APPLY_STARTED=1
+if [[ -n "$CSP_CONFIG" ]]; then
+  install -m 0644 "$WORK_ROOT/nginx-main-site.conf" "$CSP_CONFIG"
+fi
 for relative in "${RELEASE_FILES[@]}"; do
   destination="${SITE_ROOT}/${relative}"
   temporary="${destination}.tmp.$$"
