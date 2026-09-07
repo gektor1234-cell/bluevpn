@@ -221,8 +221,8 @@ updates = {
     "GREENVPN_ANDROID_MIN_SUPPORTED_VERSION": min_supported_version,
     "GREENVPN_ANDROID_UPDATE_RELEASED_AT": released_at,
     "GREENVPN_ANDROID_UPDATE_CHANGELOG": (
-        f"Green VPN {version}: исправлена доступность оплаты и проверка "
-        "состояния заказа через основной платёжный узел."
+        f"Green VPN {version}: исправлена обработка устаревших команд "
+        "подключения и взаимодействие с другими VPN."
     ),
     "GREENVPN_ANDROID_UPDATE_ROLLOUT": "100",
 }
