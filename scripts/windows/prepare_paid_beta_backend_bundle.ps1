@@ -6,6 +6,9 @@ param(
     [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9._-]*$')]
     [string]$BackendVersion = '0.9.116-active-active.3',
 
+    [ValidateSet('paid-beta', 'public-product')]
+    [string]$Contour = 'paid-beta',
+
     [string]$OutDir = 'C:\BlueVPN_Builds\paid_beta_backend_20260713'
 )
 
@@ -119,7 +122,7 @@ finally {
 
 $manifest = [ordered]@{
     schema = 1
-    contour = 'paid-beta'
+    contour = $Contour
     releaseId = $ReleaseId
     backendVersion = $BackendVersion
     generatedUtc = [DateTime]::UtcNow.ToString('o')
