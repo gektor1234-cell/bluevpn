@@ -1,6 +1,23 @@
 # Green VPN Release State
 
-## Reliability Android 0.4.13 / Windows 0.4.9 (2026-09-07 MSK)
+## Windows Installer Completion 0.4.10 (2026-09-07 MSK)
+
+Windows `0.4.10+4643` is published on fallback and primary with required=true,
+rollout=100%, minimum `0.4.10`. Successful installation closes automatically;
+errors and unfinished installation remain visible. Diagnostic override 0 remains.
+Android stays `0.4.13+2026090701`; its artifact and release metadata did not change.
+Paid-beta, backend versions and sales policy also remain unchanged.
+
+Windows installer: 52841984 bytes, NotSigned, SHA-256
+`457630468B25767E96FB203D548AB4BE37008F188FEE1BC8D51CB5F509332EF1`.
+Build/publisher source: `ccb25375fdb61cc320bae1ff06d0f1c4d3057f2b`.
+Verified 12 mocked UI completion cases, exact embedded UI, package audit 66/0,
+post-sync public checks 12/12, enforcement 12/12 and both site download links.
+DBs, sync, required units/timers and nginx pass. No host VPN transitions,
+physical installation or automation; physical upgrade testing belongs to owner.
+See `WINDOWS_INSTALLER_AUTOCLOSE_ROLLOUT_2026_09_07.md` for complete evidence.
+
+## Previous Reliability Android 0.4.13 / Windows 0.4.9 (2026-09-07 MSK)
 
 Both platforms are published as mandatory stable releases on fallback and primary:
 Android `0.4.13+2026090701` (signed), Windows `0.4.9+4642` (NotSigned).

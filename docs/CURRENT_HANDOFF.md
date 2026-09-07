@@ -6,7 +6,7 @@ This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
 `PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md`. Dated reports are evidence only.
 
-## Prepared, not published: Windows installer completion UX
+## Current production: Windows installer completion 0.4.10, 2026-09-07
 
 - The installer now closes automatically after a successful child-process exit,
   without requiring a final Done click. Installation/startup errors remain visible
@@ -15,10 +15,23 @@ This is the current operational entry point. Read it together with
   for diagnostics. The normal unset value and existing smoke value 1 auto-close.
 - `test_installer_ui_completion.ps1` exercises the embedded UI handlers with
   mocked controls/processes: 12 cases passed, without opening windows or installing.
-- Source-only change requested after the mandatory rollout below. No new build,
-  installation, publication, browser download-dialog change or version bump.
+- Published Windows-only `0.4.10+4643` on fallback then primary with mandatory
+  update, rollout 100%, minimum `0.4.10`. Installer: `52841984` bytes, NotSigned,
+  SHA-256 `457630468B25767E96FB203D548AB4BE37008F188FEE1BC8D51CB5F509332EF1`.
+- Build/publisher source `ccb25375fdb61cc320bae1ff06d0f1c4d3057f2b` is pushed.
+  Package audit: 66 entries, zero errors; extracted UI matches tested source.
+  Post-sync public checks 12/12, enforcement 12/12, both site links correct.
+- Android remains `0.4.13+2026090701` with exactly the previous bytes. Paid-beta,
+  backend versions, sales policy and Android metadata are unchanged.
+- Both nodes pass DB integrity, sync, units/timers and nginx checks. Five old
+  July Windows rollback directories were removed from fallback, retaining the
+  four newest before publication plus this release's new rollback; free space
+  after rollout is about 607 MiB. Android backups were not touched.
+- No host installation, VPN transition, browser download-dialog change or
+  automation. Physical upgrade acceptance remains delegated to the owner.
+- Exact evidence and rollback: `WINDOWS_INSTALLER_AUTOCLOSE_ROLLOUT_2026_09_07.md`.
 
-## Current production: reliability Android 0.4.13 / Windows 0.4.9, 2026-09-07
+## Historical rollout: reliability Android 0.4.13 / Windows 0.4.9, 2026-09-07
 
 - Mandatory stable Android is `0.4.13+2026090701`, signed, `56407381` bytes,
   SHA-256 `A70DA5C0F2D86627BAABFB44B366A1E96361DADDE20EA20B90DCD636AE38147A`.

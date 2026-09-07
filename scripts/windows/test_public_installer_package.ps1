@@ -269,7 +269,10 @@ try {
                     'function Get-CompetingVpnServices',
                     'function Stop-CompetingVpnTunnels',
                     "Stop-CompetingVpnTunnels -Reason 'connect'",
-                    "Stop-CompetingVpnTunnels -Reason 'guard'",
+                    'guard yielding to externally activated VPN; explicit Connect required',
+                    'function Complete-CompetingVpnTakeover',
+                    'if (-not $script:CompetingVpnRollbackPending)',
+                    'if ($cleanupComplete) { Restore-CompetingVpnTunnels }',
                     'takeover complete reason=$Reason',
                     'function Get-SafePhysicalEndpointRoute',
                     'physical gateway settled after takeover',
@@ -281,6 +284,9 @@ try {
                     if (-not $combinedTaskText.Contains($marker)) {
                         $errors.Add("Packaged Windows VPN task marker missing: $marker") | Out-Null
                     }
+                }
+                if ($vpnTaskText.Contains("Stop-CompetingVpnTunnels -Reason 'guard'")) {
+                    $errors.Add('Packaged background guard must not take over an external VPN.') | Out-Null
                 }
             }
         }
