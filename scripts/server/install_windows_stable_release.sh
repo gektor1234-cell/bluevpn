@@ -231,8 +231,8 @@ updates = {
     "GREENVPN_MIN_SUPPORTED_VERSION": min_supported_version,
     "GREENVPN_UPDATE_RELEASED_AT": released_at,
     "GREENVPN_UPDATE_CHANGELOG": (
-        f"Green VPN {version}: исправлено восстановление подключения "
-        "и взаимодействие с другими VPN."
+        f"Green VPN {version}: окно установщика автоматически закрывается "
+        "после успешной установки."
     ),
     "GREENVPN_PUBLIC_WINDOWS_DOWNLOAD_URL": download_url,
     "GREENVPN_WINDOWS_CODE_SIGNING_PROVIDER": "",
@@ -283,9 +283,8 @@ installer = pathlib.Path(installer_raw)
 required = 1 if required_raw == "1" else 0
 changelog = json.dumps(
     [
-        "Green VPN больше не запускает прежний VPN после успешного переключения.",
-        "Восстановление соединения учитывает состояние туннеля и проверенный запасной маршрут.",
-        "Улучшена защита конфиденциальных данных в диагностических отчётах.",
+        "После успешной установки окно закрывается автоматически, без нажатия кнопки Готово.",
+        "При ошибке окно остаётся открытым с причиной и путём к журналу установки.",
     ],
     ensure_ascii=False,
 )
