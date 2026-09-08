@@ -201,6 +201,10 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
                 fetchFreshConfig(accessToken, deviceId, preferredBaseUrl, candidate.serverId, routingIntent)
             } catch (failure: Throwable) {
                 lastError = safeError(failure)
+                if (GreenVpnApiFailurePolicy.requiresAuthentication(lastError)) {
+                    GreenVpnSupportJournal.record(appContext, "authentication_required", mapOf("status" to 401))
+                    return GreenVpnNativeCascadeResult(false, error = "session_expired")
+                }
                 if (!canAttemptUnderlyingNetwork()) {
                     return GreenVpnNativeCascadeResult(
                         false,
@@ -542,6 +546,8 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
         accessToken: String,
         payload: JSONObject,
     ): JSONObject {
+        val started = android.os.SystemClock.elapsedRealtime()
+        GreenVpnSupportJournal.record(appContext, "api_started", mapOf("endpointKind" to "config"))
         val connection = (URL("$baseUrl$path").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 5_000
@@ -559,7 +565,11 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
                 it.write(payload.toString().toByteArray(StandardCharsets.UTF_8))
             }
             readJsonResponse(connection)
+        } catch (failure: Exception) {
+            GreenVpnSupportJournal.record(appContext, "api_failed", mapOf("error" to failure.javaClass.simpleName))
+            throw failure
         } finally {
+            GreenVpnSupportJournal.record(appContext, "api_finished", mapOf("durationMs" to android.os.SystemClock.elapsedRealtime() - started))
             connection.disconnect()
         }
     }
@@ -583,6 +593,11 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
 
     private fun readJsonResponse(connection: HttpURLConnection): JSONObject {
         val code = connection.responseCode
+        GreenVpnSupportJournal.record(appContext, "api_response", mapOf(
+            "status" to code,
+            "endpointKind" to if (connection.url.path.endsWith("/config")) "config" else "catalog",
+            "apiRole" to if (connection.url.host == URL(API_BASE_URL).host) "primary" else "fallback",
+        ))
         val stream = if (code in 200..299) connection.inputStream else connection.errorStream
         val body = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }.orEmpty()
         if (code !in 200..299) throw IllegalStateException("HTTP $code")
@@ -661,6 +676,7 @@ internal class GreenVpnNativeCascadeCoordinator(context: Context) {
     }
 
     private fun debug(message: String) {
+        GreenVpnSupportJournal.record(appContext, "cascade", mapOf("reason" to message))
         if (BuildConfig.DEBUG) Log.i(DEBUG_TAG, message)
     }
 

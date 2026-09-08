@@ -326,6 +326,18 @@ class GreenVpnRuntimeFailoverService : Service() {
             context.stopService(Intent(context, GreenVpnRuntimeFailoverService::class.java))
         }
 
+        fun acknowledgeSessionReauthentication(context: Context) {
+            val values = prefs(context)
+            if (values.getString(KEY_STATE, "") != "authentication_required") return
+            values.edit()
+                .putString(KEY_STATE, "disarmed")
+                .putString(KEY_LAST_REASON, "session_reauthenticated")
+                .putString(KEY_LAST_ERROR, "")
+                .putLong(KEY_UPDATED_AT_MS, System.currentTimeMillis())
+                .commit()
+            GreenVpnSupportJournal.record(context, "session_reauthenticated")
+        }
+
         fun snapshot(context: Context): Map<String, Any> {
             val values = prefs(context)
             val network = GreenVpnUnderlyingNetwork.snapshot(context)
@@ -375,6 +387,7 @@ class GreenVpnRuntimeFailoverService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        GreenVpnSupportJournal.observeRuntime(applicationContext)
         if (serviceEnabled()) {
             ensureForeground()
             startMonitor()
@@ -762,6 +775,24 @@ class GreenVpnRuntimeFailoverService : Service() {
                 .apply()
             GreenVpnNetworkTransition.markActive(applicationContext)
             debug("connect_complete protocol=${result.protocol} verified=${result.verified}")
+        } else if (GreenVpnApiFailurePolicy.requiresAuthentication(result.error)) {
+            values.edit()
+                .putBoolean(KEY_DESIRED, false)
+                .putBoolean(KEY_RESUME_SCHEDULED, false)
+                .putLong(KEY_PAUSE_UNTIL_MS, 0L)
+                .putLong(KEY_NEXT_RECOVERY_AT_MS, 0L)
+                .putString(KEY_STATE, "authentication_required")
+                .putString(KEY_LAST_REASON, "session_expired")
+                .putString(KEY_LAST_ERROR, "session_expired")
+                .putLong(KEY_UPDATED_AT_MS, System.currentTimeMillis())
+                .commit()
+            // Authentication cannot be repaired by switching routes. Keep any
+            // already running VPN; stop only this service's retries and resume.
+            GreenVpnSupportJournal.record(applicationContext, "authentication_required")
+            updateNotification()
+            stopForeground(STOP_FOREGROUND_DETACH)
+            stopSelf()
+            return
         } else if (result.waitingForNetwork) {
             publishState("waiting_for_network", "underlying_network_unavailable", "", 0L)
         } else if (result.error == "vpn_permission_required") {
@@ -942,6 +973,7 @@ class GreenVpnRuntimeFailoverService : Service() {
             "degraded_no_network" -> "VPN сохранён, ожидаем сеть"
             "disconnecting" -> "Отключаем Green VPN"
             "error" -> "Ожидаем восстановления подключения"
+            "authentication_required" -> "Сессия истекла. Войдите в аккаунт снова"
             else -> "VPN подключён"
         }
         val contentIntent = PendingIntent.getActivity(
@@ -960,7 +992,7 @@ class GreenVpnRuntimeFailoverService : Service() {
             .setContentTitle(BuildConfig.GREENVPN_APP_LABEL)
             .setContentText(text)
             .setContentIntent(contentIntent)
-            .setOngoing(true)
+            .setOngoing(state != "authentication_required")
             .setOnlyAlertOnce(true)
             .setCategory(Notification.CATEGORY_SERVICE)
             .build()
@@ -975,6 +1007,7 @@ class GreenVpnRuntimeFailoverService : Service() {
         .take(180)
 
     private fun debug(message: String) {
+        GreenVpnSupportJournal.record(applicationContext, "runtime_detail", mapOf("reason" to message))
         if (BuildConfig.DEBUG) Log.i(DEBUG_TAG, message)
     }
 }

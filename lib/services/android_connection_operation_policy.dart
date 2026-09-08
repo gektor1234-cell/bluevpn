@@ -42,9 +42,14 @@ GreenVpnAndroidConnectionUiState greenVpnAndroidConnectionUiState(
         'disconnected',
         'disarmed',
         'permission_denied',
+        'authentication_required',
       }.contains(state);
 
   final (stage, hint) = switch (state) {
+    'authentication_required' => (
+      'Войдите в аккаунт снова',
+      'Сессия истекла. Для подключения подтвердите вход по email.',
+    ),
     'permission_required' => (
       'Подтвердите подключение...',
       'Android ждёт системное разрешение на VPN.',

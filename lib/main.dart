@@ -6814,6 +6814,7 @@ class RestoreAccessDialog extends StatefulWidget {
   final String? initialEmail;
   final String? deviceUidOverride;
   final Future<Session?> Function()? renewGuestSession;
+  final bool reauthenticate;
 
   const RestoreAccessDialog({
     super.key,
@@ -6822,6 +6823,7 @@ class RestoreAccessDialog extends StatefulWidget {
     this.initialEmail,
     this.deviceUidOverride,
     this.renewGuestSession,
+    this.reauthenticate = false,
   });
 
   @override
@@ -6886,10 +6888,12 @@ class _RestoreAccessDialogState extends State<RestoreAccessDialog>
       _status = 'Отправляем код...';
     });
     try {
-      var res = await widget.api.startAccessEmail(
-        accessToken: _session.accessToken,
-        email: email,
-      );
+      var res = widget.reauthenticate
+          ? await widget.api.startEmailCodeAuth(email: email)
+          : await widget.api.startAccessEmail(
+              accessToken: _session.accessToken,
+              email: email,
+            );
       if (!res.ok &&
           greenVpnIsInvalidSessionMessage(res.message) &&
           widget.renewGuestSession != null) {
@@ -6946,15 +6950,24 @@ class _RestoreAccessDialogState extends State<RestoreAccessDialog>
     try {
       final deviceUid =
           widget.deviceUidOverride ?? await _deviceStore.getOrCreate();
-      final res = await widget.api.verifyAccessEmail(
-        accessToken: _session.accessToken,
-        email: email,
-        code: code,
-        deviceUid: deviceUid,
-        deviceName: greenVpnClientDeviceName(),
-        platform: greenVpnClientPlatform(),
-        appVersion: kAppVersion,
-      );
+      final res = widget.reauthenticate
+          ? await widget.api.verifyEmailCodeAuth(
+              email: email,
+              code: code,
+              deviceUid: deviceUid,
+              deviceName: greenVpnClientDeviceName(),
+              platform: greenVpnClientPlatform(),
+              appVersion: kAppVersion,
+            )
+          : await widget.api.verifyAccessEmail(
+              accessToken: _session.accessToken,
+              email: email,
+              code: code,
+              deviceUid: deviceUid,
+              deviceName: greenVpnClientDeviceName(),
+              platform: greenVpnClientPlatform(),
+              appVersion: kAppVersion,
+            );
       if (!mounted) return;
       if (!res.ok || res.data == null) {
         setState(
@@ -6990,6 +7003,7 @@ class _RestoreAccessDialogState extends State<RestoreAccessDialog>
             TextField(
               key: const Key('restore_access_email'),
               controller: _email,
+              readOnly: widget.reauthenticate,
               enabled: !_busy && !_codeRequested,
               keyboardType: TextInputType.emailAddress,
               autofillHints: const [AutofillHints.email],
@@ -8288,6 +8302,13 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         'android managed state source=$source previous=$previousState state=${ui.state} desired=${ui.desired} busy=${ui.busy} reason=${snapshot['lastReason'] ?? ''} error=${snapshot['lastError'] ?? ''}',
       );
     }
+    if (ui.state == 'authentication_required') {
+      await _noteInvalidSession(
+        source: 'android_managed',
+        message: 'session expired',
+        showToast: emitUserFeedback && changed,
+      );
+    }
     if (!emitUserFeedback || previousState == ui.state || !mounted) return;
     if (ui.state == 'monitoring' && wasManagedPending) {
       _toast(context, 'VPN включён.');
@@ -8868,6 +8889,80 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   bool _logoutInProgress = false;
+  bool _sessionReauthenticationRequired = false;
+  bool _sessionReauthenticationOpen = false;
+
+  Future<void> _acknowledgePersistedAndroidSession(Session session) async {
+    if (kIsWeb || !Platform.isAndroid) return;
+    final raw = await kAndroidPlatformChannel.invokeMethod<String>(
+      'secureRead',
+      {'key': 'greenvpn_mobile_session_v1'},
+    );
+    final stored = raw == null ? null : jsonDecode(raw);
+    if (stored is! Map || stored['accessToken'] != session.accessToken) {
+      throw StateError('session_storage_not_confirmed');
+    }
+    await kAndroidPlatformChannel.invokeMethod<bool>(
+      'acknowledgeSessionReauthentication',
+    );
+  }
+
+  Future<Session?> _reauthenticateSession() async {
+    if (!mounted || _sessionReauthenticationOpen || _accountChangeBlocked) {
+      return null;
+    }
+    _sessionReauthenticationOpen = true;
+    try {
+      if (widget.session.isGuest) {
+        final session = await _renewGuestSession(
+          source: 'session_expired',
+          showToast: true,
+        );
+        if (session != null && mounted) {
+          await _acknowledgePersistedAndroidSession(session);
+          if (!mounted) return session;
+          setState(() => _sessionReauthenticationRequired = false);
+        }
+        return session;
+      }
+      final session = await showDialog<Session>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => RestoreAccessDialog(
+          api: _api,
+          session: widget.session,
+          initialEmail: widget.session.email,
+          reauthenticate: true,
+        ),
+      );
+      if (session == null || !mounted || _accountChangeBlocked) return null;
+      // Changing identity is explicit. A background 401 never tears down a VPN.
+      if (session.email.toLowerCase() != widget.session.email.toLowerCase()) {
+        await _stopOwnVpnForAccountChange();
+      }
+      await widget.onSessionChanged(session);
+      await _acknowledgePersistedAndroidSession(session);
+      if (mounted) {
+        setState(() => _sessionReauthenticationRequired = false);
+        _toast(context, 'Вход обновлён. Можно подключить VPN.');
+      }
+      return session;
+    } catch (error) {
+      await appendBlueVpnClientLog(
+        'session reauthentication incomplete type=${error.runtimeType}',
+      );
+      if (mounted) {
+        setState(() => _sessionReauthenticationRequired = true);
+        _toast(
+          context,
+          'Не удалось завершить сохранение входа. Повторите попытку.',
+        );
+      }
+      return null;
+    } finally {
+      _sessionReauthenticationOpen = false;
+    }
+  }
 
   Future<void> _prepareForUpdateDownload() async {
     if (!mounted ||
@@ -9123,6 +9218,25 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     String? message,
     bool showToast = false,
   }) async {
+    if (!kIsWeb && Platform.isAndroid && mounted) {
+      final first = !_sessionReauthenticationRequired;
+      setState(() => _sessionReauthenticationRequired = true);
+      if (showToast || first) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text(
+              'Сессия истекла. Для новых подключений войдите снова.',
+            ),
+            duration: const Duration(seconds: 10),
+            action: SnackBarAction(
+              label: 'Войти',
+              onPressed: () => unawaited(_reauthenticateSession()),
+            ),
+          ),
+        );
+      }
+      return;
+    }
     final reason = _safeSessionInvalidationReason(message);
     await appendBlueVpnClientLog(
       'invalid session ignored source=$source reason=$reason',
@@ -14269,6 +14383,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
 
   Future<void> _toggleVpnReal() async {
     if (_updateInProgress) return;
+    if (!vpnEnabled && _sessionReauthenticationRequired) {
+      await _reauthenticateSession();
+      return;
+    }
     final toggleWatch = Stopwatch()..start();
     await appendBlueVpnClientLog(
       'toggle requested vpnEnabled=$vpnEnabled busy=$vpnBusy cooldown=$_vpnTapCooldown',
@@ -16841,6 +16959,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         builder: (_) => DiagnosticsPage(
           accessToken: widget.session.accessToken,
           email: widget.session.email,
+          reauthenticate: _reauthenticateSession,
           windowsFullTunnelDataPlaneConfirmed:
               _windowsFullTunnelDataPlaneConfirmed,
         ),
@@ -25020,12 +25139,14 @@ class DiagnosticsPage extends StatefulWidget {
   final String accessToken;
   final String email;
   final bool windowsFullTunnelDataPlaneConfirmed;
+  final Future<Session?> Function()? reauthenticate;
 
   const DiagnosticsPage({
     super.key,
     required this.accessToken,
     required this.email,
     required this.windowsFullTunnelDataPlaneConfirmed,
+    this.reauthenticate,
   });
 
   @override
@@ -25054,6 +25175,10 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
   _GreenVpnSystemServiceResponse? _windowsSystemStatus;
   Map<String, dynamic> _androidVpnStatus = const <String, dynamic>{};
   String? _fallbackReportCode;
+  String? _reportAccessToken;
+  bool _reportAuthenticationRequired = false;
+  String? _stateCapturedAt;
+  Map<String, dynamic> _androidSupportDiagnostics = const {};
 
   @override
   void initState() {
@@ -25062,6 +25187,7 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
   }
 
   Future<void> _refresh() async {
+    if (!mounted) return;
     setState(() => _loading = true);
 
     final cfg = ConfigStore();
@@ -25078,6 +25204,18 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
       _wgFound = true;
       _isAdmin = false;
       _androidVpnStatus = await WireGuardAndroidBackend.statusSnapshot();
+      try {
+        final raw = await kAndroidPlatformChannel
+            .invokeMapMethod<String, dynamic>('supportDiagnostics')
+            .timeout(const Duration(seconds: 6));
+        _androidSupportDiagnostics = raw ?? const {'available': false};
+      } catch (_) {
+        _androidSupportDiagnostics = const {
+          'available': false,
+          'error': 'collection_unavailable',
+        };
+      }
+      _stateCapturedAt = DateTime.now().toUtc().toIso8601String();
 
       if (!mounted) return;
       setState(() => _loading = false);
@@ -25248,6 +25386,7 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
       'buildNumber': kBuildNumber,
       'build': kBuildMarker,
       'createdAt': DateTime.now().toUtc().toIso8601String(),
+      'stateCapturedAt': _stateCapturedAt,
       'platform': Platform.operatingSystem,
       'email': widget.email,
       'deviceUid': _deviceUid,
@@ -25275,6 +25414,8 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
       'endpoint': android?['endpoint'] ?? runtime?.bestEndpoint ?? '',
       if (android?['androidStatus'] != null)
         'androidStatus': android?['androidStatus'],
+      if (_isAndroidDiagnostics)
+        'androidDiagnostics': _androidSupportDiagnostics,
     };
     if (windowsDiagnostics != null) {
       payload['windowsDiagnostics'] = windowsDiagnostics;
@@ -25313,27 +25454,55 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
       _lastSendMessage = null;
     });
 
-    final reportCode = await _buildSupportReportCode();
-    final result = await _api.sendSupportReport(
-      accessToken: widget.accessToken,
-      report: reportCode,
-      summary: _supportSummary(),
-      appVersion: kAppVersion,
-      deviceUid: _deviceUid,
-    );
-
-    if (!mounted) return;
-    final message = result.ok
-        ? 'Отчёт отправлен в поддержку.'
-        : 'Не удалось отправить отчёт. Можно скопировать код и передать его поддержке.';
-    setState(() {
-      _sending = false;
-      _lastSendMessage = message;
-      _fallbackReportCode = result.ok ? null : reportCode;
-    });
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+    try {
+      if (_reportAuthenticationRequired && widget.reauthenticate != null) {
+        final session = await widget.reauthenticate!();
+        if (session == null || !mounted) return;
+        _reportAccessToken = session.accessToken;
+        _reportAuthenticationRequired = false;
+      }
+      await _refresh();
+      if (!mounted) return;
+      final reportCode = await _buildSupportReportCode();
+      _fallbackReportCode = reportCode;
+      final result = await _api.sendSupportReport(
+        accessToken: _reportAccessToken ?? widget.accessToken,
+        report: reportCode,
+        summary: _supportSummary(),
+        appVersion: kAppVersion,
+        deviceUid: _deviceUid,
+      );
+      if (!mounted) return;
+      _reportAuthenticationRequired = greenVpnIsInvalidSessionMessage(
+        result.message,
+      );
+      final message = result.ok
+          ? 'Отчёт отправлен в поддержку.'
+          : _reportAuthenticationRequired
+          ? 'Сессия истекла. Нажмите «Отправить отчёт», чтобы войти снова. Код отчёта также можно скопировать.'
+          : 'Не удалось отправить отчёт. Можно скопировать код и передать его поддержке.';
+      setState(() {
+        _lastSendMessage = message;
+        _fallbackReportCode = result.ok ? null : reportCode;
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => _lastSendMessage =
+              'Не удалось собрать или отправить отчёт. Повторите попытку.',
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _sending = false;
+          _loading = false;
+        });
+      }
+    }
   }
 
   Future<void> _copyFallbackReportCode() async {

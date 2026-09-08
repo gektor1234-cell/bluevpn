@@ -66,6 +66,8 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        GreenVpnSupportJournal.observeRuntime(applicationContext)
+        GreenVpnSupportJournal.record(applicationContext, "activity_created")
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             CHANNEL
@@ -80,6 +82,10 @@ class MainActivity : FlutterActivity() {
                 "managedConnectionStatus" -> result.success(
                     GreenVpnRuntimeFailoverService.snapshot(applicationContext)
                 )
+                "acknowledgeSessionReauthentication" -> {
+                    GreenVpnRuntimeFailoverService.acknowledgeSessionReauthentication(applicationContext)
+                    result.success(true)
+                }
                 "probeConnectedRoute" -> handleProbeConnectedRoute(call, result)
                 "armRuntimeFailover" -> handleArmRuntimeFailover(call, result)
                 "scheduleRuntimeResume" -> handleScheduleRuntimeResume(call, result)
@@ -94,6 +100,14 @@ class MainActivity : FlutterActivity() {
                 "openUrl" -> handleOpenUrl(call, result)
                 "getUpdateCacheDir" -> handleGetUpdateCacheDir(result)
                 "updateNetworkStatus" -> handleUpdateNetworkStatus(result)
+                "supportDiagnostics" -> executor.execute {
+                    val report = try {
+                        GreenVpnSupportJournal.collect(applicationContext)
+                    } catch (_: Exception) {
+                        mapOf("available" to false, "error" to "journal_unavailable")
+                    }
+                    runOnUiThread { result.success(report) }
+                }
                 "installApk" -> handleInstallApk(call, result)
                 else -> result.notImplemented()
             }
@@ -122,7 +136,13 @@ class MainActivity : FlutterActivity() {
 
     override fun onResume() {
         super.onResume()
+        GreenVpnSupportJournal.record(applicationContext, "activity_resumed")
         maybeResumePendingApkInstall()
+    }
+
+    override fun onPause() {
+        GreenVpnSupportJournal.record(applicationContext, "activity_paused")
+        super.onPause()
     }
 
     override fun onDestroy() {
