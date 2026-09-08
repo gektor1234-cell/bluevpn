@@ -1,6 +1,20 @@
 # Green VPN Release State
 
-## Current: VPN-Off Updates (2026-09-07 MSK)
+## Current: Android Session Recovery (2026-09-08 MSK)
+
+Mandatory Android `0.4.16+2026090801` is published on fallback and primary;
+minimum supported Android version is `0.4.16`. The signed APK is `56467221`
+bytes, SHA-256 `D5A171C39E674A2FF94B8C8C631362B777187C8376B097577056E445CB5965A5`.
+App/publisher source: `cb4ce4fa2242e16c6313a6938b2ea800ed33adcf`.
+Expired sessions stop native retries and offer public email-code reauthentication.
+Support reports include fresh runtime state and up to 400 bounded/redacted events.
+Flutter analyze, 7 Dart/widget and 5 Kotlin JUnit checks passed in the WSL guest;
+signature, 16-KiB alignment, exact HTTPS APKs and 16 API enforcement checks pass.
+Windows `0.4.12+4645`, backend `0.9.166-product-hardening.1`, paid-beta and billing
+policy are unchanged. No host VPN changes, automation, physical install, live
+email acceptance or battery benchmark. See `ANDROID_AUTH_DIAGNOSTICS_2026_09_08.md`.
+
+## Historical: VPN-Off Updates (2026-09-07 MSK)
 
 Mandatory stable Android `0.4.15+2026090703` and Windows `0.4.12+4645` are
 published on fallback and primary. Minimum versions are `0.4.15` / `0.4.12`.

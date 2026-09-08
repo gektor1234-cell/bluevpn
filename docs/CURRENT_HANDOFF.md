@@ -1,12 +1,29 @@
 # Green VPN Current Handoff
 
-Updated: 2026-09-07 MSK.
+Updated: 2026-09-08 MSK.
 
 This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
 `PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md`. Dated reports are evidence only.
 
-## Current Production: VPN-Off Updates, 2026-09-07
+## Current Production: Android Session Recovery, 2026-09-08
+
+Android `0.4.16+2026090801` is mandatory stable on primary and fallback, minimum
+`0.4.16`. Windows stays `0.4.12+4645` with identical published bytes. Backend
+`0.9.166-product-hardening.1`, paid-beta and payment policy are unchanged.
+Config 401 now stops route/recovery retries and requests email reauthentication
+without the expired bearer. This does not stop an already running VPN or bypass
+90-day session expiry. New sessions are acknowledged after native secure-storage
+readback. Diagnostics refreshes before sending and includes a bounded, redacted,
+event-driven Android journal; no new periodic probe or background upload.
+Flutter analyze and 12 isolated Dart/widget/JVM checks passed. APK signature and
+16-KiB alignment passed. Exact HTTPS downloads and all 16 version-enforcement
+checks passed on both nodes; protected Windows/paid-beta identities unchanged.
+No physical install, live email login or battery benchmark was run. Host VPN was
+not touched; no automation. See `ANDROID_AUTH_DIAGNOSTICS_2026_09_08.md` for
+source, hashes, evidence, rollback and remaining acceptance limits.
+
+## Historical Production: VPN-Off Updates, 2026-09-07
 
 Android `0.4.15+2026090703` and Windows `0.4.12+4645` are mandatory stable on
 primary and fallback; minimum supported versions match. Backend remains

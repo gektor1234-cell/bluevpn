@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "product": "Green VPN",
-  "appVersion": "0.4.15",
+  "appVersion": "0.4.16",
   "windowsAppVersion": "0.4.12",
-  "androidBuildNumber": "2026090703",
+  "androidBuildNumber": "2026090801",
   "windowsBuildNumber": 4645,
   "backendVersion": "0.9.166-product-hardening.1",
   "paidBeta": {
@@ -45,8 +45,8 @@
     "windowsPaidBetaPublished": true,
     "ownerApprovalRequired": true,
     "mandatoryUpdateRequired": true,
-    "minSupportedVersion": "0.4.15",
-    "androidMinSupportedVersion": "0.4.15",
+    "minSupportedVersion": "0.4.16",
+    "androidMinSupportedVersion": "0.4.16",
     "windowsMinSupportedVersion": "0.4.12"
   }
 }
