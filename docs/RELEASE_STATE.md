@@ -1,6 +1,21 @@
 # Green VPN Release State
 
-## Current: Android Session Recovery (2026-09-08 MSK)
+## Current: Android Connection Feedback (2026-09-12 MSK)
+
+Mandatory Android `0.4.17+2026091201`, minimum `0.4.17`, is published on fallback
+and primary. APK `56470189` bytes; SHA-256
+`332B29C7555A0A6421C67FFD69C6966962390DA5BB182596A69661C4A190A450`.
+Source `e8420cc25beba8e226c606251ef54d02dc900d2d`.
+Managed Quick Settings tile, optional short state sounds, VPN-bound baseline
+checks and separate supplementary YouTube diagnostics. No YouTube failure gate.
+Analyzer, 9 Dart/widget and 20 JVM tests in WSL, signature/16-KiB alignment,
+both full HTTPS APK downloads and 16 API update checks passed.
+Windows 0.4.12+4645, backend, paid-beta and billing remain unchanged.
+Physical tile/audio/selected-egress/weak-network/battery acceptance NOT RUN.
+No host VPN/network changes or automation. Evidence and rollback:
+`ANDROID_CONNECTION_FEEDBACK_2026_09_12.md`.
+
+## Historical: Android Session Recovery (2026-09-08 MSK)
 
 Mandatory Android `0.4.16+2026090801` is published on fallback and primary;
 minimum supported Android version is `0.4.16`. The signed APK is `56467221`

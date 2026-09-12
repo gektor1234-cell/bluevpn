@@ -1,6 +1,6 @@
 # Android Connection Feedback and Quick Settings
 
-Scope: Android-only mandatory 0.4.17+2026091201 candidate. Publication pending.
+Scope: Android-only mandatory 0.4.17+2026091201, published on both sites.
 Owner authorized implementation and release; never operate on host Windows VPN,
 routes, services or installers. Windows 0.4.12+4645, backend, paid-beta, billing,
 and the excluded 5.129.237.163 host are outside this change.
@@ -38,8 +38,7 @@ and the excluded 5.129.237.163 host are outside this change.
 
 ## Verification
 
-Initial isolated Flutter analyze passed, 9 Dart/widget and 20 JVM tests passed.
-Final rerun and exact release/package/publication evidence will be appended.
+Final isolated Flutter analyze passed, 9 Dart/widget and 20 JVM tests passed.
 Tests run in existing Ubuntu WSL guest without Windows executables on PATH;
 host Gradle only compiles, never installs or starts a VPN.
 
@@ -51,3 +50,37 @@ Evidence root: C:\BlueVPN_Builds\android_connection_feedback_20260912_v1.
 Publish fallback 176.113.81.35 then primary 72.56.32.197 using only the Android
 stable publisher, exact hash gates, dry-run, atomic backup and protected-contour
 comparison. Keep rollback files, do not restore a whole database over payments.
+
+## Exact Release Evidence
+
+- Source: `e8420cc25beba8e226c606251ef54d02dc900d2d`, pushed before clean-source build.
+- APK: `clients/GreenVPN_Android_0.4.17_2026091201.apk` under the evidence root.
+  Size `56470189`; SHA-256
+  `332B29C7555A0A6421C67FFD69C6966962390DA5BB182596A69661C4A190A450`.
+- Package `pro.greenvpn.app`, min SDK 26, target SDK 36, arm64-v8a/x86_64.
+  APK v2 signature verified, signer SHA-256
+  `1EA2C985890E9010AA3B76AEE676624EC45398FD86A5E40DD95C76CDFC6A0FBC`.
+  All 23 native libraries and ZIP entries meet 16-KiB alignment requirements.
+  Packaged manifest includes exactly the existing QuickTileService with the
+  system binding permission, QS_TILE action, toggle metadata and tile icon.
+- `compile-tests.log`, `guest-checks.log`, `build.log`, `apk-manifest.txt`,
+  `clients/android-16kb-compatibility.json` hold local evidence.
+- Fallback dry-run/apply/after succeeded, then primary dry-run/apply/after.
+  `fallback-before.json`, `fallback-after.json`, `primary-before.json`,
+  `primary-after.json` prove both database quick_checks, active units, unchanged
+  backend source, paid-beta environment/manifests and Windows manifests/EXE.
+- `public-verification.json`: success=true; both full HTTPS downloads match
+  exact SHA/size. Stable and public-product manifests require 0.4.17. All 16
+  checks passed: 0.4.16 catalog=426, 0.4.17 catalog=200, manifests=200 for both.
+- Primary/fallback sync and subscription-expiry service results are in the
+  corresponding `*-sync.txt` files. No payment/order or user-data mutation.
+- Rollback backups retained on the respective nodes:
+  `/root/greenvpn-android-stable-release-backups/20260912T201021Z-ruvds-0.4.17-2026091201`
+  and `/root/greenvpn-android-stable-release-backups/20260912T201138Z-timeweb-0.4.17-2026091201`.
+- Build-time `public-product-artifacts.json` intentionally retains
+  productionPublished=false; the after/public verification receipts prove the
+  subsequent publication. Do not reinterpret the immutable build manifest.
+- Both unique `/dev/shm/greenvpn-android-connection-feedback-20260912-v1` stages
+  were removed after successful local receipt collection; rollback backups and
+  the exact local APK remain. Release JSON and three PowerShell script parsers
+  passed after the metadata-only version update.

@@ -1,10 +1,10 @@
-Green VPN 0.4.16
+Green VPN 0.4.17
 Windows version: 0.4.12
-Android build: 2026090801
+Android build: 2026091201
 Windows build: 4645
 Platforms: Android, Windows
 Source backend: 0.9.166-product-hardening.1
-Status: Android expired-session recovery and bounded diagnostics published as mandatory stable on both sites; 12 isolated checks and analyzer passed; exact HTTPS artifacts and update enforcement verified; physical/live-email/battery acceptance NOT RUN; host VPN untouched; Windows unchanged and unsigned
+Status: Android connection sounds, managed Quick Settings tile and baseline checks without a YouTube gate published as mandatory stable on both sites; 29 isolated checks and analyzer passed; exact HTTPS artifacts and update enforcement verified; physical tile/audio/weak-network acceptance NOT RUN; host VPN untouched; Windows unchanged and unsigned
 Production sales: enabled on the primary billing node only
 Refund execution: enabled on the primary billing node only
 Auto-renew: explicit consent UI is released; automatic charges remain disabled in the manual NPD contour

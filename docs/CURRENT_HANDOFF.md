@@ -1,12 +1,27 @@
 # Green VPN Current Handoff
 
-Updated: 2026-09-08 MSK.
+Updated: 2026-09-12 MSK.
 
 This is the current operational entry point. Read it together with
 `RELEASE_STATE.md`, `PROJECT_MAP_RU.md` and
 `PROJECT_OPERATIONS_MASTER_RUNBOOK_RU.md`. Dated reports are evidence only.
 
-## Current Production: Android Session Recovery, 2026-09-08
+## Current Production: Android Connection Feedback, 2026-09-12
+
+Android `0.4.17+2026091201` is mandatory stable on fallback and primary, minimum
+`0.4.17`. Includes an add-tile action in settings, a managed Quick Settings tile,
+optional connection sounds, and VPN-bound baseline probes without mandatory
+YouTube waiting. Supplementary YouTube results cannot trigger failover.
+Source `e8420cc25beba8e226c606251ef54d02dc900d2d`; APK SHA-256
+`332B29C7555A0A6421C67FFD69C6966962390DA5BB182596A69661C4A190A450`,
+`56470189` bytes. Signature, 16-KiB alignment, analyzer, 29 isolated checks,
+full HTTPS downloads and 16 update-enforcement checks passed. Windows
+`0.4.12+4645`, backend, paid-beta and payment policy are unchanged.
+No physical phone/tile/audio/weak-network acceptance or host VPN changes.
+No automation. See `ANDROID_CONNECTION_FEEDBACK_2026_09_12.md` for evidence,
+rollback and limits. Do not resume historical host VPN runners.
+
+## Historical Production: Android Session Recovery, 2026-09-08
 
 Android `0.4.16+2026090801` is mandatory stable on primary and fallback, minimum
 `0.4.16`. Windows stays `0.4.12+4645` with identical published bytes. Backend
