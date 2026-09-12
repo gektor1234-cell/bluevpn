@@ -13,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:pub_semver/pub_semver.dart';
 
 import 'runtime_config.dart';
+import 'widgets/android_connection_settings.dart';
 import 'services/android_connection_operation_policy.dart';
 import 'services/fusion_connection_status_policy.dart';
 import 'services/product_display_policy.dart';
@@ -8988,6 +8989,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       await _pendingVpnActionStore.clear();
       await _prefsStore.patch({'vpnPauseUntil': ''});
       if (!kIsWeb && Platform.isAndroid) {
+        await kAndroidPlatformChannel.invokeMethod<void>(
+          'setQuickTileUpdateInProgress',
+          {'active': true},
+        );
         if (!await _cancelAndroidPauseResume() ||
             !await _requestAndroidManagedDisconnect()) {
           throw const UpdatePreparationException(
@@ -9057,6 +9062,15 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
   }
 
   void _finishUpdateDownload() {
+    if (!kIsWeb && Platform.isAndroid) {
+      unawaited(
+        kAndroidPlatformChannel
+            .invokeMethod<void>('setQuickTileUpdateInProgress', {
+              'active': false,
+            })
+            .catchError((Object _) {}),
+      );
+    }
     if (!mounted) return;
     setState(() => _updateInProgress = false);
     // Updating never resumes a tunnel, a scheduled pause or a previous VPN.
@@ -9516,6 +9530,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
       // ignore
     } finally {
       _prefsLoaded = true;
+      unawaited(_syncAndroidQuickTileConfiguration());
       if (mounted && vpnEnabled) {
         if (!kIsWeb && Platform.isAndroid) {
           unawaited(() async {
@@ -9569,8 +9584,38 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _syncAndroidQuickTileConfiguration() async {
+    if (kIsWeb || !Platform.isAndroid) return;
+    try {
+      await kAndroidPlatformChannel.invokeMethod<bool>('configureQuickTile', {
+        'mode': socialOnlyEnabled ? 'social_only' : 'full',
+        'packages': socialOnlyEnabled
+            ? <String>{
+                ..._resolveAndroidSocialPackageNames(socialOnlyApps),
+                ...socialOnlyCustomPackages.where(_isValidAndroidPackageName),
+              }.toList()
+            : <String>[],
+        'serverId': selectedServer.isAuto ? '' : selectedServer.id,
+      });
+    } catch (_) {
+      // An older native host can still use the ordinary connection screen.
+    }
+  }
+
+  Future<void> _androidConnectionFeedback(String event) async {
+    if (kIsWeb || !Platform.isAndroid) return;
+    try {
+      await kAndroidPlatformChannel.invokeMethod<void>('connectionFeedback', {
+        'event': event,
+      });
+    } catch (_) {
+      /* Feedback must never block connection management. */
+    }
+  }
+
   void _schedulePrefsSave() {
     if (kIsWeb) return;
+    unawaited(_syncAndroidQuickTileConfiguration());
     _persistedServerId = _serverSelectionKey(selectedServer);
     _prefsDebounce?.cancel();
     _prefsDebounce = Timer(const Duration(milliseconds: 350), () {
@@ -14355,10 +14400,10 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
         errorCode: probe.ok
             ? null
             : (probe.statusCode == null
-                  ? 'youtube_probe_failed'
-                  : 'youtube_http_${probe.statusCode}'),
+                  ? 'baseline_probe_failed'
+                  : 'baseline_http_${probe.statusCode}'),
         message: probe.ok
-            ? 'YouTube route confirmed after Android VPN connect.'
+            ? 'Baseline VPN route confirmed after Android VPN connect.'
             : 'Android VPN поднялся, проверка Интернета продолжится надзором.',
         details: {
           'background': true,
@@ -14370,6 +14415,7 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
     );
     if (probe.ok) {
       await _recordRouteSuccess(server);
+      unawaited(_androidConnectionFeedback('connected'));
       await appendBlueVpnClientLog(
         'background Android post connect probe accepted server=${server.id}',
       );
@@ -14859,6 +14905,9 @@ class _RootShellState extends State<RootShell> with WidgetsBindingObserver {
           );
           if (!kIsWeb && Platform.isAndroid && _shouldRunPostConnectProbe) {
             unawaited(_verifyAndroidConnectedRouteInBackground(candidate));
+          }
+          if (!kIsWeb && Platform.isAndroid && socialOnlyEnabled) {
+            unawaited(_androidConnectionFeedback('connected'));
           }
           _refreshConnectionOptionsAfterConnect(candidate);
           if (kPaidBetaBuild) {
@@ -21731,6 +21780,14 @@ class SettingsPage extends StatelessWidget {
                     onTap: onPickWindowsCloseBehavior,
                   ),
                 ],
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+          if (!kIsWeb && Platform.isAndroid) ...[
+            const _Card(
+              child: AndroidConnectionSettings(
+                channel: kAndroidPlatformChannel,
               ),
             ),
             const SizedBox(height: 12),

@@ -81,12 +81,15 @@ class GreenVpnRuntimeFailoverService : Service() {
             context: Context,
             serverId: String,
             mode: String,
+            includedApplications: Set<String> = emptySet(),
         ): Map<String, Any> {
             val normalizedMode = mode.trim().lowercase()
-            if (!serviceEnabled() || normalizedMode != "full") {
+            val routing = try { GreenVpnRoutingIntent(normalizedMode, includedApplications) }
+                catch (_: IllegalArgumentException) { null }
+            if (!serviceEnabled() || routing == null) {
                 return LinkedHashMap<String, Any>(snapshot(context)).apply {
                     put("ok", false)
-                    put("message", "managed_full_mode_required")
+                    put("message", "invalid_routing_intent")
                 }
             }
             val normalizedServerId = serverId.trim().take(160)
@@ -107,7 +110,9 @@ class GreenVpnRuntimeFailoverService : Service() {
                 .putString(KEY_OPERATION_KIND, "connect")
                 .putString(KEY_REQUESTED_SERVER_ID, normalizedServerId)
                 .putString(KEY_REQUESTED_MODE, normalizedMode)
-                .putStringSet(KEY_REQUESTED_PACKAGES, emptySet())
+                // The app's own probe must use the selected tunnel, not direct Internet.
+                .putStringSet(KEY_REQUESTED_PACKAGES, if (normalizedMode == "social_only")
+                    routing.packages + context.applicationContext.packageName else emptySet())
                 .putBoolean(KEY_EXPLICIT_TAKEOVER, true)
                 .putString(KEY_STATE, state)
                 .putInt(KEY_ROUTE_FAILURES, 0)
@@ -388,6 +393,7 @@ class GreenVpnRuntimeFailoverService : Service() {
     override fun onCreate() {
         super.onCreate()
         GreenVpnSupportJournal.observeRuntime(applicationContext)
+        GreenVpnConnectionFeedback.observe(applicationContext)
         if (serviceEnabled()) {
             ensureForeground()
             startMonitor()
@@ -775,6 +781,7 @@ class GreenVpnRuntimeFailoverService : Service() {
                 .apply()
             GreenVpnNetworkTransition.markActive(applicationContext)
             debug("connect_complete protocol=${result.protocol} verified=${result.verified}")
+            if (result.verified) GreenVpnRouteProbe.observeYoutube(applicationContext, result.protocol)
         } else if (GreenVpnApiFailurePolicy.requiresAuthentication(result.error)) {
             values.edit()
                 .putBoolean(KEY_DESIRED, false)

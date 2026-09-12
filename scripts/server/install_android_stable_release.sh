@@ -249,8 +249,8 @@ updates = {
     "GREENVPN_ANDROID_MIN_SUPPORTED_VERSION": min_supported_version,
     "GREENVPN_ANDROID_UPDATE_RELEASED_AT": released_at,
     "GREENVPN_ANDROID_UPDATE_CHANGELOG": (
-        f"Green VPN {version}: исправлен повторный вход после истечения сессии "
-        "и добавлена подробная диагностика подключения."
+        f"Green VPN {version}: плитка VPN в быстрых настройках Android, "
+        "звуки подключения и проверка соединения без ожидания YouTube."
     ),
     "GREENVPN_ANDROID_UPDATE_ROLLOUT": "100",
 }
@@ -296,9 +296,9 @@ apk = pathlib.Path(apk_raw)
 required = 1 if required_raw == "1" else 0
 changelog = json.dumps(
     [
-        "Истёкшая сессия больше не вызывает повторные попытки подключения: приложение предложит войти снова.",
-        "Отчёт поддержки содержит свежий статус и ограниченную историю событий без паролей и ключей.",
-        "Диагностика записывает изменения без постоянного опроса телефона и фоновой отправки данных.",
+        "Плитка Green VPN в быстрых настройках Android включает и выключает VPN.",
+        "Короткие звуки подключения можно отключить в настройках приложения.",
+        "Проверка подключения больше не ждёт YouTube: доступность сервиса проверяется отдельно.",
     ],
     ensure_ascii=False,
 )

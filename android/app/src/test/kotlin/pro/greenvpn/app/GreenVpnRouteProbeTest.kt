@@ -22,14 +22,16 @@ class GreenVpnRouteProbeTest {
 
     @Test
     fun nativeProbeDeadlineFinishesBeforeFlutterChannelTimeout() {
-        assertEquals(18_000L, GreenVpnRouteProbe.TOTAL_PROBE_TIMEOUT_MS)
+        assertEquals(10_000L, GreenVpnRouteProbe.TOTAL_PROBE_TIMEOUT_MS)
     }
 
     @Test
-    fun routeNeedsYoutubeAndAnIndependentTarget() {
-        assertEquals(false, GreenVpnRouteProbe.quorumSatisfied(true, false))
-        assertEquals(false, GreenVpnRouteProbe.quorumSatisfied(false, true))
-        assertEquals(true, GreenVpnRouteProbe.quorumSatisfied(true, true))
+    fun baselineRequiresTheExactExpectedStatusNotRedirectsOrCaptivePortals() {
+        assertEquals(true, GreenVpnRouteProbe.acceptsStatus(204, 204))
+        assertEquals(true, GreenVpnRouteProbe.acceptsStatus(200, 200))
+        assertEquals(false, GreenVpnRouteProbe.acceptsStatus(200, 204))
+        assertEquals(false, GreenVpnRouteProbe.acceptsStatus(302, 204))
+        assertEquals(false, GreenVpnRouteProbe.acceptsStatus(503, 200))
     }
 
     @Test

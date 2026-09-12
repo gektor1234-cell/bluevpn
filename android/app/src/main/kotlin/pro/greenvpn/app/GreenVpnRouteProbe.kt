@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.SystemClock
+import android.os.Build
 import android.util.Log
 import java.io.DataInputStream
 import java.io.DataOutputStream
@@ -16,11 +17,17 @@ import java.nio.charset.StandardCharsets
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ExecutorCompletionService
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.Future
+import java.util.concurrent.atomic.AtomicBoolean
+import java.io.Closeable
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
 
 internal object GreenVpnRouteProbe {
-    internal const val TOTAL_PROBE_TIMEOUT_MS = 18_000L
+    internal const val TOTAL_PROBE_TIMEOUT_MS = 10_000L
     private const val TAG = "GreenVpnRouteProbe"
 
     data class Result(
@@ -34,26 +41,43 @@ internal object GreenVpnRouteProbe {
     )
 
     private val targets = listOf(
-        Target("www.youtube.com", "/generate_204", TargetClass.YOUTUBE),
-        Target("i.ytimg.com", "/generate_204", TargetClass.YOUTUBE),
-        Target("connectivitycheck.gstatic.com", "/generate_204", TargetClass.INDEPENDENT),
-        Target("api.greenvpn.pro", "/healthz", TargetClass.INDEPENDENT),
+        Target("connectivitycheck.gstatic.com", "/generate_204", 204),
+        Target("api.greenvpn.pro", "/healthz", 200),
     )
 
-    private val probeExecutor = Executors.newFixedThreadPool(2) { runnable ->
-        Thread(runnable, "GreenVPN-Network-Route-Probe").apply { isDaemon = true }
+    private val probeExecutor = ThreadPoolExecutor(2, 2, 0L, TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue(2), { runnable ->
+            Thread(runnable, "GreenVPN-Network-Route-Probe").apply { isDaemon = true }
+        })
+    private val supplementaryExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "GreenVPN-Service-Probe").apply { isDaemon = true }
     }
+    private val supplementaryRunning = AtomicBoolean(false)
+    private var lastSupplementaryAt = 0L
 
     fun probe(context: Context, protocol: String): Result {
         val normalizedProtocol = protocol.trim().lowercase()
         val startedAt = SystemClock.elapsedRealtime()
-        val future = probeExecutor.submit<Result> {
-            probeBlocking(context.applicationContext, normalizedProtocol)
-        }
+        val resources = GreenVpnProbeResources()
+        val completion = ExecutorCompletionService<Result>(probeExecutor)
+        val futures = mutableListOf<Future<Result>>()
         return try {
-            future.get(TOTAL_PROBE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            targets.forEach { target ->
+                futures.add(completion.submit {
+                    probeTarget(context.applicationContext, normalizedProtocol, target, resources)
+                })
+            }
+            var last = Result(false, "baseline", null, 0L, "route probe failed")
+            repeat(targets.size) {
+                val remaining = TOTAL_PROBE_TIMEOUT_MS - (SystemClock.elapsedRealtime() - startedAt)
+                val completed = completion.poll(remaining.coerceAtLeast(0), TimeUnit.MILLISECONDS)
+                    ?: throw TimeoutException()
+                last = completed.get()
+                if (last.ok) return last.copy(independentTargetOk = true,
+                    latencyMs = SystemClock.elapsedRealtime() - startedAt)
+            }
+            last.copy(latencyMs = SystemClock.elapsedRealtime() - startedAt)
         } catch (_: TimeoutException) {
-            future.cancel(true)
             Result(
                 ok = false,
                 target = targets.first().url,
@@ -62,7 +86,7 @@ internal object GreenVpnRouteProbe {
                 error = "route probe timed out",
             )
         } catch (failure: Throwable) {
-            future.cancel(true)
+            if (failure is InterruptedException) Thread.currentThread().interrupt()
             Result(
                 ok = false,
                 target = targets.first().url,
@@ -70,41 +94,39 @@ internal object GreenVpnRouteProbe {
                 latencyMs = SystemClock.elapsedRealtime() - startedAt,
                 error = safeError(failure),
             )
+        } finally {
+            resources.close()
+            futures.forEach { it.cancel(true) }
+            probeExecutor.purge()
         }
     }
 
-    private fun probeBlocking(context: Context, protocol: String): Result {
-        val overallStartedAt = SystemClock.elapsedRealtime()
+    private fun probeTarget(context: Context, protocol: String, target: Target,
+        resources: GreenVpnProbeResources): Result {
         val credentials = if (protocol == "dnstt") {
             GreenVpnDnsttPreview.routeProbeCredentials(context.applicationContext)
         } else {
             null
         }
-        var last = Result(false, targets.first().url, null, 0L, "route probe did not run")
-        var youtubeTargetOk = false
-        var independentTargetOk = false
-        for (target in targets) {
-            if (target.targetClass == TargetClass.YOUTUBE && youtubeTargetOk) continue
-            if (target.targetClass == TargetClass.INDEPENDENT && independentTargetOk) continue
             val startedAt = SystemClock.elapsedRealtime()
-            last = try {
+            return try {
                 debug("protocol=$protocol target=${target.host} phase=system start")
-                val systemStatus = probeSystemRoute(context, target)
-                require(systemStatus in 200..399) { "system route returned HTTP $systemStatus" }
+                val systemStatus = probeSystemRoute(context, target, resources)
+                require(acceptsStatus(systemStatus, target.expectedStatus)) { "system route returned HTTP $systemStatus" }
                 debug("protocol=$protocol target=${target.host} phase=system status=$systemStatus")
                 val status = socksPortForProtocol(protocol)?.let { port ->
                     debug("protocol=$protocol target=${target.host} phase=socks start")
-                    val proxyStatus = probeHttpsViaSocks(target, port, credentials)
-                    require(proxyStatus in 200..399) { "SOCKS route returned HTTP $proxyStatus" }
+                    val proxyStatus = probeHttpsViaSocks(target, port, credentials, resources)
+                    require(acceptsStatus(proxyStatus, target.expectedStatus)) { "SOCKS route returned HTTP $proxyStatus" }
                     debug("protocol=$protocol target=${target.host} phase=socks status=$proxyStatus")
                     proxyStatus
                 } ?: systemStatus
                 Result(
-                    ok = status in 200..399,
+                    ok = true,
                     target = target.url,
                     statusCode = status,
                     latencyMs = SystemClock.elapsedRealtime() - startedAt,
-                    error = if (status in 200..399) "" else "http_$status",
+                    error = "",
                 )
             } catch (failure: Throwable) {
                 debug("protocol=$protocol target=${target.host} failed=${safeError(failure)}")
@@ -116,35 +138,35 @@ internal object GreenVpnRouteProbe {
                     error = safeError(failure),
                 )
             }
-            if (last.ok) {
-                when (target.targetClass) {
-                    TargetClass.YOUTUBE -> youtubeTargetOk = true
-                    TargetClass.INDEPENDENT -> independentTargetOk = true
-                }
-            }
-            if (quorumSatisfied(youtubeTargetOk, independentTargetOk)) {
-                return last.copy(
-                    ok = true,
-                    target = "youtube+independent",
-                    latencyMs = SystemClock.elapsedRealtime() - overallStartedAt,
-                    youtubeTargetOk = true,
-                    independentTargetOk = true,
-                )
-            }
-        }
-        return last.copy(
-            ok = false,
-            latencyMs = SystemClock.elapsedRealtime() - overallStartedAt,
-            error = "route quorum failed youtube=$youtubeTargetOk independent=$independentTargetOk; ${last.error}",
-            youtubeTargetOk = youtubeTargetOk,
-            independentTargetOk = independentTargetOk,
-        )
     }
 
-    internal fun quorumSatisfied(
-        youtubeTargetOk: Boolean,
-        independentTargetOk: Boolean,
-    ): Boolean = youtubeTargetOk && independentTargetOk
+    internal fun acceptsStatus(actual: Int, expected: Int): Boolean = actual == expected
+
+    // Supplementary service availability never changes connection state or cooldowns.
+    @Synchronized
+    fun observeYoutube(context: Context, protocol: String) {
+        val now = SystemClock.elapsedRealtime()
+        if (supplementaryRunning.get() ||
+            (lastSupplementaryAt != 0L && now - lastSupplementaryAt < 300_000L)) return
+        supplementaryRunning.set(true)
+        lastSupplementaryAt = now
+        val operation = GreenVpnRuntimeFailoverService.eventPreferences(context)
+            .getString("operation_id", "")
+        supplementaryExecutor.execute {
+            try {
+                GreenVpnProbeResources().use { resources ->
+                    val result = probeTarget(context, protocol,
+                        Target("www.youtube.com", "/generate_204", 204), resources)
+                    if (operation == GreenVpnRuntimeFailoverService.eventPreferences(context)
+                        .getString("operation_id", "") && GreenVpnNetworkTransition.isActive(context)) {
+                        GreenVpnSupportJournal.record(context, "youtube_supplementary", mapOf(
+                            "lastProbeOk" to result.ok, "status" to (result.statusCode ?: 0),
+                            "durationMs" to result.latencyMs))
+                    }
+                }
+            } finally { supplementaryRunning.set(false) }
+        }
+    }
 
     internal fun socksPortForProtocol(protocol: String): Int? = when (protocol.trim().lowercase()) {
         "hysteria2" -> 1980
@@ -182,14 +204,17 @@ internal object GreenVpnRouteProbe {
             byteArrayOf(password.size.toByte()) + password
     }
 
-    private fun probeSystemRoute(context: Context, target: Target): Int {
+    private fun probeSystemRoute(context: Context, target: Target, resources: GreenVpnProbeResources): Int {
         val network = awaitVpnNetwork(context)
         val connection = (network.openConnection(URL(target.url)) as HttpURLConnection).apply {
             requestMethod = "GET"
+            instanceFollowRedirects = false
+            useCaches = false
             connectTimeout = 4_000
             readTimeout = 5_000
             setRequestProperty("User-Agent", "GreenVPN Android route-check")
         }
+        resources.track(Closeable { connection.disconnect() })
         return try {
             connection.responseCode
         } finally {
@@ -207,8 +232,10 @@ internal object GreenVpnRouteProbe {
                 activeNetwork = connectivity.activeNetwork,
                 availableNetworks = connectivity.allNetworks.toList(),
             ) { candidate ->
-                connectivity.getNetworkCapabilities(candidate)
-                    ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+                val caps = connectivity.getNetworkCapabilities(candidate)
+                caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true &&
+                    (Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
+                        caps.ownerUid == context.applicationInfo.uid)
             }
             if (network != null) return network
             try {
@@ -225,11 +252,13 @@ internal object GreenVpnRouteProbe {
         target: Target,
         socksPort: Int,
         credentials: GreenVpnDnsttPreview.ProxyCredentials?,
+        resources: GreenVpnProbeResources,
     ): Int {
         val socket = Socket()
-        socket.soTimeout = 8_000
-        socket.connect(InetSocketAddress("127.0.0.1", socksPort), 3_000)
+        resources.track(socket)
         try {
+            socket.soTimeout = 4_000
+            socket.connect(InetSocketAddress("127.0.0.1", socksPort), 2_000)
             val input = DataInputStream(socket.getInputStream())
             val output = DataOutputStream(socket.getOutputStream())
             output.write(socksGreeting(credentials))
@@ -265,7 +294,8 @@ internal object GreenVpnRouteProbe {
 
             val tlsFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
             val tls = tlsFactory.createSocket(socket, target.host, 443, true) as SSLSocket
-            tls.soTimeout = 8_000
+            resources.track(tls)
+            tls.soTimeout = 4_000
             tls.sslParameters = tls.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
             tls.startHandshake()
             tls.getOutputStream().bufferedWriter(StandardCharsets.US_ASCII).use { writer ->
@@ -316,12 +346,10 @@ internal object GreenVpnRouteProbe {
         if (BuildConfig.DEBUG) Log.d(TAG, message)
     }
 
-    private enum class TargetClass { YOUTUBE, INDEPENDENT }
-
     private data class Target(
         val host: String,
         val path: String,
-        val targetClass: TargetClass,
+        val expectedStatus: Int,
     ) {
         val url: String get() = "https://$host$path"
     }

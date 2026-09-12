@@ -1,6 +1,9 @@
 package pro.greenvpn.app
 
 import android.app.Activity
+import android.app.StatusBarManager
+import android.content.ComponentName
+import android.graphics.drawable.Icon
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -58,6 +61,7 @@ class MainActivity : FlutterActivity() {
     private var pendingConfig: Any? = null
     private var pendingProtocol: String = "wireguard_udp"
     private var pendingInstallApkPath: String? = null
+    private var tileAddPending = false
     private var connectionEventSink: EventChannel.EventSink? = null
     private var connectionPrefsListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
     private val securePrefs by lazy {
@@ -67,12 +71,40 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         GreenVpnSupportJournal.observeRuntime(applicationContext)
+        GreenVpnConnectionFeedback.observe(applicationContext)
         GreenVpnSupportJournal.record(applicationContext, "activity_created")
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             CHANNEL
         ).setMethodCallHandler { call, result ->
             when (call.method) {
+                "setQuickTileUpdateInProgress" -> {
+                    GreenVpnQuickTileService.updateInProgress = call.argument<Boolean>("active") == true
+                    GreenVpnQuickTileService.requestRefresh(this)
+                    result.success(null)
+                }
+                "connectionSoundsEnabled" -> result.success(GreenVpnConnectionFeedback.enabled(this))
+                "setConnectionSoundsEnabled" -> result.success(
+                    GreenVpnConnectionFeedback.setEnabled(this, call.argument<Boolean>("enabled") == true))
+                "connectionFeedback" -> {
+                    when (call.argument<String>("event")) {
+                        "connected" -> GreenVpnConnectionFeedback.confirmed(this)
+                        "disconnected" -> GreenVpnConnectionFeedback.disconnected(this)
+                    }
+                    result.success(null)
+                }
+                "configureQuickTile" -> {
+                    val mode = call.argument<String>("mode").orEmpty()
+                    val packages = call.argument<List<String>>("packages").orEmpty().toSet()
+                    val valid = try { GreenVpnRoutingIntent(mode, packages); true }
+                        catch (_: IllegalArgumentException) { false }
+                    result.success(GreenVpnQuickTileService.preferences(this).edit()
+                        .putBoolean("configured", valid)
+                        .putString("mode", mode)
+                        .putStringSet("packages", packages)
+                        .putString("server", call.argument<String>("serverId").orEmpty()).commit())
+                }
+                "requestAddQuickTile" -> requestAddQuickTile(result)
                 "status" -> handleStatusV2(call, result)
                 "connect" -> handleConnect(call, result)
                 "disconnect" -> handleDisconnect(result)
@@ -188,6 +220,29 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun backend(): GoBackend = GreenVpnWireGuardRuntime.backend(applicationContext)
+
+    private fun requestAddQuickTile(result: MethodChannel.Result) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            result.success("manual")
+            return
+        }
+        if (tileAddPending) { result.success("pending"); return }
+        val manager = getSystemService(StatusBarManager::class.java)
+        if (manager == null) { result.success("unavailable"); return }
+        tileAddPending = true
+        try {
+            manager.requestAddTileService(ComponentName(this, GreenVpnQuickTileService::class.java),
+                "Green VPN", Icon.createWithResource(this, R.drawable.ic_vpn_tile), mainExecutor) { code ->
+                tileAddPending = false
+                result.success(when (code) {
+                    StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED -> "added"
+                    StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED -> "already_added"
+                    StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_NOT_ADDED -> "declined"
+                    else -> "unavailable"
+                })
+            }
+        } catch (_: Exception) { tileAddPending = false; result.success("unavailable") }
+    }
 
     private fun handleRequestManagedConnect(call: MethodCall, result: MethodChannel.Result) {
         val serverId = call.argument<String>("serverId").orEmpty()

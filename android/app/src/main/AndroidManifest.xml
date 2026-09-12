@@ -60,7 +60,7 @@
         <service
             android:name="pro.greenvpn.app.GreenVpnQuickTileService"
             android:label="${greenVpnApplicationLabel}"
-            android:icon="@mipmap/ic_launcher"
+            android:icon="@drawable/ic_vpn_tile"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
             android:exported="true">
             <intent-filter>
